@@ -32,8 +32,10 @@ from supply_chain_planner.models import (
 )
 from supply_chain_planner.network_models import RouteQuoteRecord
 from supply_chain_planner.optimization_models import (
+    AllowExistingWarehouseClosurePolicy,
     AssignmentComparison,
     BaselineResult,
+    KeepAllExistingWarehousePolicy,
     PMedianSolution,
     ScenarioResult,
     ScenarioSpec,
@@ -136,9 +138,9 @@ def _published_network(
         warehouse.warehouse_id for warehouse in fixture.warehouses if not warehouse.is_existing
     }
     return (
-            _resource_ref(store.publish(prepared.schema_version, prepared)),
-            _resource_ref(store.publish(routes.schema_version, routes)),
-            _resource_ref(store.publish(costs.schema_version, costs)),
+        _resource_ref(store.publish(prepared.schema_version, prepared)),
+        _resource_ref(store.publish(routes.schema_version, routes)),
+        _resource_ref(store.publish(costs.schema_version, costs)),
         existing_ids,
         candidate_ids,
     )
@@ -184,8 +186,7 @@ def _sample2_resource_refs(
             route_ref,
             cost_ref,
             2,
-            sorted(existing_ids),
-            [],
+            KeepAllExistingWarehousePolicy(),
             [6, 12, 18],
             30,
             ctx,
@@ -266,8 +267,7 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
         "route_matrix_ref",
         "cost_matrix_ref",
         "number_to_open",
-        "fixed_existing_ids",
-        "optional_existing_ids",
+        "existing_warehouse_policy",
         "service_targets",
         "time_limit_seconds",
     }.issubset(p_median["required"])
@@ -285,31 +285,34 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
         "network_scenario.v2",
         "facility_location_solution.v3",
     ]
-    assert "Comparable network result schema" in comparable_ref_schema["properties"][
-        "resource_schema"
-    ]["description"]
+    assert (
+        "Comparable network result schema"
+        in comparable_ref_schema["properties"]["resource_schema"]["description"]
+    )
 
     route_plan = tools["plan_route_matrix"].inputSchema
     assert "Route method" in route_plan["properties"]["route_method"]["description"]
-    assert "both detour_coefficient and average_speed_kph" in route_plan["properties"][
-        "route_method"
-    ]["description"]
-    assert "Required when route_method is haversine" in route_plan["properties"][
-        "detour_coefficient"
-    ]["description"]
-    assert "Required when route_method is haversine" in route_plan["properties"][
-        "average_speed_kph"
-    ]["description"]
+    assert (
+        "both detour_coefficient and average_speed_kph"
+        in route_plan["properties"]["route_method"]["description"]
+    )
+    assert (
+        "Required when route_method is haversine"
+        in route_plan["properties"]["detour_coefficient"]["description"]
+    )
+    assert (
+        "Required when route_method is haversine"
+        in route_plan["properties"]["average_speed_kph"]["description"]
+    )
 
-    assert "Count of candidate new warehouses selected" in p_median["properties"][
-        "number_to_open"
-    ]["description"]
-    assert "Existing warehouses that must remain open" in p_median["properties"][
-        "fixed_existing_ids"
-    ]["description"]
-    assert "allowed to remain open or close" in p_median["properties"][
-        "optional_existing_ids"
-    ]["description"]
+    assert (
+        "Count of candidate new warehouses selected"
+        in p_median["properties"]["number_to_open"]["description"]
+    )
+    assert "keep_all_existing" in p_median["properties"]["existing_warehouse_policy"]["description"]
+    assert "allow_closure" in p_median["properties"]["existing_warehouse_policy"]["description"]
+    assert "fixed_existing_ids" not in p_median["properties"]
+    assert "optional_existing_ids" not in p_median["properties"]
 
     comparison_map = tools["prepare_network_comparison_map"].inputSchema
     assert "ctx" not in comparison_map["properties"]
@@ -319,6 +322,7 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
         "facility_location_ref",
         "comparison_ref",
     }
+    assert "same exact result" in comparison_map["properties"]["comparison_ref"]["description"]
 
     final_required = {
         "normalized_input_ref",
@@ -482,8 +486,8 @@ def test_baseline_assessment_creates_markdown_without_comparison_refs(
     workspace, store = _runtime(tmp_path, monkeypatch)
     (workspace / "outputs").mkdir()
     ctx = _context(workspace)
-    normalized_ref, baseline_ref, _facility_ref, _comparison_ref = (
-        _sample2_resource_refs(store, ctx)
+    normalized_ref, baseline_ref, _facility_ref, _comparison_ref = _sample2_resource_refs(
+        store, ctx
     )
 
     result = server.publish_network_planning_report(
@@ -498,12 +502,9 @@ def test_baseline_assessment_creates_markdown_without_comparison_refs(
     assert result.structuredContent is not None
     artifact = NetworkFinalArtifactToolResult.model_validate(result.structuredContent)
     assert artifact.artifact.artifact_schema == NETWORK_PLANNING_MARKDOWN_SCHEMA
-    markdown = (workspace / artifact.artifact.workspace_relative_path).read_text(
-        encoding="utf-8"
-    )
+    markdown = (workspace / artifact.artifact.workspace_relative_path).read_text(encoding="utf-8")
     assert result.content[0].text == (
-        "正式简报已生成：[下载中文 Markdown 简报]"
-        "(outputs/current-network-assessment.md)"
+        "正式简报已生成：[下载中文 Markdown 简报](outputs/current-network-assessment.md)"
     )
     assert markdown.startswith("# 当前仓网评估简报\n")
     assert NETWORK_PLANNING_MARKDOWN_MARKER in markdown
@@ -552,7 +553,8 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(tmp_path: Path, mon
     scenario_summary = scenario_result.structuredContent["summary"]
     assert "10 active warehouses" in scenario_summary
     assert f"removed [{BEKASI_ID}]" in scenario_summary
-    assert "service 12h demand-weighted=" in scenario_summary
+    assert "coverage 12h city-count=" in scenario_summary
+    assert "demand-weighted=" in scenario_summary
     scenario = server._runtime().load_model(
         scenario_ref,
         "network_scenario.v2",
@@ -575,15 +577,19 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(tmp_path: Path, mon
     assert comparison_result.structuredContent is not None
     comparison_summary = comparison_result.structuredContent["summary"]
     assert "affected 50, reassigned 50" in comparison_summary
-    assert "service 12h" in comparison_summary
+    assert "coverage 12h city-count" in comparison_summary
+    assert "demand-weighted" in comparison_summary
     comparison = server._runtime().load_model(
         comparison_ref,
-        "network_assignment_comparison.v1",
+        "network_assignment_comparison.v2",
         AssignmentComparison,
     )
     assert comparison.selected_warehouse_ids == []
     assert comparison.removed_warehouse_ids == [BEKASI_ID]
     assert comparison.requested_service_targets == [12]
+    assert comparison.coverage[0].before.total_city_count == 50
+    assert comparison.coverage[0].after.total_city_count == 50
+    assert comparison.coverage[0].before.total_demand == comparison.coverage[0].after.total_demand
     assert len(comparison.city_changes) == 50
     assert len(comparison.affected_city_ids) == 50
     assert len(comparison.reassigned_city_ids) == 50
@@ -598,7 +604,7 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(tmp_path: Path, mon
     )
     same_scenario = server._runtime().load_model(
         same_scenario_ref,
-        "network_assignment_comparison.v1",
+        "network_assignment_comparison.v2",
         AssignmentComparison,
     )
     assert same_scenario.selected_warehouse_ids == []
@@ -661,7 +667,7 @@ def test_comparison_accepts_actual_and_optimized_baseline_resources(
     )
     comparison = server._runtime().load_model(
         comparison_ref,
-        "network_assignment_comparison.v1",
+        "network_assignment_comparison.v2",
         AssignmentComparison,
     )
 
@@ -694,8 +700,7 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
         route_ref,
         cost_ref,
         2,
-        sorted(existing_ids),
-        [],
+        KeepAllExistingWarehousePolicy(),
         [6, 12, 18],
         30,
         ctx,
@@ -710,7 +715,8 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
     assert facility_result.structuredContent is not None
     facility_summary = facility_result.structuredContent["summary"]
     assert "opened [WH-CANDIDATE-KENDARI, WH-CANDIDATE-MANADO]" in facility_summary
-    assert "service 6h demand-weighted=" in facility_summary
+    assert "coverage 6h city-count=" in facility_summary
+    assert "demand-weighted=" in facility_summary
     facility = server._runtime().load_model(
         facility_ref,
         "facility_location_solution.v3",
@@ -753,7 +759,7 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
     )
     facility_to_scenario = server._runtime().load_model(
         facility_to_scenario_ref,
-        "network_assignment_comparison.v1",
+        "network_assignment_comparison.v2",
         AssignmentComparison,
     )
     assert facility_to_scenario.requested_service_targets == [12]
@@ -786,10 +792,11 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
     assert comparison_result.structuredContent is not None
     comparison_summary = comparison_result.structuredContent["summary"]
     assert "selected [WH-CANDIDATE-KENDARI, WH-CANDIDATE-MANADO]" in comparison_summary
-    assert "service 6h" in comparison_summary and "18h" in comparison_summary
+    assert "coverage 6h city-count" in comparison_summary and "18h" in comparison_summary
+    assert "demand-weighted" in comparison_summary
     comparison = server._runtime().load_model(
         comparison_ref,
-        "network_assignment_comparison.v1",
+        "network_assignment_comparison.v2",
         AssignmentComparison,
     )
     assert comparison.selected_warehouse_ids == facility.opened_candidate_ids
@@ -800,7 +807,7 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
 def test_baseline_and_p_median_reject_missing_explicit_inputs(tmp_path: Path, monkeypatch) -> None:
     workspace, store = _runtime(tmp_path, monkeypatch)
     ctx = _context(workspace)
-    prepared_ref, route_ref, cost_ref, existing_ids, _candidate_ids = _published_network(store)
+    prepared_ref, route_ref, cost_ref, existing_ids, candidate_ids = _published_network(store)
     prepared = server._runtime().load_model(
         prepared_ref,
         "normalized_network_input.v1",
@@ -821,14 +828,13 @@ def test_baseline_and_p_median_reject_missing_explicit_inputs(tmp_path: Path, mo
             cost_ref,
         )
 
-    with pytest.raises(ValueError, match="existing_policy_incomplete"):
+    with pytest.raises(ValueError, match="existing_policy_requires_existing_warehouses"):
         server.solve_p_median(
             prepared_ref,
             route_ref,
             cost_ref,
             2,
-            sorted(existing_ids - {next(iter(existing_ids))}),
-            [],
+            AllowExistingWarehouseClosurePolicy(closable_existing_ids=[next(iter(candidate_ids))]),
             [12],
             30,
             ctx,

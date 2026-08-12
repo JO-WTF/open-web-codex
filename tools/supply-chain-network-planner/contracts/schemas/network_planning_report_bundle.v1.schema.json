@@ -55,6 +55,13 @@
           "default": null,
           "title": "Cost Delta"
         },
+        "coverage": {
+          "items": {
+            "$ref": "#/$defs/CoverageComparison"
+          },
+          "title": "Coverage",
+          "type": "array"
+        },
         "reassigned_city_ids": {
           "items": {
             "type": "string"
@@ -77,8 +84,8 @@
           "type": "array"
         },
         "schema_version": {
-          "const": "network_assignment_comparison.v1",
-          "default": "network_assignment_comparison.v1",
+          "const": "network_assignment_comparison.v2",
+          "default": "network_assignment_comparison.v2",
           "title": "Schema Version",
           "type": "string"
         },
@@ -88,18 +95,11 @@
           },
           "title": "Selected Warehouse Ids",
           "type": "array"
-        },
-        "service": {
-          "items": {
-            "$ref": "#/$defs/ServiceComparison"
-          },
-          "title": "Service",
-          "type": "array"
         }
       },
       "required": [
         "requested_service_targets",
-        "service",
+        "coverage",
         "selected_warehouse_ids",
         "removed_warehouse_ids",
         "affected_city_ids",
@@ -430,6 +430,92 @@
         "last_mile"
       ],
       "title": "CostSummary",
+      "type": "object"
+    },
+    "CoverageComparison": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "$ref": "#/$defs/CoverageMetricSummary"
+        },
+        "before": {
+          "$ref": "#/$defs/CoverageMetricSummary"
+        },
+        "delta": {
+          "$ref": "#/$defs/CoverageMetricDelta"
+        },
+        "target_hours": {
+          "exclusiveMinimum": 0,
+          "title": "Target Hours",
+          "type": "number"
+        }
+      },
+      "required": [
+        "target_hours",
+        "before",
+        "after",
+        "delta"
+      ],
+      "title": "CoverageComparison",
+      "type": "object"
+    },
+    "CoverageMetricDelta": {
+      "additionalProperties": false,
+      "properties": {
+        "city_coverage_rate": {
+          "maximum": 1,
+          "minimum": -1,
+          "title": "City Coverage Rate",
+          "type": "number"
+        },
+        "covered_city_count": {
+          "title": "Covered City Count",
+          "type": "integer"
+        },
+        "covered_demand": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Covered Demand"
+        },
+        "demand_weighted_coverage_rate": {
+          "maximum": 1,
+          "minimum": -1,
+          "title": "Demand Weighted Coverage Rate",
+          "type": "number"
+        },
+        "total_city_count": {
+          "title": "Total City Count",
+          "type": "integer"
+        },
+        "total_demand": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Total Demand"
+        }
+      },
+      "required": [
+        "covered_city_count",
+        "total_city_count",
+        "city_coverage_rate",
+        "covered_demand",
+        "total_demand",
+        "demand_weighted_coverage_rate"
+      ],
+      "title": "CoverageMetricDelta",
       "type": "object"
     },
     "CoverageMetricSummary": {
@@ -843,42 +929,6 @@
         "total_demand"
       ],
       "title": "NetworkReportScope",
-      "type": "object"
-    },
-    "ServiceComparison": {
-      "additionalProperties": false,
-      "properties": {
-        "after_coverage_rate": {
-          "maximum": 1,
-          "minimum": 0,
-          "title": "After Coverage Rate",
-          "type": "number"
-        },
-        "before_coverage_rate": {
-          "maximum": 1,
-          "minimum": 0,
-          "title": "Before Coverage Rate",
-          "type": "number"
-        },
-        "coverage_rate_delta": {
-          "maximum": 1,
-          "minimum": -1,
-          "title": "Coverage Rate Delta",
-          "type": "number"
-        },
-        "target_hours": {
-          "exclusiveMinimum": 0,
-          "title": "Target Hours",
-          "type": "number"
-        }
-      },
-      "required": [
-        "target_hours",
-        "before_coverage_rate",
-        "after_coverage_rate",
-        "coverage_rate_delta"
-      ],
-      "title": "ServiceComparison",
       "type": "object"
     },
     "ServiceMetric": {

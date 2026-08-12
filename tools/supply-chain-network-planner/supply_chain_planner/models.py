@@ -146,10 +146,28 @@ class NetworkComparisonReportInput(StrictModel):
     """Exact typed inputs for a baseline-versus-plan comparison brief."""
 
     mode: Literal["comparison"] = "comparison"
-    normalized_input_ref: _ResourceRef
-    baseline_ref: _ResourceRef
-    facility_location_ref: _ResourceRef
-    comparison_ref: _ResourceRef
+    normalized_input_ref: Annotated[
+        _ResourceRef,
+        Field(description="The exact normalized input used by all report results."),
+    ]
+    baseline_ref: Annotated[
+        _ResourceRef,
+        Field(description="The exact baseline used as the comparison before subject."),
+    ]
+    facility_location_ref: Annotated[
+        _ResourceRef,
+        Field(description="The exact selected result used as the comparison after subject."),
+    ]
+    comparison_ref: Annotated[
+        _ResourceRef,
+        Field(
+            description=(
+                "The comparison produced from the same exact result referenced by "
+                "facility_location_ref and this exact baseline_ref; a semantically "
+                "equivalent recomputation is invalid."
+            )
+        ),
+    ]
 
 
 NetworkReportInput = Annotated[

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -99,11 +99,20 @@ class ScenarioResult(OptimizationModel):
     warehouse_changes: dict[str, list[str]] = Field(default_factory=dict)
 
 
-class ServiceComparison(OptimizationModel):
+class CoverageMetricDelta(OptimizationModel):
+    covered_city_count: int
+    total_city_count: int
+    city_coverage_rate: float = Field(ge=-1, le=1)
+    covered_demand: Decimal
+    total_demand: Decimal
+    demand_weighted_coverage_rate: float = Field(ge=-1, le=1)
+
+
+class CoverageComparison(OptimizationModel):
     target_hours: float = Field(gt=0)
-    before_coverage_rate: float = Field(ge=0, le=1)
-    after_coverage_rate: float = Field(ge=0, le=1)
-    coverage_rate_delta: float = Field(ge=-1, le=1)
+    before: CoverageMetricSummary
+    after: CoverageMetricSummary
+    delta: CoverageMetricDelta
 
 
 class CityAssignmentChange(OptimizationModel):
@@ -117,11 +126,9 @@ class CityAssignmentChange(OptimizationModel):
 
 
 class AssignmentComparison(OptimizationModel):
-    schema_version: Literal["network_assignment_comparison.v1"] = (
-        "network_assignment_comparison.v1"
-    )
+    schema_version: Literal["network_assignment_comparison.v2"] = "network_assignment_comparison.v2"
     requested_service_targets: list[float]
-    service: list[ServiceComparison]
+    coverage: list[CoverageComparison]
     before_cost: float | None = Field(default=None, ge=0)
     after_cost: float | None = Field(default=None, ge=0)
     cost_delta: float | None = None
@@ -141,10 +148,24 @@ class FacilityLocationResult(OptimizationModel):
     assignment: AssignmentResult
 
 
+class KeepAllExistingWarehousePolicy(OptimizationModel):
+    mode: Literal["keep_all_existing"] = "keep_all_existing"
+
+
+class AllowExistingWarehouseClosurePolicy(OptimizationModel):
+    mode: Literal["allow_closure"] = "allow_closure"
+    closable_existing_ids: list[str] = Field(min_length=1)
+
+
+ExistingWarehousePolicy = Annotated[
+    KeepAllExistingWarehousePolicy | AllowExistingWarehouseClosurePolicy,
+    Field(discriminator="mode"),
+]
+
+
 class PMedianRequest(OptimizationModel):
     number_to_open: int = Field(ge=0)
-    fixed_existing_ids: list[str]
-    optional_existing_ids: list[str]
+    existing_warehouse_policy: ExistingWarehousePolicy
     time_limit_seconds: float = Field(default=30, gt=0, le=300)
 
 

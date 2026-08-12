@@ -15,8 +15,8 @@ from .optimization_models import (
     AssignmentComparison,
     AssignmentRow,
     BaselineResult,
+    CoverageComparison,
     PMedianSolution,
-    ServiceComparison,
 )
 
 
@@ -181,7 +181,7 @@ class NetworkMapSummary(DeliveryModel):
     before_cost: float | None
     after_cost: float | None
     cost_delta: float | None
-    service: list[ServiceComparison]
+    coverage: list[CoverageComparison]
 
 
 class NetworkComparisonMapBundle(DeliveryModel):
@@ -719,7 +719,7 @@ def build_network_comparison_map_bundle(
             before_cost=comparison.before_cost,
             after_cost=comparison.after_cost,
             cost_delta=comparison.cost_delta,
-            service=sorted(comparison.service, key=lambda item: item.target_hours),
+            coverage=sorted(comparison.coverage, key=lambda item: item.target_hours),
         ),
         geojson=NetworkMapFeatureCollection(features=features),
         layers=_map_layers(),

@@ -20,9 +20,10 @@ from .optimization_models import (
     AssignmentRow,
     CityAssignmentChange,
     CostSummary,
+    CoverageComparison,
+    CoverageMetricDelta,
     CoverageMetricSummary,
     FacilityLocationResult,
-    ServiceComparison,
     ServiceMetric,
 )
 
@@ -37,9 +38,7 @@ class SolverUnavailable(RuntimeError):
 
 
 def _route_index(matrix: RouteMatrix):
-    return {
-        (row.origin_id, row.destination_id, row.layer): row for row in matrix.rows
-    }
+    return {(row.origin_id, row.destination_id, row.layer): row for row in matrix.rows}
 
 
 def _cost_index(matrix: CostMatrix):
@@ -92,11 +91,7 @@ def solve_assignment(
 ) -> AssignmentResult:
     demand_rows = sorted(demand, key=lambda row: row.city_id)
     warehouse_rows = sorted(
-        (
-            warehouse
-            for warehouse in warehouses
-            if warehouse.warehouse_id in active_warehouse_ids
-        ),
+        (warehouse for warehouse in warehouses if warehouse.warehouse_id in active_warehouse_ids),
         key=lambda row: row.warehouse_id,
     )
     if not warehouse_rows:
@@ -286,8 +281,7 @@ def coverage_metrics(
     target_values = list(targets)
     total_city_count = len(assignment.rows)
     demand_by_target = {
-        metric.target_hours: metric
-        for metric in service_metrics(assignment, target_values)
+        metric.target_hours: metric for metric in service_metrics(assignment, target_values)
     }
     result: list[CoverageMetricSummary] = []
     for target in target_values:
@@ -329,23 +323,12 @@ def compare_assignments(
         set(after_city_ids)
     ):
         raise ValueError("comparison_assignment_city_duplicate")
-    before_quantities = {
-        row.demand_city_id: row.demand_quantity for row in before.rows
-    }
-    after_quantities = {
-        row.demand_city_id: row.demand_quantity for row in after.rows
-    }
-    if (
-        before_quantities != after_quantities
-        or before.total_demand != after.total_demand
-    ):
+    before_quantities = {row.demand_city_id: row.demand_quantity for row in before.rows}
+    after_quantities = {row.demand_city_id: row.demand_quantity for row in after.rows}
+    if before_quantities != after_quantities or before.total_demand != after.total_demand:
         raise ValueError("comparison_assignment_domain_mismatch")
-    before_service = {
-        metric.target_hours: metric for metric in service_metrics(before, targets)
-    }
-    after_service = {
-        metric.target_hours: metric for metric in service_metrics(after, targets)
-    }
+    before_coverage = {metric.target_hours: metric for metric in coverage_metrics(before, targets)}
+    after_coverage = {metric.target_hours: metric for metric in coverage_metrics(after, targets)}
     before_rows = {row.demand_city_id: row for row in before.rows}
     after_rows = {row.demand_city_id: row for row in after.rows}
     changes: list[CityAssignmentChange] = []
@@ -379,14 +362,35 @@ def compare_assignments(
     after_cost = _complete_assignment_cost(after)
     return AssignmentComparison(
         requested_service_targets=targets,
-        service=[
-            ServiceComparison(
+        coverage=[
+            CoverageComparison(
                 target_hours=target,
-                before_coverage_rate=before_service[target].coverage_rate,
-                after_coverage_rate=after_service[target].coverage_rate,
-                coverage_rate_delta=(
-                    after_service[target].coverage_rate
-                    - before_service[target].coverage_rate
+                before=before_coverage[target],
+                after=after_coverage[target],
+                delta=CoverageMetricDelta(
+                    covered_city_count=(
+                        after_coverage[target].covered_city_count
+                        - before_coverage[target].covered_city_count
+                    ),
+                    total_city_count=(
+                        after_coverage[target].total_city_count
+                        - before_coverage[target].total_city_count
+                    ),
+                    city_coverage_rate=(
+                        after_coverage[target].city_coverage_rate
+                        - before_coverage[target].city_coverage_rate
+                    ),
+                    covered_demand=(
+                        after_coverage[target].covered_demand
+                        - before_coverage[target].covered_demand
+                    ),
+                    total_demand=(
+                        after_coverage[target].total_demand - before_coverage[target].total_demand
+                    ),
+                    demand_weighted_coverage_rate=(
+                        after_coverage[target].demand_weighted_coverage_rate
+                        - before_coverage[target].demand_weighted_coverage_rate
+                    ),
                 ),
             )
             for target in targets
@@ -394,16 +398,10 @@ def compare_assignments(
         before_cost=before_cost,
         after_cost=after_cost,
         cost_delta=(
-            after_cost - before_cost
-            if before_cost is not None and after_cost is not None
-            else None
+            after_cost - before_cost if before_cost is not None and after_cost is not None else None
         ),
-        selected_warehouse_ids=sorted(
-            after_active_warehouse_ids - before_active_warehouse_ids
-        ),
-        removed_warehouse_ids=sorted(
-            before_active_warehouse_ids - after_active_warehouse_ids
-        ),
+        selected_warehouse_ids=sorted(after_active_warehouse_ids - before_active_warehouse_ids),
+        removed_warehouse_ids=sorted(before_active_warehouse_ids - after_active_warehouse_ids),
         affected_city_ids=[item.demand_city_id for item in changes if item.affected],
         reassigned_city_ids=[item.demand_city_id for item in changes if item.reassigned],
         city_changes=changes,
@@ -459,9 +457,7 @@ def enumerate_p_median(
     warehouse_rows = sorted(warehouses, key=lambda row: row.warehouse_id)
     _validate_warehouse_upstreams(warehouse_rows)
     warehouse_ids = {warehouse.warehouse_id for warehouse in warehouse_rows}
-    existing_ids = {
-        warehouse.warehouse_id for warehouse in warehouse_rows if warehouse.is_existing
-    }
+    existing_ids = {warehouse.warehouse_id for warehouse in warehouse_rows if warehouse.is_existing}
     policy_ids = fixed_existing_ids | optional_existing_ids
     unknown_policy_ids = policy_ids - warehouse_ids
     if unknown_policy_ids:
@@ -521,9 +517,7 @@ def enumerate_p_median(
             variable = model.NewBoolVar(f"assign_{city.city_id}_{warehouse.warehouse_id}")
             assignment_variables[(city.city_id, warehouse.warehouse_id)] = variable
             model.Add(variable <= open_variables[warehouse.warehouse_id])
-            objective_terms.append(
-                int(round(cost * 1000 * float(city.demand_quantity))) * variable
-            )
+            objective_terms.append(int(round(cost * 1000 * float(city.demand_quantity))) * variable)
             choices.append((warehouse, route))
         if not choices:
             return None, 0, False
@@ -594,9 +588,7 @@ def enumerate_p_median(
         route = routes[(selected.warehouse_id, city.city_id, "last_mile")]
         cost = _total_unit_cost(costs, selected, city.city_id)
         if cost is None:
-            raise ValueError(
-                f"selected_total_cost_missing:{selected.warehouse_id}:{city.city_id}"
-            )
+            raise ValueError(f"selected_total_cost_missing:{selected.warehouse_id}:{city.city_id}")
         rows.append(
             AssignmentRow(
                 demand_city_id=city.city_id,
@@ -619,9 +611,7 @@ def enumerate_p_median(
         objective_value=value,
         active_warehouse_ids=sorted(active),
         opened_candidate_ids=sorted(
-            warehouse_id
-            for warehouse_id in active
-            if warehouse_id not in existing_ids
+            warehouse_id for warehouse_id in active if warehouse_id not in existing_ids
         ),
         closed_existing_ids=sorted(existing_ids - active),
         assignment=assignment,
@@ -649,17 +639,11 @@ def summarize_assignment_cost(
         if row.warehouse_id is None:
             continue
         demand_quantity = float(row.demand_quantity)
-        last_mile_rate = costs.get(
-            (row.warehouse_id, row.demand_city_id, "last_mile")
-        )
+        last_mile_rate = costs.get((row.warehouse_id, row.demand_city_id, "last_mile"))
         if last_mile_rate is None:
-            missing_routes.append(
-                (row.warehouse_id, row.demand_city_id, "last_mile")
-            )
+            missing_routes.append((row.warehouse_id, row.demand_city_id, "last_mile"))
         else:
-            last_mile_by_warehouse[row.warehouse_id] += (
-                last_mile_rate * demand_quantity
-            )
+            last_mile_by_warehouse[row.warehouse_id] += last_mile_rate * demand_quantity
         if row.upstream_center_id and row.upstream_center_id != row.warehouse_id:
             linehaul_key = (
                 row.upstream_center_id,
@@ -670,13 +654,10 @@ def summarize_assignment_cost(
             if linehaul_rate is None:
                 missing_routes.append(linehaul_key)
             else:
-                linehaul_by_warehouse[row.upstream_center_id] += (
-                    linehaul_rate * demand_quantity
-                )
+                linehaul_by_warehouse[row.upstream_center_id] += linehaul_rate * demand_quantity
     warehouse_ids = set(last_mile_by_warehouse) | set(linehaul_by_warehouse)
     by_warehouse = {
-        warehouse_id: last_mile_by_warehouse[warehouse_id]
-        + linehaul_by_warehouse[warehouse_id]
+        warehouse_id: last_mile_by_warehouse[warehouse_id] + linehaul_by_warehouse[warehouse_id]
         for warehouse_id in sorted(warehouse_ids)
     }
     linehaul = sum(linehaul_by_warehouse.values())

@@ -82,9 +82,7 @@ def test_sample2_opens_exactly_two_candidates_with_existing_sites_explicitly_fix
         warehouse_scope="all_warehouses",
     )
     fixed_existing = {
-        warehouse.warehouse_id
-        for warehouse in fixture.warehouses
-        if warehouse.is_existing
+        warehouse.warehouse_id for warehouse in fixture.warehouses if warehouse.is_existing
     }
 
     result, _, timed_out = enumerate_p_median(
@@ -128,3 +126,8 @@ def test_planning_objective_and_existing_policy_have_no_hidden_defaults() -> Non
         ScenarioSpec()
     with pytest.raises(ValidationError):
         PMedianRequest(number_to_open=1)
+    with pytest.raises(ValidationError):
+        PMedianRequest(
+            number_to_open=1,
+            existing_warehouse_policy={"mode": "allow_closure"},
+        )

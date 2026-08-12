@@ -20,6 +20,7 @@ from .optimization_models import (
     PMedianSolution,
     ServiceMetric,
 )
+from .solver import coverage_metrics
 
 DeliveryValue = TypeVar("DeliveryValue")
 
@@ -119,9 +120,7 @@ def validate_delivery_inputs(
     before_rows = _assignment_rows(
         "baseline", baseline.assignment, demand, warehouses, before_active
     )
-    after_rows = _assignment_rows(
-        "facility", facility.assignment, demand, warehouses, after_active
-    )
+    after_rows = _assignment_rows("facility", facility.assignment, demand, warehouses, after_active)
     candidates = set(warehouses) - existing
     _exact_ids(
         "facility_opened_candidate",
@@ -157,9 +156,7 @@ def validate_delivery_inputs(
 
 
 def ordered_assignment(value: AssignmentResult) -> AssignmentResult:
-    return value.model_copy(
-        update={"rows": sorted(value.rows, key=lambda row: row.demand_city_id)}
-    )
+    return value.model_copy(update={"rows": sorted(value.rows, key=lambda row: row.demand_city_id)})
 
 
 def ordered_cost(value: CostSummary | None) -> CostSummary | None:
@@ -183,14 +180,12 @@ def ordered_comparison(value: AssignmentComparison) -> AssignmentComparison:
     return value.model_copy(
         update={
             "requested_service_targets": sorted(value.requested_service_targets),
-            "service": sorted(value.service, key=lambda item: item.target_hours),
+            "coverage": sorted(value.coverage, key=lambda item: item.target_hours),
             "selected_warehouse_ids": sorted(value.selected_warehouse_ids),
             "removed_warehouse_ids": sorted(value.removed_warehouse_ids),
             "affected_city_ids": sorted(value.affected_city_ids),
             "reassigned_city_ids": sorted(value.reassigned_city_ids),
-            "city_changes": sorted(
-                value.city_changes, key=lambda item: item.demand_city_id
-            ),
+            "city_changes": sorted(value.city_changes, key=lambda item: item.demand_city_id),
         }
     )
 
@@ -236,9 +231,7 @@ def _assignment_rows(
     )
     if set(rows) != set(demand):
         raise ValueError(f"delivery_{source}_assignment_city_set_mismatch")
-    expected_total = sum(
-        (item.demand_quantity for item in demand.values()), start=Decimal(0)
-    )
+    expected_total = sum((item.demand_quantity for item in demand.values()), start=Decimal(0))
     if assignment.total_demand != expected_total:
         raise ValueError(f"delivery_{source}_total_demand_mismatch")
     unassigned = Decimal(0)
@@ -252,13 +245,9 @@ def _assignment_rows(
             continue
         warehouse = warehouses.get(row.warehouse_id)
         if warehouse is None:
-            raise ValueError(
-                f"delivery_{source}_assignment_warehouse_unknown:{row.warehouse_id}"
-            )
+            raise ValueError(f"delivery_{source}_assignment_warehouse_unknown:{row.warehouse_id}")
         if warehouse.warehouse_id not in active:
-            raise ValueError(
-                f"delivery_{source}_assignment_warehouse_inactive:{row.warehouse_id}"
-            )
+            raise ValueError(f"delivery_{source}_assignment_warehouse_inactive:{row.warehouse_id}")
         if row.upstream_center_id != warehouse.upstream_center_id:
             raise ValueError(f"delivery_{source}_assignment_upstream_mismatch:{city_id}")
     if assignment.unassigned_demand != unassigned:
@@ -336,24 +325,48 @@ def _service(
     if not facility.service:
         raise ValueError("delivery_facility_service_required")
     requested = set(comparison.requested_service_targets)
-    compared = {item.target_hours: item for item in comparison.service}
+    compared = {item.target_hours: item for item in comparison.coverage}
     before = {item.target_hours: item for item in baseline.service}
     after = {item.target_hours: item for item in facility.service}
     if not requested or set(compared) != requested or set(before) != requested:
         raise ValueError("delivery_baseline_service_targets_mismatch")
     if set(after) != requested:
         raise ValueError("delivery_facility_service_targets_mismatch")
+    baseline_coverage = {
+        item.target_hours: item for item in coverage_metrics(baseline.assignment, requested)
+    }
+    facility_coverage = {
+        item.target_hours: item for item in coverage_metrics(facility.assignment, requested)
+    }
     for target in requested:
         item = compared[target]
-        if not _close(item.before_coverage_rate, before[target].coverage_rate):
-            raise ValueError("delivery_baseline_comparison_service_mismatch")
-        if not _close(item.after_coverage_rate, after[target].coverage_rate):
-            raise ValueError("delivery_facility_comparison_service_mismatch")
-        if not _close(
-            item.coverage_rate_delta,
-            item.after_coverage_rate - item.before_coverage_rate,
+        expected_before = baseline_coverage[target]
+        expected_after = facility_coverage[target]
+        if item.before != expected_before:
+            raise ValueError("delivery_baseline_comparison_coverage_mismatch")
+        if item.after != expected_after:
+            raise ValueError("delivery_facility_comparison_coverage_mismatch")
+        if item.delta.covered_city_count != (
+            expected_after.covered_city_count - expected_before.covered_city_count
+        ) or item.delta.total_city_count != (
+            expected_after.total_city_count - expected_before.total_city_count
         ):
-            raise ValueError("delivery_comparison_service_delta_mismatch")
+            raise ValueError("delivery_comparison_city_coverage_delta_mismatch")
+        if item.delta.covered_demand != (
+            expected_after.covered_demand - expected_before.covered_demand
+        ) or item.delta.total_demand != (
+            expected_after.total_demand - expected_before.total_demand
+        ):
+            raise ValueError("delivery_comparison_demand_coverage_delta_mismatch")
+        if not _close(
+            item.delta.city_coverage_rate,
+            expected_after.city_coverage_rate - expected_before.city_coverage_rate,
+        ) or not _close(
+            item.delta.demand_weighted_coverage_rate,
+            expected_after.demand_weighted_coverage_rate
+            - expected_before.demand_weighted_coverage_rate,
+        ):
+            raise ValueError("delivery_comparison_coverage_rate_delta_mismatch")
 
 
 def _cost(

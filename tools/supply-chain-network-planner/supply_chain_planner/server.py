@@ -51,6 +51,7 @@ from .optimization_models import (
     BaselineResult,
     CostSummary,
     CoverageMetricSummary,
+    ExistingWarehousePolicy,
     PMedianSolution,
     ScenarioResult,
     ScenarioSpec,
@@ -289,17 +290,21 @@ def compare_network_scenarios(
         before_active_ids,
         after_active_ids,
     )
-    service_summary = (
+    coverage_summary = (
         ", ".join(
-            f"{metric.target_hours:g}h demand-weighted "
-            f"{metric.before_coverage_rate:.1%}→"
-            f"{metric.after_coverage_rate:.1%} ({metric.coverage_rate_delta:+.1%})"
-            for metric in comparison.service[:8]
+            f"{metric.target_hours:g}h city-count "
+            f"{metric.before.city_coverage_rate:.1%}→"
+            f"{metric.after.city_coverage_rate:.1%} "
+            f"({metric.delta.city_coverage_rate:+.1%}), demand-weighted "
+            f"{metric.before.demand_weighted_coverage_rate:.1%}→"
+            f"{metric.after.demand_weighted_coverage_rate:.1%} "
+            f"({metric.delta.demand_weighted_coverage_rate:+.1%})"
+            for metric in comparison.coverage[:8]
         )
         or "none"
     )
-    if len(comparison.service) > 8:
-        service_summary = f"{service_summary}, +{len(comparison.service) - 8} more"
+    if len(comparison.coverage) > 8:
+        coverage_summary = f"{coverage_summary}, +{len(comparison.coverage) - 8} more"
     cost_summary = (
         "unavailable"
         if comparison.before_cost is None or comparison.after_cost is None
@@ -313,8 +318,8 @@ def compare_network_scenarios(
         f"[{_bounded_id_summary(comparison.selected_warehouse_ids)}], removed "
         f"[{_bounded_id_summary(comparison.removed_warehouse_ids)}], affected "
         f"{len(comparison.affected_city_ids)}, reassigned "
-        f"{len(comparison.reassigned_city_ids)}; cost {cost_summary}; service "
-        f"{service_summary}.",
+        f"{len(comparison.reassigned_city_ids)}; cost {cost_summary}; coverage "
+        f"{coverage_summary}.",
     )
 
 
@@ -399,8 +404,7 @@ def plan_route_matrix(
         float | None,
         Field(
             description=(
-                "Required when route_method is haversine; omit for navigation or "
-                "provided routes."
+                "Required when route_method is haversine; omit for navigation or provided routes."
             )
         ),
     ] = None,
@@ -408,8 +412,7 @@ def plan_route_matrix(
         float | None,
         Field(
             description=(
-                "Required when route_method is haversine; omit for navigation or "
-                "provided routes."
+                "Required when route_method is haversine; omit for navigation or provided routes."
             )
         ),
     ] = None,
@@ -819,8 +822,8 @@ def evaluate_facility_scenario(
         f"Evaluated a scenario with {len(result.active_warehouse_ids)} active warehouses; "
         f"added [{_bounded_id_summary(sorted(add_ids))}], removed "
         f"[{_bounded_id_summary(sorted(remove_ids))}]; cost "
-        f"{_cost_metric_summary(result.cost)}, service "
-        f"{_service_metric_summary(result.service)}.",
+        f"{_cost_metric_summary(result.cost)}, coverage "
+        f"{_coverage_metric_summary(coverage_metrics(assignment, sorted(set(scenario.service_targets))))}.",
     )
 
 
@@ -834,27 +837,18 @@ def solve_p_median(
         Field(
             ge=0,
             description=(
-                "Count of candidate new warehouses selected; excludes existing "
-                "warehouses."
+                "Count of candidate new warehouses selected; excludes existing warehouses."
             ),
         ),
     ],
-    fixed_existing_ids: Annotated[
-        list[str],
+    existing_warehouse_policy: Annotated[
+        ExistingWarehousePolicy,
         Field(
             description=(
-                "Existing warehouses that must remain open. Never include candidate "
-                "warehouse IDs."
-            )
-        ),
-    ],
-    optional_existing_ids: Annotated[
-        list[str],
-        Field(
-            description=(
-                "Remaining existing warehouses allowed to remain open or close; "
-                "disjoint from fixed_existing_ids, together covering all existing "
-                "warehouses, and never containing candidate IDs."
+                "Explicit existing-site policy. Use keep_all_existing to keep every "
+                "existing warehouse open. Use allow_closure only with the exact existing "
+                "warehouse IDs the user authorized to close; all other existing "
+                "warehouses remain fixed."
             )
         ),
     ],
@@ -891,6 +885,19 @@ def solve_p_median(
         (constraint.target_hours, constraint.minimum_coverage)
         for constraint in service_constraints or []
     ]
+    existing_ids = {
+        warehouse.warehouse_id for warehouse in prepared.warehouses if warehouse.is_existing
+    }
+    if existing_warehouse_policy.mode == "keep_all_existing":
+        fixed_existing_ids = existing_ids
+        optional_existing_ids: set[str] = set()
+    else:
+        if len(existing_warehouse_policy.closable_existing_ids) != len(
+            set(existing_warehouse_policy.closable_existing_ids)
+        ):
+            raise McpResourceContractError("existing_policy_closable_ids_duplicate")
+        optional_existing_ids = set(existing_warehouse_policy.closable_existing_ids)
+        fixed_existing_ids = existing_ids - optional_existing_ids
     try:
         solved, _branches, timed_out = enumerate_p_median(
             prepared.demand_cities,
@@ -898,8 +905,8 @@ def solve_p_median(
             routes,
             costs,
             number_to_open,
-            set(fixed_existing_ids),
-            set(optional_existing_ids),
+            fixed_existing_ids,
+            optional_existing_ids,
             time_limit_seconds,
             constraints,
         )
@@ -946,8 +953,8 @@ def solve_p_median(
         f"{len(solution.active_warehouse_ids)}, opened "
         f"[{_bounded_id_summary(solution.opened_candidate_ids)}], closed "
         f"[{_bounded_id_summary(solution.closed_existing_ids)}]; cost "
-        f"{_cost_metric_summary(solution.cost)}, service "
-        f"{_service_metric_summary(solution.service)}.",
+        f"{_cost_metric_summary(solution.cost)}, coverage "
+        f"{_coverage_metric_summary(coverage_metrics(solution.assignment, sorted(set(service_targets)))) if solution.assignment is not None else 'none'}.",
     )
 
 
@@ -976,7 +983,7 @@ def _load_final_delivery_inputs(
     )
     comparison = _runtime().load_model(
         comparison_ref,
-        "network_assignment_comparison.v1",
+        "network_assignment_comparison.v2",
         AssignmentComparison,
     )
     normalized = NormalizedInputBatch(
@@ -1058,10 +1065,30 @@ def _write_final_delivery_markdown(
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def prepare_network_comparison_map(
-    normalized_input_ref: ResourceRef,
-    baseline_ref: ResourceRef,
-    facility_location_ref: ResourceRef,
-    comparison_ref: ResourceRef,
+    normalized_input_ref: Annotated[
+        ResourceRef,
+        Field(description="The exact normalized input used by the baseline and selected result."),
+    ],
+    baseline_ref: Annotated[
+        ResourceRef,
+        Field(description="The exact baseline result used as the comparison before subject."),
+    ],
+    facility_location_ref: Annotated[
+        ResourceRef,
+        Field(
+            description="The exact selected facility result used as the comparison after subject."
+        ),
+    ],
+    comparison_ref: Annotated[
+        ResourceRef,
+        Field(
+            description=(
+                "The comparison produced from the same exact result referenced by "
+                "facility_location_ref and this exact baseline_ref; a semantically "
+                "equivalent recomputation is invalid."
+            )
+        ),
+    ],
     ctx: Context,
 ) -> CallToolResult:
     """Publish exact baseline-versus-plan GeoJSON and map-card arguments."""
@@ -1101,10 +1128,30 @@ def prepare_network_comparison_map(
 
 @mcp.tool(structured_output=True, annotations=FINAL_WORKSPACE_DELIVERY_TOOL)
 def render_network_comparison_map(
-    normalized_input_ref: ResourceRef,
-    baseline_ref: ResourceRef,
-    facility_location_ref: ResourceRef,
-    comparison_ref: ResourceRef,
+    normalized_input_ref: Annotated[
+        ResourceRef,
+        Field(description="The exact normalized input used by the baseline and selected result."),
+    ],
+    baseline_ref: Annotated[
+        ResourceRef,
+        Field(description="The exact baseline result used as the comparison before subject."),
+    ],
+    facility_location_ref: Annotated[
+        ResourceRef,
+        Field(
+            description="The exact selected facility result used as the comparison after subject."
+        ),
+    ],
+    comparison_ref: Annotated[
+        ResourceRef,
+        Field(
+            description=(
+                "The comparison produced from the same exact result referenced by "
+                "facility_location_ref and this exact baseline_ref; a semantically "
+                "equivalent recomputation is invalid."
+            )
+        ),
+    ],
     output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     ctx: Context,
 ) -> CallToolResult:
@@ -1168,7 +1215,7 @@ def publish_network_planning_report(
         )
         comparison = _runtime().load_model(
             report_input.comparison_ref,
-            "network_assignment_comparison.v1",
+            "network_assignment_comparison.v2",
             AssignmentComparison,
         )
         bundle = build_network_planning_report_bundle(

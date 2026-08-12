@@ -4809,6 +4809,95 @@
     "closed_existing_ids": [],
     "cost_delta": -33645285241.368996,
     "country_code": "ID",
+    "coverage": [
+      {
+        "after": {
+          "city_coverage_rate": 0.5,
+          "covered_city_count": 25,
+          "covered_demand": "37097",
+          "demand_weighted_coverage_rate": 0.7300403424185772,
+          "target_hours": 6.0,
+          "total_city_count": 50,
+          "total_demand": "50815"
+        },
+        "before": {
+          "city_coverage_rate": 0.34,
+          "covered_city_count": 17,
+          "covered_demand": "28363",
+          "demand_weighted_coverage_rate": 0.558161960051166,
+          "target_hours": 6.0,
+          "total_city_count": 50,
+          "total_demand": "50815"
+        },
+        "delta": {
+          "city_coverage_rate": 0.15999999999999998,
+          "covered_city_count": 8,
+          "covered_demand": "8734",
+          "demand_weighted_coverage_rate": 0.17187838236741115,
+          "total_city_count": 0,
+          "total_demand": "0"
+        },
+        "target_hours": 6.0
+      },
+      {
+        "after": {
+          "city_coverage_rate": 0.68,
+          "covered_city_count": 34,
+          "covered_demand": "41841",
+          "demand_weighted_coverage_rate": 0.8233986027747713,
+          "target_hours": 12.0,
+          "total_city_count": 50,
+          "total_demand": "50815"
+        },
+        "before": {
+          "city_coverage_rate": 0.44,
+          "covered_city_count": 22,
+          "covered_demand": "34174",
+          "demand_weighted_coverage_rate": 0.672517957296074,
+          "target_hours": 12.0,
+          "total_city_count": 50,
+          "total_demand": "50815"
+        },
+        "delta": {
+          "city_coverage_rate": 0.24000000000000005,
+          "covered_city_count": 12,
+          "covered_demand": "7667",
+          "demand_weighted_coverage_rate": 0.15088064547869728,
+          "total_city_count": 0,
+          "total_demand": "0"
+        },
+        "target_hours": 12.0
+      },
+      {
+        "after": {
+          "city_coverage_rate": 0.88,
+          "covered_city_count": 44,
+          "covered_demand": "48645",
+          "demand_weighted_coverage_rate": 0.9572960739938995,
+          "target_hours": 18.0,
+          "total_city_count": 50,
+          "total_demand": "50815"
+        },
+        "before": {
+          "city_coverage_rate": 0.54,
+          "covered_city_count": 27,
+          "covered_demand": "36777",
+          "demand_weighted_coverage_rate": 0.7237429892748204,
+          "target_hours": 18.0,
+          "total_city_count": 50,
+          "total_demand": "50815"
+        },
+        "delta": {
+          "city_coverage_rate": 0.33999999999999997,
+          "covered_city_count": 17,
+          "covered_demand": "11868",
+          "demand_weighted_coverage_rate": 0.2335530847190791,
+          "total_city_count": 0,
+          "total_demand": "0"
+        },
+        "target_hours": 18.0
+      }
+    ],
     "facility_active_warehouse_ids": [
       "WH-CANDIDATE-BALIKPAPAN",
       "WH-CANDIDATE-BANDAR_LAMPUNG",
@@ -4829,26 +4918,6 @@
     "opened_candidate_ids": [
       "WH-CANDIDATE-BALIKPAPAN",
       "WH-CANDIDATE-BANDAR_LAMPUNG"
-    ],
-    "service": [
-      {
-        "after_coverage_rate": 0.7300403424185772,
-        "before_coverage_rate": 0.558161960051166,
-        "coverage_rate_delta": 0.17187838236741115,
-        "target_hours": 6.0
-      },
-      {
-        "after_coverage_rate": 0.8233986027747713,
-        "before_coverage_rate": 0.672517957296074,
-        "coverage_rate_delta": 0.15088064547869728,
-        "target_hours": 12.0
-      },
-      {
-        "after_coverage_rate": 0.9572960739938995,
-        "before_coverage_rate": 0.7237429892748204,
-        "coverage_rate_delta": 0.2335530847190791,
-        "target_hours": 18.0
-      }
     ]
   },
   "title": "Warehouse network: baseline vs selected facilities"

@@ -439,8 +439,7 @@ async def _run_network_s3_then_s2(
                     "route_matrix_ref": routes_ref,
                     "cost_matrix_ref": costs_ref,
                     "number_to_open": 2,
-                    "fixed_existing_ids": existing_ids,
-                    "optional_existing_ids": [],
+                    "existing_warehouse_policy": {"mode": "keep_all_existing"},
                     "service_targets": [6, 12, 18],
                     "time_limit_seconds": 30,
                 },
@@ -528,8 +527,7 @@ async def _run_network_s3_then_s2(
             assert "## 时效覆盖" in report_markdown
             assert "结构化计算结果" in report_markdown
             assert report_result.content[0].text == (
-                "正式简报已生成：[下载中文 Markdown 简报]"
-                "(deliverables/sample2-report.md)"
+                "正式简报已生成：[下载中文 Markdown 简报](deliverables/sample2-report.md)"
             )
             return [*common_trace, *s3_trace], [*common_trace, *s2_trace]
 

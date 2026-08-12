@@ -336,7 +336,7 @@ def test_delivery_bundles_are_deterministic_for_equivalent_input_order(
             "requested_service_targets": list(
                 reversed(inputs.comparison.requested_service_targets)
             ),
-            "service": list(reversed(inputs.comparison.service)),
+            "coverage": list(reversed(inputs.comparison.coverage)),
             "selected_warehouse_ids": list(reversed(inputs.comparison.selected_warehouse_ids)),
             "affected_city_ids": list(reversed(inputs.comparison.affected_city_ids)),
             "reassigned_city_ids": list(reversed(inputs.comparison.reassigned_city_ids)),
