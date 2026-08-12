@@ -740,8 +740,11 @@ mod tests {
         assert!(NETWORK_SKILL.contains("矩阵 Resource 自己携带该 scope"));
         assert!(NETWORK_SKILL.contains("完整仓网分析、模拟或规划达到可交付终态时"));
         assert!(NETWORK_SKILL.contains("不用 JSON 报告冒充 Excel"));
-        assert!(NETWORK_SKILL.contains("一个组合 Tool 的当前 typed input"));
-        assert!(NETWORK_SKILL.contains("不要把同一动作拆成语义等价的多次求解和比较"));
+        assert!(NETWORK_SKILL.contains("`assess_facility_change` 当前 typed input"));
+        assert!(NETWORK_SKILL.contains("只调用一次 `assess_facility_change`"));
+        assert!(NETWORK_SKILL.contains(
+            "不要把同一动作拆为 `evaluate_facility_scenario` 与 `compare_network_scenarios`"
+        ));
         assert!(NETWORK_SKILL.contains("以准备调用的 Tool 当前 typed input 为边界"));
         assert!(NETWORK_SKILL.contains("不要携带该 Tool 不接收的上游 refs"));
         assert!(NETWORK_SKILL.contains("Tool 成功后只基于同一次 structured result"));
