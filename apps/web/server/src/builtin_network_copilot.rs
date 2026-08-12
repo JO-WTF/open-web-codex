@@ -128,11 +128,11 @@ impl BuiltinNetworkCopilotAssets {
             self.render_network_role(&profile_home, &profile_runtime, &profile_logs)?;
 
         Ok(vec![
-            ProfileStartupFile::skill("warehouse-supervisor", SUPERVISOR_SKILL.as_bytes())?,
-            ProfileStartupFile::skill("warehouse-data", DATA_SKILL.as_bytes())?,
-            ProfileStartupFile::skill("warehouse-network", NETWORK_SKILL.as_bytes())?,
-            ProfileStartupFile::agent_role("data_agent", data_role.into_bytes())?,
-            ProfileStartupFile::agent_role("network_agent", network_role.into_bytes())?,
+            ProfileStartupFile::managed_skill("warehouse-supervisor", SUPERVISOR_SKILL.as_bytes())?,
+            ProfileStartupFile::managed_skill("warehouse-data", DATA_SKILL.as_bytes())?,
+            ProfileStartupFile::managed_skill("warehouse-network", NETWORK_SKILL.as_bytes())?,
+            ProfileStartupFile::managed_agent_role("data_agent", data_role.into_bytes())?,
+            ProfileStartupFile::managed_agent_role("network_agent", network_role.into_bytes())?,
         ])
     }
 

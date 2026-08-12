@@ -11,15 +11,23 @@ use crate::{create_private_directory, restrict_directory_permissions};
 const MAX_STARTUP_FILE_BYTES: usize = 128 * 1024;
 const MAX_IDENTIFIER_BYTES: usize = 96;
 
-/// One server-provided default seed that Codex discovers from its native
-/// Profile roots. Existing regular files remain owned by the Profile.
+/// One server-provided native Profile file that Codex discovers from its
+/// standard roots. Ordinary files seed missing destinations; explicitly
+/// managed built-ins keep their reserved destinations aligned at startup.
 ///
 /// Destinations are intentionally limited to native Skill and Agent Role
 /// locations. This is not a general Profile filesystem API.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfileStartupFile {
     destination: ProfileStartupFileDestination,
+    ownership: ProfileStartupFileOwnership,
     contents: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProfileStartupFileOwnership {
+    Seed,
+    Managed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -35,7 +43,27 @@ impl ProfileStartupFile {
     ) -> Result<Self, ProfileStartupFileError> {
         let id = id.into();
         validate_identifier(&id, "Skill id")?;
-        Self::new(ProfileStartupFileDestination::Skill { id }, contents.into())
+        Self::new(
+            ProfileStartupFileDestination::Skill { id },
+            ProfileStartupFileOwnership::Seed,
+            contents.into(),
+        )
+    }
+
+    /// One server-owned built-in Skill. Its reserved destination is refreshed
+    /// before the Profile process starts while unrelated Profile files remain
+    /// user-owned.
+    pub fn managed_skill(
+        id: impl Into<String>,
+        contents: impl Into<Vec<u8>>,
+    ) -> Result<Self, ProfileStartupFileError> {
+        let id = id.into();
+        validate_identifier(&id, "Skill id")?;
+        Self::new(
+            ProfileStartupFileDestination::Skill { id },
+            ProfileStartupFileOwnership::Managed,
+            contents.into(),
+        )
     }
 
     pub fn agent_role(
@@ -46,12 +74,29 @@ impl ProfileStartupFile {
         validate_identifier(&name, "Agent Role name")?;
         Self::new(
             ProfileStartupFileDestination::AgentRole { name },
+            ProfileStartupFileOwnership::Seed,
+            contents.into(),
+        )
+    }
+
+    /// One server-owned built-in Agent Role. The checked-in definition is the
+    /// startup source of truth for this reserved Role name.
+    pub fn managed_agent_role(
+        name: impl Into<String>,
+        contents: impl Into<Vec<u8>>,
+    ) -> Result<Self, ProfileStartupFileError> {
+        let name = name.into();
+        validate_identifier(&name, "Agent Role name")?;
+        Self::new(
+            ProfileStartupFileDestination::AgentRole { name },
+            ProfileStartupFileOwnership::Managed,
             contents.into(),
         )
     }
 
     fn new(
         destination: ProfileStartupFileDestination,
+        ownership: ProfileStartupFileOwnership,
         contents: Vec<u8>,
     ) -> Result<Self, ProfileStartupFileError> {
         if contents.is_empty() {
@@ -66,6 +111,7 @@ impl ProfileStartupFile {
         }
         Ok(Self {
             destination,
+            ownership,
             contents,
         })
     }
@@ -121,7 +167,7 @@ pub(crate) fn materialize_profile_startup_files(
         })?;
     for file in files {
         let relative_path = file.relative_path();
-        materialize_profile_startup_file(&home, &relative_path, &file.contents)?;
+        materialize_profile_startup_file(&home, &relative_path, file.ownership, &file.contents)?;
     }
     Ok(())
 }
@@ -129,6 +175,7 @@ pub(crate) fn materialize_profile_startup_files(
 fn materialize_profile_startup_file(
     home: &Path,
     relative_path: &Path,
+    ownership: ProfileStartupFileOwnership,
     contents: &[u8],
 ) -> Result<(), ProfileStartupFileError> {
     let label = relative_path_label(relative_path);
@@ -141,7 +188,7 @@ fn materialize_profile_startup_file(
     })?;
     let target = parent.join(file_name);
 
-    match fs::symlink_metadata(&target) {
+    let replace_existing = match fs::symlink_metadata(&target) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(ProfileStartupFileError::UnsafePath {
                 relative_path: label,
@@ -154,17 +201,28 @@ fn materialize_profile_startup_file(
                 message: "target must be a regular file".to_string(),
             });
         }
-        // Checked-in startup files seed a clean Profile. Once a regular file
-        // exists, the Profile is the runtime owner and may hot-edit it.
-        Ok(_) => return Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        // Ordinary startup files only seed a clean Profile. Managed built-ins
+        // reserve their exact destination and converge it before Runtime
+        // discovery so a deployed Tool/Role contract cannot remain stale.
+        Ok(_) if ownership == ProfileStartupFileOwnership::Seed => return Ok(()),
+        Ok(_) => {
+            let current = fs::read(&target).map_err(|source| ProfileStartupFileError::Io {
+                relative_path: label.clone(),
+                source,
+            })?;
+            if current == contents {
+                return Ok(());
+            }
+            true
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
         Err(source) => {
             return Err(ProfileStartupFileError::Io {
                 relative_path: label,
                 source,
             });
         }
-    }
+    };
 
     let temporary = parent.join(format!(
         ".{}.{}.tmp",
@@ -186,6 +244,18 @@ fn materialize_profile_startup_file(
             relative_path: label,
             source,
         });
+    }
+
+    if replace_existing {
+        let result =
+            fs::rename(&temporary, &target).map_err(|source| ProfileStartupFileError::Io {
+                relative_path: label,
+                source,
+            });
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        return result;
     }
 
     match fs::hard_link(&temporary, &target) {
@@ -403,6 +473,48 @@ mod tests {
         assert_eq!(
             fs::read_to_string(home.join("skills/warehouse-data/SKILL.md")).expect("read skill"),
             "seed"
+        );
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn refreshes_only_managed_builtin_destinations() {
+        let root = temp_root("startup-managed");
+        let home = root.join("profile");
+        fs::create_dir_all(home.join("agents")).expect("create agents");
+        fs::create_dir_all(home.join("skills/warehouse-network")).expect("create builtin skill");
+        fs::create_dir_all(home.join("skills/user-skill")).expect("create user skill");
+        fs::write(home.join("agents/network_agent.toml"), "old-role").expect("write old role");
+        fs::write(home.join("skills/warehouse-network/SKILL.md"), "old-skill")
+            .expect("write old skill");
+        fs::write(home.join("skills/user-skill/SKILL.md"), "user-owned").expect("write user skill");
+        fs::write(home.join("config.toml"), "model = \"keep-me\"\n").expect("write config");
+
+        let files = [
+            ProfileStartupFile::managed_skill("warehouse-network", b"current-skill".to_vec())
+                .expect("managed skill"),
+            ProfileStartupFile::managed_agent_role("network_agent", b"current-role".to_vec())
+                .expect("managed role"),
+        ];
+        materialize_profile_startup_files(&home, &files).expect("refresh managed files");
+        materialize_profile_startup_files(&home, &files).expect("idempotent refresh");
+
+        assert_eq!(
+            fs::read_to_string(home.join("skills/warehouse-network/SKILL.md"))
+                .expect("read managed skill"),
+            "current-skill"
+        );
+        assert_eq!(
+            fs::read_to_string(home.join("agents/network_agent.toml")).expect("read managed role"),
+            "current-role"
+        );
+        assert_eq!(
+            fs::read_to_string(home.join("skills/user-skill/SKILL.md")).expect("read user skill"),
+            "user-owned"
+        );
+        assert_eq!(
+            fs::read_to_string(home.join("config.toml")).expect("read config"),
+            "model = \"keep-me\"\n"
         );
         fs::remove_dir_all(root).expect("remove temp root");
     }
