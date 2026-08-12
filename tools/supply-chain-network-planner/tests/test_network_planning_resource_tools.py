@@ -264,6 +264,9 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
     assert {"normalized_input_ref", "route_matrix_ref", "scenario"}.issubset(scenario["required"])
 
     assessment = tools["assess_facility_change"].inputSchema
+    assert "single call" in tools["assess_facility_change"].description
+    assert "do not chain" in tools["assess_facility_change"].description
+    assert "assess_facility_change instead" in tools["evaluate_facility_scenario"].description
     assert "ctx" not in assessment["properties"]
     assert {
         "normalized_input_ref",
@@ -276,6 +279,7 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
     assessment_output = tools["assess_facility_change"].outputSchema
     assert assessment_output["properties"]["coverage"]["maxItems"] == 32
     assert assessment_output["properties"]["affected_city_ids"]["maxItems"] == 100
+    assert assessment_output["properties"]["affected_city_changes"]["maxItems"] == 100
     assert assessment_output["properties"]["reassigned_city_ids"]["maxItems"] == 100
 
     p_median = tools["solve_p_median"].inputSchema
@@ -709,6 +713,7 @@ def test_assess_facility_change_preserves_selected_candidates_and_matches_manual
     assert bounded.cost.currency == "IDR"
     assert bounded.cost.complete
     assert len(bounded.affected_city_ids) <= 100
+    assert len(bounded.affected_city_changes) <= 100
     assert len(bounded.reassigned_city_ids) <= 100
 
     scenario = server._runtime().load_model(
@@ -759,6 +764,14 @@ def test_assess_facility_change_preserves_selected_candidates_and_matches_manual
     assert comparison == manual_comparison
     assert bounded.coverage == comparison.coverage
     assert bounded.affected_city_count == len(comparison.affected_city_ids)
+    assert bounded.affected_city_changes == [
+        change for change in comparison.city_changes if change.affected
+    ][:100]
+    assert all(
+        change.before_warehouse_id is not None
+        and change.after_warehouse_id is not None
+        for change in bounded.affected_city_changes
+    )
     assert bounded.reassigned_city_count == len(comparison.reassigned_city_ids)
 
     wrong_server_ref = server.ComparableResourceRef(

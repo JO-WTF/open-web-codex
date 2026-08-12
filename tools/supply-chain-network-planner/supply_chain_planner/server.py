@@ -860,7 +860,14 @@ def assess_facility_change(
     ctx: Context,
     cost_matrix_ref: ResourceRef | None = None,
 ) -> Annotated[CallToolResult, FacilityChangeAssessmentToolResult]:
-    """Apply and compare one facility change against an exact typed result."""
+    """Apply and compare one bounded facility change in a single call.
+
+    Use this tool when a user adds, removes, or relocates facilities and the
+    exact normalized input, route matrix, prior result, scenario, and optional
+    cost matrix are already available. It returns both the changed scenario and
+    its comparison; do not chain evaluate_facility_scenario and
+    compare_network_scenarios for that request.
+    """
     _runtime().require_workspace(ctx)
     prepared, routes, costs, targets, add_ids, remove_ids = _load_facility_scenario_inputs(
         normalized_input_ref,
@@ -934,6 +941,9 @@ def assess_facility_change(
         or comparison_published.structuredContent is None
     ):
         raise McpResourceContractError("facility_change_result_missing")
+    affected_city_changes = [
+        change for change in comparison.city_changes if change.affected
+    ]
     result = FacilityChangeAssessmentToolResult(
         summary=summary,
         scenario_ref=NetworkScenarioResourceRef.model_validate(
@@ -956,6 +966,8 @@ def assess_facility_change(
         affected_city_count=len(comparison.affected_city_ids),
         affected_city_ids=comparison.affected_city_ids[:100],
         affected_city_ids_truncated=len(comparison.affected_city_ids) > 100,
+        affected_city_changes=affected_city_changes[:100],
+        affected_city_changes_truncated=len(affected_city_changes) > 100,
         reassigned_city_count=len(comparison.reassigned_city_ids),
         reassigned_city_ids=comparison.reassigned_city_ids[:100],
         reassigned_city_ids_truncated=len(comparison.reassigned_city_ids) > 100,
@@ -978,7 +990,11 @@ def evaluate_facility_scenario(
     ctx: Context,
     cost_matrix_ref: ResourceRef | None = None,
 ) -> CallToolResult:
-    """Evaluate an add, remove or relocation scenario without a mutable Case."""
+    """Evaluate a standalone scenario from the normalized existing footprint.
+
+    Use assess_facility_change instead when one facility change must be applied
+    to and compared with an exact prior baseline, scenario, or location result.
+    """
     _runtime().require_workspace(ctx)
     prepared, routes, costs, targets, add_ids, remove_ids = _load_facility_scenario_inputs(
         normalized_input_ref,

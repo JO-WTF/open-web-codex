@@ -17,7 +17,7 @@ from .network_models import (
     RouteQuoteRecord,
     WarehouseRecord,
 )
-from .optimization_models import CoverageComparison, CoverageMetricSummary
+from .optimization_models import CityAssignmentChange, CoverageComparison, CoverageMetricSummary
 
 MCP_SERVER_NAME = "supply_chain"
 
@@ -146,6 +146,8 @@ class FacilityChangeAssessmentToolResult(StrictModel):
     affected_city_count: int = Field(ge=0)
     affected_city_ids: list[str] = Field(max_length=100)
     affected_city_ids_truncated: bool
+    affected_city_changes: list[CityAssignmentChange] = Field(max_length=100)
+    affected_city_changes_truncated: bool
     reassigned_city_count: int = Field(ge=0)
     reassigned_city_ids: list[str] = Field(max_length=100)
     reassigned_city_ids_truncated: bool
