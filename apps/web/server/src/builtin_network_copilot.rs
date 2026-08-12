@@ -672,6 +672,17 @@ mod tests {
         assert!(SUPERVISOR_SKILL.contains("不自行猜测、缩写或转换国家代码"));
         assert!(SUPERVISOR_SKILL.contains("不要再次询问是否纳入候选仓"));
         assert!(SUPERVISOR_SKILL.contains("一次用户请求只保留一份正式简报"));
+        assert!(SUPERVISOR_SKILL
+            .contains("当前后续 Tool 实际需要、且由前轮 Tool 返回的全部 exact refs"));
+        assert!(SUPERVISOR_SKILL.contains("typed `needs_context`"));
+        assert!(SUPERVISOR_SKILL.contains("不得 list resources、读取 Resource 正文"));
+        assert!(SUPERVISOR_SKILL
+            .contains("阶段完成 handoff 动态列出本阶段实际 Tool 返回且后续适用的 exact refs"));
+        assert!(SUPERVISOR_SKILL
+            .contains("final Tool/Artifact typed descriptor 与 Platform terminal state 是权威"));
+        assert!(SUPERVISOR_SKILL.contains(
+            "下游 Tool 同时接收 result 与 comparison 时，comparison 必须由同一个 exact result 产生"
+        ));
         assert!(DATA_SKILL.contains("`city_id`、`city_name`、`demand_quantity`"));
         assert!(DATA_SKILL.contains("不要从行政区目录静默生成候选仓"));
         assert!(DATA_SKILL.contains("路线距离、时长和计算来源"));
@@ -696,6 +707,18 @@ mod tests {
         assert!(NETWORK_SKILL.contains("矩阵 Resource 自己携带该 scope"));
         assert!(NETWORK_SKILL.contains("完整仓网分析、模拟或规划达到可交付终态时"));
         assert!(NETWORK_SKILL.contains("不用 JSON 报告冒充 Excel"));
+        assert!(NETWORK_SKILL
+            .contains("处理 follow-up 时只消费 Supervisor 或当前 Thread 提供的 exact refs"));
+        assert!(NETWORK_SKILL.contains("当前 Tool 任一 required ref"));
+        assert!(NETWORK_SKILL.contains("typed `needs_context`"));
+        assert!(
+            NETWORK_SKILL.contains("阶段完成时动态列出本阶段实际 Tool 返回且后续适用的 exact refs")
+        );
+        assert!(NETWORK_SKILL
+            .contains("final Tool/Artifact typed descriptor 与 Platform terminal state 是权威"));
+        assert!(NETWORK_SKILL.contains(
+            "下游 Tool 同时接收 result 与 comparison 时，comparison 必须由同一个 exact result 产生"
+        ));
         assert!(NETWORK_ROLE.contains("call the matching domain Tool directly"));
         assert!(NETWORK_ROLE.contains("pass its arguments unchanged"));
         for deprecated in [

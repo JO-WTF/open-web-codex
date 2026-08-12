@@ -32,6 +32,12 @@ description: 当用户要求准备仓网数据、分析覆盖或成本、模拟�
 - 如果 `network_agent`、地图 Resource Tool 或地图卡片 Tool 不可用或失败，Root 必须报告该明确失败并停止；不得降级为自制 HTML、文件、图片、文本地图或伪造成功。
 - 不把以上分支固化为固定 workflow。根据用户目标跳过无关步骤，并优先复用当前 Thread 中由允许工具返回、仍适用的精确 ResourceRef。
 
+## 延续原生交接
+
+- 依赖前轮 Tool refs 的后续工作优先在同一 `network_agent` child 上使用原生 follow-up；仅当原 child 不可用且已持有当前后续 Tool 实际需要、且由前轮 Tool 返回的全部 exact refs 时才 spawn 替代 child，否则返回 typed `needs_context` 并停止；不得 list resources、读取 Resource 正文、扫描 Workspace 或重建 ref/结果。阶段完成 handoff 动态列出本阶段实际 Tool 返回且后续适用的 exact refs。
+- Network final 只原样回传实际 Tool structured result 的 bounded 结论和 exact refs；不发明 ref、不复制内容。final Tool/Artifact typed descriptor 与 Platform terminal state 是权威；不得用 `ls`、`cat`、`find`、`stat`、shell、Workspace 扫描、Resource 重读或自行计算复核成功交付，失败则报告原始终态。
+- 下游 Tool 同时接收 result 与 comparison 时，comparison 必须由同一个 exact result 产生；语义等价的重算 result 不可混用。
+
 ## 使用 Codex 原生协作
 
 - 使用原生 spawn、wait、mailbox、steer 和 follow-up。明确选择 `fork_turns`：child 需要当前业务对话时带入 Root history；任务与输入已完整时使用有界的新 child。

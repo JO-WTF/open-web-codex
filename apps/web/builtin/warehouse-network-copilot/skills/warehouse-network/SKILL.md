@@ -9,6 +9,10 @@ description: 仅供仓网 Supervisor 原生 spawn 的 network_agent child 使用
 
 所有分析必须直接消费上游 exact `ResourceRef` 和当前 Tool 返回的 bounded summary。不得使用 `ls`、`find`、`git`、`jq`、`cat`、内联 Python 或其他 Workspace 命令重读原始文件、中间 Resource、旧 Artifact 或最终报告来重建指标；Tool 合同不足时返回明确缺口，不得用 shell 旁路补协议。
 
+- 处理 follow-up 时只消费 Supervisor 或当前 Thread 提供的 exact refs；缺当前 Tool 任一 required ref 时返回 typed `needs_context` 并停止；不得 list resources、读取 Resource 正文、扫描 Workspace 或重建 ref/结果。
+- Network final 只原样回传实际 Tool structured result 的 bounded 结论和 exact refs；不发明 ref、不复制内容。final Tool/Artifact typed descriptor 与 Platform terminal state 是权威；不得用 `ls`、`cat`、`find`、`stat`、shell、Workspace 扫描、Resource 重读或自行计算复核成功交付，失败则报告原始终态。阶段完成时动态列出本阶段实际 Tool 返回且后续适用的 exact refs。
+- 下游 Tool 同时接收 result 与 comparison 时，comparison 必须由同一个 exact result 产生；语义等价的重算 result 不可混用。
+
 ## 定义数据要求
 
 - 先根据用户目标向 Supervisor 说明必要数据和决策参数，不直接读取用户上传的原始业务文件；文件检查、字段映射、标准化和地理补全由 Data Agent 完成。
