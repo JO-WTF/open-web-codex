@@ -710,6 +710,8 @@ mod tests {
         assert!(SUPERVISOR_SKILL
             .contains("只有当后续工作的正确性确实依赖原 child 对话中尚未结构化的判断或上下文时"));
         assert!(SUPERVISOR_SKILL.contains("spawn 后只等待 child，不再次复述 handoff"));
+        assert!(SUPERVISOR_SKILL.contains("`wait` 已返回 child `completed` 时，该 child 已是终态"));
+        assert!(SUPERVISOR_SKILL.contains("不再调用 `closeAgent` 或其他终止工具"));
         assert!(SUPERVISOR_SKILL.contains("Root 只简短汇总用户要求的业务变化"));
         assert!(SUPERVISOR_SKILL
             .contains("final Tool/Artifact typed descriptor 与 Platform terminal state 是权威"));

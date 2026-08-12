@@ -36,7 +36,7 @@ description: 当用户要求准备仓网数据、分析覆盖或成本、模拟�
 
 - 原 `network_agent` 已处于 safe/terminal 边界，且下一 Tool 的当前 typed input 已完整时，spawn 新的 `network_agent` 并显式使用 `fork_turns=none`。以该 typed input 为 handoff 边界：只传本次调用实际需要且 Tool 接受的 exact Resource refs、非 Resource 参数，以及合同之外仍需明确的用户许可和交付要求；不要传 Tool 不接收的上游 refs，不要复述已经封装在 Resource 中的路线、成本、求解规则、历史指标或旧 child 对话。
 - 只有当后续工作的正确性确实依赖原 child 对话中尚未结构化的判断或上下文时，才对同一个 `network_agent` 使用原生 follow-up；不能只因为该 child 曾经参与前轮就复用其完整历史。若下一 Tool 的 required input 不完整，返回 typed `needs_context` 并停止；不得 list resources、读取 Resource 正文、扫描 Workspace 或重建 ref/结果。
-- spawn 后只等待 child，不再次复述 handoff。child final 后，Root 只简短汇总用户要求的业务变化；除必要的交付链接、地图 embed 和当前下游调用所需引用外，不重复 refs、输入、过程或相同结论。
+- spawn 后只等待 child，不再次复述 handoff。`wait` 已返回 child `completed` 时，该 child 已是终态；直接汇总结果，不再调用 `closeAgent` 或其他终止工具。child final 后，Root 只简短汇总用户要求的业务变化；除必要的交付链接、地图 embed 和当前下游调用所需引用外，不重复 refs、输入、过程或相同结论。
 - Network final 只使用实际 Tool structured result 的 bounded 结论。final Tool/Artifact typed descriptor 与 Platform terminal state 是权威；不得用 `ls`、`cat`、`find`、`stat`、shell、Workspace 扫描、Resource 重读或自行计算复核成功交付，失败则报告原始终态。
 - 下游 Tool 同时接收 result 与 comparison 时，comparison 必须由同一个 exact result 产生；语义等价的重算 result 不可混用。
 
