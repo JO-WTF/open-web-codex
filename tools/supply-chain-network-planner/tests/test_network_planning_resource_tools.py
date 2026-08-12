@@ -193,10 +193,10 @@ def _sample2_resource_refs(
     )
     comparison_ref = _result_ref(
         server.compare_network_scenarios(
-            baseline_ref,
-            facility_ref,
-            [6, 12, 18],
-            ctx,
+            before_ref=baseline_ref,
+            after_ref=facility_ref,
+            service_targets=[6, 12, 18],
+            ctx=ctx,
         )
     )
     return prepared_ref, baseline_ref, facility_ref, comparison_ref
@@ -275,7 +275,41 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
 
     comparison = tools["compare_network_scenarios"].inputSchema
     assert "ctx" not in comparison["properties"]
-    assert {"baseline_ref", "candidate_ref", "service_targets"}.issubset(comparison["required"])
+    assert {"before_ref", "after_ref", "service_targets"}.issubset(comparison["required"])
+    assert "baseline_ref" not in comparison["properties"]
+    assert "candidate_ref" not in comparison["properties"]
+    assert comparison["properties"]["before_ref"] == comparison["properties"]["after_ref"]
+    comparable_ref_schema = comparison["$defs"]["ComparableResourceRef"]
+    assert comparable_ref_schema["properties"]["resource_schema"]["enum"] == [
+        "network_baseline.v2",
+        "network_scenario.v2",
+        "facility_location_solution.v3",
+    ]
+    assert "Comparable network result schema" in comparable_ref_schema["properties"][
+        "resource_schema"
+    ]["description"]
+
+    route_plan = tools["plan_route_matrix"].inputSchema
+    assert "Route method" in route_plan["properties"]["route_method"]["description"]
+    assert "both detour_coefficient and average_speed_kph" in route_plan["properties"][
+        "route_method"
+    ]["description"]
+    assert "Required when route_method is haversine" in route_plan["properties"][
+        "detour_coefficient"
+    ]["description"]
+    assert "Required when route_method is haversine" in route_plan["properties"][
+        "average_speed_kph"
+    ]["description"]
+
+    assert "Count of candidate new warehouses selected" in p_median["properties"][
+        "number_to_open"
+    ]["description"]
+    assert "Existing warehouses that must remain open" in p_median["properties"][
+        "fixed_existing_ids"
+    ]["description"]
+    assert "allowed to remain open or close" in p_median["properties"][
+        "optional_existing_ids"
+    ]["description"]
 
     comparison_map = tools["prepare_network_comparison_map"].inputSchema
     assert "ctx" not in comparison_map["properties"]
@@ -532,10 +566,10 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(tmp_path: Path, mon
     assert [metric.target_hours for metric in scenario.service] == [12]
 
     comparison_result = server.compare_network_scenarios(
-        baseline_ref,
-        scenario_ref,
-        [12],
-        ctx,
+        before_ref=baseline_ref,
+        after_ref=scenario_ref,
+        service_targets=[12],
+        ctx=ctx,
     )
     comparison_ref = _result_ref(comparison_result)
     assert comparison_result.structuredContent is not None
@@ -553,6 +587,39 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(tmp_path: Path, mon
     assert len(comparison.city_changes) == 50
     assert len(comparison.affected_city_ids) == 50
     assert len(comparison.reassigned_city_ids) == 50
+
+    same_scenario_ref = _result_ref(
+        server.compare_network_scenarios(
+            before_ref=scenario_ref,
+            after_ref=scenario_ref,
+            service_targets=[12],
+            ctx=ctx,
+        )
+    )
+    same_scenario = server._runtime().load_model(
+        same_scenario_ref,
+        "network_assignment_comparison.v1",
+        AssignmentComparison,
+    )
+    assert same_scenario.selected_warehouse_ids == []
+    assert same_scenario.removed_warehouse_ids == []
+    assert same_scenario.affected_city_ids == []
+
+    unsupported_ref = ResourceRef(
+        server=server.MCP_SERVER_NAME,
+        uri=baseline_ref.uri,
+        resource_schema="route_matrix.v2",
+    )
+    with pytest.raises(
+        McpResourceContractError,
+        match="comparison_subject_schema_invalid",
+    ):
+        server.compare_network_scenarios(
+            before_ref=unsupported_ref,
+            after_ref=scenario_ref,
+            service_targets=[12],
+            ctx=ctx,
+        )
 
 
 def test_comparison_accepts_actual_and_optimized_baseline_resources(
@@ -585,7 +652,12 @@ def test_comparison_accepts_actual_and_optimized_baseline_resources(
     )
 
     comparison_ref = _result_ref(
-        server.compare_network_scenarios(actual_ref, optimized_ref, [12], ctx)
+        server.compare_network_scenarios(
+            before_ref=actual_ref,
+            after_ref=optimized_ref,
+            service_targets=[12],
+            ctx=ctx,
+        )
     )
     comparison = server._runtime().load_model(
         comparison_ref,
@@ -658,11 +730,57 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
     assert facility.cost is not None and facility.cost.complete
     assert [metric.target_hours for metric in facility.service] == [6, 12, 18]
 
+    scenario_ref = _result_ref(
+        server.evaluate_facility_scenario(
+            prepared_ref,
+            route_ref,
+            ScenarioSpec(
+                remove_warehouse_ids=[BEKASI_ID],
+                objective="min_cost",
+                service_targets=[12],
+            ),
+            ctx,
+            cost_ref,
+        )
+    )
+    facility_to_scenario_ref = _result_ref(
+        server.compare_network_scenarios(
+            before_ref=facility_ref,
+            after_ref=scenario_ref,
+            service_targets=[12],
+            ctx=ctx,
+        )
+    )
+    facility_to_scenario = server._runtime().load_model(
+        facility_to_scenario_ref,
+        "network_assignment_comparison.v1",
+        AssignmentComparison,
+    )
+    assert facility_to_scenario.requested_service_targets == [12]
+    assert BEKASI_ID in facility_to_scenario.removed_warehouse_ids
+
+    facility_without_assignment_ref = _resource_ref(
+        store.publish(
+            facility.schema_version,
+            facility.model_copy(update={"assignment": None}),
+        )
+    )
+    with pytest.raises(
+        McpResourceContractError,
+        match="comparable_assignment_unavailable",
+    ):
+        server.compare_network_scenarios(
+            before_ref=facility_without_assignment_ref,
+            after_ref=scenario_ref,
+            service_targets=[12],
+            ctx=ctx,
+        )
+
     comparison_result = server.compare_network_scenarios(
-        baseline_ref,
-        facility_ref,
-        [6, 12, 18],
-        ctx,
+        before_ref=baseline_ref,
+        after_ref=facility_ref,
+        service_targets=[6, 12, 18],
+        ctx=ctx,
     )
     comparison_ref = _result_ref(comparison_result)
     assert comparison_result.structuredContent is not None

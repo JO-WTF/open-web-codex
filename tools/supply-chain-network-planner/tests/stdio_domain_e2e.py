@@ -406,8 +406,8 @@ async def _run_network_s3_then_s2(
                 session,
                 "compare_network_scenarios",
                 {
-                    "baseline_ref": baseline_ref,
-                    "candidate_ref": scenario_ref,
+                    "before_ref": baseline_ref,
+                    "after_ref": scenario_ref,
                     "service_targets": [12],
                 },
                 workspace,
@@ -460,8 +460,8 @@ async def _run_network_s3_then_s2(
                 session,
                 "compare_network_scenarios",
                 {
-                    "baseline_ref": baseline_ref,
-                    "candidate_ref": facility_ref,
+                    "before_ref": baseline_ref,
+                    "after_ref": facility_ref,
                     "service_targets": [6, 12, 18],
                 },
                 workspace,

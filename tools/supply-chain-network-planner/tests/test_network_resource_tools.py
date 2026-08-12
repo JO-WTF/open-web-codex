@@ -119,6 +119,16 @@ def test_matrix_tools_expose_composable_resource_schemas() -> None:
 
     plan = tools["plan_route_matrix"].inputSchema
     assert "prior_route_matrix_ref" not in plan["properties"]
+    assert "Route method" in plan["properties"]["route_method"]["description"]
+    assert "both detour_coefficient and average_speed_kph" in plan["properties"][
+        "route_method"
+    ]["description"]
+    assert "Required when route_method is haversine" in plan["properties"][
+        "detour_coefficient"
+    ]["description"]
+    assert "Required when route_method is haversine" in plan["properties"][
+        "average_speed_kph"
+    ]["description"]
     haversine = tools["build_haversine_route_matrix"].inputSchema
     assert "route_plan_ref" not in haversine["properties"]
     assert {"detour_coefficient", "average_speed_kph"}.issubset(haversine["required"])

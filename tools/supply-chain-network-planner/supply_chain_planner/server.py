@@ -198,6 +198,21 @@ _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".code
 _mcp_resource_runtime: McpResourceRuntime | None = None
 
 
+class ComparableResourceRef(ResourceRef):
+    """A network result Resource that can be used as either comparison subject."""
+
+    resource_schema: Literal[
+        "network_baseline.v2",
+        "network_scenario.v2",
+        "facility_location_solution.v3",
+    ] = Field(
+        description=(
+            "Comparable network result schema: network_baseline.v2, "
+            "network_scenario.v2, or facility_location_solution.v3."
+        )
+    )
+
+
 def _store() -> ResourceStore:
     return _runtime().store
 
@@ -225,56 +240,54 @@ def read_supply_chain_resource(resource_id: str) -> str:
     return _store().read(resource_id)
 
 
-@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
-def compare_network_scenarios(
-    baseline_ref: ResourceRef,
-    candidate_ref: ResourceRef,
-    service_targets: Annotated[list[float], Field(min_length=1, max_length=32)],
-    ctx: Context,
-) -> CallToolResult:
-    """Compare a typed baseline with another baseline, scenario, or location result."""
-    _runtime().require_workspace(ctx)
-    if any(target <= 0 for target in service_targets):
-        raise McpResourceContractError("comparison_service_targets_invalid")
-    baseline = _runtime().load_model(
-        baseline_ref,
-        "network_baseline.v2",
-        BaselineResult,
-    )
-    if candidate_ref.resource_schema == "network_scenario.v2":
-        candidate = _runtime().load_model(
-            candidate_ref,
-            "network_scenario.v2",
-            ScenarioResult,
-        )
-        candidate_assignment = candidate.assignment
-        candidate_active_ids = set(candidate.active_warehouse_ids)
-    elif candidate_ref.resource_schema == "network_baseline.v2":
-        candidate = _runtime().load_model(
-            candidate_ref,
+def _load_comparable_resource(
+    resource_ref: ComparableResourceRef,
+) -> tuple[AssignmentResult, set[str]]:
+    """Load one supported comparison subject through the provider runtime."""
+    if resource_ref.resource_schema == "network_baseline.v2":
+        result = _runtime().load_model(
+            resource_ref,
             "network_baseline.v2",
             BaselineResult,
         )
-        candidate_assignment = candidate.assignment
-        candidate_active_ids = set(candidate.active_warehouse_ids)
-    elif candidate_ref.resource_schema == "facility_location_solution.v3":
-        candidate = _runtime().load_model(
-            candidate_ref,
+    elif resource_ref.resource_schema == "network_scenario.v2":
+        result = _runtime().load_model(
+            resource_ref,
+            "network_scenario.v2",
+            ScenarioResult,
+        )
+    elif resource_ref.resource_schema == "facility_location_solution.v3":
+        result = _runtime().load_model(
+            resource_ref,
             "facility_location_solution.v3",
             PMedianSolution,
         )
-        if candidate.assignment is None:
-            raise McpResourceContractError("candidate_assignment_unavailable")
-        candidate_assignment = candidate.assignment
-        candidate_active_ids = set(candidate.active_warehouse_ids)
+        if result.assignment is None:
+            raise McpResourceContractError("comparable_assignment_unavailable")
     else:
-        raise McpResourceContractError("comparison_candidate_schema_invalid")
+        raise McpResourceContractError("comparison_subject_schema_invalid")
+    return result.assignment, set(result.active_warehouse_ids)
+
+
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
+def compare_network_scenarios(
+    before_ref: ComparableResourceRef,
+    after_ref: ComparableResourceRef,
+    service_targets: Annotated[list[float], Field(min_length=1, max_length=32)],
+    ctx: Context,
+) -> CallToolResult:
+    """Compare two typed network results in either direction."""
+    _runtime().require_workspace(ctx)
+    if any(target <= 0 for target in service_targets):
+        raise McpResourceContractError("comparison_service_targets_invalid")
+    before_assignment, before_active_ids = _load_comparable_resource(before_ref)
+    after_assignment, after_active_ids = _load_comparable_resource(after_ref)
     comparison: AssignmentComparison = compare_assignments(
-        baseline.assignment,
-        candidate_assignment,
+        before_assignment,
+        after_assignment,
         service_targets,
-        set(baseline.active_warehouse_ids),
-        candidate_active_ids,
+        before_active_ids,
+        after_active_ids,
     )
     service_summary = (
         ", ".join(
@@ -372,10 +385,34 @@ def prepare_network_distribution_map(
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def plan_route_matrix(
     normalized_input_ref: ResourceRef,
-    route_method: Literal["haversine", "navigation", "provided"],
+    route_method: Annotated[
+        Literal["haversine", "navigation", "provided"],
+        Field(
+            description=(
+                "Route method for the required route pairs. Haversine requires both "
+                "detour_coefficient and average_speed_kph."
+            )
+        ),
+    ],
     ctx: Context,
-    detour_coefficient: float | None = None,
-    average_speed_kph: float | None = None,
+    detour_coefficient: Annotated[
+        float | None,
+        Field(
+            description=(
+                "Required when route_method is haversine; omit for navigation or "
+                "provided routes."
+            )
+        ),
+    ] = None,
+    average_speed_kph: Annotated[
+        float | None,
+        Field(
+            description=(
+                "Required when route_method is haversine; omit for navigation or "
+                "provided routes."
+            )
+        ),
+    ] = None,
 ) -> CallToolResult:
     """Plan required layered route pairs without persisting workflow state."""
     _runtime().require_workspace(ctx)
@@ -792,9 +829,35 @@ def solve_p_median(
     normalized_input_ref: ResourceRef,
     route_matrix_ref: ResourceRef,
     cost_matrix_ref: ResourceRef,
-    number_to_open: Annotated[int, Field(ge=0)],
-    fixed_existing_ids: list[str],
-    optional_existing_ids: list[str],
+    number_to_open: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Count of candidate new warehouses selected; excludes existing "
+                "warehouses."
+            ),
+        ),
+    ],
+    fixed_existing_ids: Annotated[
+        list[str],
+        Field(
+            description=(
+                "Existing warehouses that must remain open. Never include candidate "
+                "warehouse IDs."
+            )
+        ),
+    ],
+    optional_existing_ids: Annotated[
+        list[str],
+        Field(
+            description=(
+                "Remaining existing warehouses allowed to remain open or close; "
+                "disjoint from fixed_existing_ids, together covering all existing "
+                "warehouses, and never containing candidate IDs."
+            )
+        ),
+    ],
     service_targets: Annotated[list[float], Field(min_length=1, max_length=32)],
     time_limit_seconds: Annotated[float, Field(gt=0, le=300)],
     ctx: Context,
