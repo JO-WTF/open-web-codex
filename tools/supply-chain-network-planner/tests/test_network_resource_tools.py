@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -145,6 +146,36 @@ def test_network_stdio_advertises_native_workspace_metadata(monkeypatch) -> None
 
     options = captured["options"]
     assert server.SANDBOX_STATE_META_CAPABILITY in options.capabilities.experimental
+
+
+def test_main_starts_stdio_without_case_repository(tmp_path: Path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setenv("CODEX_HOME", str(profile))
+    monkeypatch.setenv("SUPPLY_CHAIN_DATA_ROOT", str(workspace))
+    monkeypatch.setattr(sys, "argv", ["supply-chain-planner", "--transport", "stdio"])
+    for name in ("_workspace_root", "_data_root", "_profile_state_root", "_mcp_resource_runtime"):
+        monkeypatch.setattr(server, name, getattr(server, name))
+    captured: dict[str, bool] = {}
+
+    @asynccontextmanager
+    async def fake_stdio_server():
+        captured["stdio_entered"] = True
+        yield object(), object()
+
+    async def fake_run(_reader, _writer, _initialization_options):
+        captured["runtime_called"] = True
+
+    monkeypatch.setattr(server, "stdio_server", fake_stdio_server)
+    monkeypatch.setattr(server.mcp._mcp_server, "run", fake_run)
+
+    server.main()
+
+    assert captured == {"stdio_entered": True, "runtime_called": True}
+    assert not (profile / "mcp-state" / "supply-chain-network" / "cases.sqlite3").exists()
 
 
 def test_distribution_map_publishes_geojson_for_map_card_only(

@@ -5,7 +5,6 @@
   "author": {
     "name": "Open Web Codex"
   },
-  "skills": "./skills/",
   "interface": {
     "displayName": "Supply Chain Network Planner",
     "shortDescription": "Build governed evidence for supply-chain decisions.",

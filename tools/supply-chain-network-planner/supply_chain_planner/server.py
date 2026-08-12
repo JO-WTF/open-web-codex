@@ -16,7 +16,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Literal
-from uuid import UUID
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.stdio import stdio_server
@@ -30,10 +29,7 @@ from mcp.types import (
 )
 from pydantic import Field, ValidationError
 
-from .analysis_service import NetworkAnalysisService
 from .case_models import ArtifactRef, NetworkCase, NormalizedNetworkInput
-from .case_repository import CaseRepository, CaseRepositoryError
-from .case_tools import EvidenceSummary, SafeIssue, ToolEnvelopeBuilder
 from .core import (
     compare_scenarios,
     create_route_matrix,
@@ -51,7 +47,6 @@ from .decision_core import (
 from .map_service import (
     NetworkComparisonGeoJson,
     NetworkComparisonMapBundle,
-    NetworkMapService,
     build_network_comparison_map_bundle,
     build_network_comparison_map_card_handoff,
     build_network_distribution_geojson,
@@ -63,9 +58,8 @@ from .matrix import build_route_matrix_with_reuse
 from .matrix import plan_route_matrix as _plan_composable_route_matrix
 from .matrix import register_navigation_route_matrix as _register_composable_navigation_matrix
 from .matrix import validate_route_matrix as _validate_route_matrix_model
-from .matrix_models import CostCalculationPolicy, CostMatrix, RouteMatrixRow
+from .matrix_models import CostCalculationPolicy, CostMatrix
 from .matrix_models import RouteMatrix as ComposableRouteMatrix
-from .matrix_service import CaseMatrixService
 from .mcp_contracts import MapResourceRef, ResourceRef
 from .mcp_resources import McpResourceContractError, McpResourceRuntime, bind_runtime
 from .models import (
@@ -119,7 +113,6 @@ from .optimization_models import (
 )
 from .report_service import (
     NETWORK_PLANNING_MARKDOWN_SCHEMA,
-    NetworkReportService,
     build_network_baseline_assessment_report_bundle,
     build_network_planning_report_bundle,
     render_network_baseline_assessment_markdown,
@@ -132,7 +125,6 @@ from .resource_store import (
 from .resource_store import (
     resource_ref as _resource_ref,
 )
-from .scenario_service import FacilityLocationService, NetworkScenarioService
 from .solver import (
     SolverUnavailable,
     compare_assignments,
@@ -271,7 +263,6 @@ _workspace_root = Path.cwd().resolve()
 _data_root = Path(os.environ.get("SUPPLY_CHAIN_DATA_ROOT", _workspace_root)).resolve()
 _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
 _mcp_resource_runtime: McpResourceRuntime | None = None
-_case_store: CaseRepository | None = None
 _CONTRACT_PATH = (
     Path(__file__).resolve().parents[1] / "contracts" / "warehouse-network-planning-1.0.0.json"
 )
@@ -291,29 +282,6 @@ def _runtime() -> McpResourceRuntime:
             RESOURCE_URI_PREFIX,
         )
     return _mcp_resource_runtime
-
-
-def _cases() -> CaseRepository:
-    global _case_store
-    if _case_store is None:
-        _case_store = CaseRepository.from_profile(_profile_state_root)
-    return _case_store
-
-
-def _workspace(ctx: Context) -> Path:
-    return _runtime().require_workspace(ctx)
-
-
-def _case_error_result(error: CaseRepositoryError) -> CallToolResult:
-    return CallToolResult(
-        isError=True,
-        content=[TextContent(type="text", text=str(error))],
-        structuredContent={
-            "schemaVersion": "network-case-tool-error.v1",
-            "code": error.code,
-            "message": str(error),
-        },
-    )
 
 
 def _artifact_ref(published: PublishedResource, server_name: str = MCP_SERVER_NAME) -> ArtifactRef:
@@ -2023,237 +1991,6 @@ def _load_new_model(ref: ArtifactRef, model_type):
     return model_type.model_validate(payload)
 
 
-def _legacy_plan_route_matrix(
-    case_id: str,
-    route_method: Literal["haversine", "navigation", "provided"],
-    ctx: Context,
-    detour_coefficient: float | None = None,
-    average_speed_kph: float | None = None,
-) -> CallToolResult:
-    """Count routes and validate parameters before building a Case route matrix."""
-    try:
-        parsed = UUID(case_id)
-        plan = CaseMatrixService(_cases()).plan_routes(
-            parsed,
-            _workspace(ctx),
-            route_method,
-            detour_coefficient,
-            average_speed_kph,
-        )
-        case = _cases().get_case(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        return _case_error_result(
-            error
-            if isinstance(error, CaseRepositoryError)
-            else CaseRepositoryError("route_plan_invalid", str(error))
-        )
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        summary=(
-            f"Planned {plan.route_count} routes using {plan.method}; "
-            f"estimated billable calls: {plan.estimated_billable_calls}."
-        ),
-        evidence=[
-            EvidenceSummary(
-                kind="parameter",
-                evidence_id="route_count",
-                label="Route count",
-                value=plan.route_count,
-            ),
-            EvidenceSummary(
-                kind="parameter",
-                evidence_id="estimated_billable_calls",
-                label="Estimated billable calls",
-                value=plan.estimated_billable_calls,
-            ),
-        ],
-        next_action=(
-            "confirm_navigation_cost"
-            if route_method == "navigation"
-            else "build_haversine_route_matrix"
-        ),
-    )
-
-
-def _legacy_build_haversine_route_matrix(
-    case_id: str,
-    detour_coefficient: float,
-    average_speed_kph: float,
-    ctx: Context,
-) -> CallToolResult:
-    """Build and persist distance = haversine distance multiplied by a coefficient."""
-    try:
-        parsed = UUID(case_id)
-        matrix, result = CaseMatrixService(_cases()).build_haversine(
-            parsed, _workspace(ctx), detour_coefficient, average_speed_kph
-        )
-        case = _cases().get_case(parsed, _workspace(ctx))
-        status = _cases().get_status(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        return _case_error_result(
-            error
-            if isinstance(error, CaseRepositoryError)
-            else CaseRepositoryError("route_matrix_invalid", str(error))
-        )
-    facet = next(item for item in status.facets if item.name.value == "route_matrix")
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        operation=result.operation,
-        summary=f"Built and stored {len(matrix.rows)} distance and duration routes.",
-        facet_updates=[facet],
-        evidence=[
-            EvidenceSummary(
-                kind="metric",
-                evidence_id="route_count",
-                label="Stored routes",
-                value=len(matrix.rows),
-            )
-        ],
-        next_action="plan_cost_matrix_or_evaluate_service",
-    )
-
-
-def _legacy_validate_route_matrix(
-    case_id: str,
-    ctx: Context,
-) -> CallToolResult:
-    """Validate the currently bound Case route matrix without returning its rows."""
-    try:
-        parsed = UUID(case_id)
-        normalized, _ = _cases().load_normalized_input(parsed, _workspace(ctx))
-        matrix, _ = _cases().load_route_matrix(parsed, _workspace(ctx))
-        validation = _validate_route_matrix_model(
-            normalized.demand_cities, normalized.warehouses, matrix
-        )
-        case = _cases().get_case(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        return _case_error_result(
-            error
-            if isinstance(error, CaseRepositoryError)
-            else CaseRepositoryError("route_matrix_validation_failed", str(error))
-        )
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        summary=(
-            f"Route matrix validation {'passed' if validation['valid'] else 'failed'} "
-            f"for {validation['route_count']} routes."
-        ),
-        issues=(
-            []
-            if validation["valid"]
-            else [
-                SafeIssue(
-                    code="route_matrix_incomplete",
-                    severity="error",
-                    business_message="距离时效矩阵不完整，不能用于网络分析。",
-                )
-            ]
-        ),
-        next_action="evaluate_service_baseline" if validation["valid"] else None,
-    )
-
-
-def _legacy_register_navigation_route_matrix(
-    case_id: str,
-    navigation_rows: list[RouteMatrixRow],
-    ctx: Context,
-) -> CallToolResult:
-    """Register one batch of navigation results without returning route rows."""
-    if len(navigation_rows) > 50_000:
-        return _case_error_result(
-            CaseRepositoryError(
-                "navigation_matrix_too_large",
-                "The navigation matrix exceeds the bounded batch size.",
-            )
-        )
-    try:
-        parsed = UUID(case_id)
-        matrix, operation = CaseMatrixService(_cases()).register_navigation(
-            parsed,
-            _workspace(ctx),
-            navigation_rows,
-        )
-        case = _cases().get_case(parsed, _workspace(ctx))
-        status = _cases().get_status(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError, ValidationError) as error:
-        if isinstance(error, CaseRepositoryError):
-            return _case_error_result(error)
-        return _case_error_result(CaseRepositoryError("navigation_matrix_invalid", str(error)))
-    facet = next(item for item in status.facets if item.name.value == "route_matrix")
-    issues = (
-        [
-            SafeIssue(
-                code="navigation_matrix_incomplete",
-                severity="error",
-                business_message=(
-                    f"导航结果缺少 {len(matrix.missing_routes)} 条路线，不能用于网络分析。"
-                ),
-            )
-        ]
-        if matrix.missing_routes
-        else []
-    )
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        operation=operation,
-        summary=(
-            f"Registered {len(matrix.rows)} navigation routes; "
-            f"{len(matrix.missing_routes)} routes remain incomplete."
-        ),
-        facet_updates=[facet],
-        issues=issues,
-        next_action=(
-            "validate_route_matrix" if not matrix.missing_routes else "request_navigation_rows"
-        ),
-    )
-
-
-def _legacy_plan_cost_matrix(
-    case_id: str,
-    ctx: Context,
-    fallback_rule: dict[str, object] | None = None,
-    warehouse_scope: Literal["existing_only", "all_warehouses"] = "existing_only",
-) -> CallToolResult:
-    """Check whether quotes and an optional fallback rule can form a complete cost matrix."""
-    try:
-        parsed = UUID(case_id)
-        matrix, result = CaseMatrixService(_cases()).build_costs(
-            parsed, _workspace(ctx), fallback_rule, warehouse_scope
-        )
-        case = _cases().get_case(parsed, _workspace(ctx))
-        status = _cases().get_status(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        return _case_error_result(
-            error
-            if isinstance(error, CaseRepositoryError)
-            else CaseRepositoryError("cost_matrix_invalid", str(error))
-        )
-    facet = next(item for item in status.facets if item.name.value == "cost_matrix")
-    issues = []
-    if matrix.missing_routes:
-        issues.append(
-            SafeIssue(
-                code="cost_rule_required",
-                severity="warning",
-                business_message=(
-                    f"仍有 {len(matrix.missing_routes)} 条路线缺少报价；"
-                    "请提供每公里费用、固定起步价和币种。"
-                ),
-            )
-        )
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        operation=result.operation if result is not None else None,
-        summary=(
-            f"Cost matrix has {len(matrix.rows)} usable routes and "
-            f"{len(matrix.missing_routes)} missing routes."
-        ),
-        facet_updates=[facet],
-        issues=issues,
-        next_action=("request_cost_rule" if matrix.missing_routes else "evaluate_cost_baseline"),
-    )
-
-
 def _legacy_compute_optimal_assignment(
     network_case_ref: ArtifactRef | ResourceRef,
     route_matrix_ref: ArtifactRef,
@@ -2340,245 +2077,6 @@ def _legacy_summarize_network_cost(
         summary,
         f"Network cost summary is {state}: {total:.2f} {currency.upper()} "
         f"(linehaul {linehaul:.2f}, last mile {last_mile:.2f}).",
-    )
-
-
-def _legacy_evaluate_network_baseline(
-    case_id: str,
-    objective: Literal["min_time", "min_cost"],
-    service_targets: list[float],
-    ctx: Context,
-    coverage_mode: Literal[
-        "actual_if_available", "optimized_existing_footprint"
-    ] = "actual_if_available",
-    include_cost: bool = True,
-) -> CallToolResult:
-    """Persist an actual or optimized baseline and return only bounded metrics."""
-    try:
-        parsed = UUID(case_id)
-        baseline, result = NetworkAnalysisService(_cases()).evaluate_baseline(
-            parsed,
-            _workspace(ctx),
-            objective,
-            service_targets,
-            coverage_mode,
-            include_cost,
-        )
-        case = _cases().get_case(parsed, _workspace(ctx))
-        status = _cases().get_status(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        return _case_error_result(
-            error
-            if isinstance(error, CaseRepositoryError)
-            else CaseRepositoryError("baseline_invalid", str(error))
-        )
-    facet = next(item for item in status.facets if item.name.value == "baseline")
-    evidence = [
-        EvidenceSummary(
-            kind="metric",
-            evidence_id=f"service_{metric.target_hours:g}_hours",
-            label=f"Coverage within {metric.target_hours:g} hours",
-            value=round(metric.coverage_rate, 6),
-        )
-        for metric in baseline.service
-    ]
-    if baseline.cost is not None:
-        evidence.append(
-            EvidenceSummary(
-                kind="metric",
-                evidence_id="network_total_cost",
-                label=f"Total network cost ({baseline.cost.currency})",
-                value=round(baseline.cost.total, 2),
-            )
-        )
-    issues = []
-    if baseline.notice_code == "current_assignment_missing":
-        issues.append(
-            SafeIssue(
-                code="current_assignment_missing",
-                severity="warning",
-                business_message="未发现当前覆盖方案，结果是现有仓范围内的优化基线。",
-            )
-        )
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        operation=result.operation,
-        summary=(
-            f"Stored {baseline.label} baseline for {baseline.assignment.total_demand} "
-            f"demand units; {baseline.assignment.unassigned_demand} are unassigned."
-        ),
-        facet_updates=[facet],
-        issues=issues,
-        evidence=evidence,
-        next_action="publish_network_planning_report",
-    )
-
-
-def _legacy_evaluate_facility_scenario(
-    case_id: str,
-    scenario: dict[str, object],
-    ctx: Context,
-) -> CallToolResult:
-    """Evaluate an explicit add, remove or relocation scenario inside one Case."""
-    try:
-        parsed = UUID(case_id)
-        spec = ScenarioSpec.model_validate(scenario)
-        result_value, result = NetworkScenarioService(_cases()).evaluate(
-            parsed, _workspace(ctx), spec
-        )
-        case = _cases().get_case(parsed, _workspace(ctx))
-        status = _cases().get_status(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError, ValidationError) as error:
-        return _case_error_result(
-            error
-            if isinstance(error, CaseRepositoryError)
-            else CaseRepositoryError("scenario_invalid", str(error))
-        )
-    facet = next(item for item in status.facets if item.name.value == "scenario")
-    evidence = [
-        EvidenceSummary(
-            kind="metric",
-            evidence_id=f"scenario_service_{metric.target_hours:g}_hours",
-            label=f"Scenario coverage within {metric.target_hours:g} hours",
-            value=round(metric.coverage_rate, 6),
-        )
-        for metric in result_value.service
-    ]
-    if result_value.cost is not None:
-        evidence.append(
-            EvidenceSummary(
-                kind="metric",
-                evidence_id="scenario_total_cost",
-                label=f"Scenario total cost ({result_value.cost.currency})",
-                value=round(result_value.cost.total, 2),
-            )
-        )
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        operation=result.operation,
-        summary=(
-            f"Stored scenario with {len(result_value.warehouse_changes.get('added', []))} "
-            f"added and {len(result_value.warehouse_changes.get('removed', []))} "
-            f"removed warehouses; {result_value.assignment.unassigned_demand} demand "
-            "units are unassigned."
-        ),
-        facet_updates=[facet],
-        evidence=evidence,
-        next_action="compare_network_scenarios",
-    )
-
-
-def _legacy_solve_p_median(
-    case_id: str,
-    number_to_open: int,
-    ctx: Context,
-    fixed_existing_ids: list[str] | None = None,
-    optional_existing_ids: list[str] | None = None,
-    time_limit_seconds: float = 30,
-) -> CallToolResult:
-    """Solve p-median against the current Case matrices and candidate set."""
-    try:
-        parsed = UUID(case_id)
-        solution, result = FacilityLocationService(_cases()).solve(
-            parsed,
-            _workspace(ctx),
-            number_to_open=number_to_open,
-            fixed_existing_ids=set(fixed_existing_ids or []),
-            optional_existing_ids=set(optional_existing_ids or []),
-            time_limit_seconds=time_limit_seconds,
-        )
-        case = _cases().get_case(parsed, _workspace(ctx))
-        status = _cases().get_status(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        return _case_error_result(
-            error
-            if isinstance(error, CaseRepositoryError)
-            else CaseRepositoryError("facility_location_invalid", str(error))
-        )
-    facet = next(item for item in status.facets if item.name.value == "facility_location")
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        operation=result.operation,
-        summary=(
-            f"Facility-location status is {solution.status}; selected "
-            f"{len(solution.selected_warehouse_ids)} warehouses."
-        ),
-        facet_updates=[facet],
-        evidence=[
-            EvidenceSummary(
-                kind="metric",
-                evidence_id="facility_objective_value",
-                label="Facility objective value",
-                value=solution.objective_value,
-            )
-        ],
-        issues=(
-            []
-            if solution.status in {"optimal", "feasible"}
-            else [
-                SafeIssue(
-                    code=f"facility_{solution.status}",
-                    severity="warning" if solution.status == "timeout" else "error",
-                    business_message=(
-                        "选址求解未证明最优，结果只能按当前求得状态解释。"
-                        if solution.status == "timeout"
-                        else "选址求解没有可交付方案。"
-                    ),
-                )
-            ]
-        ),
-        next_action="publish_network_planning_report",
-    )
-
-
-def _legacy_solve_service_constrained_location(
-    case_id: str,
-    number_to_open: int,
-    minimum_coverage: float,
-    ctx: Context,
-    service_target_hours: float = 24,
-    time_limit_seconds: float = 30,
-) -> CallToolResult:
-    """Solve a cost objective with an explicit service-coverage constraint."""
-    try:
-        parsed = UUID(case_id)
-        solution, result = FacilityLocationService(_cases()).solve(
-            parsed,
-            _workspace(ctx),
-            number_to_open=number_to_open,
-            fixed_existing_ids=set(),
-            optional_existing_ids=set(),
-            time_limit_seconds=time_limit_seconds,
-            service_constraints=[(service_target_hours, minimum_coverage)],
-        )
-        case = _cases().get_case(parsed, _workspace(ctx))
-        status = _cases().get_status(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        return _case_error_result(
-            error
-            if isinstance(error, CaseRepositoryError)
-            else CaseRepositoryError("service_constrained_location_invalid", str(error))
-        )
-    facet = next(item for item in status.facets if item.name.value == "facility_location")
-    achieved = solution.service[0].coverage_rate if solution.service else None
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        operation=result.operation,
-        summary=(
-            f"Service-constrained location status is {solution.status}; "
-            f"coverage at {service_target_hours:g} hours is "
-            f"{achieved if achieved is not None else 'unavailable'}."
-        ),
-        facet_updates=[facet],
-        evidence=[
-            EvidenceSummary(
-                kind="metric",
-                evidence_id="service_constrained_coverage",
-                label=f"Coverage within {service_target_hours:g} hours",
-                value=achieved,
-            )
-        ],
-        next_action="publish_network_planning_report",
     )
 
 
@@ -2764,211 +2262,6 @@ def render_legacy_network_comparison_map(
         "network_comparison_map.v1",
         map_payload,
         "Prepared a map resource for comparing the two network scenarios.",
-    )
-
-
-def _legacy_render_network_comparison_map(
-    case_id: str,
-    candidate_source: Literal["scenario", "facility_location"],
-    ctx: Context,
-) -> CallToolResult:
-    """Publish a deterministic baseline-versus-candidate GeoJSON Artifact."""
-    try:
-        parsed = UUID(case_id)
-        published, summary, result = NetworkMapService(_cases(), _store()).publish_comparison(
-            parsed, _workspace(ctx), candidate_source
-        )
-        case = _cases().get_case(parsed, _workspace(ctx))
-        status = _cases().get_status(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        return _case_error_result(
-            error
-            if isinstance(error, CaseRepositoryError)
-            else CaseRepositoryError("comparison_map_invalid", str(error))
-        )
-    facet = next(item for item in status.facets if item.name.value == "map")
-    artifact_ref = f"network-map-{published.resource_id.rsplit('-', maxsplit=1)[-1]}"
-    embed_code = f'::codex-inline-vis{{artifact="{artifact_ref}"}}'
-    inline_visualization = {
-        "type": "open-web-artifact",
-        "kind": "inline-visualization.v1",
-        "artifact": {
-            "ref": artifact_ref,
-            "renderer": {
-                "kind": "map.v3",
-                "payload": {
-                    "title": "仓网方案对比",
-                    "intent": "比较基线与候选仓网方案",
-                    "status": "ready",
-                    "summary": "展示需求城市、仓库和两套覆盖关系。",
-                    "center": [118.0, -2.0],
-                    "zoom": 3.2,
-                    "sources": {
-                        "network": {
-                            "type": "geojson",
-                            "data": {
-                                "type": "mcp_resource",
-                                "server": MCP_SERVER_NAME,
-                                "uri": published.uri,
-                                "resource_schema": "geojson.v1",
-                            },
-                        }
-                    },
-                    "layers": [
-                        {
-                            "id": "baseline-assignments",
-                            "source": "network",
-                            "type": "line",
-                            "filter": [
-                                "all",
-                                ["==", ["get", "kind"], "assignment"],
-                                ["==", ["get", "scenario"], "baseline"],
-                            ],
-                            "paint": {
-                                "line-color": "#64748b",
-                                "line-opacity": 0.28,
-                                "line-width": 1,
-                            },
-                        },
-                        {
-                            "id": "candidate-assignments",
-                            "source": "network",
-                            "type": "line",
-                            "filter": [
-                                "all",
-                                ["==", ["get", "kind"], "assignment"],
-                                ["==", ["get", "scenario"], "candidate"],
-                            ],
-                            "paint": {
-                                "line-color": "#e76f51",
-                                "line-opacity": 0.46,
-                                "line-width": 1.4,
-                            },
-                        },
-                        {
-                            "id": "demand-cities",
-                            "source": "network",
-                            "type": "circle",
-                            "filter": ["==", ["get", "kind"], "demand"],
-                            "paint": {
-                                "circle-color": "#2a9d8f",
-                                "circle-radius": 3,
-                                "circle-opacity": 0.72,
-                            },
-                        },
-                        {
-                            "id": "warehouses",
-                            "source": "network",
-                            "type": "circle",
-                            "filter": ["==", ["get", "kind"], "warehouse"],
-                            "paint": {
-                                "circle-color": "#e9c46a",
-                                "circle-radius": 6,
-                                "circle-stroke-color": "#264653",
-                                "circle-stroke-width": 1.5,
-                            },
-                        },
-                    ],
-                },
-            },
-        },
-        "embed": {
-            "syntax": "codex-inline-vis.artifact.v1",
-            "code": embed_code,
-        },
-    }
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        operation=result.operation,
-        summary=(
-            f"Published comparison map with {summary['feature_count']} features and "
-            f"{summary['candidate_active_warehouse_count']} candidate-plan warehouses."
-        ),
-        facet_updates=[facet],
-        evidence=[
-            EvidenceSummary(
-                kind="artifact",
-                evidence_id=published.resource_id,
-                label="Network comparison map",
-                value=f"{published.schema}; {published.size} bytes",
-            )
-        ],
-        published_artifacts=[
-            {
-                "schema": published.schema,
-                "name": published.resource_id,
-                "mime_type": "application/geo+json",
-                "size": published.size,
-            }
-        ],
-        extra_content=[
-            ResourceLink(
-                type="resource_link",
-                name="Network comparison map",
-                title="network_comparison_map.v1",
-                uri=published.uri,
-                description="Deterministic baseline and candidate assignment map.",
-                mimeType="application/geo+json",
-                size=published.size,
-            )
-        ],
-        inline_visualization=inline_visualization,
-    )
-
-
-def _legacy_publish_network_planning_report(
-    case_id: str,
-    source: Literal["baseline", "scenario", "facility_location"],
-    ctx: Context,
-) -> CallToolResult:
-    """Publish one bounded Case result as a durable platform Artifact candidate."""
-    try:
-        parsed = UUID(case_id)
-        published, summary, result = NetworkReportService(_cases(), _store()).publish(
-            parsed, _workspace(ctx), source
-        )
-        case = _cases().get_case(parsed, _workspace(ctx))
-        status = _cases().get_status(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        return _case_error_result(
-            error
-            if isinstance(error, CaseRepositoryError)
-            else CaseRepositoryError("report_publication_invalid", str(error))
-        )
-    facet = next(item for item in status.facets if item.name.value == "report")
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        operation=result.operation,
-        summary=f"Published {source} report with {summary['service_metric_count']} service metrics.",
-        facet_updates=[facet],
-        evidence=[
-            EvidenceSummary(
-                kind="artifact",
-                evidence_id=published.resource_id,
-                label="Network planning report",
-                value=f"{published.schema}; {published.size} bytes",
-            )
-        ],
-        published_artifacts=[
-            {
-                "schema": published.schema,
-                "name": published.resource_id,
-                "mime_type": "application/json",
-                "size": published.size,
-            }
-        ],
-        next_action=None,
-        extra_content=[
-            ResourceLink(
-                type="resource_link",
-                name="Network planning report",
-                title="network_planning_report.v1",
-                uri=published.uri,
-                description="Bounded user-facing network planning result.",
-                mimeType="application/json",
-                size=published.size,
-            )
-        ],
     )
 
 
@@ -3890,7 +3183,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    global _workspace_root, _data_root, _profile_state_root, _mcp_resource_runtime, _case_store
+    global _workspace_root, _data_root, _profile_state_root, _mcp_resource_runtime
     _workspace_root = Path.cwd().resolve(strict=True)
     _data_root = Path(os.environ.get("SUPPLY_CHAIN_DATA_ROOT", _workspace_root)).resolve()
     _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
@@ -3900,7 +3193,6 @@ def main() -> None:
         MCP_SERVER_NAME,
         RESOURCE_URI_PREFIX,
     )
-    _case_store = CaseRepository.from_profile(_profile_state_root)
     if args.transport == "stdio":
         asyncio.run(run_stdio())
     else:

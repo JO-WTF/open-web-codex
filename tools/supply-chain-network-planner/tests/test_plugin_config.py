@@ -20,6 +20,19 @@ REMOVED_CASE_ENTRYPOINTS = (
     "normalize_case_input",
     "define_network_requirements",
 )
+REMOVED_CASE_LEGACY_ENTRYPOINTS = (
+    "_legacy_plan_route_matrix",
+    "_legacy_build_haversine_route_matrix",
+    "_legacy_validate_route_matrix",
+    "_legacy_register_navigation_route_matrix",
+    "_legacy_plan_cost_matrix",
+    "_legacy_evaluate_network_baseline",
+    "_legacy_evaluate_facility_scenario",
+    "_legacy_solve_p_median",
+    "_legacy_solve_service_constrained_location",
+    "_legacy_render_network_comparison_map",
+    "_legacy_publish_network_planning_report",
+)
 
 
 def test_plugin_manifest_and_mcp_config_are_wired() -> None:
@@ -30,7 +43,7 @@ def test_plugin_manifest_and_mcp_config_are_wired() -> None:
 
     assert manifest["name"] == "supply-chain-network-planner"
     assert manifest["version"] == project["project"]["version"] == __version__ == "0.4.0"
-    assert manifest["skills"] == "./skills/"
+    assert "skills" not in manifest
     assert manifest["mcpServers"] == "./.mcp.json"
     assert set(mcp_config["mcpServers"]) == {"supply_chain"}
     server = mcp_config["mcpServers"]["supply_chain"]
@@ -73,14 +86,10 @@ def test_network_server_exposes_only_network_tools() -> None:
     }
     for entrypoint in REMOVED_CASE_ENTRYPOINTS:
         assert not hasattr(network_server, entrypoint)
+    for entrypoint in REMOVED_CASE_LEGACY_ENTRYPOINTS:
+        assert not hasattr(network_server, entrypoint)
 
 
-def test_legacy_case_skills_are_removed() -> None:
+def test_legacy_skill_surface_is_removed() -> None:
     root = Path(__file__).resolve().parents[1]
-    for skill_name in (
-        "prepare-network-input",
-        "prepare-network-baseline",
-        "create-demo-workspace-data",
-        "validate-network-result",
-    ):
-        assert not (root / "skills" / skill_name).exists()
+    assert not (root / "skills").exists()
