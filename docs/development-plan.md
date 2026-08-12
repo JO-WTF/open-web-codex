@@ -3,14 +3,14 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前与下一里程碑的执行计划 |
-| 更新日期 | 2026-08-10 |
+| 更新日期 | 2026-08-12 |
 | 当前阶段 | 阶段一：内置仓网 Copilot 架构纠偏与完整运行闭环 |
-| 当前状态 | 实施中；现有脚本接线的 7/7 E2E 不是阶段一完成证据 |
+| 当前状态 | 正常业务主链完成；后续进入 hardening 与阶段二 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018 已接受并作为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
 | 后续阶段 | 公开 SDK、Studio、Marketplace、第二领域和多用户产品流程 |
 
-本文只维护阶段一尚未完成的工作、顺序和退出门。用户心智统一为：
+本文记录阶段一已完成的正常业务主链、仍有效的边界和后续工作。用户心智统一为：
 
 > Workspace 管理用户文件，Task 做一个独立方案，Copilot 通过原生协作和领域工具处理、复用并交付数据。
 
@@ -284,8 +284,9 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
    已完成 provided/haversine/navigation 路线、route/cost pair-level 复用、双覆盖口径以及 final
    地图卡片、map 文件与单份中文 Markdown 简报的最小交付合同；正文只显示关键结论和 durable Artifact 授权下载链接，不复制整份简报。Stage E non-active compatibility tail 已完成尾删，后续只维护
    Platform 业务状态。
-4. **D — 完整案例验收。** 把 Indonesia cold E2E 作为通用 Copilot 的一个完整组合示例，同时验证
-   partial reuse 与跨 Workspace/未授权 ref denial；案例顺序不成为产品 workflow。
+4. **D — 完整案例验收。** 已用 clean real Web 的 S1/S2/S3 验证 Indonesia 数据准备、完整规划、
+   同一 Network child 场景复用、地图卡片、唯一 Markdown Artifact 和一次 pending approval 刷新恢复；
+   案例顺序没有进入 Platform workflow。
 5. **E — 旧 caller 尾删。** 已原子删除 Network non-active compatibility tail 中的
    `CaseRepository`、`NetworkSnapshot`、`ArtifactRef`、旧 services/models/tests 与 Demo launcher
    surface，不保留兼容双路径；Data4 与 Network active `ResourceRef` surface 不回退为 aliases。
@@ -320,6 +321,22 @@ Data child 和一个 Network child，没有单独的需求定义 child、`reques
 需求量加权 74.5%；对话地图卡片 Ready，最终只有一个 2,913 字节中文 Markdown Artifact，正文
 区域从授权 Artifact DTO 显示可点击下载链接。该证据只提高当前覆盖纵向切片，不替代三个产品
 样例、恢复矩阵和跨 Workspace 拒绝。
+
+2026-08-12 从 clean DB/Profile、真实 Web Task、真实 Codex Runtime 与真实 Provider 完成阶段一
+三轮正常链。S1 观测 164.782 秒：Wanwan 产出 ready 的 `normalized_network_input.v1`，包含
+50 demand、11 existing、12 candidate、50 current assignments 和 580 quotes，Network/map/report/
+Artifact 均为 0。S2 观测 302.141 秒：Harbor 选择 Kendari 与 Manado，13 active，成本由
+55,815,960,000 降至 18,579,390,907.47 IDR；6/12/18 小时需求加权覆盖由
+55.8%/67.3%/72.4% 升至 73.9%/83.2%/96.6%，城市覆盖由 34%/44%/54% 升至
+52%/70%/90%；最终只有一个 3,930-byte 中文 Markdown Artifact 和一个 ready 的 `map.v3`。
+首次报告调用因不存在的父目录被 typed 拒绝，随后在 Workspace 根正常完成且未产生重复 Artifact。
+S3 观测 136.828 秒：Root 恢复同一个 Harbor，只执行场景评估与比较；关闭 Bekasi 后成本及
+6/12/18 小时覆盖不变，affected/reassigned=1/1，geography/p-median/map/report 增量为 0，
+Artifact delta=0。三轮浏览器观测共 603.791 秒，含轮询间隔。
+
+另一个同日门在 final report approval pending 时执行整页刷新，恢复同一授权 Workspace、Root
+Thread、history、Agent activity 和唯一 pending approval；接受后原 Network child 正常完成。
+用户跳过 Mapbox 视觉细节，因此这里只认 typed `map.v3` Ready，不声称地图像素或交互视觉通过。
 
 当前用三个彼此独立的产品样例证明这一点：
 
@@ -460,9 +477,9 @@ producer Item 唯一，Task grant 仍只负责授权。删除 `retention_state`�
 恢复；明确导出的地图和报告仍可查看下载；中间矩阵不进入 Artifact 交换链；durable 交付可从
 Runtime history 和 Artifact 权威记录重建浏览器视图。
 
-### Slice 7：双 E2E、恢复和全量清理
+### Slice 7：E2E、恢复和全量清理（完成）
 
-#### 硬门 A：三个可组合产品样例
+#### 已通过的阶段一 normal-path 门
 
 - 样例 1 只完成 Workspace 数据理解与准备，明确断言没有调用 Network Tool。
 - 样例 2 由用户明确选择 Indonesia fixture，完成 baseline、两个候选仓、分配、6/12/18 小时
@@ -470,35 +487,23 @@ Runtime history 和 Artifact 权威记录重建浏览器视图。
   写成产品合同。
 - 样例 3 复用样例 2 的已准备数据，只关闭 `WH-CROSS_DOCKING-BEKASI` 并比较 12 小时覆盖、
   成本与重分配；明确断言没有重新运行选址、地图或报告。
-- 三个样例都不使用隐藏对象或特殊数据 API，不注入 Task/Run/WorkState/ref/wire ID；各自实际
-  经过的行数、路线数、业务结果、结果文件和交付件有确定性断言。
+- 三个样例都不使用隐藏对象或特殊数据 API，不注入 Task/Run/WorkState/ref/wire ID；实际 Agent、
+  Tool、Resource、Artifact 与业务结果均由 UI activity 和 owning store 交叉核对。
+- clean DB/Profile/Workspace 从当前 schema/config 初始化；真实 Provider catalog、模型选择、Root/Data/
+  Network 原生协作、Approval、reload restore、Workspace 文件和最终交付全部通过。
+- 旧 Intake、Dataset、SourceAsset、DomainResource/Broker、Case、Work State、continuation、scan、Demo
+  和长 Prompt E2E 已从 active 代码、测试和当前合同删除。
 
-#### 硬门 B：真实上传交互完整链
+#### 后续 hardening（不再阻断阶段一）
 
-- 用户通过通用 Workspace 文件面板上传 Excel/CSV/JSON，并在 Task 中要求 Copilot 使用。
-- 覆盖字段映射、缺失数据、候选仓、距离方式、绕路系数、导航费用许可、成本规则、覆盖目标、
-  SLA、模拟、p-median 和允许关闭已有仓等原生交互。
-- 导航合同使用确定性测试 provider；另设配置真实导航凭据时的 smoke gate，未配置不能冒充成功。
-
-#### 多 Task 与多 Workspace
-
-- 同一 Workspace 的 10 仓和 5 仓 Task 可读取相同普通文件并按 exact Resource ref 复用中间数据，
-  参数、新结果和 Artifact 互不覆盖；
-  一个失败、取消或中断不影响另一个。
-- Task A 按用户要求写入 Workspace 的结果文件可被后续 Task 读取；未写入的 context/结果不可得；
-  Artifact 不能作为输入；同名保存触发显式冲突处理。
-- Indonesia 与 Thailand Workspace 完全隔离；Platform 不理解国家语义。
-
-#### 恢复与清洁门
-
-- Root wait 期间 user steer、child error/cancel/terminal mailbox、pending form 刷新、Profile
-  restart interrupted、事件 replay、文件删除/替换、单文件原子写失败、hot reload 成功/失败。
-- 三个 Web 自然语言样例都必须能从 Agent activity 观察实际 child Item 序列：Data/Network Agent
-  的 MCP Tool、bounded command/action、进度、等待/审批和终态可区分；刷新后顺序与终态一致，
-  不出现 `Using/Completed a workspace command` 这类替代全部执行内容的占位投影。
-- clean DB + clean Profile + clean Workspace 从当前 schema/config 完整初始化。
-- 旧 Intake、Dataset、SourceAsset、DomainResource/Broker、Case、Work State、continuation、scan 和长 Prompt
-  E2E 的代码、migration、fixture、测试与当前文档全部删除。
+- pending approval replay 仍从 sequence 0 扫描长 Run；应由 Platform approval owner 改为权威 pending
+  projection/query，而不是在 Browser 或 Skill 增加缓存、重试或猜测。
+- reasoning/agentMessage delta 对 `run_events` 有写放大；先测量用户可见延迟，再由 event projection
+  owner 做 bounded persistence/retention，不为阶段一补极端竞态矩阵。
+- 一次 E2E 中 Root 在 final Tool success 与 Artifact ready 后仍额外执行 `listFiles`；当前结果正确，
+  记为 Skill 遵循噪声，后续用通用 Skill/Runtime 行为证据处理，不写死文件名或案例。
+- 多用户、完整失败/取消/并发/跨 Workspace 矩阵、a11y、地图视觉细节和第二服务器 cold smoke
+  随对应产品阶段验证，不反向扩张本阶段。
 
 ## 5. 删除与切换纪律
 
@@ -525,8 +530,8 @@ Runtime history 和 Artifact 权威记录重建浏览器视图。
 
 ## 6. 验证与完成定义
 
-验证必须覆盖正常、拒绝、取消、失败、中断、刷新、重启、乱序、并发和跨 Workspace 拒绝。
-按受影响 owner 使用：
+阶段一完成以正常业务链、关键 typed failure、一次 pending approval 刷新恢复和 clean 初始化为门；
+其余失败、并发和隔离矩阵随受影响 owner 进入后续 hardening。验证命令包括：
 
 - `scripts/codex-upstream-status.sh`、`scripts/codex-customization-status.sh` 和
   `scripts/test-codex.sh`；
@@ -536,16 +541,17 @@ Runtime history 和 Artifact 权威记录重建浏览器视图。
 - 仓网 Python pytest/Ruff、真实 stdio inventory/tool call、Mock E2E、真实上传 E2E 和配置真实
   导航时的 smoke gate。
 
-阶段一只有在以下全部成立时才完成：
+阶段一完成证据如下：
 
-1. Web 的印尼 Mock 零询问完整链通过。
-2. Web 的真实上传交互完整链通过。
-3. 同 Workspace 多 Task 文件与授权 Resource 复用、不同 Workspace 隔离通过。
-4. Task 之间不存在消息、context、result、data 或 adopt API。
-5. Runtime 原生 discovery/reload、多 Agent、elicitation、history 与 Workspace metadata 被真实使用。
-6. 完整仓网业务清单和最终交付件全部通过确定性断言。
-7. 旧重型路径已从代码、数据库、测试和当前文档彻底删除。
-8. clean DB/Profile/Workspace 全量重建成功。
+1. Web 的真实 Workspace 文件 S1/S2/S3 正常链通过，同一 Task/Thread 完成 Data→Network→同 child
+   follow-up；最终只有一个中文 Markdown Artifact 与一个 typed 地图卡片。
+2. Task 之间不存在 Platform-owned message、context、result、data 或 adopt API；中间数据只走 exact
+   MCP Resource，普通文件只走授权 Workspace。
+3. Runtime 原生 discovery/reload、多 Agent、approval、history 与 Workspace metadata 被真实使用；
+   pending approval 的整页刷新恢复通过。
+4. Data4/Network14、双覆盖口径、完整规划与场景复用通过 typed 测试、stdio 和 Web 证据。
+5. 旧重型路径已从 active 代码、数据库、测试和当前文档删除。
+6. clean DB/Profile/Workspace 从当前 schema/config 初始化成功。
 
 没有成功 evidence 时，只更新能力基线中的缺口；不得用模型最终文本、数据库 success 字段、
 Mock fallback 或旧 7/7 脚本声称完成。

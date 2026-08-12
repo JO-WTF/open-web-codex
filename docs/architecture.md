@@ -3,8 +3,8 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前事实 |
-| 快照日期 | 2026-08-09 |
-| 代码快照 | HEAD `75a3d5eb98a42e8556da34a19e1ca5bfe4571326` + 当前阶段一工作树 |
+| 快照日期 | 2026-08-12 |
+| 代码快照 | HEAD `073919814` |
 | 当前阶段边界 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 与 [开发计划](development-plan.md) |
 | 接受决策 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
 
@@ -35,8 +35,8 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | Thread、Turn、Item、上下文、Agent 调度 | Codex Runtime | Runtime 是权威 owner；已物化 Thread 的实际 Provider/model 属于 official Thread settings，不由 Profile 默认值或 Task 字段覆盖。当前 Adapter/Server/Browser 仍叠加本地 history mode、approval overlay 和 live/history merge，其中 Browser 会按相同用户文本去重，尚未收敛为 official Item/client identity 的纯投影 |
 | Skill、Plugin、MCP、Tool 执行 | Codex Runtime | Runtime 执行；阶段一 built-in 使用原生 Profile Skill/Role 与 Role-local MCP；Standard/fork 产品路径不再注入 selected capability roots，也不扫描 cwd、Workspace 或源码树寻找 built-in |
 | Profile 进程与 `CODEX_HOME` | Profile Host | 单 Profile 进程已存在；启动前只为 clean Profile 原子 seed 固定 Skill/Role，已存在普通文件归 Profile 所有且不覆盖；进程 `HOME`/`USERPROFILE` 与 neutral cwd 均按 Profile Host 隔离；Server 仍有显式宿主认证导入路径 |
-| Provider 定义、模型目录与 Profile 的未来 Thread 默认选择 | Codex Profile config + Runtime | `config/batchWrite` 已持久化到 Profile `config.toml`，Runtime 读取并用于后续新 Thread；Platform 当前仍以 `profile_provider_definitions` 和 global `models.default_selection` 镜像并在启动后回写，属于待原子删除的第二/第三 owner |
-| Provider Secret | Platform encrypted Secret store | Profile/provider scope 的密文和进程环境注入由 Platform 拥有；Codex config 只保存环境变量引用，不保存明文 |
+| Provider 定义、模型目录与 Profile 的未来 Thread 默认选择 | Codex Profile config + Runtime；Platform 保存 Browser catalog 投影 | `config/batchWrite` 持久化 Runtime 配置；Platform 的 Profile catalog 保存 Web 配置入口所需的 provider/model 投影和非敏感 credential env-key 名称。真实 fresh Profile 已通过 provider-scoped Fetch、选择、重启恢复和新 Thread 创建，不再把空 model pair 发给 Server |
+| Provider Secret | Platform encrypted Secret store 或显式环境凭据 | Direct credential 只进入 Profile/provider scoped Secret store；环境凭据只持久化变量名称并由 owned Profile process 注入。Codex config、Browser DTO、日志和文档不保存明文 |
 | Workspace 授权、执行根与普通文件 | Platform + Runner | Workspace 独立于 Thread/Run；Task 已固定唯一授权 Workspace，Run/fork/recovery 受数据库和服务端不变量约束；真实 Runtime Probe 已证明 Root/child 使用同一 native `sandboxCwd`，同时观察到 macOS `/var` 与 `/private/var` 的同 inode 词法差异；physical-path join 的通用收敛进入后续 backlog，当前仓网链继续以既有 Workspace denial gate 为边界；通用文件 Web 产品流已统一到 `/workspaces/{id}/files` 与 `GitRuntime` |
 | MCP Resource 内容与生命周期 | 各个 MCP provider | Codex 按 Thread/Turn 当前 server inventory 执行 list/read，official Tool Item 保存 ResourceLink/structuredContent；供应链 provider 当前把字节保存在 Profile 私有、按 canonical Workspace 隔离的 `ResourceStore` 中。Platform 不复制内容或提供通用 Resource API；对 exact `map_utils/create_map_card` 展示，Platform 只持久化 bounded renderer/ref 投影，浏览器按组织与 Run 授权通过 producing Thread 的 official `mcpServer/resource/read` 即时取得 GeoJSON |
 | 通用 Copilot Resource/Workspace 基础合同 | 长期由 Platform/Workspace authority 与平台提供的 provider library 分工拥有 | Workspace 授权、canonical containment/no-follow、final file atomic create-new 和 Artifact 物化属于 Platform/Runner；`ResourceRef` envelope、expected-schema 校验、canonical codec、payload bounds、typed errors 与 provider load/publish primitives 长期应由平台提供给所有 Copilot。阶段一仍以内嵌在 `supply_chain` 的领域无关单模块孵化，尚未成为公开 SDK |
@@ -109,7 +109,7 @@ Indonesia/Thailand 真实探针证明 Standard Root 与原生 child 都从各自
 3B.3-B4 已从当前 schema 删除 DB-only readiness 与 Catalog/Installation 等无 owner 对象；
 Slice 4B.2-A 又由 fresh PostgreSQL 全迁移链断言 Work State 十表、Supervisor 六表和
 provider speculative hash 四列不存在，同时保留 provider_call_metrics 与 Runtime agent
-projection 表。阶段一仓网业务闭环仍未完成。
+projection 表。2026-08-12 clean real Web 的 S1/S2/S3 已完成阶段一正常业务闭环。
 
 ## 4. 当前协同和 Run 生命周期
 
@@ -124,6 +124,12 @@ snapshot/binding/continuation 以及 Event Projection 的领域 continuation dis
 Root Turn。当前投影只保存 Runtime 事实：native Agent、activity、execution、Approval 和
 Artifact；它不再负责协作调度。fresh PostgreSQL security gate 与原生 child projection
 gate 均证明删除后 Runtime child lifecycle、Artifact 和资源投影继续可用。
+
+Browser 的当前 Workspace 与每个 Workspace 的 Root Thread 选择只作为 session-scoped
+presentation state 保存；reload 后必须先用授权 Workspace/Thread 列表校验，再通过既有
+`selectThread` 恢复 official history、Agent activity、overview 和 durable pending approval。
+2026-08-12 的真实 Web 门在 final report approval pending 时刷新，恢复了同一 Root Thread 和
+唯一可操作 approval，接受后原 Network child 继续完成唯一 Markdown Artifact。
 
 ## 5. 当前文件、Resource 与旧数据边界
 
@@ -216,33 +222,26 @@ SDK 当前只有 `tool init/validate/test/pack`，Web 也没有消费 SDK 包的
 
 ## 8. 当前最重要的边界偏离
 
-1. Event Projection 把 generic ResourceLink 提升成 Artifact、执行跨 child Resource lookup 并解析
-   模型文本呈现指令；Run-scoped inline 表和无 writer 的 `retention_state` 又伪装了不存在的
-   持久展示与保留生命周期，使 Artifact 超出最终交付 owner。
-2. Profile Runtime 的 HOME 与 process cwd 已隔离，但 Server 仍可默认导入宿主认证；未来
+1. Profile Runtime 的 HOME 与 process cwd 已隔离，但 Server 仍可默认导入宿主认证；未来
    多用户身份隔离尚未成立。
-3. Provider 定义、模型目录和未来 Thread 默认选择已由持久 Profile config/Runtime 拥有，但 Platform 仍在
-   `profile_provider_definitions` 和 global `models.default_selection` 重复保存、启动回放和覆盖
-   Runtime 结果；非默认 Provider 刷新还会改写 Profile 默认选择，普通目录更新会安排额外 Runtime 重启。
-4. Task 固定 Workspace、child `sandboxCwd`、通用 Workspace 文件产品入口和旧 Platform
-   数据路径删除已有独立集成证据，但完整仓网纵向 E2E 尚未形成。
-5. 当前 history overlay 按 Tool 名称或 approval message 推断插入位置，Browser 又以相同用户
+2. 当前 history overlay 按 Tool 名称或 approval message 推断插入位置，Browser 又以相同用户
    文本合并 optimistic/live/history 消息；这些启发式在 Runtime exact Item ID 之外形成第二历史
    关联规则，连续相同消息会被误合并。当前 Codex subtree 还保留旧 legacy response-tool/history
    materialization seam，尚未接受 latest official paginated history 全量实现。
-6. `run_events` 的 sequence 和 run/thread/turn/item provenance 是合理的持久投影，但当前
+3. `run_events` 的 sequence 和 run/thread/turn/item provenance 是合理的持久投影，但当前
    `project_item` 会把未统一限长的 agent text、reasoning、command output、diff 与 Tool result
    同时写入 PostgreSQL 和 WebSocket，且 unknown Runtime method 仍可能被 Browser JSON summary
-   放入对话；当前没有 event retention/prune owner。
-7. 通用 Copilot Resource/Workspace primitives 仍内嵌在供应链包中；当前只能保持其领域无关、
+   放入对话；当前没有 event retention/prune owner。一次真实长 Run 观察到事件 delta 写放大，
+   pending approval replay 仍从 sequence 0 分页扫描；它们是性能 backlog，不是阶段一正常链门。
+4. 通用 Copilot Resource/Workspace primitives 仍内嵌在供应链包中；当前只能保持其领域无关、
    单一实现且由 Data、Network 与 final binding 共用，并保持依赖方向
    `warehouse planning -> common infrastructure`。出现第二个真实 Copilot，或进入 phase-two public
    Copilot SDK 之前，必须在不改变 `ResourceRef`、Tool 合同和 provider content owner 的前提下，
    把它迁到平台提供的通用 provider library 与 Platform/Runner Workspace authority。
 
-这些都是当前事实，不是应继续兼容的接口，也不自动成为仓网闭环前置。当前只处理会直接
-使 DeepSeek + supply-chain + final map/report + Indonesia E2E 链不可达、写错数据或泄露 Secret
-的缺口；Browser legacy、Provider 全量去重和完整 Thread/history/lease 收敛进入后续 backlog。
+这些都是当前事实，不是应继续兼容的接口，也不是已经完成的阶段一正常链前置。后续按 owner
+处理 Browser legacy、完整 Thread/history/lease、approval replay、event retention 和多用户隔离；
+不再把它们插回已经通过的仓网正常路径。
 阶段一边界由 [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 约束；具体顺序只进入
 [开发计划](development-plan.md)。
 
