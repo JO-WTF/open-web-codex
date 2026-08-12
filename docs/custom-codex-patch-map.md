@@ -142,12 +142,14 @@ request preparation and Provider auth/retry/telemetry hooks are isolated in
 tool-call, message-phase and namespace/MCP tests.
 
 Inline Visualization does not create another retained Codex seam. The integrated
-upstream TUI owns `::codex-inline-vis{file="..."}` parsing, streaming tracking
-and local HTML link fallback. The Web platform preserves that meaning and adds
-the narrow `artifact="..."` attribute for authorized typed renderers; this
-extension stays outside `codex/`. Chat and Responses transports preserve both
-forms as ordinary Agent Message text; neither `codex-api` nor Core may interpret
-`map.v3`, register Platform Artifacts or create card Items. If official
+upstream TUI owns both native `visualize` content references and
+`::codex-inline-vis{file="..."}` parsing, streaming tracking and HTML viewer assets.
+The Web platform preserves that meaning through an authorized Thread-scoped
+HTML/static-image endpoint and adds only the narrow `artifact="..."` attribute
+for the retained `map.v3` renderer; these extensions stay outside `codex/`.
+Chat and Responses transports preserve all forms as ordinary Agent Message text;
+neither `codex-api` nor Core may interpret `map.v3`, register Platform Artifacts
+or create card Items. If official
 app-server later exposes a typed equivalent, the Web extension must converge to
 that official contract and be deleted.
 

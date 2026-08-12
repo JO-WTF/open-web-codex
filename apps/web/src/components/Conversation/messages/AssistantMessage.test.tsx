@@ -10,6 +10,12 @@ vi.mock("./ReplyCard", () => ({
   ),
 }));
 
+vi.mock("./InlineVisualizationFile", () => ({
+  default: ({ file, media, threadId }: { file: string; media: string; threadId: string }) => (
+    <div data-testid="inline-file">{`${threadId}:${media}:${file}`}</div>
+  ),
+}));
+
 const mapArtifact: InlineVisualizationArtifact = {
   ref: "map-one",
   rendererKind: "map.v3",
@@ -26,23 +32,10 @@ const mapArtifact: InlineVisualizationArtifact = {
   },
 };
 
-const reportArtifact: InlineVisualizationArtifact = {
-  ref: "report-one",
-  rendererKind: "report.v1",
-  card: {
-    type: "card",
-    kind: "report.v1",
-    id: "report-one",
-    title: "Network decision",
-    status: "ready",
-    source: {
-      type: "artifact",
-      format: "json",
-      artifactId: "8e98ff2f-82ee-4cc9-a3e6-2974debf8666",
-      mimeType: "application/json",
-      url: "/api/artifacts/8e98ff2f-82ee-4cc9-a3e6-2974debf8666/content",
-    },
-  },
+const secondMapArtifact: InlineVisualizationArtifact = {
+  ...mapArtifact,
+  ref: "map-two",
+  card: { ...mapArtifact.card, id: "map-two", title: "北京地图" },
 };
 
 describe("AssistantMessage", () => {
@@ -133,21 +126,17 @@ describe("AssistantMessage", () => {
     );
   });
 
-  it("places a typed report Artifact at its referenced message position", () => {
-    const view = render(
+  it("renders native HTML and image references through the current Thread", () => {
+    render(
       <AssistantMessage
-        text={[
-          "Report follows.",
-          '::codex-inline-vis{artifact="report-one"}',
-        ].join("\n")}
-        inlineArtifacts={[reportArtifact]}
+        text={'::codex-inline-vis{file="chart.html"}\n::codex-inline-vis{file="result.png"}'}
+        inlineVisualizationThreadId="0198ff2f-82ee-7cc9-a3e6-2974debf8666"
       />,
     );
 
-    const body = view.container.querySelector(".web-msg-assistant-body");
-    expect(Array.from(body!.children).map((child) => child.textContent)).toEqual([
-      "Report follows.",
-      "Network decision",
+    expect(screen.getAllByTestId("inline-file").map((node) => node.textContent)).toEqual([
+      "0198ff2f-82ee-7cc9-a3e6-2974debf8666:html:chart.html",
+      "0198ff2f-82ee-7cc9-a3e6-2974debf8666:image:result.png",
     ]);
   });
 
@@ -157,16 +146,16 @@ describe("AssistantMessage", () => {
         text={[
           "Deliveries follow.",
           '::codex-inline-vis{artifact="map-one"}',
-          '::codex-inline-vis{artifact="report-one"}',
+          '::codex-inline-vis{artifact="map-two"}',
         ].join("\n")}
-        inlineArtifacts={[mapArtifact, reportArtifact]}
+        inlineArtifacts={[mapArtifact, secondMapArtifact]}
         hiddenInlineArtifactRefs={["map-one"]}
       />,
     );
 
     expect(view.container.textContent).toContain("Deliveries follow.");
     expect(view.container.textContent).not.toContain("上海地图");
-    expect(view.container.textContent).toContain("Network decision");
+    expect(view.container.textContent).toContain("北京地图");
     expect(view.container.textContent).not.toContain("Visualization unavailable");
   });
 

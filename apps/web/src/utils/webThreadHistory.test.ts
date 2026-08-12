@@ -467,56 +467,6 @@ describe("buildWebThreadHistory", () => {
     });
   });
 
-  it("restores an authorized report Artifact without reading report text from the message", () => {
-    const [entry] = buildWebThreadHistory({
-      turns: [{ items: [{
-        id: "assistant-report",
-        type: "agentMessage",
-        text: [
-          "Decision report.",
-          '::codex-inline-vis{artifact="network-report"}',
-        ].join("\n"),
-        inlineArtifacts: [{
-          ref: "network-report",
-          renderer: {
-            kind: "report.v1",
-            payload: {
-              title: "Indonesia warehouse-network decision",
-              status: "ready",
-              source: {
-                type: "artifact",
-                format: "json",
-                artifact_id: "8e98ff2f-82ee-4cc9-a3e6-2974debf8666",
-                mime_type: "application/json",
-                url: "/api/artifacts/8e98ff2f-82ee-4cc9-a3e6-2974debf8666/content",
-              },
-            },
-          },
-        }],
-      }] }],
-    }, () => "generated");
-
-    expect(entry).toMatchObject({
-      id: "assistant-report",
-      level: "assistant",
-      text: 'Decision report.\n::codex-inline-vis{artifact="network-report"}',
-      inlineArtifacts: [{
-        ref: "network-report",
-        rendererKind: "report.v1",
-        card: {
-          kind: "report.v1",
-          title: "Indonesia warehouse-network decision",
-          source: {
-            type: "artifact",
-            format: "json",
-            artifactId: "8e98ff2f-82ee-4cc9-a3e6-2974debf8666",
-          },
-        },
-      }],
-    });
-    expect(JSON.stringify(entry.inlineArtifacts)).not.toContain("markdown");
-  });
-
   it("redacts sensitive dynamic tool arguments", () => {
     let id = 0;
     const [entry] = buildWebThreadHistory({ turns: [{ items: [{

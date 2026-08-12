@@ -1,15 +1,17 @@
 import type { InlineVisualizationArtifact } from "./replyCards";
 
 const DIRECTIVE_PREFIX = "::codex-inline-vis{";
+const NATIVE_PREFIX = "visualize";
+const NATIVE_SUFFIX = "";
 const ARTIFACT_PREFIX = `${DIRECTIVE_PREFIX}artifact="`;
 const FILE_PREFIX = `${DIRECTIVE_PREFIX}file="`;
 const SAFE_REFERENCE = /^[A-Za-z0-9_.-]{1,128}$/;
-const SAFE_HTML_FILE = /^[A-Za-z0-9_.-]{1,123}\.html$/;
+const SAFE_FILE = /^[A-Za-z0-9_.-]{1,123}\.(?:html|png|jpe?g|gif|webp)$/;
 
 export type InlineVisualizationSegment =
   | { kind: "markdown"; text: string }
   | { kind: "artifact"; ref: string }
-  | { kind: "file"; file: string }
+  | { kind: "file"; file: string; media: "html" | "image" }
   | { kind: "unavailable"; label: string };
 
 function directiveValue(
@@ -34,11 +36,34 @@ function fenceMarker(line: string): { character: string; length: number } | null
   return markerLength >= 3 ? { character, length: markerLength } : null;
 }
 
+function fileSegment(path: string): Extract<InlineVisualizationSegment, { kind: "file" }> | null {
+  const parts = path.split(/[\\/]/);
+  const file = parts[parts.length - 1] ?? "";
+  if (!SAFE_FILE.test(file)) return null;
+  return {
+    kind: "file",
+    file,
+    media: file.endsWith(".html") ? "html" : "image",
+  };
+}
+
+function nativeFileReference(value: string): Extract<InlineVisualizationSegment, { kind: "file" }> | null {
+  if (!value.startsWith(NATIVE_PREFIX) || !value.endsWith(NATIVE_SUFFIX)) return null;
+  try {
+    const payload = JSON.parse(value.slice(NATIVE_PREFIX.length, -NATIVE_SUFFIX.length));
+    return payload && typeof payload === "object" && typeof payload.path === "string"
+      ? fileSegment(payload.path)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function segmentInlineVisualizations(
   markdown: string,
   streaming = false,
 ): InlineVisualizationSegment[] {
-  if (!markdown.includes(DIRECTIVE_PREFIX)) {
+  if (!markdown.includes(DIRECTIVE_PREFIX) && !markdown.includes(NATIVE_PREFIX)) {
     return markdown ? [{ kind: "markdown", text: markdown }] : [];
   }
 
@@ -70,13 +95,20 @@ export function segmentInlineVisualizations(
     const leadingSpaces = line.match(/^ */)?.[0].length ?? 0;
     const inIndentedCode = leadingSpaces >= 4 || line.startsWith("\t");
     const directive = line.trim();
-    if (!fence && !inIndentedCode && directive.startsWith(DIRECTIVE_PREFIX)) {
+    if (!fence && !inIndentedCode && (
+      directive.startsWith(DIRECTIVE_PREFIX) || directive.startsWith(NATIVE_PREFIX)
+    )) {
       const artifact = directiveValue(directive, ARTIFACT_PREFIX, SAFE_REFERENCE);
-      const file = directiveValue(directive, FILE_PREFIX, SAFE_HTML_FILE);
+      const file = directiveValue(directive, FILE_PREFIX, SAFE_FILE);
+      const fileReference = file ? fileSegment(file) : nativeFileReference(directive);
       const incomplete = streaming
         && newlineIndex < 0
-        && !directive.endsWith("}");
-      if (artifact || file || directive.endsWith("}") || incomplete) {
+        && !directive.endsWith("}")
+        && !directive.endsWith(NATIVE_SUFFIX);
+      const terminal = directive.startsWith(NATIVE_PREFIX)
+        ? directive.endsWith(NATIVE_SUFFIX)
+        : directive.endsWith("}");
+      if (artifact || fileReference || terminal || incomplete) {
         if (lineStart > markdownStart) {
           segments.push({
             kind: "markdown",
@@ -85,8 +117,8 @@ export function segmentInlineVisualizations(
         }
         if (artifact) {
           segments.push({ kind: "artifact", ref: artifact });
-        } else if (file) {
-          segments.push({ kind: "file", file });
+        } else if (fileReference) {
+          segments.push(fileReference);
         } else if (!incomplete) {
           segments.push({ kind: "unavailable", label: "Visualization unavailable" });
         }

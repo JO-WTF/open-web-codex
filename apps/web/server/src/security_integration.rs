@@ -1,10 +1,11 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
+use chrono::DateTime;
 use futures_util::{SinkExt, StreamExt};
 use open_web_codex_adapter::{fake::FakeCodexAdapter, CodexAdapter};
 use open_web_codex_approval_service::{ApprovalActor, ApprovalService};
@@ -449,10 +450,11 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .await
         .expect("migrate database");
 
+    let codex_home = tempfile::tempdir().expect("Codex home");
     let profile = RuntimeProfileBinding {
         runtime_key: "security-test-profile".to_string(),
         name: "Security Test Profile".to_string(),
-        codex_home: None,
+        codex_home: Some(Arc::new(codex_home.path().to_path_buf())),
     };
     let state = AppState::new(pool.clone());
     let approval_service = Arc::new(ApprovalService::new(pool.clone(), "security-test-profile"));
@@ -1083,6 +1085,199 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .execute(&pool)
     .await
     .unwrap();
+
+    let inline_task_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO tasks (id, organization_id, project_id, workspace_id, title) \
+         VALUES ($1, $2, $3, $4, 'Inline Visualization Task')",
+    )
+    .bind(inline_task_id)
+    .bind(first_organization_id)
+    .bind(Uuid::parse_str(&first_project_id).unwrap())
+    .bind(workspace_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let inline_root_thread_id = Uuid::now_v7().to_string();
+    let inline_child_thread_id = Uuid::now_v7().to_string();
+    let inline_run_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO runs \
+         (id, organization_id, task_id, requested_by, requested_profile_id, workspace_id, \
+          status, codex_thread_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'running', $7)",
+    )
+    .bind(inline_run_id)
+    .bind(first_organization_id)
+    .bind(inline_task_id)
+    .bind(first_user_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .bind(&inline_root_thread_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runtime_agent_projections (
+            organization_id, profile_id, workspace_id, root_run_id, thread_id,
+            parent_thread_id, source_kind, agent_path, agent_nickname, agent_role
+         ) VALUES ($1, $2, $3, $4, $5, $6,
+                   'thread_spawn', '/root/data', 'Inline Child', 'data_agent')",
+    )
+    .bind(first_organization_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .bind(inline_run_id)
+    .bind(&inline_child_thread_id)
+    .bind(&inline_root_thread_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let inline_root_dir = visualization_thread_dir(codex_home.path(), &inline_root_thread_id);
+    let inline_child_dir = visualization_thread_dir(codex_home.path(), &inline_child_thread_id);
+    std::fs::create_dir_all(&inline_root_dir).unwrap();
+    std::fs::create_dir_all(&inline_child_dir).unwrap();
+    std::fs::write(
+        inline_root_dir.join("root.html"),
+        "<div id=\"inline-root\">root visualization</div>",
+    )
+    .unwrap();
+    let inline_child_png = b"\x89PNG\r\n\x1a\ninline-child";
+    std::fs::write(inline_child_dir.join("child.png"), inline_child_png).unwrap();
+
+    let other_profile_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO profiles (id, organization_id, owner_user_id, runtime_key, name) \
+         VALUES ($1, $2, $3, 'security-other-profile', 'Other Security Profile')",
+    )
+    .bind(other_profile_id)
+    .bind(first_organization_id)
+    .bind(first_user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let other_workspace_id = Uuid::now_v7();
+    let other_workspace_root = runner_root.path().join("other-profile-workspace");
+    std::fs::create_dir_all(&other_workspace_root).unwrap();
+    sqlx::query(
+        "INSERT INTO workspaces \
+         (id, organization_id, project_id, profile_id, created_by, root_path, state, \
+          source_ref, kind, name) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'ready', 'main', 'main', 'Other Profile Workspace')",
+    )
+    .bind(other_workspace_id)
+    .bind(first_organization_id)
+    .bind(Uuid::parse_str(&first_project_id).unwrap())
+    .bind(other_profile_id)
+    .bind(first_user_id)
+    .bind(other_workspace_root.to_string_lossy().as_ref())
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO workspace_grants \
+         (workspace_id, organization_id, user_id, profile_id, role) \
+         VALUES ($1, $2, $3, $4, 'owner')",
+    )
+    .bind(other_workspace_id)
+    .bind(first_organization_id)
+    .bind(first_user_id)
+    .bind(other_profile_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let other_profile_task_id = Uuid::now_v7();
+    let other_profile_thread_id = Uuid::now_v7().to_string();
+    let other_profile_run_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO tasks (id, organization_id, project_id, workspace_id, title) \
+         VALUES ($1, $2, $3, $4, 'Other Profile Task')",
+    )
+    .bind(other_profile_task_id)
+    .bind(first_organization_id)
+    .bind(Uuid::parse_str(&first_project_id).unwrap())
+    .bind(other_workspace_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runs \
+         (id, organization_id, task_id, requested_by, requested_profile_id, workspace_id, \
+          status, codex_thread_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'running', $7)",
+    )
+    .bind(other_profile_run_id)
+    .bind(first_organization_id)
+    .bind(other_profile_task_id)
+    .bind(first_user_id)
+    .bind(other_profile_id)
+    .bind(other_workspace_id)
+    .bind(&other_profile_thread_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let non_ready_workspace_id = Uuid::now_v7();
+    let non_ready_task_id = Uuid::now_v7();
+    let non_ready_run_id = Uuid::now_v7();
+    let non_ready_thread_id = Uuid::now_v7().to_string();
+    let non_ready_workspace_root = runner_root.path().join("non-ready-workspace");
+    sqlx::query(
+        "INSERT INTO workspaces \
+         (id, organization_id, project_id, profile_id, created_by, root_path, state, \
+          source_ref, kind, name) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'creating', 'main', 'main', 'Non-ready Workspace')",
+    )
+    .bind(non_ready_workspace_id)
+    .bind(first_organization_id)
+    .bind(Uuid::parse_str(&first_project_id).unwrap())
+    .bind(profile_id)
+    .bind(first_user_id)
+    .bind(non_ready_workspace_root.to_string_lossy().as_ref())
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO workspace_grants \
+         (workspace_id, organization_id, user_id, profile_id, role) \
+         VALUES ($1, $2, $3, $4, 'owner')",
+    )
+    .bind(non_ready_workspace_id)
+    .bind(first_organization_id)
+    .bind(first_user_id)
+    .bind(profile_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO tasks (id, organization_id, project_id, workspace_id, title) \
+         VALUES ($1, $2, $3, $4, 'Non-ready Visualization Task')",
+    )
+    .bind(non_ready_task_id)
+    .bind(first_organization_id)
+    .bind(Uuid::parse_str(&first_project_id).unwrap())
+    .bind(non_ready_workspace_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runs \
+         (id, organization_id, task_id, requested_by, requested_profile_id, workspace_id, \
+          status, codex_thread_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'running', $7)",
+    )
+    .bind(non_ready_run_id)
+    .bind(first_organization_id)
+    .bind(non_ready_task_id)
+    .bind(first_user_id)
+    .bind(profile_id)
+    .bind(non_ready_workspace_id)
+    .bind(&non_ready_thread_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
     let child_approval_id = approval_service
         .capture_message(
             runtime_instance_id,
@@ -1595,6 +1790,60 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     assert_eq!(second_list.1.as_array().unwrap().len(), 1);
     assert_eq!(second_list.1[0]["name"], "Second Project");
 
+    let (root_status, root_headers, root_body) = raw_call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/threads/{inline_root_thread_id}/inline-visualizations/root.html"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(root_status, StatusCode::OK);
+    assert_eq!(root_headers["content-type"], "text/html; charset=utf-8");
+    assert_eq!(root_headers["cache-control"], "private, no-store");
+    assert_eq!(root_headers["x-content-type-options"], "nosniff");
+    assert!(String::from_utf8_lossy(&root_body).contains("inline-root"));
+    assert!(!String::from_utf8_lossy(&root_body).contains(&codex_home.path().display().to_string()));
+
+    let (child_status, child_headers, child_body) = raw_call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/threads/{inline_child_thread_id}/inline-visualizations/child.png"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(child_status, StatusCode::OK);
+    assert_eq!(child_headers["content-type"], "image/png");
+    assert_eq!(child_body, inline_child_png);
+    assert!(
+        !String::from_utf8_lossy(&child_body).contains(&codex_home.path().display().to_string())
+    );
+
+    let unknown_thread_id = Uuid::now_v7().to_string();
+    for (label, thread_id) in [
+        ("other-profile", other_profile_thread_id.as_str()),
+        ("unknown-thread", unknown_thread_id.as_str()),
+        ("non-ready-workspace", non_ready_thread_id.as_str()),
+    ] {
+        let response = call(
+            &app,
+            authenticated(
+                "GET",
+                &format!("/api/threads/{thread_id}/inline-visualizations/root.html"),
+                &first_token,
+            ),
+        )
+        .await;
+        assert_eq!(response.0, StatusCode::NOT_FOUND, "{label}");
+        assert!(!response
+            .1
+            .to_string()
+            .contains(&codex_home.path().display().to_string()));
+    }
+
     let cross_tenant = call(
         &app,
         authenticated(
@@ -1605,6 +1854,21 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     )
     .await;
     assert_eq!(cross_tenant.0, StatusCode::NOT_FOUND);
+
+    let cross_tenant_inline = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/threads/{inline_root_thread_id}/inline-visualizations/root.html"),
+            second_token,
+        ),
+    )
+    .await;
+    assert_eq!(cross_tenant_inline.0, StatusCode::NOT_FOUND);
+    assert!(!cross_tenant_inline
+        .1
+        .to_string()
+        .contains(&codex_home.path().display().to_string()));
 
     let cross_tenant_asset = call(
         &app,
@@ -1868,6 +2132,16 @@ async fn call(app: &Router, request: Request<Body>) -> (StatusCode, Value) {
     (status, value)
 }
 
+async fn raw_call(app: &Router, request: Request<Body>) -> (StatusCode, HeaderMap, Vec<u8>) {
+    let response = app.clone().oneshot(request).await.expect("HTTP response");
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = to_bytes(response.into_body(), 16 * 1024 * 1024)
+        .await
+        .expect("response body");
+    (status, headers, body.into_iter().collect())
+}
+
 async fn call_with_headers(app: &Router, request: Request<Body>) -> (StatusCode, HeaderMap, Value) {
     let response = app.clone().oneshot(request).await.expect("HTTP response");
     let status = response.status();
@@ -1902,6 +2176,17 @@ fn fixture_git(cwd: &Path, args: &[&str]) {
         "Git fixture failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn visualization_thread_dir(codex_home: &Path, thread_id: &str) -> PathBuf {
+    let uuid = Uuid::parse_str(thread_id).unwrap();
+    let timestamp = uuid.get_timestamp().unwrap();
+    let (seconds, nanos) = timestamp.to_unix();
+    let created_at = DateTime::from_timestamp(i64::try_from(seconds).unwrap(), nanos).unwrap();
+    codex_home
+        .join("visualizations")
+        .join(created_at.format("%Y/%m/%d").to_string())
+        .join(thread_id)
 }
 
 fn authenticated(method: &str, uri: &str, token: &str) -> Request<Body> {

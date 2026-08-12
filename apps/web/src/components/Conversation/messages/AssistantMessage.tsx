@@ -6,6 +6,7 @@ import {
 import type { InlineVisualizationArtifact } from "../../../utils/replyCards";
 import ReplyCard from "./ReplyCard";
 import SafeMarkdown from "./SafeMarkdown";
+import InlineVisualizationFile from "./InlineVisualizationFile";
 
 type Props = {
   text: string;
@@ -15,6 +16,7 @@ type Props = {
   inlineArtifacts?: InlineVisualizationArtifact[];
   showInlineArtifacts?: boolean;
   hiddenInlineArtifactRefs?: string[];
+  inlineVisualizationThreadId?: string | null;
 };
 
 export default function AssistantMessage({
@@ -25,6 +27,7 @@ export default function AssistantMessage({
   inlineArtifacts,
   showInlineArtifacts = true,
   hiddenInlineArtifactRefs,
+  inlineVisualizationThreadId,
 }: Props) {
   const commentary = variant === "commentary";
   const segments = useMemo(
@@ -83,6 +86,16 @@ export default function AssistantMessage({
             );
           }
           if (!showInlineArtifacts) return null;
+          if (segment.kind === "file" && inlineVisualizationThreadId) {
+            return (
+              <InlineVisualizationFile
+                key={`visualization-file-${segment.file}-${index}`}
+                threadId={inlineVisualizationThreadId}
+                file={segment.file}
+                media={segment.media}
+              />
+            );
+          }
           return (
             <div
               className="web-inline-visualization-unavailable"
@@ -90,7 +103,7 @@ export default function AssistantMessage({
               key={`visualization-unavailable-${index}`}
             >
               {segment.kind === "file"
-                ? `HTML visualization “${segment.file}” is unavailable in Web.`
+                ? `Visualization “${segment.file}” is unavailable.`
                 : segment.label}
             </div>
           );

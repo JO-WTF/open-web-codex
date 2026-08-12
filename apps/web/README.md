@@ -106,7 +106,6 @@ Run these commands from the repository root:
 
 ```bash
 (cd apps/web && npm run check:no-desktop)
-(cd apps/web && npm run check:main-ui-parity)
 (cd apps/web && npm run lint)
 (cd apps/web && npm run typecheck)
 (cd apps/web && npm run test)

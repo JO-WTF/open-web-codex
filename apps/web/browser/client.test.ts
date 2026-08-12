@@ -8,6 +8,32 @@ import {
 describe("PlatformClient", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it("reads only bounded native inline visualization files", async () => {
+    const threadId = "0198ff2f-82ee-7cc9-a3e6-2974debf8666";
+    const fetchMock = vi.fn().mockResolvedValue(new Response("image", {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    const result = await client.readInlineVisualization(threadId, "chart.png");
+
+    expect(result.contentType).toBe("image/png");
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform.test/api/threads/${threadId}/inline-visualizations/chart.png`,
+      expect.objectContaining({
+        cache: "no-store",
+        headers: { authorization: "Bearer session-token" },
+      }),
+    );
+    await expect(client.readInlineVisualization(threadId, "unsafe.svg"))
+      .rejects.toThrow("file is invalid");
+  });
+
   it("rejects multi-file Workspace uploads before issuing a request", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

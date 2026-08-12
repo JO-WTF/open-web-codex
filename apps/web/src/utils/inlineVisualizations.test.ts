@@ -21,7 +21,17 @@ describe("segmentInlineVisualizations", () => {
   it("preserves the official file form without treating it as a typed Artifact", () => {
     expect(segmentInlineVisualizations(
       '::codex-inline-vis{file="chart.html"}',
-    )).toEqual([{ kind: "file", file: "chart.html" }]);
+    )).toEqual([{ kind: "file", file: "chart.html", media: "html" }]);
+  });
+
+  it("accepts the current native content reference and static raster images", () => {
+    expect(segmentInlineVisualizations(
+      'visualize{"path":"/Users/example/.codex/visualizations/chart.html"}\n'
+      + '::codex-inline-vis{file="result.png"}',
+    )).toEqual([
+      { kind: "file", file: "chart.html", media: "html" },
+      { kind: "file", file: "result.png", media: "image" },
+    ]);
   });
 
   it("does not parse directives inside fenced or indented code", () => {
@@ -41,11 +51,18 @@ describe("segmentInlineVisualizations", () => {
       'Before.\n::codex-inline-vis{artifact="map',
       true,
     )).toEqual([{ kind: "markdown", text: "Before.\n" }]);
+    expect(segmentInlineVisualizations(
+      'Before.\nvisualize{"path":"/Users/example/chart',
+      true,
+    )).toEqual([{ kind: "markdown", text: "Before.\n" }]);
   });
 
   it("returns an explicit unavailable segment for a closed invalid directive", () => {
     expect(segmentInlineVisualizations(
       '::codex-inline-vis{artifact="../unsafe"}',
+    )).toEqual([{ kind: "unavailable", label: "Visualization unavailable" }]);
+    expect(segmentInlineVisualizations(
+      '::codex-inline-vis{file="unsafe.svg"}',
     )).toEqual([{ kind: "unavailable", label: "Visualization unavailable" }]);
   });
 });

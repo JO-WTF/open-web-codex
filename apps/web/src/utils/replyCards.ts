@@ -74,39 +74,12 @@ export type MapReplyCard = {
   };
 };
 
-export type ReportReplyCard = {
-  type: "card";
-  kind: "report.v1";
-  id: string;
-  title: string;
-  status: "ready";
-  source: {
-    type: "artifact";
-    format: "json";
-    artifactId: string;
-    mimeType: "application/json";
-    url: string;
-  };
+export type ReplyCard = MapReplyCard;
+export type InlineVisualizationArtifact = {
+  ref: string;
+  rendererKind: "map.v3";
+  card: MapReplyCard;
 };
-
-export type ReportArtifactContent = {
-  schemaVersion: "indonesia_decision_report.v1";
-  markdown: string;
-  markdownSha256: string;
-};
-
-export type ReplyCard = MapReplyCard | ReportReplyCard;
-export type InlineVisualizationArtifact =
-  | {
-    ref: string;
-    rendererKind: "map.v3";
-    card: MapReplyCard;
-  }
-  | {
-    ref: string;
-    rendererKind: "report.v1";
-    card: ReportReplyCard;
-  };
 
 export type GeoJson = Record<string, unknown> & { type: string };
 
@@ -124,91 +97,9 @@ function finiteNumber(value: unknown): number | undefined {
     : undefined;
 }
 
-function hasOnlyKeys(
-  value: Record<string, unknown>,
-  allowedKeys: readonly string[],
-): boolean {
-  const allowed = new Set(allowedKeys);
-  return Object.keys(value).every((key) => allowed.has(key));
-}
-
 function geoJson(value: unknown): GeoJson | undefined {
   if (!isRecord(value) || !nonemptyString(value.type)) return undefined;
   return value as GeoJson;
-}
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SHA256_PATTERN = /^[0-9a-f]{64}$/;
-
-function parseReportRendererPayload(
-  value: unknown,
-  artifactRef: string,
-): ReportReplyCard | null {
-  if (
-    !isRecord(value)
-    || !hasOnlyKeys(value, ["title", "status", "source"])
-    || value.status !== "ready"
-    || !isRecord(value.source)
-    || !hasOnlyKeys(value.source, [
-      "type",
-      "format",
-      "artifact_id",
-      "mime_type",
-      "url",
-    ])
-    || value.source.type !== "artifact"
-    || value.source.format !== "json"
-    || value.source.mime_type !== "application/json"
-  ) {
-    return null;
-  }
-  const title = nonemptyString(value.title);
-  const artifactId = nonemptyString(value.source.artifact_id);
-  const url = nonemptyString(value.source.url);
-  if (
-    !title
-    || !artifactId
-    || !UUID_PATTERN.test(artifactId)
-    || !url
-    || url !== `/api/artifacts/${artifactId}/content`
-  ) {
-    return null;
-  }
-  return {
-    type: "card",
-    kind: "report.v1",
-    id: artifactRef,
-    title,
-    status: "ready",
-    source: {
-      type: "artifact",
-      format: "json",
-      artifactId,
-      mimeType: "application/json",
-      url,
-    },
-  };
-}
-
-export function parseReportArtifactContent(
-  value: unknown,
-): ReportArtifactContent | null {
-  if (
-    !isRecord(value)
-    || value.schema_version !== "indonesia_decision_report.v1"
-    || typeof value.markdown !== "string"
-    || !value.markdown.trim()
-    || typeof value.markdown_sha256 !== "string"
-    || !SHA256_PATTERN.test(value.markdown_sha256)
-  ) {
-    return null;
-  }
-  return {
-    schemaVersion: "indonesia_decision_report.v1",
-    markdown: value.markdown,
-    markdownSha256: value.markdown_sha256,
-  };
 }
 
 type MapLegend = NonNullable<
@@ -417,10 +308,6 @@ export function parseInlineVisualizationArtifact(
   if (value.renderer.kind === "map.v3") {
     const card = parseMapRendererPayload(value.renderer.payload, ref);
     return card ? { ref, rendererKind: "map.v3", card } : null;
-  }
-  if (value.renderer.kind === "report.v1") {
-    const card = parseReportRendererPayload(value.renderer.payload, ref);
-    return card ? { ref, rendererKind: "report.v1", card } : null;
   }
   return null;
 }

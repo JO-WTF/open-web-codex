@@ -2224,12 +2224,45 @@ body:has(.web-app-shell) {
 
 .web-msg-assistant.has-inline-visualization > .web-msg-assistant-body > :is(
   .web-map-card,
-  .web-report-card
+  .web-inline-visualization-file
 ) {
   width: auto;
   max-width: none;
   margin: 12px -6px;
   border-radius: 12px;
+}
+
+.web-inline-visualization-file {
+  width: min(100%, 900px);
+  margin: 12px 0;
+  border: 1px solid var(--web-border-strong);
+  border-radius: 12px;
+  background: var(--web-panel);
+}
+
+.web-inline-visualization-file.is-html {
+  display: block;
+  min-height: 460px;
+}
+
+.web-inline-visualization-file.is-image {
+  display: grid;
+  overflow: hidden;
+  place-items: center;
+}
+
+.web-inline-visualization-file.is-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+}
+
+.web-inline-visualization-file.is-loading {
+  box-sizing: border-box;
+  min-height: 120px;
+  padding: 24px;
+  color: var(--web-muted);
 }
 
 .web-inline-visualization-unavailable {

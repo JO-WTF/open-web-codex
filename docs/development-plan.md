@@ -371,6 +371,11 @@ renderer 与 producing Thread 的精确 Resource ref，并在浏览器授权读�
 `mcpServer/resource/read`，不保存 Resource 字节、不登记 durable Artifact。final Artifact 子片尚未
 就绪时，导出/下载显式 unavailable；不得借地图卡片冒充文件交付。
 
+Web 同时保留 Codex 原生 inline visualization 语义：仅从当前授权 Profile/Thread 读取原生 HTML
+和签名验证后的 PNG/JPEG/GIF/WebP；不引入 SVG/Markdown renderer，也不把临时可视化登记为
+Artifact。阶段一额外 renderer 只保留仓网 `map.v3`；旧 `report.v1` inline 卡片已删除，正式简报
+继续只走中文 Markdown 最终文件与 durable 下载链接。
+
 #### 数据准备
 
 1. Network Agent 定义需求列表与已有仓列表的必要字段。

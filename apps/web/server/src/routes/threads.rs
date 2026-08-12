@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::{
+    body::Body,
     extract::{Path, State},
-    http::StatusCode,
+    http::{header, Response, StatusCode},
     Extension, Json,
 };
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -19,7 +20,9 @@ use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::middleware::auth::require_runtime_profile;
 use crate::middleware::auth::AuthenticatedUser;
+use crate::routes::RuntimeProfileBinding;
 
 type ApiError = (StatusCode, Json<PlatformError>);
 type ApiResult<T> = Result<Json<T>, ApiError>;
@@ -80,6 +83,82 @@ pub async fn read_inline_map_source(
         return Err(bad_gateway("Inline map source did not contain GeoJSON"));
     }
     Ok(Json(value))
+}
+
+pub async fn read_inline_visualization(
+    State(state): State<AppState>,
+    auth: AuthenticatedUser,
+    Path((thread_id, file)): Path<(String, String)>,
+    Extension(profile): Extension<RuntimeProfileBinding>,
+) -> Result<Response<Body>, ApiError> {
+    authorize_inline_visualization_thread(&state, &auth, &profile, &thread_id).await?;
+    let codex_home = profile
+        .codex_home
+        .as_deref()
+        .map(|path| path.as_path())
+        .ok_or_else(|| bad_gateway("Inline visualization storage is not configured"))?;
+    let payload = crate::inline_visualizations::read(codex_home, &thread_id, &file)
+        .await
+        .map_err(|_| not_found())?;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, payload.content_type)
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(Body::from(payload.bytes))
+        .map_err(|_| bad_gateway("Inline visualization response could not be created"))
+}
+
+async fn authorize_inline_visualization_thread(
+    state: &AppState,
+    auth: &AuthenticatedUser,
+    profile: &RuntimeProfileBinding,
+    thread_id: &str,
+) -> Result<(), ApiError> {
+    require_runtime_profile(&state.db, auth, &profile.runtime_key).await?;
+    if thread_id.trim().is_empty() {
+        return Err(not_found());
+    }
+    let row = sqlx::query(
+        "SELECT run.requested_by, workspace.state \
+         FROM runs run \
+         JOIN tasks task ON task.id = run.task_id \
+           AND task.organization_id = run.organization_id \
+           AND task.workspace_id = run.workspace_id \
+         JOIN workspaces workspace ON workspace.id = run.workspace_id \
+           AND workspace.organization_id = run.organization_id \
+         JOIN profiles profile ON profile.id = workspace.profile_id \
+           AND profile.organization_id = run.organization_id \
+           AND profile.runtime_key = $2 \
+           AND profile.status = 'active' \
+         JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
+           AND workspace_grant.organization_id = workspace.organization_id \
+           AND workspace_grant.user_id = run.requested_by \
+           AND workspace_grant.profile_id = workspace.profile_id \
+         LEFT JOIN runtime_agent_projections agent \
+           ON agent.root_run_id = run.id \
+          AND agent.organization_id = run.organization_id \
+           AND agent.thread_id = $3 \
+         WHERE run.organization_id = $1 \
+           AND (run.codex_thread_id = $3 OR agent.thread_id = $3) \
+         ORDER BY run.updated_at DESC \
+         LIMIT 1",
+    )
+    .bind(auth.organization_id)
+    .bind(&profile.runtime_key)
+    .bind(thread_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(database_error)?
+    .ok_or_else(not_found)?;
+    let requested_by: Option<Uuid> = row.get("requested_by");
+    if !matches!(row.get::<String, _>("state").as_str(), "ready" | "retained")
+        || (requested_by != Some(auth.user_id)
+            && !matches!(auth.organization_role.as_str(), "owner" | "admin"))
+    {
+        return Err(not_found());
+    }
+    Ok(())
 }
 
 fn mcp_resource_bytes(response: &Value, expected_uri: &str) -> Result<Vec<u8>, &'static str> {

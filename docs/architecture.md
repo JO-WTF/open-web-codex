@@ -41,6 +41,7 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | MCP Resource 内容与生命周期 | 各个 MCP provider | Codex 按 Thread/Turn 当前 server inventory 执行 list/read，official Tool Item 保存 ResourceLink/structuredContent；供应链 provider 当前把字节保存在 Profile 私有、按 canonical Workspace 隔离的 `ResourceStore` 中。Platform 不复制内容或提供通用 Resource API；对 exact `map_utils/create_map_card` 展示，Platform 只持久化 bounded renderer/ref 投影，浏览器按组织与 Run 授权通过 producing Thread 的 official `mcpServer/resource/read` 即时取得 GeoJSON |
 | 通用 Copilot Resource/Workspace 基础合同 | 长期由 Platform/Workspace authority 与平台提供的 provider library 分工拥有 | Workspace 授权、canonical containment/no-follow、final file atomic create-new 和 Artifact 物化属于 Platform/Runner；`ResourceRef` envelope、expected-schema 校验、canonical codec、payload bounds、typed errors 与 provider load/publish primitives 长期应由平台提供给所有 Copilot。阶段一仍以内嵌在 `supply_chain` 的领域无关单模块孵化，尚未成为公开 SDK |
 | Task、Run、Approval、Artifact、Audit | Platform | 持久 Artifact 只接受 built-in exact final Tool 的 typed Workspace-relative descriptor，并按 producing Item provenance 物化；中间 Resource 永不注册 Artifact。最终地图文件使用 provider-owned JSON bundle，正式结果简报使用有界中文 `text/markdown` 文件；Browser 依据 MIME 安全预览、授权下载，并从 durable `ArtifactSummary.download_url` 在对话正文区域显示文件链接，不依赖 Assistant 复述路径或简报正文。对话内地图卡片是独立的 bounded presentation projection：只接受 exact `map_utils/create_map_card`、独立行 embed 指令和私有 Resource ref，既不创建 Workspace 文件，也不进入 durable Artifact 列表 |
+| Codex Inline Visualization | Codex Runtime + Platform 授权投影 | Runtime 仍生成原生 `visualize`/`file` 引用和 Thread-scoped 文件；Platform 将执行器绝对路径投影为 basename，并只允许当前授权 Profile/Thread 读取。Web 直接支持原生 HTML 与静态 PNG/JPEG/GIF/WebP；HTML 复用 Codex viewer assets 并运行在无 same-origin 权限的脚本沙箱/CSP 中，图片验证扩展名、大小与文件签名。SVG、Markdown 和任意 Artifact 脚本不进入该表面；仓网 `map.v3` 仍是唯一额外 typed 卡片 |
 | 用户输入 | Runtime 请求，Platform Approval 投影 | Root 官方输入路径已在真实 E2E 中通过 |
 | Agent execution | Runtime 事件，Platform projection | 有等待、输入和完整终态投影；属于可重建视图 |
 | Capability Draft/Release/Installation | 无当前生产 owner | Catalog/Studio/Python publish crate、route、DTO、client、UI 与无 owner 数据表均已删除，不参与启动或 readiness |
@@ -174,17 +175,13 @@ pair 给出显式验证结果。覆盖口径及未覆盖城市由
 Network Tool 确定性计算，同时区分城市数量和需求量加权指标；这些领域事实不进入 Platform
 DTO、数据库工作流或 Skill 中的案例规则。
 
-当前 `artifacts`、`artifact_task_grants`、exact Item provenance 和物化字节是可保留的
-Platform owner，但注册和来源合同尚未收敛。`artifact_candidates` 会把任何完成 MCP Tool
-返回的 JSON/GeoJSON ResourceLink 自动注册并读回 PostgreSQL；`inline_visualization_artifacts`
-又以 Run 外键保存 renderer，并依赖 Assistant 复述 `::codex-inline-vis` 文本指令和跨 child
-Resource 搜索。这会把中间数据提升为 Artifact，也使 Run 删除同时删除所谓可持久交付。
-`artifacts.retention_state` 只有读取条件，没有 expiration/delete/policy writer，当前并不存在
-真实保留周期。上述旧链必须在新的仓网 Resource active surface 切换前删除；目标 final map/report
-由明确 built-in final Tool 原子写入 Workspace-relative create-new 自包含 bundle，Platform 只从
-其 exact official completed Item 和 typed output schema 注册、通过 producing Run 的授权 Workspace
-使用既有 no-follow/containment/size 边界即时复制。`content_sha256` 只记录复制后字节完整性，
-不参与业务复用或准入。
+当前 `artifacts`、`artifact_task_grants`、exact Item provenance 和物化字节是 Platform
+最终交付 owner。generic ResourceLink 注册、跨 child Resource 搜索、Artifact 输入回流和旧
+`report.v1` JSON inline renderer 已删除；正式结果简报只作为 built-in final Tool 产生的中文
+Markdown 文件登记并下载。对话内 `map.v3` 只保存 bounded renderer 与 exact producing Resource
+引用，原生 Codex inline visualization 则从授权 Profile/Thread 目录即时读取，二者都不会把
+中间 MCP Resource 提升为 Artifact。`content_sha256` 只记录复制后字节完整性，不参与业务复用
+或准入。
 
 ## 6. Profile 与认证的当前边界
 
@@ -206,9 +203,8 @@ Browser 文件不在该图内，但 `tsconfig` 仍会把它们全部编译。`sr
 及其 hooks/facade/styles/tests 因而仍构成非生产维护面。`PlatformClient` 又以一个完整 class 进入
 生产 bundle，未使用的 legacy methods 和 endpoint 字符串不会被 tree-shake，形成浏览器 API
 第二表面；这些事实不能作为第二产品入口或兼容合同继续扩展。
-当前 `check-main-ui-parity` 还会把整个 `apps/web/src` 与历史 Git/UI overlay 和手工 SHA 清单
-做字节级比较；它是阻碍当前 WebApp 演进的历史第二 UI truth，现阶段仍是已启用的 CI gate。
-该清理进入后续 backlog，不再作为仓网闭环或 4B.3 的前置；`check:no-desktop` 继续作为
+历史 `check-main-ui-parity` 字节级第二 UI truth 及其手工 SHA/overlay CI gate 已删除；Web 交付
+使用类型检查、组件/合同测试、生产构建与真实浏览器验收。`check:no-desktop` 继续作为
 browser-only 边界门。
 
 Settings 只保留 Codex 原生 Runtime Agents、Skills/MCP 等当前运行配置表面；旧 Agent

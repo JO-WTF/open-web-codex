@@ -43,6 +43,7 @@ type Props = {
   onOpenFile?: (path: string) => void;
   workspaceId?: string;
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
+  inlineVisualizationThreadId?: string | null;
 };
 
 function isAssistantProcessEntry(entry: MessageEntry) {
@@ -172,7 +173,7 @@ export function foldTerminalApprovals(items: MessageEntry[]) {
   return folded.filter((_, index) => !consumedApprovals.has(index));
 }
 
-export default function MessageList({ items, thinking = false, turnStartedAt, onOpenFile, workspaceId, onResolveApproval }: Props) {
+export default function MessageList({ items, thinking = false, turnStartedAt, onOpenFile, workspaceId, onResolveApproval, inlineVisualizationThreadId }: Props) {
   if (items.length === 0) {
     return (
       <div className="web-empty">
@@ -281,6 +282,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
                 inlineArtifacts={entry.inlineArtifacts}
                 showInlineArtifacts={!entry.suppressInlineArtifacts}
                 hiddenInlineArtifactRefs={entry.hiddenInlineArtifactRefs}
+                inlineVisualizationThreadId={inlineVisualizationThreadId}
               />
             );
           case "system":

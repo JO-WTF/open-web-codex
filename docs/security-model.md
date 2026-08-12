@@ -243,8 +243,12 @@ SHA 只用于字节完整性、ETag 或 provider 物理去重，不能替代授�
   Workspace 文件用相对路径，MCP Resource 用已授权 provider 与精确 URI，两者不互相伪装；
 - 删除、保留、替代和依赖失效产生审计。
 
-当前 Inline Visualization 的 Run/Thread 作用域是能力缺口，不是目标安全边界；在
-持久 Artifact 授权完成前，不能宣称支持任意跨 Run 成果共享。
+原生 Codex Inline Visualization 是 Thread-scoped 临时展示，不是 Artifact 或跨 Run 成果共享：
+Browser 只提交 Thread ID 与安全 basename；Server 重新验证组织、用户、Profile、Workspace 和
+Root/child Thread provenance，再从该 Profile 的精确 Thread visualization 目录读取。文件必须是
+非符号链接普通文件并满足 containment 与大小限制。HTML 使用 Codex viewer 资源、CSP 和不含
+`allow-same-origin` 的脚本沙箱；静态图片只允许 PNG/JPEG/GIF/WebP 并校验文件签名；SVG、Markdown、
+任意路径、任意 Artifact HTML 和其它内容类型显式拒绝。
 
 ## 多 Agent 与企业 Tool
 

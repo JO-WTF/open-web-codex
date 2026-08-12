@@ -267,6 +267,7 @@ export default function Conversation({
             onOpenFile={onOpenFile}
             workspaceId={workspaceId}
             onResolveApproval={onResolveApproval}
+            inlineVisualizationThreadId={conversationId}
           />
           <FinalArtifactLinks artifacts={finalArtifacts} />
           <TaskApprovalQueue

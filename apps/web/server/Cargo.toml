@@ -41,6 +41,8 @@ url.workspace = true
 reqwest.workspace = true
 async-trait.workspace = true
 tempfile.workspace = true
+cap-std.workspace = true
+cap-fs-ext.workspace = true
 
 [dev-dependencies]
 rmcp = { workspace = true, features = [

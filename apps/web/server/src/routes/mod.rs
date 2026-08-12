@@ -228,6 +228,10 @@ pub fn router(
             axum::routing::get(threads::read_inline_map_source),
         )
         .route(
+            "/threads/{thread_id}/inline-visualizations/{file}",
+            axum::routing::get(threads::read_inline_visualization),
+        )
+        .route(
             "/runs/{id}/thread/turns",
             axum::routing::get(threads::list_turns),
         )

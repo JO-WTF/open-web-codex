@@ -2840,9 +2840,96 @@ fn redact_agent_markdown_value(value: &Value) -> Value {
 }
 
 fn redact_agent_markdown(value: &str) -> String {
+    let normalized = normalize_native_inline_visualization_references(value);
     let markdown =
-        redact_markdown_reference_destinations(&redact_markdown_link_destinations(value));
+        redact_markdown_reference_destinations(&redact_markdown_link_destinations(&normalized));
     redact_local_paths(&redact_internal_resource_uris(&markdown))
+}
+
+const NATIVE_VISUALIZATION_PREFIX: &str = "\u{e200}visualize\u{e202}";
+const NATIVE_VISUALIZATION_SUFFIX: char = '\u{e201}';
+const INLINE_VISUALIZATION_PREFIX: &str = "::codex-inline-vis{";
+
+/// Replace an executor-local native visualization reference with the same
+/// path-free file directive that Codex already accepts. The browser receives
+/// only a safe basename; the authorized route resolves it inside the exact
+/// Profile/Thread visualization directory.
+fn normalize_native_inline_visualization_references(value: &str) -> String {
+    if !value.contains(NATIVE_VISUALIZATION_PREFIX) && !value.contains("::codex-inline-vis{file=\"")
+    {
+        return value.to_string();
+    }
+    let mut output = String::with_capacity(value.len());
+    let mut fence: Option<(u8, usize)> = None;
+    for line in value.split_inclusive('\n') {
+        let (content, newline) = line
+            .strip_suffix('\n')
+            .map_or((line, ""), |content| (content, "\n"));
+        let content = content.strip_suffix('\r').unwrap_or(content);
+        if let Some(marker) = markdown_fence_marker(content) {
+            match fence {
+                None => fence = Some(marker),
+                Some((character, length)) if character == marker.0 && marker.1 >= length => {
+                    fence = None;
+                }
+                _ => {}
+            }
+            output.push_str(content);
+            output.push_str(newline);
+            continue;
+        }
+        let leading = content.len() - content.trim_start_matches(' ').len();
+        let indented = leading >= 4 || content.starts_with('\t');
+        let trimmed = content.trim();
+        if fence.is_none() && !indented {
+            if let Some(file) = native_inline_visualization_file(trimmed) {
+                output.push_str(&content[..leading.min(content.len())]);
+                output.push_str("::codex-inline-vis{file=\"");
+                output.push_str(&file);
+                output.push_str("\"}");
+                output.push_str(newline);
+                continue;
+            }
+        }
+        output.push_str(content);
+        output.push_str(newline);
+    }
+    output
+}
+
+fn markdown_fence_marker(line: &str) -> Option<(u8, usize)> {
+    let leading = line.len() - line.trim_start_matches(' ').len();
+    if leading > 3 {
+        return None;
+    }
+    let bytes = line[leading..].as_bytes();
+    let character = *bytes.first()?;
+    if !matches!(character, b'`' | b'~') {
+        return None;
+    }
+    let length = bytes.iter().take_while(|byte| **byte == character).count();
+    (length >= 3).then_some((character, length))
+}
+
+fn native_inline_visualization_file(reference: &str) -> Option<String> {
+    let path = if let Some(attributes) = reference.strip_prefix(INLINE_VISUALIZATION_PREFIX) {
+        let attributes = attributes.strip_suffix('}')?.trim();
+        attributes
+            .strip_prefix("file=\"")?
+            .strip_suffix('"')?
+            .to_string()
+    } else {
+        let payload = reference
+            .strip_prefix(NATIVE_VISUALIZATION_PREFIX)?
+            .strip_suffix(NATIVE_VISUALIZATION_SUFFIX)?;
+        serde_json::from_str::<Value>(payload)
+            .ok()?
+            .get("path")?
+            .as_str()?
+            .to_string()
+    };
+    let file = path.rsplit(['/', '\\']).next()?;
+    crate::inline_visualizations::file_kind(file).map(|_| file.to_string())
 }
 
 /// Reference-style Markdown links keep their destination on a separate
@@ -4241,6 +4328,39 @@ mod tests {
         assert!(!text.contains("C:/Users/example/runner/workspaces"));
         assert!(!text.contains("\\\\server\\share\\runner\\workspaces"));
         assert!(!text.contains("file:///Users/example/runner/workspaces"));
+    }
+
+    #[test]
+    fn projects_native_inline_visualizations_to_path_free_file_references() {
+        let markdown = concat!(
+            "Before\n",
+            "\u{e200}visualize\u{e202}{\"path\":\"/Users/example/.codex/visualizations/2026/08/12/0198/chart.html\"}\u{e201}\n",
+            "::codex-inline-vis{file=\"/private/var/example/result.png\"}\n",
+            "After"
+        );
+        let projected = project_item(
+            json!({"type": "agentMessage", "phase": "final_answer", "text": markdown})
+                .as_object()
+                .expect("agent message object"),
+        );
+        let text = projected["text"].as_str().expect("projected markdown");
+        assert_eq!(
+            text,
+            concat!(
+                "Before\n",
+                "::codex-inline-vis{file=\"chart.html\"}\n",
+                "::codex-inline-vis{file=\"result.png\"}\n",
+                "After"
+            )
+        );
+        assert!(!text.contains("/Users/"));
+        assert!(!text.contains("/private/"));
+
+        let invalid = redact_agent_markdown(
+            "\u{e200}visualize\u{e202}{\"path\":\"/Users/example/unsafe.svg\"}\u{e201}",
+        );
+        assert!(!invalid.contains("/Users/example"));
+        assert!(!invalid.contains("::codex-inline-vis{file="));
     }
 
     #[test]

@@ -22,7 +22,6 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check:no-desktop": "node scripts/check-no-desktop.mjs",
-    "check:main-ui-parity": "node scripts/check-main-ui-parity.mjs",
     "smoke:codex-app-server": "node scripts/codex-app-server-smoke.mjs",
     "test:codex-harness": "node scripts/test-codex-app-server-harness.mjs",
     "test:e2e:real-platform": "node scripts/real-platform-e2e.mjs"

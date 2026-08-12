@@ -441,6 +441,39 @@ export class PlatformClient {
     return this.request<Run>(`/api/runs/${encodeURIComponent(runId)}`);
   }
 
+  async readInlineVisualization(threadId: string, file: string) {
+    if (!/^[0-9a-f-]{36}$/i.test(threadId)) {
+      throw new Error("Inline visualization Thread is invalid.");
+    }
+    if (!/^[A-Za-z0-9_.-]{1,123}\.(?:html|png|jpe?g|gif|webp)$/.test(file)) {
+      throw new Error("Inline visualization file is invalid.");
+    }
+    const response = await fetch(
+      `${this.baseUrl}/api/threads/${encodeURIComponent(threadId)}/inline-visualizations/${encodeURIComponent(file)}`,
+      {
+        cache: "no-store",
+        headers: this.token ? { authorization: `Bearer ${this.token}` } : undefined,
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Inline visualization is unavailable (HTTP ${response.status}).`);
+    }
+    const contentType = response.headers.get("content-type")
+      ?.split(";", 1)[0]
+      ?.trim()
+      ?.toLowerCase() ?? "";
+    if (![
+      "text/html",
+      "image/png",
+      "image/jpeg",
+      "image/gif",
+      "image/webp",
+    ].includes(contentType)) {
+      throw new Error("Inline visualization content type is unsupported.");
+    }
+    return { blob: await response.blob(), contentType };
+  }
+
   readRunThread(runId: string) {
     return this.request<ThreadHistoryResponse>(`/api/runs/${encodeURIComponent(runId)}/thread`);
   }
