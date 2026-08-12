@@ -626,6 +626,32 @@ mod tests {
             .as_str()
             .expect("network instructions")
             .contains("Do not use shell, Workspace command, Git, jq, or ad-hoc Python"));
+        let network_instructions = network["instructions"]
+            .as_str()
+            .expect("network Role instructions");
+        assert!(network_instructions.contains("focused warehouse-network analysis Agent"));
+        assert!(!network_instructions.contains("You are a coding agent"));
+        assert_eq!(
+            network["include_permissions_instructions"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(network["include_apps_instructions"].as_bool(), Some(false));
+        assert_eq!(
+            network["include_collaboration_mode_instructions"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            network["skills"]["bundled"]["enabled"].as_bool(),
+            Some(false)
+        );
+        assert!(network["skills"]["config"]
+            .as_array_of_tables()
+            .expect("network Skill policy")
+            .iter()
+            .any(|skill| {
+                skill["name"].as_str() == Some("warehouse-network")
+                    && skill["enabled"].as_bool() == Some(true)
+            }));
         assert!(!data.to_string().contains("__OPEN_WEB_CODEX_"));
         assert!(!network.to_string().contains("__OPEN_WEB_CODEX_"));
         assert_eq!(
@@ -676,12 +702,15 @@ mod tests {
         assert!(SUPERVISOR_SKILL.contains("typed `needs_context`"));
         assert!(SUPERVISOR_SKILL.contains("不得 list resources、读取 Resource 正文"));
         assert!(SUPERVISOR_SKILL.contains("原 `network_agent` 已处于 safe/terminal 边界"));
-        assert!(SUPERVISOR_SKILL.contains("全部非 Resource 参数、用户许可和交付要求"));
+        assert!(SUPERVISOR_SKILL.contains("以该 typed input 为 handoff 边界"));
+        assert!(SUPERVISOR_SKILL.contains("只传本次调用实际需要且 Tool 接受的 exact Resource refs"));
+        assert!(SUPERVISOR_SKILL.contains("不要传 Tool 不接收的上游 refs"));
+        assert!(SUPERVISOR_SKILL.contains("不要复述已经封装在 Resource 中的路线、成本、求解规则"));
         assert!(SUPERVISOR_SKILL.contains("显式使用 `fork_turns=none`"));
         assert!(SUPERVISOR_SKILL
             .contains("只有当后续工作的正确性确实依赖原 child 对话中尚未结构化的判断或上下文时"));
-        assert!(SUPERVISOR_SKILL
-            .contains("阶段完成 handoff 动态列出本阶段实际 Tool 返回且后续适用的 exact refs"));
+        assert!(SUPERVISOR_SKILL.contains("spawn 后只等待 child，不再次复述 handoff"));
+        assert!(SUPERVISOR_SKILL.contains("Root 只简短汇总用户要求的业务变化"));
         assert!(SUPERVISOR_SKILL
             .contains("final Tool/Artifact typed descriptor 与 Platform terminal state 是权威"));
         assert!(SUPERVISOR_SKILL.contains(
@@ -711,23 +740,13 @@ mod tests {
         assert!(NETWORK_SKILL.contains("矩阵 Resource 自己携带该 scope"));
         assert!(NETWORK_SKILL.contains("完整仓网分析、模拟或规划达到可交付终态时"));
         assert!(NETWORK_SKILL.contains("不用 JSON 报告冒充 Excel"));
-        assert!(NETWORK_SKILL.contains("优先只调用一次 `assess_facility_change`"));
-        assert!(NETWORK_SKILL.contains(
-            "exact `normalized_input_ref`、`route_matrix_ref`、`before_ref`、完整 `scenario`"
-        ));
-        assert!(NETWORK_SKILL.contains("适用时的可选 `cost_matrix_ref`"));
-        assert!(NETWORK_SKILL
-            .contains("exact `scenario_ref`、`comparison_ref`、`summary` 与 bounded metrics"));
-        assert!(NETWORK_SKILL.contains(
-            "不要再分别调用 `evaluate_facility_scenario` 与 `compare_network_scenarios`"
-        ));
-        assert!(NETWORK_SKILL
-            .contains("处理 follow-up 时只消费 Supervisor 或当前 Thread 提供的 exact refs"));
-        assert!(NETWORK_SKILL.contains("当前 Tool 任一 required ref"));
+        assert!(NETWORK_SKILL.contains("一个组合 Tool 的当前 typed input"));
+        assert!(NETWORK_SKILL.contains("不要把同一动作拆成语义等价的多次求解和比较"));
+        assert!(NETWORK_SKILL.contains("以准备调用的 Tool 当前 typed input 为边界"));
+        assert!(NETWORK_SKILL.contains("不要携带该 Tool 不接收的上游 refs"));
+        assert!(NETWORK_SKILL.contains("Tool 成功后只基于同一次 structured result"));
+        assert!(NETWORK_SKILL.contains("不重新推导、不复述输入政策、验证过程或相同结论"));
         assert!(NETWORK_SKILL.contains("typed `needs_context`"));
-        assert!(
-            NETWORK_SKILL.contains("阶段完成时动态列出本阶段实际 Tool 返回且后续适用的 exact refs")
-        );
         assert!(NETWORK_SKILL
             .contains("final Tool/Artifact typed descriptor 与 Platform terminal state 是权威"));
         assert!(NETWORK_SKILL.contains(

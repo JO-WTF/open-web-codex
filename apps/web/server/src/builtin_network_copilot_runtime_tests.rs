@@ -1453,6 +1453,15 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     .await;
     let network_request =
         wait_for_model_request(&model_control, NETWORK_CHILD_PROMPT, NETWORK_SPAWN_CALL).await;
+    let network_instructions = network_request["instructions"]
+        .as_str()
+        .expect("Network Role base instructions");
+    assert!(network_instructions.contains("focused warehouse-network analysis Agent"));
+    assert!(!network_instructions.contains("You are a coding agent"));
+    let network_developer_text = request_developer_text(&network_request);
+    assert!(network_developer_text.contains("warehouse-network"));
+    assert!(!network_developer_text.contains("imagegen:"));
+    assert!(!network_developer_text.contains("<permissions instructions>"));
     assert_child_skill_policy(
         &network_request,
         "当用户要求定义仓网数据需求",

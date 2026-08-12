@@ -9,8 +9,8 @@ description: 仅供仓网 Supervisor 原生 spawn 的 network_agent child 使用
 
 所有分析必须直接消费上游 exact `ResourceRef` 和当前 Tool 返回的 bounded summary。不得使用 `ls`、`find`、`git`、`jq`、`cat`、内联 Python 或其他 Workspace 命令重读原始文件、中间 Resource、旧 Artifact 或最终报告来重建指标；Tool 合同不足时返回明确缺口，不得用 shell 旁路补协议。
 
-- 处理 follow-up 时只消费 Supervisor 或当前 Thread 提供的 exact refs；缺当前 Tool 任一 required ref 时返回 typed `needs_context` 并停止；不得 list resources、读取 Resource 正文、扫描 Workspace 或重建 ref/结果。
-- Network final 只原样回传实际 Tool structured result 的 bounded 结论和 exact refs；不发明 ref、不复制内容。final Tool/Artifact typed descriptor 与 Platform terminal state 是权威；不得用 `ls`、`cat`、`find`、`stat`、shell、Workspace 扫描、Resource 重读或自行计算复核成功交付，失败则报告原始终态。阶段完成时动态列出本阶段实际 Tool 返回且后续适用的 exact refs。
+- 处理 handoff 或 follow-up 时，以准备调用的 Tool 当前 typed input 为边界，只消费它实际接受且本次需要的 exact refs 与参数；缺任一 required input 时返回 typed `needs_context` 并停止。不要携带该 Tool 不接收的上游 refs，不要复述 Resource 已封装的路线、成本、求解规则或历史指标；不得 list resources、读取 Resource 正文、扫描 Workspace 或重建 ref/结果。
+- Tool 成功后只基于同一次 structured result 返回用户要求的 bounded 业务指标和交付。仅在真正的下游调用需要时回传其 typed input 接受的 exact refs；不重新推导、不复述输入政策、验证过程或相同结论。final Tool/Artifact typed descriptor 与 Platform terminal state 是权威；不得用 `ls`、`cat`、`find`、`stat`、shell、Workspace 扫描、Resource 重读或自行计算复核成功交付，失败则报告原始终态。
 - 下游 Tool 同时接收 result 与 comparison 时，comparison 必须由同一个 exact result 产生；语义等价的重算 result 不可混用。
 
 ## 定义数据要求
@@ -46,7 +46,7 @@ description: 仅供仓网 Supervisor 原生 spawn 的 network_agent child 使用
 ## 仓网模拟与规划
 
 - 模拟增加、关闭或搬迁仓库时，复用当前有效的数据、路线、成本和基线 Resource。搬迁等价于关闭一个已有仓并启用一个候选仓。
-- 当用户要求评估一次增加、关闭或搬迁仓库的影响，且当前 handoff 已提供匹配的 exact `normalized_input_ref`、`route_matrix_ref`、`before_ref`、完整 `scenario`，以及适用时的可选 `cost_matrix_ref` 时，优先只调用一次 `assess_facility_change`，不要再分别调用 `evaluate_facility_scenario` 与 `compare_network_scenarios`。后续地图、报告和 final 只使用该 Tool 同一次 structured result 返回的 exact `scenario_ref`、`comparison_ref`、`summary` 与 bounded metrics；不得重算、混配或读取 Resource 正文来补指标。若当前 Tool 的 required ref 或非 Resource 参数缺失，返回 typed `needs_context` 并停止；不得伪造成本引用。
+- 当一个组合 Tool 的当前 typed input 已完整覆盖一次有界设施变更及比较时，直接调用该 Tool 一次；不要把同一动作拆成语义等价的多次求解和比较。后续地图、报告和 final 只使用该次 structured result 提供的 bounded metrics 与真正需要的 exact refs；不得重算、混配或读取 Resource 正文补指标。若 required input 缺失，返回 typed `needs_context` 并停止。
 - 模拟默认建议成本最优，但要向用户说明；上下文没有时效目标时先询问。输出活动仓库、仓库变动、城市重新分配、总成本、分仓库成本和全网时效满足率；分仓时效同样只能使用 typed Tool 结果。
 - 关闭已有仓库必须得到用户明确许可；只关闭仓库的模拟不运行 p-median，也不创建候选仓。是否补充地图卡片按空间关系是否有助理解判断；完整分析形成业务结果时必须生成 Markdown 结果简报，纯数据需求定义、`needs_input` 或失败终态不生成简报。
 - 用户要求仓网规划时才调用 p-median。默认把全部已有仓库列入固定集合并提前告知；只有用户明确允许时，才把指定已有仓库列入可选集合。固定集合与可选集合必须完整、不重叠。
