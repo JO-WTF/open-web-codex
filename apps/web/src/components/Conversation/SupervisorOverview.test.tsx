@@ -146,6 +146,9 @@ describe("SupervisorOverview", () => {
     expect(screen.getByText("network_planning_agent · Task 2")).toBeTruthy();
     expect(screen.getByText("Validated capacity and demand inputs.")).toBeTruthy();
     expect(screen.getByText("Using network planner · compare scenarios")).toBeTruthy();
+    const summary = screen.getByLabelText("Agent collaboration summary");
+    expect(summary.textContent).toContain("2 Agents");
+    expect(summary.textContent).toContain("2 active");
   });
 
   it("renders a child Agent approval as an actionable approval card", () => {
@@ -240,7 +243,9 @@ describe("SupervisorOverview", () => {
       />,
     );
 
-    const log = screen.getByLabelText("Agent behavior log").querySelector("ol");
+    const behaviorLog = screen.getByLabelText("Agent behavior log") as HTMLDetailsElement;
+    const log = behaviorLog.querySelector("ol");
+    expect(behaviorLog.open).toBe(false);
     expect(screen.getByText("Agent behavior log")).toBeTruthy();
     expect(screen.getAllByText("Root Supervisor")).toHaveLength(3);
     expect(screen.getByText("Data Agent")).toBeTruthy();
@@ -296,7 +301,7 @@ describe("SupervisorOverview", () => {
     );
 
     expect(screen.getByText("Agent collaboration")).toBeTruthy();
-    expect(screen.getByText("Runtime-owned Agent collaboration")).toBeTruthy();
+    expect(screen.getByText("Live Runtime collaboration")).toBeTruthy();
     expect(screen.getByRole("article", { name: "Supervisor status" })).toBeTruthy();
     expect(screen.getByText("Optimize the enterprise supply-chain network")).toBeTruthy();
     expect(screen.getAllByText(
@@ -606,6 +611,7 @@ describe("SupervisorOverview", () => {
     expect(screen.queryByText("rm -rf /private/secret")).toBeNull();
     expect(screen.queryByText("DEEPSEEK_KEY=do-not-render")).toBeNull();
     const log = screen.getByLabelText("Agent behavior log");
+    expect((log as HTMLDetailsElement).open).toBe(true);
     expect(log.querySelector("[role=alert], [role=status], [aria-live]")).toBeNull();
     expect(log.textContent).toContain("image generation");
     expect(log.textContent).toContain("Waiting");
@@ -785,10 +791,12 @@ describe("SupervisorOverview", () => {
       />,
     );
 
-    const summary = container.querySelector("summary") as HTMLElement | null;
+    const summary = container.querySelector(
+      ".web-supervisor-activity-detail summary",
+    ) as HTMLElement | null;
     expect(summary).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Show safe activity detail" })).toBeTruthy();
-    expect(summary?.getAttribute("aria-label")).toBe("Show safe activity detail");
+    expect(screen.getByRole("button", { name: "Show command details" })).toBeTruthy();
+    expect(summary?.getAttribute("aria-label")).toBe("Show command details");
     expect((summary?.closest("details") as HTMLDetailsElement | null)?.open).toBe(false);
     fireEvent.click(summary as HTMLElement);
     expect((summary?.closest("details") as HTMLDetailsElement | null)?.open).toBe(true);

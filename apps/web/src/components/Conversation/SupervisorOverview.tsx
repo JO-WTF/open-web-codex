@@ -3,6 +3,7 @@ import Bot from "lucide-react/dist/esm/icons/bot";
 import Download from "lucide-react/dist/esm/icons/download";
 import FileCheck2 from "lucide-react/dist/esm/icons/file-check-2";
 import History from "lucide-react/dist/esm/icons/history";
+import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import LoaderCircle from "lucide-react/dist/esm/icons/loader-circle";
 import Network from "lucide-react/dist/esm/icons/network";
 import ShieldCheck from "lucide-react/dist/esm/icons/shield-check";
@@ -204,6 +205,7 @@ function ActivityRow({ activity, actorName, action, status }: ActivityRowProps) 
   const actorId = `${rowId}-actor`;
   const headingId = `${rowId}-heading`;
   const statusId = `${rowId}-status`;
+  const hasCommandDetail = activity.subject?.kind === "workspace_action";
   const timestamp = activityTime(activity.created_at);
 
   return (
@@ -246,9 +248,11 @@ function ActivityRow({ activity, actorName, action, status }: ActivityRowProps) 
             <details className="web-supervisor-activity-detail">
               <summary
                 role="button"
-                aria-label="Show safe activity detail"
+                aria-label={hasCommandDetail
+                  ? "Show command details"
+                  : "Show safe activity detail"}
               >
-                Show details
+                {hasCommandDetail ? "Command details" : "Show details"}
               </summary>
               <p>{activity.detail}</p>
             </details>
@@ -420,6 +424,11 @@ export default function SupervisorOverview({
   const rootStatus = rootAgent
     ? agentStatusPresentation(rootAgent)
     : { label: "Starting", tone: "idle" as const };
+  const agentStatuses = agents.map(agentStatusPresentation);
+  const activeAgentCount = agentStatuses.filter((status) => status.tone === "active").length;
+  const waitingAgentCount = agentStatuses.filter((status) => status.tone === "waiting").length;
+  const attentionAgentCount = agentStatuses.filter((status) => status.tone === "error").length;
+  const behaviorLogStartsOpen = timelineActivities.some((activity) => activity.status === "failed");
 
   useEffect(() => {
     if (!review) return;
@@ -533,7 +542,7 @@ export default function SupervisorOverview({
         </span>
         <div>
           <strong>Agent collaboration</strong>
-          <span>Runtime-owned Agent collaboration</span>
+          <span>Live Runtime collaboration</span>
         </div>
       </div>
 
@@ -553,6 +562,12 @@ export default function SupervisorOverview({
         </div>
       ) : (
         <>
+          <div className="web-supervisor-glance" aria-label="Agent collaboration summary">
+            <span>{agents.length} {agents.length === 1 ? "Agent" : "Agents"}</span>
+            {activeAgentCount ? <span className="is-active">{activeAgentCount} active</span> : null}
+            {waitingAgentCount ? <span className="is-waiting">{waitingAgentCount} waiting</span> : null}
+            {attentionAgentCount ? <span className="is-error">{attentionAgentCount} need attention</span> : null}
+          </div>
           {rootAgent ? (
             <article className="web-supervisor-agent web-supervisor-root" aria-label="Supervisor status">
               <div className="web-supervisor-agent-summary">
@@ -654,33 +669,40 @@ export default function SupervisorOverview({
             )}
           </div>
 
-          <div className="web-supervisor-activity" aria-label="Agent behavior log">
-            <div className="web-supervisor-section-heading">
+          <details
+            className="web-supervisor-activity"
+            aria-label="Agent behavior log"
+            open={behaviorLogStartsOpen ? true : undefined}
+          >
+            <summary className="web-supervisor-section-heading">
+              <ChevronRight className="web-supervisor-disclosure" size={13} aria-hidden="true" />
               <History size={14} aria-hidden="true" />
               <strong>Agent behavior log</strong>
               <span>{timelineActivities.length}</span>
+            </summary>
+            <div className="web-supervisor-activity-content">
+              {timelineActivities.length ? (
+                <ol>
+                  {timelineActivities.map((activity) => {
+                    const actor = agentsByThread.get(activity.thread_id);
+                    return (
+                      <ActivityRow
+                        key={activityIdentity(activity)}
+                        activity={activity}
+                        actorName={actor ? agentLabel(actor) : "Runtime Agent"}
+                        action={activityAction(activity)}
+                        status={activityStatusPresentation(activity.status)}
+                      />
+                    );
+                  })}
+                </ol>
+              ) : (
+                <p className="web-supervisor-overview-empty">
+                  No persisted Agent behavior has been observed yet.
+                </p>
+              )}
             </div>
-            {timelineActivities.length ? (
-              <ol>
-                {timelineActivities.map((activity) => {
-                  const actor = agentsByThread.get(activity.thread_id);
-                  return (
-                    <ActivityRow
-                      key={activityIdentity(activity)}
-                      activity={activity}
-                      actorName={actor ? agentLabel(actor) : "Runtime Agent"}
-                      action={activityAction(activity)}
-                      status={activityStatusPresentation(activity.status)}
-                    />
-                  );
-                })}
-              </ol>
-            ) : (
-              <p className="web-supervisor-overview-empty">
-                No persisted Agent behavior has been observed yet.
-              </p>
-            )}
-          </div>
+          </details>
 
           <div className="web-supervisor-artifacts" aria-label="Final deliveries">
             <div className="web-supervisor-section-heading">

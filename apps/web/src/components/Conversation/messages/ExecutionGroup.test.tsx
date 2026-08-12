@@ -48,6 +48,59 @@ describe("ExecutionGroup", () => {
     expect(screen.getByText("Historical tool details")).toBeTruthy();
   });
 
+  it("shows the official completed Turn duration after the collapsed counts", () => {
+    render(
+      <ExecutionGroup
+        items={[
+          {
+            id: "tool-1",
+            level: "info",
+            kind: "tool",
+            text: "assess_facility_change",
+          },
+          {
+            id: "message-1",
+            level: "assistant",
+            text: "Running the assessment.",
+          },
+        ]}
+        active={false}
+        durationMs={48_318}
+        timelineItemCount={2}
+      >
+        <div>Completed activity</div>
+      </ExecutionGroup>,
+    );
+
+    expect(screen.getByRole("button", {
+      name: "1 tool call, 1 message · 0:48",
+    })).toBeTruthy();
+  });
+
+  it("adds the live Turn elapsed time to an active execution summary", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-14T00:01:03Z"));
+    render(
+      <ExecutionGroup
+        items={[{
+          id: "tool-1",
+          level: "info",
+          kind: "tool",
+          text: "assess_facility_change",
+        }]}
+        active
+        startedAt={Date.parse("2026-07-14T00:00:00Z")}
+        timelineItemCount={1}
+      >
+        <div>Live activity</div>
+      </ExecutionGroup>,
+    );
+
+    expect(screen.getByRole("button", {
+      name: "1 tool call, 0 messages · 1:03",
+    })).toBeTruthy();
+  });
+
   it("does not count approval cards as tool calls", () => {
     render(
       <ExecutionGroup

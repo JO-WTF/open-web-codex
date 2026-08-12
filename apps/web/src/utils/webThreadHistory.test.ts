@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentMessagePhase, appendTerminalInteractionOutput, buildWebThreadHistory, isUserThreadItem, mergeWebThreadHistory, unwrapWebRpcResult } from "./webThreadHistory";
+import { agentMessagePhase, appendTerminalInteractionOutput, buildWebThreadHistory, isUserThreadItem, mergeWebThreadHistory, threadTurnDurationMs, unwrapWebRpcResult } from "./webThreadHistory";
 
 describe("isUserThreadItem", () => {
   it("recognizes both live and persisted user message shapes", () => {
@@ -64,6 +64,18 @@ describe("mergeWebThreadHistory", () => {
         streaming: true,
       },
     ]);
+  });
+
+  it("keeps the authoritative history Turn duration when live content merges", () => {
+    expect(mergeWebThreadHistory(
+      [{
+        id: "item-8",
+        level: "assistant",
+        text: "Inspecting Shanghai boundaries",
+        turnDurationMs: 48_318,
+      }],
+      [{ id: "item-8", level: "assistant", text: "Inspecting Shanghai boundaries" }],
+    )[0]?.turnDurationMs).toBe(48_318);
   });
 
   it("does not let a stale started Tool event overwrite authoritative completed history", () => {
@@ -134,6 +146,27 @@ describe("appendTerminalInteractionOutput", () => {
 });
 
 describe("buildWebThreadHistory", () => {
+  it("preserves the official Turn duration on every restored entry", () => {
+    const result = buildWebThreadHistory({
+      turns: [{
+        durationMs: 48_318,
+        items: [
+          { id: "user-1", type: "userMessage", text: "Assess the network" },
+          { id: "reply-1", type: "agentMessage", text: "Done" },
+        ],
+      }],
+    }, () => "unused");
+
+    expect(result.map((entry) => entry.turnDurationMs)).toEqual([48_318, 48_318]);
+  });
+
+  it("derives a Turn duration from official start and completion timestamps", () => {
+    expect(threadTurnDurationMs({
+      startedAt: 1_786_540_197,
+      completedAt: 1_786_540_245,
+    })).toBe(48_000);
+  });
+
   it("drops whitespace-only restored agent messages", () => {
     expect(buildWebThreadHistory({
       turns: [{
@@ -398,8 +431,25 @@ describe("buildWebThreadHistory", () => {
 
     expect(result[0]?.toolOutput).toContain("bounded wait");
     expect(result[0]?.toolOutput).toContain("still active");
+    expect(result[0]?.agentAction).toBe("wait");
     expect(result[1]?.toolOutput).toContain("wait cycle finished");
     expect(result[1]?.toolOutput).toContain("may start another");
+    expect(result[1]?.agentAction).toBe("wait");
+  });
+
+  it("does not classify other collaboration tools as Agent waits", () => {
+    const [entry] = buildWebThreadHistory({
+      turns: [{ items: [{
+        id: "spawn",
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        status: "completed",
+        prompt: "Review the current change.",
+      }] }],
+    }, () => "log-1");
+
+    expect(entry?.toolType).toBe("Agent");
+    expect(entry?.agentAction).toBeUndefined();
   });
 
   it("restores authorized typed Artifacts on their Agent Message", () => {

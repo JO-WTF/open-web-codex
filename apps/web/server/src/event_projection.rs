@@ -1874,9 +1874,9 @@ fn subject_detail(subject: &RuntimeAgentActivitySubject) -> Option<String> {
         RuntimeAgentActivitySubject::WorkspaceAction { action, path } => {
             let detail = path
                 .as_deref()
-                .map(|path| format!("{action} · {path}"))
-                .unwrap_or_else(|| action.clone());
-            bounded_runtime_text(&detail, 256)
+                .map(|path| format!("Action: {action} · Target: {path}"))
+                .unwrap_or_else(|| format!("Action: {action}"));
+            Some(detail.chars().take(512).collect())
         }
         _ => None,
     }

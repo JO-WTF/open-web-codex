@@ -9,6 +9,7 @@ import CommandExecutionCard from "./messages/CommandExecutionCard";
 import SystemNotice from "./messages/SystemNotice";
 import ExecutionGroup from "./messages/ExecutionGroup";
 import ReplyCard from "./messages/ReplyCard";
+import AgentWaitCard from "./messages/AgentWaitCard";
 import type { InlineVisualizationArtifact } from "../../utils/replyCards";
 
 type DiffLine = {
@@ -44,6 +45,7 @@ type Props = {
   workspaceId?: string;
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
   inlineVisualizationThreadId?: string | null;
+  onOpenAgentPanel?: () => void;
 };
 
 function isAssistantProcessEntry(entry: MessageEntry) {
@@ -173,7 +175,7 @@ export function foldTerminalApprovals(items: MessageEntry[]) {
   return folded.filter((_, index) => !consumedApprovals.has(index));
 }
 
-export default function MessageList({ items, thinking = false, turnStartedAt, onOpenFile, workspaceId, onResolveApproval, inlineVisualizationThreadId }: Props) {
+export default function MessageList({ items, thinking = false, turnStartedAt, onOpenFile, workspaceId, onResolveApproval, inlineVisualizationThreadId, onOpenAgentPanel }: Props) {
   if (items.length === 0) {
     return (
       <div className="web-empty">
@@ -244,6 +246,15 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
           );
         }
         if (entry.kind === "tool") {
+          if (entry.agentAction === "wait") {
+            return (
+              <AgentWaitCard
+                key={entry.id}
+                status={entry.toolStatus ?? ""}
+                onOpenAgentPanel={onOpenAgentPanel}
+              />
+            );
+          }
           return (
             <ToolCallCard
               key={entry.id}
@@ -336,9 +347,19 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
         ? "Waiting for approval…"
         : "Working…";
     const isActiveTurn = end === items.length && (thinking || hasLiveItem);
+    const finalReplyIndex = turnItems.length > 0
+      && isAssistantReply(turnItems[turnItems.length - 1])
+      ? turnItems.length - 1
+      : -1;
+    const completedTurnDurationMs = entry.turnDurationMs
+      ?? turnItems.find((item) => item.turnDurationMs !== undefined)?.turnDurationMs;
 
-    let executionSegment: MessageEntry[] = [];
-    let executionSegmentIndex = 0;
+    // One Runtime Turn has one execution summary. This keeps its counts and
+    // official duration on the same boundary even when the Turn emits several
+    // intermediate Agent messages.
+    const executionSegment: MessageEntry[] = [];
+    const artifactDeliveries: React.ReactNode[] = [];
+    let visibleReply: MessageEntry | null = null;
     const flushExecutionSegment = (active: boolean) => {
       if (executionSegment.length === 0 && !active) return;
       const displaySegment = foldTerminalApprovals(executionSegment);
@@ -356,24 +377,28 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
       }
       const timelineItems = displaySegment.filter((_, cursor) => cursor !== activeIndex);
       const activeItem = activeIndex >= 0 ? displaySegment[activeIndex] : null;
+      const activeAgentWait = active && activeItem?.agentAction === "wait"
+        ? activeItem
+        : null;
       rendered.push(
         <ExecutionGroup
-          key={`execution-${entry.id}-${executionSegmentIndex}`}
+          key={`execution-${entry.id}`}
           items={displaySegment}
           active={active}
           startedAt={turnStartedAt}
+          durationMs={active ? undefined : completedTurnDurationMs}
           timelineItemCount={timelineItems.length}
-          activeItem={activeItem ? renderEntry(activeItem) : null}
+          activeItem={activeItem && !activeAgentWait ? renderEntry(activeItem) : null}
+          agentWaitStatus={activeAgentWait?.toolStatus}
+          onOpenAgentPanel={onOpenAgentPanel}
           activityLabel={activityLabel}
         >
           {timelineItems.map(renderEntry)}
         </ExecutionGroup>,
       );
-      executionSegment = [];
-      executionSegmentIndex += 1;
     };
 
-    for (const item of turnItems) {
+    for (const [turnItemIndex, item] of turnItems.entries()) {
       const typedArtifacts = typedArtifactDeliveries(item);
       const hiddenInlineArtifactRefs: string[] = [];
       const newlySurfacedArtifacts = typedArtifacts.filter((artifact) => {
@@ -384,24 +409,20 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
         surfacedArtifactRefs.add(artifact.ref);
         return true;
       });
-      if (isAssistantReply(item)) {
-        flushExecutionSegment(false);
-        rendered.push(renderEntry(hiddenInlineArtifactRefs.length
+      if (turnItemIndex === finalReplyIndex) {
+        visibleReply = hiddenInlineArtifactRefs.length
           ? { ...item, hiddenInlineArtifactRefs }
-          : item));
+          : item;
         continue;
       }
-      if (typedArtifacts.length === 0) {
-        executionSegment.push(item);
-        continue;
-      }
-      executionSegment.push({
-        ...item,
-        suppressInlineArtifacts: true,
-      });
+      const executionItem = isAssistantReply(item)
+        ? { ...item, messagePhase: "commentary" as const }
+        : item;
+      executionSegment.push(typedArtifacts.length === 0
+        ? executionItem
+        : { ...executionItem, suppressInlineArtifacts: true });
       if (newlySurfacedArtifacts.length === 0) continue;
-      flushExecutionSegment(false);
-      rendered.push(
+      artifactDeliveries.push(
         <ArtifactDeliveries
           key={`artifact-deliveries-${item.id}`}
           artifacts={newlySurfacedArtifacts}
@@ -411,13 +432,12 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
     }
 
     if (executionSegment.length > 0) {
-      flushExecutionSegment(isActiveTurn);
-    } else {
-      const lastItem = turnItems[turnItems.length - 1];
-      if (isActiveTurn && (!lastItem || !isAssistantReply(lastItem))) {
-        flushExecutionSegment(true);
-      }
+      flushExecutionSegment(isActiveTurn && visibleReply === null);
+    } else if (isActiveTurn && visibleReply === null) {
+      flushExecutionSegment(true);
     }
+    rendered.push(...artifactDeliveries);
+    if (visibleReply) rendered.push(renderEntry(visibleReply));
     index = end;
   }
   return <>{rendered}</>;

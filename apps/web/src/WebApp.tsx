@@ -25,7 +25,7 @@ import type { GoalInfo } from "./components/Conversation/GoalBanner";
 import type { QueuedFollowUp } from "./components/Conversation/FollowUpQueue";
 import type { ModelProviderSummary, ModelSummary } from "./components/Conversation/Composer";
 import { parseModelListResponse } from "./features/models/utils/modelListResponse";
-import { agentMessagePhase, appendTerminalInteractionOutput, buildWebThreadHistory, commandText, isUserThreadItem, mergeWebThreadHistory, unwrapWebRpcResult, webLogEntryFromThreadItem } from "./utils/webThreadHistory";
+import { agentMessagePhase, appendTerminalInteractionOutput, buildWebThreadHistory, commandText, isUserThreadItem, mergeWebThreadHistory, threadTurnDurationMs, unwrapWebRpcResult, webLogEntryFromThreadItem } from "./utils/webThreadHistory";
 import { normalizeTokenUsage } from "./features/threads/utils/threadNormalize";
 import { normalizePlanUpdate } from "./features/threads/utils/threadNormalize";
 import { parseWebTurnDiff } from "./utils/webTurnDiff";
@@ -72,6 +72,7 @@ export type LogEntry = {
   toolStatus?: string;
   toolDetail?: string;
   toolOutput?: string;
+  agentAction?: "wait";
   inlineArtifacts?: InlineVisualizationArtifact[];
   reasoningSummary?: string;
   filePath?: string;
@@ -84,6 +85,7 @@ export type LogEntry = {
   cmdCwd?: string;
   cmdOutput?: string;
   cmdActions?: { type: string; path: string }[];
+  turnDurationMs?: number;
 };
 
 type WebEventLogEntry = Omit<LogEntry, "id"> & { id?: string };
@@ -1102,30 +1104,50 @@ export default function WebApp() {
           return null;
         }
 
-        case "turn/completed":
+        case "turn/completed": {
           // Keep the richer live transcript. The durable thread projection can omit
           // reasoning and tool items, so replacing the transcript here made every
           // execution step disappear as soon as the final answer arrived.
+          const completedTurnDurationMs = threadTurnDurationMs(eventTurn ?? params);
           setThinking(false);
           setTurnStartedAt(null);
           setThreadStatus("idle");
           setActiveTurnId(null);
           setStopping(false);
           void refreshThreadsRef.current?.(event.workspace_id);
-          setMessages((previous) => previous
-            .filter((entry) => entry.kind !== "connection"
+          setMessages((previous) => {
+            let turnStartIndex = -1;
+            for (let index = previous.length - 1; index >= 0; index -= 1) {
+              if (previous[index].level === "user") {
+                turnStartIndex = index;
+                break;
+              }
+            }
+            const completedTurnEntryIds = turnStartIndex >= 0
+              ? new Set(previous.slice(turnStartIndex).map((entry) => entry.id))
+              : null;
+            return previous
+              .filter((entry) => entry.kind !== "connection"
               && !(entry.level === "system" && entry.text === "Thinking...")
               && !(entry.kind === "reasoning"
                 && /^(reasoning completed|reasoning in progress|reasoning)$/i.test(entry.text.trim())
                 && !entry.reasoningSummary?.trim()))
-            .map((entry) => entry.streaming
-              ? {
-                  ...entry,
-                  streaming: false,
-                  text: entry.text,
-                }
-              : entry));
+              .map((entry) => {
+                const finalized = entry.streaming
+                  ? {
+                      ...entry,
+                      streaming: false,
+                      text: entry.text,
+                    }
+                  : entry;
+                return completedTurnDurationMs !== undefined
+                  && completedTurnEntryIds?.has(entry.id)
+                  ? { ...finalized, turnDurationMs: completedTurnDurationMs }
+                  : finalized;
+              });
+          });
           return null;
+        }
 
         case "error": {
           const parsed = parseWebAppServerError(params);

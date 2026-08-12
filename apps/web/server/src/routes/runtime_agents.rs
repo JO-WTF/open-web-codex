@@ -1293,12 +1293,41 @@ mod tests {
         );
         assert_eq!(
             activities[0].detail.as_deref(),
-            Some("read · src/routes/runtime_agents.rs")
+            Some("Action: read · Target: src/routes/runtime_agents.rs")
         );
         let serialized = serde_json::to_string(&activities).unwrap();
         assert!(!serialized.contains("/private/profile"));
         assert!(!serialized.contains("https://example.com"));
         assert!(!serialized.contains("password=leak"));
+    }
+
+    #[test]
+    fn projects_only_structured_command_action_detail_for_the_agent_sidebar() {
+        let activities = project_activities(event(
+            "codex.item.completed",
+            "child-thread",
+            json!({
+                "itemType": "commandExecution",
+                "data": {
+                    "command": "printf 'unlabeled-sensitive-value' > src/runtime_agents.rs",
+                    "aggregatedOutput": "must not enter the activity descriptor",
+                    "status": "completed",
+                    "commandActions": [{
+                        "type": "read",
+                        "path": "src/runtime_agents.rs"
+                    }]
+                }
+            }),
+        ));
+
+        assert_eq!(activities.len(), 1);
+        assert_eq!(
+            activities[0].detail.as_deref(),
+            Some("Action: read · Target: src/runtime_agents.rs")
+        );
+        let serialized = serde_json::to_string(&activities).unwrap();
+        assert!(!serialized.contains("unlabeled-sensitive-value"));
+        assert!(!serialized.contains("must not enter"));
     }
 
     #[test]
@@ -1364,7 +1393,7 @@ mod tests {
                     path: None,
                 })
             );
-            assert_eq!(activities[0].detail.as_deref(), Some("execute"));
+            assert_eq!(activities[0].detail.as_deref(), Some("Action: execute"));
             let serialized = serde_json::to_string(&activities).unwrap();
             assert!(!serialized.contains("/private/profile"));
             assert!(!serialized.contains("<credential-fragment>"));

@@ -54,6 +54,41 @@ describe("MessageList", () => {
     expect(screen.getByText("running")).toBeTruthy();
   });
 
+  it("renders a live Agent wait as collaboration state instead of a generic tool call", () => {
+    const onOpenAgentPanel = vi.fn();
+    const view = render(
+      <MessageList
+        thinking
+        turnStartedAt={Date.now() - 5_000}
+        onOpenAgentPanel={onOpenAgentPanel}
+        items={[
+          { id: "user-wait", level: "user", text: "Coordinate the review." },
+          {
+            id: "agent-wait",
+            level: "info",
+            kind: "tool",
+            text: "Agent collaboration",
+            toolType: "Agent",
+            toolTitle: "wait",
+            toolStatus: "inProgress",
+            agentAction: "wait",
+            streaming: true,
+          },
+        ]}
+      />,
+    );
+
+    const card = screen.getByRole("status", { name: "Waiting for Agent updates" });
+    expect(card.textContent).toContain("Waiting for Agent updates");
+    expect(card.textContent).toContain("Supervisor is still active");
+    expect(card.textContent).toContain("Waiting");
+    expect(view.container.querySelector(".web-tool-card")).toBeNull();
+    expect(screen.queryByText("Working…")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Agent activity" }));
+    expect(onOpenAgentPanel).toHaveBeenCalledTimes(1);
+  });
+
   it("shows a resolved approval on the command card", () => {
     render(
       <MessageList
@@ -300,16 +335,20 @@ describe("MessageList", () => {
     expect(view.container.querySelectorAll(".web-map-card")).toHaveLength(1);
   });
 
-  it("uses message phase instead of message position to identify replies", () => {
+  it("folds earlier provider replies when the final reply appears", () => {
     const view = render(
       <MessageList
         items={[
-          { id: "user-1", level: "user", text: "Inspect the project" },
+          {
+            id: "user-1",
+            level: "user",
+            text: "Inspect the project",
+            turnDurationMs: 48_318,
+          },
           {
             id: "first-reply",
             level: "assistant",
             text: "First provider reply.",
-            messagePhase: "final_answer",
           },
           {
             id: "commentary-1",
@@ -334,11 +373,15 @@ describe("MessageList", () => {
       />,
     );
 
-    expect(screen.getByText("First provider reply.")).toBeTruthy();
+    expect(screen.queryByText("First provider reply.")).toBeNull();
     expect(screen.getByText("Typed final reply.")).toBeTruthy();
     expect(screen.queryByText("I am checking one more file.")).toBeNull();
-    const summary = screen.getByRole("button", { name: "1 tool call, 1 message" });
+    const summary = screen.getByRole("button", {
+      name: "1 tool call, 2 messages · 0:48",
+    });
+    expect(summary.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(summary);
+    expect(screen.getByText("First provider reply.")).toBeTruthy();
     expect(screen.getByText("I am checking one more file.")).toBeTruthy();
 
     const text = view.container.textContent ?? "";
@@ -436,7 +479,7 @@ describe("MessageList", () => {
     expect(view.container.querySelector(".web-execution-current .web-msg-commentary")).toBeTruthy();
   });
 
-  it("does not guess a process phase for an unclassified streaming assistant message", () => {
+  it("keeps the latest unclassified reply visible, then folds it behind later work", () => {
     const items = [
       { id: "user-1", level: "user" as const, text: "Write the script" },
       {
@@ -454,20 +497,55 @@ describe("MessageList", () => {
 
     view.rerender(
       <MessageList
-        items={items.map((item) => item.id === "assistant-1"
-          ? {
-              ...item,
-              text: "Script complete",
-              streaming: false,
-              messagePhase: "final_answer" as const,
-            }
-          : item)}
+        thinking
+        items={[
+          items[0],
+          { ...items[1], streaming: false },
+          {
+            id: "tool-1",
+            level: "info",
+            kind: "tool",
+            text: "apply_patch",
+            toolStatus: "running",
+            streaming: true,
+          },
+        ]}
       />,
     );
 
-    expect(view.container.querySelector(".web-execution-current")).toBeNull();
-    expect(view.container.querySelector(".web-msg-commentary-body")).toBeNull();
+    expect(view.container.querySelector(".web-execution-timeline .web-msg-commentary-body"))
+      .toBeTruthy();
+
+    view.rerender(
+      <MessageList
+        items={[
+          { ...items[0], turnDurationMs: 12_940 },
+          { ...items[1], streaming: false },
+          {
+            id: "tool-1",
+            level: "info",
+            kind: "tool",
+            text: "apply_patch",
+            toolStatus: "completed",
+          },
+          {
+            id: "assistant-final",
+            level: "assistant",
+            text: "Script complete",
+            messagePhase: "final_answer",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText("Preparing the Python script")).toBeNull();
     expect(screen.getByText("Script complete")).toBeTruthy();
+    const summary = screen.getByRole("button", {
+      name: "1 tool call, 1 message · 0:12",
+    });
+    expect(summary.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(summary);
+    expect(screen.getByText("Preparing the Python script")).toBeTruthy();
   });
 
   it("passes the live reasoning state through to its collapsible block", () => {

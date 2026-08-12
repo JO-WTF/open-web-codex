@@ -2,14 +2,18 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Brain from "lucide-react/dist/esm/icons/brain";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import type { MessageEntry } from "../MessageList";
+import AgentWaitCard from "./AgentWaitCard";
 
 type Props = {
   items: MessageEntry[];
   active: boolean;
   startedAt?: number | null;
+  durationMs?: number;
   activeItem?: ReactNode;
   timelineItemCount?: number;
   activityLabel?: string;
+  agentWaitStatus?: string;
+  onOpenAgentPanel?: () => void;
   children: ReactNode;
 };
 
@@ -17,9 +21,12 @@ export default function ExecutionGroup({
   items,
   active,
   startedAt,
+  durationMs,
   activeItem,
   timelineItemCount = 0,
   activityLabel = "Working…",
+  agentWaitStatus,
+  onOpenAgentPanel,
   children,
 }: Props) {
   const [manuallyOpen, setManuallyOpen] = useState(false);
@@ -47,7 +54,11 @@ export default function ExecutionGroup({
     return () => window.clearInterval(timer);
   }, [active, fallbackStartedAt, startedAt]);
 
-  const elapsedLabel = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
+  const elapsedLabel = formatExecutionDuration(elapsed * 1000);
+  const summaryDuration = active
+    ? elapsedLabel
+    : (durationMs === undefined ? null : formatExecutionDuration(durationMs));
+  const countLabel = `${toolCount} tool ${toolCount === 1 ? "call" : "calls"}, ${messageCount} ${messageCount === 1 ? "message" : "messages"}`;
   return (
     <section className={`web-execution-group${active ? " is-active" : ""}`}>
       {(!active || timelineItemCount > 0) && (
@@ -59,19 +70,37 @@ export default function ExecutionGroup({
           aria-disabled={active}
         >
           <ChevronRight size={12} className={open ? "is-open" : ""} />
-          <span>{toolCount} tool {toolCount === 1 ? "call" : "calls"}, {messageCount} {messageCount === 1 ? "message" : "messages"}</span>
+          <span>{countLabel}{summaryDuration ? ` · ${summaryDuration}` : ""}</span>
         </button>
       )}
       {((active && timelineItemCount > 0) || (!active && open)) && <div className="web-execution-timeline">{children}</div>}
       {activeItem ? <div className="web-execution-current">{activeItem}</div> : null}
-      {active && (
+      {active && agentWaitStatus ? (
+        <div className="web-execution-current">
+          <AgentWaitCard
+            status={agentWaitStatus}
+            elapsedLabel={elapsedLabel}
+            live
+            onOpenAgentPanel={onOpenAgentPanel}
+          />
+        </div>
+      ) : active ? (
         <div className="web-execution-working" role="status">
           <span className="web-thinking-spinner" aria-hidden="true" />
           <span className="web-execution-elapsed">{elapsedLabel}</span>
           <Brain size={14} aria-hidden="true" />
           <span>{activityLabel}</span>
         </div>
-      )}
+      ) : null}
     </section>
   );
+}
+
+export function formatExecutionDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}:${seconds}`;
+  const minutes = String(totalMinutes % 60).padStart(2, "0");
+  return `${Math.floor(totalMinutes / 60)}:${minutes}:${seconds}`;
 }

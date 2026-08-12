@@ -1661,14 +1661,16 @@ describe("WebApp workspace-first messaging", () => {
           method: "turn/completed",
           params: {
             threadId: "thread-new",
-            turn: { id: "turn-1", status: "completed" },
+            turn: { id: "turn-1", status: "completed", durationMs: 48_318 },
           },
         },
       });
     });
 
     expect(screen.queryByText("I will find the boundary data.")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "0 tool calls, 1 message" }));
+    fireEvent.click(screen.getByRole("button", {
+      name: "0 tool calls, 1 message · 0:48",
+    }));
     expect(screen.getByText("I will find the boundary data.")).toBeTruthy();
   });
 });

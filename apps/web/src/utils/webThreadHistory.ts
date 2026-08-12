@@ -2,7 +2,11 @@ import type { AgentMessagePhase, LogEntry } from "../WebApp";
 import { stripLeadingProviderSentinel } from "./providerText";
 import { parseInlineVisualizationArtifact } from "./replyCards";
 import { parseApprovalStatus } from "./approvalStatus";
-import { collabBriefDescription, collabWaitCycleExplanation } from "./threadItems.collab";
+import {
+  collabAgentAction,
+  collabBriefDescription,
+  collabWaitCycleExplanation,
+} from "./threadItems.collab";
 
 export function unwrapWebRpcResult(value: unknown): unknown {
   let current = value;
@@ -123,6 +127,23 @@ export function isUserThreadItem(item: Record<string, unknown>): boolean {
   return item.type === "userMessage" || item.role === "user";
 }
 
+function timestampMs(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return value < 10_000_000_000 ? value * 1000 : value;
+}
+
+export function threadTurnDurationMs(turn: Record<string, unknown>): number | undefined {
+  const direct = turn.durationMs ?? turn.duration_ms;
+  if (typeof direct === "number" && Number.isFinite(direct) && direct >= 0) {
+    return Math.round(direct);
+  }
+  const startedAt = timestampMs(turn.startedAt ?? turn.started_at);
+  const completedAt = timestampMs(turn.completedAt ?? turn.completed_at);
+  return startedAt !== undefined && completedAt !== undefined && completedAt >= startedAt
+    ? Math.round(completedAt - startedAt)
+    : undefined;
+}
+
 export function mergeWebThreadHistory(history: LogEntry[], live: LogEntry[]): LogEntry[] {
   const merged = [...history];
   for (const entry of live) {
@@ -152,6 +173,7 @@ export function mergeWebThreadHistory(history: LogEntry[], live: LogEntry[]): Lo
         id: historical.id,
         messagePhase: entry.messagePhase ?? historical.messagePhase,
         inlineArtifacts: entry.inlineArtifacts ?? historical.inlineArtifacts,
+        turnDurationMs: entry.turnDurationMs ?? historical.turnDurationMs,
         approvalStatus: historicalApprovalIsTerminal && entry.approvalStatus === "pending"
           ? historical.approvalStatus
           : entry.approvalStatus ?? historical.approvalStatus,
@@ -314,6 +336,7 @@ export function webLogEntryFromThreadItem(
       toolTitle: brief ? `${tool} · ${brief}` : tool,
       toolStatus,
       toolDetail: prompt,
+      agentAction: collabAgentAction(tool),
       toolOutput: hasStates
         ? jsonText(states)
         : collabWaitCycleExplanation(tool, toolStatus),
@@ -330,17 +353,26 @@ export function buildWebThreadHistory(
 ): LogEntry[] {
   const turns = Array.isArray(thread.turns) ? thread.turns : [];
   const entries = turns.flatMap((turn) => {
-    const items = Array.isArray((turn as Record<string, unknown>)?.items)
-      ? ((turn as Record<string, unknown>).items as Record<string, unknown>[])
+    const turnRecord = turn as Record<string, unknown>;
+    const durationMs = threadTurnDurationMs(turnRecord);
+    const items = Array.isArray(turnRecord?.items)
+      ? (turnRecord.items as Record<string, unknown>[])
       : [];
     const mapped = items.flatMap((item): LogEntry[] => {
       const entry = webLogEntryFromThreadItem(item, createId);
-      return entry ? [entry] : [];
+      return entry
+        ? [{ ...entry, ...(durationMs !== undefined ? { turnDurationMs: durationMs } : {}) }]
+        : [];
     });
-    const turnError = (turn as Record<string, unknown>).error;
+    const turnError = turnRecord.error;
     if (turnError && typeof turnError === "object") {
       const error = turnError as Record<string, unknown>;
-      mapped.push({ id: createId(), level: "error", text: asText(error.message) || "Turn failed." });
+      mapped.push({
+        id: createId(),
+        level: "error",
+        text: asText(error.message) || "Turn failed.",
+        ...(durationMs !== undefined ? { turnDurationMs: durationMs } : {}),
+      });
     }
     return mapped;
   });

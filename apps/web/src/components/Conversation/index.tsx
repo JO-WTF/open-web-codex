@@ -268,6 +268,7 @@ export default function Conversation({
             workspaceId={workspaceId}
             onResolveApproval={onResolveApproval}
             inlineVisualizationThreadId={conversationId}
+            onOpenAgentPanel={onOpenAgentPanel}
           />
           <FinalArtifactLinks artifacts={finalArtifacts} />
           <TaskApprovalQueue

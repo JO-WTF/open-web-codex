@@ -1273,6 +1273,44 @@ body:has(.web-app-shell) {
   white-space: nowrap;
 }
 
+.web-supervisor-glance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 10px 0;
+}
+
+.web-supervisor-glance > span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 999px;
+  color: #9ca6b5;
+  background: rgb(255 255 255 / 3%);
+  font-size: 9px;
+  font-weight: 680;
+}
+
+.web-supervisor-glance > span.is-active {
+  border-color: rgb(92 218 145 / 20%);
+  color: #71d89c;
+  background: rgb(92 218 145 / 6%);
+}
+
+.web-supervisor-glance > span.is-waiting {
+  border-color: rgb(228 180 87 / 23%);
+  color: #e4b457;
+  background: rgb(228 180 87 / 6%);
+}
+
+.web-supervisor-glance > span.is-error {
+  border-color: rgb(237 139 146 / 23%);
+  color: #ed8b92;
+  background: rgb(237 139 146 / 6%);
+}
+
 .web-supervisor-agent-status {
   display: inline-flex;
   align-items: center;
@@ -1560,6 +1598,32 @@ body:has(.web-app-shell) {
 
 .web-supervisor-activity {
   padding: 0 10px 8px;
+}
+
+.web-supervisor-activity > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.web-supervisor-activity > summary::-webkit-details-marker {
+  display: none;
+}
+
+.web-supervisor-activity > summary:hover {
+  color: #d7dce5;
+}
+
+.web-supervisor-disclosure {
+  color: #7d8796;
+  transition: transform 140ms ease;
+}
+
+.web-supervisor-activity[open] .web-supervisor-disclosure {
+  transform: rotate(90deg);
+}
+
+.web-supervisor-activity-content {
+  padding-top: 1px;
 }
 
 .web-supervisor-activity ol {
@@ -2429,6 +2493,175 @@ body:has(.web-app-shell) {
   margin-top: 8px;
   color: var(--web-muted);
   font-size: 12px;
+}
+
+.web-agent-wait-card {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 11px;
+  padding: 12px 13px;
+  border: 1px solid rgb(228 180 87 / 24%);
+  border-radius: 11px;
+  background:
+    linear-gradient(135deg, rgb(228 180 87 / 9%), rgb(59 130 246 / 5%)),
+    rgb(10 13 20 / 78%);
+  box-shadow: inset 3px 0 0 rgb(228 180 87 / 55%);
+}
+
+.web-agent-wait-card.is-done {
+  border-color: rgb(121 167 232 / 22%);
+  background: rgb(121 167 232 / 5%);
+  box-shadow: inset 3px 0 0 rgb(121 167 232 / 46%);
+}
+
+.web-agent-wait-card.is-error {
+  border-color: rgb(237 139 146 / 28%);
+  background: rgb(237 139 146 / 5%);
+  box-shadow: inset 3px 0 0 rgb(237 139 146 / 52%);
+}
+
+.web-agent-wait-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 10px;
+  color: #e4b457;
+  background: rgb(228 180 87 / 11%);
+}
+
+.web-agent-wait-card.is-active .web-agent-wait-icon {
+  animation: web-agent-wait-pulse 1.8s ease-in-out infinite;
+}
+
+.web-agent-wait-card.is-done .web-agent-wait-icon {
+  color: #8eb3ea;
+  background: rgb(121 167 232 / 10%);
+}
+
+.web-agent-wait-card.is-error .web-agent-wait-icon {
+  color: #ed8b92;
+  background: rgb(237 139 146 / 10%);
+}
+
+.web-agent-wait-copy {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.web-agent-wait-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.web-agent-wait-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #e0e5ed;
+  font-size: 12px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-agent-wait-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  color: #d5b66f;
+  font-size: 9px;
+  font-weight: 720;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.web-agent-wait-status > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.web-agent-wait-status.is-active > span {
+  box-shadow: 0 0 0 4px rgb(228 180 87 / 10%);
+}
+
+.web-agent-wait-status.is-done { color: #8eb3ea; }
+.web-agent-wait-status.is-error { color: #ed8b92; }
+.web-agent-wait-status.is-pending { color: #9ca6b5; }
+
+.web-agent-wait-copy p {
+  margin: 0;
+  color: #9ea7b5;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.web-agent-wait-meta {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.web-agent-wait-meta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #7f8999;
+  font: 10px/1.4 var(--font-code);
+  font-variant-numeric: tabular-nums;
+}
+
+.web-agent-wait-meta button {
+  padding: 3px 7px;
+  border: 0;
+  border-radius: 6px;
+  color: #a9c7ed;
+  background: rgb(59 130 246 / 9%);
+  font-size: 9px;
+  font-weight: 680;
+}
+
+.web-agent-wait-meta button:hover {
+  color: #d6e8ff;
+  background: rgb(59 130 246 / 15%);
+}
+
+@keyframes web-agent-wait-pulse {
+  0%, 100% { opacity: 0.72; transform: scale(0.94); }
+  50% { opacity: 1; transform: scale(1.04); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .web-agent-wait-card.is-active .web-agent-wait-icon {
+    animation: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .web-agent-wait-card {
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 9px;
+    padding: 10px;
+  }
+
+  .web-agent-wait-icon {
+    width: 30px;
+    height: 30px;
+  }
+
+  .web-agent-wait-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
 }
 
 .web-execution-current {
@@ -4191,6 +4424,16 @@ body:has(.web-app-shell[data-theme="light"]) {
   color: #7d748b;
 }
 
+.web-app-shell[data-theme="light"] .web-supervisor-glance > span {
+  border-color: rgb(45 55 72 / 9%);
+  color: #657185;
+  background: rgb(45 55 72 / 3%);
+}
+
+.web-app-shell[data-theme="light"] .web-supervisor-glance > span.is-active { color: #227a4d; }
+.web-app-shell[data-theme="light"] .web-supervisor-glance > span.is-waiting { color: #986800; }
+.web-app-shell[data-theme="light"] .web-supervisor-glance > span.is-error { color: #b4232d; }
+
 .web-app-shell[data-theme="light"] .web-supervisor-agent {
   border-color: rgb(45 55 72 / 9%);
   background: rgb(45 55 72 / 2%);
@@ -4253,6 +4496,17 @@ body:has(.web-app-shell[data-theme="light"]) {
 .web-app-shell[data-theme="light"] .web-supervisor-activity-detail summary {
   color: #5f6d80;
 }
+
+.web-app-shell[data-theme="light"] .web-agent-wait-card {
+  border-color: rgb(152 104 0 / 18%);
+  background:
+    linear-gradient(135deg, rgb(228 180 87 / 12%), rgb(59 130 246 / 4%)),
+    #fff;
+}
+
+.web-app-shell[data-theme="light"] .web-agent-wait-heading strong { color: #2f3744; }
+.web-app-shell[data-theme="light"] .web-agent-wait-copy p { color: #657185; }
+.web-app-shell[data-theme="light"] .web-agent-wait-meta > span { color: #718096; }
 
 .web-app-shell[data-theme="light"] .web-supervisor-activity-status.is-active {
   color: #227a4d;

@@ -306,11 +306,22 @@ export function collabBriefDescription(value: string) {
   return `${Array.from(sentence).slice(0, 119).join("")}…`;
 }
 
-export function collabWaitCycleExplanation(tool: string, status: string) {
-  const normalizedTool = tool
+function normalizedCollabTool(tool: string) {
+  return tool
     .replace(/^collab:\s*/i, "")
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
+}
+
+export function collabAgentAction(tool: string): "wait" | undefined {
+  const normalizedTool = normalizedCollabTool(tool);
+  return normalizedTool === "wait" || normalizedTool === "waitagent"
+    ? "wait"
+    : undefined;
+}
+
+export function collabWaitCycleExplanation(tool: string, status: string) {
+  const normalizedTool = normalizedCollabTool(tool);
   if (normalizedTool !== "wait" && normalizedTool !== "waitagent") {
     return "";
   }
