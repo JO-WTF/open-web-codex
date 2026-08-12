@@ -204,10 +204,11 @@ Profile seed 与显式应用资产 composition：
 
 - checked-in `apps/web/builtin/warehouse-network-copilot` 提供 Root Supervisor、Data、Network
   三项 Skill 默认内容和 `data_agent`、`network_agent` 两项原生 Role 默认配置；
-- Profile Host 只接受 native Skill/Role 两种 typed startup destination。duplicate spec 在任何
-  写入前拒绝；clean Profile 缺失项逐文件原子 create-new；已存在普通文件保留，不覆盖用户
-  热修改；symlink、目录、逃逸和非法 seed 失败；`config.toml`、用户其他 Skill/Role 与
-  Workspace 不受影响。5 项单测通过；
+- Profile Host 只接受 native Skill/Role 两种 typed startup destination，并显式区分普通
+  `Seed` 与 Server-owned `Managed`。普通 seed 仍只在缺失时 create-new 并保留已存在内容；
+  仓网三项内置 Skill 和两项内置 Role 使用 managed 保留 ID，部署升级在 Runtime 启动前只在
+  内容漂移时原子更新。duplicate spec 在任何写入前拒绝；symlink、目录、逃逸和非法输入失败；
+  `config.toml`、用户其他 Skill/Role 与 Workspace 不受影响。6 项单测通过；
 - 仓网验收 Profile 通过 Codex 官方进程级 feature override，在首次请求前关闭
   `plugins`、`remote_plugin`、`apps` 与 `tool_suggest`；CLI feature discovery 精确报告四项
   均为 disabled，real clean-Profile Runtime gate 仍能发现三项内置 Skill、两项 Role 与

@@ -34,7 +34,7 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | --- | --- | --- |
 | Thread、Turn、Item、上下文、Agent 调度 | Codex Runtime | Runtime 是权威 owner；已物化 Thread 的实际 Provider/model 属于 official Thread settings，不由 Profile 默认值或 Task 字段覆盖。当前 Adapter/Server/Browser 仍叠加本地 history mode、approval overlay 和 live/history merge，其中 Browser 会按相同用户文本去重，尚未收敛为 official Item/client identity 的纯投影 |
 | Skill、Plugin、MCP、Tool 执行 | Codex Runtime | Runtime 执行；阶段一 built-in 使用原生 Profile Skill/Role 与 Role-local MCP；Standard/fork 产品路径不再注入 selected capability roots，也不扫描 cwd、Workspace 或源码树寻找 built-in |
-| Profile 进程与 `CODEX_HOME` | Profile Host | 单 Profile 进程已存在；启动前只为 clean Profile 原子 seed 固定 Skill/Role，已存在普通文件归 Profile 所有且不覆盖；进程 `HOME`/`USERPROFILE` 与 neutral cwd 均按 Profile Host 隔离；Server 仍有显式宿主认证导入路径 |
+| Profile 进程与 `CODEX_HOME` | Profile Host | 单 Profile 进程已存在；普通 startup file 仍只对 clean Profile 做 create-new seed，并保留已存在的用户文件。仓网三项内置 Skill 与两项内置 Role 使用显式 managed destination，部署升级会在 Runtime 启动前把这五个保留 ID 收敛到当前 checked-in 内容；其他 Skill、Role 和 `config.toml` 不覆盖。进程 `HOME`/`USERPROFILE` 与 neutral cwd 均按 Profile Host 隔离；Server 仍有显式宿主认证导入路径 |
 | Provider 定义、模型目录与 Profile 的未来 Thread 默认选择 | Codex Profile config + Runtime；Platform 保存 Browser catalog 投影 | `config/batchWrite` 持久化 Runtime 配置；Platform 的 Profile catalog 保存 Web 配置入口所需的 provider/model 投影和非敏感 credential env-key 名称。真实 fresh Profile 已通过 provider-scoped Fetch、选择、重启恢复和新 Thread 创建，不再把空 model pair 发给 Server |
 | Provider Secret | Platform encrypted Secret store 或显式环境凭据 | Direct credential 只进入 Profile/provider scoped Secret store；环境凭据只持久化变量名称并由 owned Profile process 注入。Codex config、Browser DTO、日志和文档不保存明文 |
 | Workspace 授权、执行根与普通文件 | Platform + Runner | Workspace 独立于 Thread/Run；Task 已固定唯一授权 Workspace，Run/fork/recovery 受数据库和服务端不变量约束；真实 Runtime Probe 已证明 Root/child 使用同一 native `sandboxCwd`，同时观察到 macOS `/var` 与 `/private/var` 的同 inode 词法差异；physical-path join 的通用收敛进入后续 backlog，当前仓网链继续以既有 Workspace denial gate 为边界；通用文件 Web 产品流已统一到 `/workspaces/{id}/files` 与 `GitRuntime` |
@@ -73,8 +73,11 @@ typed 校验官方 `initialize` 的四字段，并只对 `codexHome` 执行 Prof
 缺少固定 launcher、runtime、Mock 源或依赖文件时 real mode 明确 unavailable。Profile Host
 只允许 `$CODEX_HOME/skills/<id>/SKILL.md` 和 `$CODEX_HOME/agents/<role>.toml` 两种
 typed destination，不写 `config.toml`，不复制工具代码、venv、Node 依赖、Mock 或缓存。
-clean Profile 缺失文件使用 create-new 原子落盘；现有普通文件保留，使开发者修改后的
-Skill watcher 和下一次 Role spawn 仍由 Codex 原生语义拥有。仓网验收 composition 在
+普通 startup file 在 clean Profile 缺失时使用 create-new 原子落盘，已存在文件继续保留。
+仓网 built-in 明确把三项 Skill ID 与两项 Role name 作为 Server-owned managed destination：
+内容变化时在 app-server 启动前原子替换，内容相同时不写入；用户使用其他 ID 创建的 Skill、
+Role 和 `config.toml` 不受影响。运行中的 Skill watcher 与下一次 Role spawn 仍由 Codex 原生
+语义拥有。仓网验收 composition 在
 `app-server` 启动前使用 Codex 官方、进程级 `--disable` feature override 关闭
 `plugins`、`remote_plugin`、`apps` 与 `tool_suggest`；不改写持久 Profile 配置，也不在
 Platform 侧过滤 Runtime discovery 或 Tool。
