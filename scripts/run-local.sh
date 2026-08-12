@@ -487,6 +487,11 @@ combined_runtime_build_args=(
   -p codex-code-mode-host
   --bin codex-code-mode-host
 )
+python_cmd="${PYTHON:-python3}"
+codex_cargo_adapter=(
+  "$python_cmd"
+  "$repo_root/scripts/run-codex-cargo-with-v8.py"
+)
 printf -v server_build_command '%q ' "${server_build_args[@]}"
 printf -v codex_build_command '%q ' "${codex_build_args[@]}"
 printf -v code_mode_host_build_command '%q ' "${code_mode_host_build_args[@]}"
@@ -504,15 +509,15 @@ build_platform_server() {
 }
 
 build_codex_runtime() {
-  (cd "$runtime_root" && "${combined_runtime_build_args[@]}")
+  (cd "$runtime_root" && "${codex_cargo_adapter[@]}" "${combined_runtime_build_args[@]}")
 }
 
 build_codex_cli() {
-  (cd "$runtime_root" && "${codex_build_args[@]}")
+  (cd "$runtime_root" && "${codex_cargo_adapter[@]}" "${codex_build_args[@]}")
 }
 
 build_codex_code_mode_host() {
-  (cd "$runtime_root" && "${code_mode_host_build_args[@]}")
+  (cd "$runtime_root" && "${codex_cargo_adapter[@]}" "${code_mode_host_build_args[@]}")
 }
 
 check_cargo_component_fingerprint() {
