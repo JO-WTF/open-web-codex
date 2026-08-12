@@ -36,10 +36,25 @@ REMOVED_CASE_LEGACY_ENTRYPOINTS = (
     "_legacy_publish_network_planning_report",
 )
 REMOVED_MODULES = (
-    "analysis_service", "case_models", "case_repository", "case_tools", "case_types",
-    "core", "data_core", "decision_core", "demo_server", "indonesia_analysis",
-    "indonesia_models", "indonesia_report", "indonesia_server", "mapping_service",
-    "matrix_service", "network_data", "readiness", "requirements", "scenario_service",
+    "analysis_service",
+    "case_models",
+    "case_repository",
+    "case_tools",
+    "case_types",
+    "core",
+    "data_core",
+    "decision_core",
+    "demo_server",
+    "indonesia_analysis",
+    "indonesia_models",
+    "indonesia_report",
+    "indonesia_server",
+    "mapping_service",
+    "matrix_service",
+    "network_data",
+    "readiness",
+    "requirements",
+    "scenario_service",
     "workspace_dataset",
 )
 REMOVED_CONTRACT_FILES = (
@@ -54,6 +69,7 @@ DATA_TOOLS = {
     "prepare_network_geography",
 }
 NETWORK_TOOLS = {
+    "assess_facility_change",
     "build_haversine_route_matrix",
     "build_provided_route_matrix",
     "compare_network_scenarios",
@@ -97,6 +113,7 @@ def test_plugin_manifest_and_mcp_config_are_wired() -> None:
         "prepare_network_distribution_map": {"approval_mode": "approve"},
         "prepare_network_comparison_map": {"approval_mode": "approve"},
         "evaluate_network_baseline": {"approval_mode": "approve"},
+        "assess_facility_change": {"approval_mode": "approve"},
         "evaluate_facility_scenario": {"approval_mode": "approve"},
         "solve_p_median": {"approval_mode": "approve"},
         "compare_network_scenarios": {"approval_mode": "approve"},

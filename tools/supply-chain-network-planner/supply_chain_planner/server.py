@@ -33,10 +33,14 @@ from .matrix_models import RouteMatrix as ComposableRouteMatrix
 from .mcp_contracts import MapResourceRef, ResourceRef
 from .mcp_resources import McpResourceContractError, McpResourceRuntime, bind_runtime
 from .models import (
+    FacilityChangeAssessmentToolResult,
+    FacilityChangeCostComparison,
+    NetworkAssignmentComparisonResourceRef,
     NetworkBaselineResourceToolResult,
     NetworkFinalArtifactDescriptor,
     NetworkFinalArtifactToolResult,
     NetworkReportInput,
+    NetworkScenarioResourceRef,
     PreparedNetworkResource,
     UncoveredCitySummary,
 )
@@ -747,17 +751,25 @@ def evaluate_network_baseline(
     return result
 
 
-@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
-def evaluate_facility_scenario(
+def _load_facility_scenario_inputs(
     normalized_input_ref: ResourceRef,
     route_matrix_ref: ResourceRef,
+    cost_matrix_ref: ResourceRef | None,
     scenario: ScenarioSpec,
-    ctx: Context,
-    cost_matrix_ref: ResourceRef | None = None,
-) -> CallToolResult:
-    """Evaluate an add, remove or relocation scenario without a mutable Case."""
-    _runtime().require_workspace(ctx)
-    if not scenario.service_targets or any(target <= 0 for target in scenario.service_targets):
+) -> tuple[
+    PreparedNetworkResource,
+    ComposableRouteMatrix,
+    CostMatrix | None,
+    list[float],
+    set[str],
+    set[str],
+]:
+    """Load and validate immutable inputs shared by both scenario tools."""
+    if (
+        not scenario.service_targets
+        or len(scenario.service_targets) > 32
+        or any(target <= 0 for target in scenario.service_targets)
+    ):
         raise McpResourceContractError("scenario_service_targets_invalid")
     prepared = _load_ready_network(normalized_input_ref)
     routes = _runtime().load_model(
@@ -778,6 +790,8 @@ def evaluate_facility_scenario(
     for relocation in scenario.relocations:
         remove_ids.add(relocation.remove_warehouse_id)
         add_ids.add(relocation.add_warehouse_id)
+    if len(add_ids) > 256 or len(remove_ids) > 256:
+        raise McpResourceContractError("scenario_warehouse_change_limit_exceeded")
     unknown = (add_ids | remove_ids) - set(warehouse_by_id)
     if unknown:
         raise McpResourceContractError("scenario_unknown_warehouses")
@@ -787,9 +801,28 @@ def evaluate_facility_scenario(
         raise McpResourceContractError("scenario_remove_requires_existing_warehouse")
     if add_ids & remove_ids:
         raise McpResourceContractError("scenario_add_remove_conflict")
-    active_ids = {
-        warehouse.warehouse_id for warehouse in prepared.warehouses if warehouse.is_existing
-    }
+    return (
+        prepared,
+        routes,
+        costs,
+        sorted(set(scenario.service_targets)),
+        add_ids,
+        remove_ids,
+    )
+
+
+def _evaluate_facility_change(
+    prepared: PreparedNetworkResource,
+    routes: ComposableRouteMatrix,
+    costs: CostMatrix | None,
+    scenario: ScenarioSpec,
+    base_active_ids: set[str],
+    add_ids: set[str],
+    remove_ids: set[str],
+    ordered_targets: list[float],
+) -> ScenarioResult:
+    """Apply one validated change to an explicit active warehouse footprint."""
+    active_ids = set(base_active_ids)
     active_ids.difference_update(remove_ids)
     active_ids.update(add_ids)
     invalid_upstreams = sorted(
@@ -809,12 +842,162 @@ def evaluate_facility_scenario(
         scenario.objective,
         active_ids,
     )
-    result = ScenarioResult(
+    return ScenarioResult(
         active_warehouse_ids=sorted(active_ids),
         assignment=assignment,
         cost=summarize_assignment_cost(assignment, costs) if costs is not None else None,
-        service=service_metrics(assignment, sorted(set(scenario.service_targets))),
+        service=service_metrics(assignment, ordered_targets),
         warehouse_changes={"added": sorted(add_ids), "removed": sorted(remove_ids)},
+    )
+
+
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
+def assess_facility_change(
+    normalized_input_ref: ResourceRef,
+    route_matrix_ref: ResourceRef,
+    before_ref: ComparableResourceRef,
+    scenario: ScenarioSpec,
+    ctx: Context,
+    cost_matrix_ref: ResourceRef | None = None,
+) -> Annotated[CallToolResult, FacilityChangeAssessmentToolResult]:
+    """Apply and compare one facility change against an exact typed result."""
+    _runtime().require_workspace(ctx)
+    prepared, routes, costs, targets, add_ids, remove_ids = _load_facility_scenario_inputs(
+        normalized_input_ref,
+        route_matrix_ref,
+        cost_matrix_ref,
+        scenario,
+    )
+    before_assignment, before_active_ids = _load_comparable_resource(before_ref)
+    known_warehouse_ids = {warehouse.warehouse_id for warehouse in prepared.warehouses}
+    if before_active_ids - known_warehouse_ids:
+        raise McpResourceContractError("scenario_before_warehouse_unknown")
+    if remove_ids - before_active_ids:
+        raise McpResourceContractError("scenario_remove_requires_active_warehouse")
+    if add_ids & before_active_ids:
+        raise McpResourceContractError("scenario_add_requires_inactive_warehouse")
+    after = _evaluate_facility_change(
+        prepared,
+        routes,
+        costs,
+        scenario,
+        before_active_ids,
+        add_ids,
+        remove_ids,
+        targets,
+    )
+    comparison = compare_assignments(
+        before_assignment,
+        after.assignment,
+        targets,
+        before_active_ids,
+        set(after.active_warehouse_ids),
+    )
+    coverage_summary = (
+        ", ".join(
+            f"{metric.target_hours:g}h city-count "
+            f"{metric.before.city_coverage_rate:.1%}→{metric.after.city_coverage_rate:.1%} "
+            f"({metric.delta.city_coverage_rate:+.1%}), demand-weighted "
+            f"{metric.before.demand_weighted_coverage_rate:.1%}→"
+            f"{metric.after.demand_weighted_coverage_rate:.1%} "
+            f"({metric.delta.demand_weighted_coverage_rate:+.1%})"
+            for metric in comparison.coverage[:8]
+        )
+        or "none"
+    )
+    if len(comparison.coverage) > 8:
+        coverage_summary = f"{coverage_summary}, +{len(comparison.coverage) - 8} more"
+    cost_complete = comparison.before_cost is not None and comparison.after_cost is not None
+    cost_summary = (
+        f"{comparison.before_cost:.2f}→{comparison.after_cost:.2f} "
+        f"({comparison.cost_delta or 0:+.2f})"
+        if cost_complete
+        else "unavailable"
+    )
+    summary = (
+        f"Assessed one facility change against the exact before result; active warehouses "
+        f"{len(after.active_warehouse_ids)}, added [{_bounded_id_summary(sorted(add_ids))}], "
+        f"removed [{_bounded_id_summary(sorted(remove_ids))}], affected "
+        f"{len(comparison.affected_city_ids)}, reassigned "
+        f"{len(comparison.reassigned_city_ids)}; cost {cost_summary}; coverage "
+        f"{coverage_summary}."
+    )
+
+    scenario_published = _runtime().publish(after.schema_version, after, summary)
+    comparison_published = _runtime().publish(
+        comparison.schema_version,
+        comparison,
+        summary,
+    )
+    if (
+        scenario_published.structuredContent is None
+        or comparison_published.structuredContent is None
+    ):
+        raise McpResourceContractError("facility_change_result_missing")
+    result = FacilityChangeAssessmentToolResult(
+        summary=summary,
+        scenario_ref=NetworkScenarioResourceRef.model_validate(
+            scenario_published.structuredContent["resource_ref"]
+        ),
+        comparison_ref=NetworkAssignmentComparisonResourceRef.model_validate(
+            comparison_published.structuredContent["resource_ref"]
+        ),
+        active_warehouse_count=len(after.active_warehouse_ids),
+        added_warehouse_ids=sorted(add_ids),
+        removed_warehouse_ids=sorted(remove_ids),
+        cost=FacilityChangeCostComparison(
+            currency=costs.currency if costs is not None else None,
+            before_total=comparison.before_cost,
+            after_total=comparison.after_cost,
+            delta=comparison.cost_delta,
+            complete=cost_complete,
+        ),
+        coverage=comparison.coverage,
+        affected_city_count=len(comparison.affected_city_ids),
+        affected_city_ids=comparison.affected_city_ids[:100],
+        affected_city_ids_truncated=len(comparison.affected_city_ids) > 100,
+        reassigned_city_count=len(comparison.reassigned_city_ids),
+        reassigned_city_ids=comparison.reassigned_city_ids[:100],
+        reassigned_city_ids_truncated=len(comparison.reassigned_city_ids) > 100,
+    )
+    return CallToolResult(
+        content=[
+            TextContent(type="text", text=summary),
+            *scenario_published.content[1:],
+            *comparison_published.content[1:],
+        ],
+        structuredContent=result.model_dump(mode="json"),
+    )
+
+
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
+def evaluate_facility_scenario(
+    normalized_input_ref: ResourceRef,
+    route_matrix_ref: ResourceRef,
+    scenario: ScenarioSpec,
+    ctx: Context,
+    cost_matrix_ref: ResourceRef | None = None,
+) -> CallToolResult:
+    """Evaluate an add, remove or relocation scenario without a mutable Case."""
+    _runtime().require_workspace(ctx)
+    prepared, routes, costs, targets, add_ids, remove_ids = _load_facility_scenario_inputs(
+        normalized_input_ref,
+        route_matrix_ref,
+        cost_matrix_ref,
+        scenario,
+    )
+    base_active_ids = {
+        warehouse.warehouse_id for warehouse in prepared.warehouses if warehouse.is_existing
+    }
+    result = _evaluate_facility_change(
+        prepared,
+        routes,
+        costs,
+        scenario,
+        base_active_ids,
+        add_ids,
+        remove_ids,
+        targets,
     )
     return _runtime().publish(
         result.schema_version,
@@ -823,7 +1006,7 @@ def evaluate_facility_scenario(
         f"added [{_bounded_id_summary(sorted(add_ids))}], removed "
         f"[{_bounded_id_summary(sorted(remove_ids))}]; cost "
         f"{_cost_metric_summary(result.cost)}, coverage "
-        f"{_coverage_metric_summary(coverage_metrics(assignment, sorted(set(scenario.service_targets))))}.",
+        f"{_coverage_metric_summary(coverage_metrics(result.assignment, targets))}.",
     )
 
 

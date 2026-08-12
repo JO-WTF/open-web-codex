@@ -284,6 +284,7 @@ async def _run_network_s3_then_s2(
                 "prepare_network_comparison_map",
                 "prepare_network_distribution_map",
                 "evaluate_network_baseline",
+                "assess_facility_change",
                 "evaluate_facility_scenario",
                 "solve_p_median",
                 "compare_network_scenarios",
@@ -374,14 +375,15 @@ async def _run_network_s3_then_s2(
             )
 
             s3_trace: list[str] = []
-            s3_trace.append("evaluate_facility_scenario")
-            scenario_result = await _call(
+            s3_trace.append("assess_facility_change")
+            assessment_result = await _call(
                 session,
-                "evaluate_facility_scenario",
+                "assess_facility_change",
                 {
                     "normalized_input_ref": normalized_ref,
                     "route_matrix_ref": provided_ref,
                     "cost_matrix_ref": costs_ref,
+                    "before_ref": baseline_ref,
                     "scenario": {
                         "add_warehouse_ids": [],
                         "remove_warehouse_ids": [BEKASI_ID],
@@ -392,7 +394,8 @@ async def _run_network_s3_then_s2(
                 },
                 workspace,
             )
-            scenario_ref = scenario_result.structuredContent["resource_ref"]
+            assert assessment_result.structuredContent["active_warehouse_count"] == 10
+            scenario_ref = assessment_result.structuredContent["scenario_ref"]
             scenario = await _read_resource(session, scenario_ref)
             assert scenario["active_warehouse_ids"] == [
                 item for item in existing_ids if item != BEKASI_ID
@@ -401,20 +404,9 @@ async def _run_network_s3_then_s2(
                 "added": [],
                 "removed": [BEKASI_ID],
             }
-            s3_trace.append("compare_network_scenarios")
-            s3_comparison_result = await _call(
-                session,
-                "compare_network_scenarios",
-                {
-                    "before_ref": baseline_ref,
-                    "after_ref": scenario_ref,
-                    "service_targets": [12],
-                },
-                workspace,
-            )
             s3_comparison = await _read_resource(
                 session,
-                s3_comparison_result.structuredContent["resource_ref"],
+                assessment_result.structuredContent["comparison_ref"],
             )
             assert s3_comparison["selected_warehouse_ids"] == []
             assert s3_comparison["removed_warehouse_ids"] == [BEKASI_ID]
@@ -549,10 +541,7 @@ async def smoke() -> None:
             environment,
             normalized_ref,
         )
-        assert s3_trace[-2:] == [
-            "evaluate_facility_scenario",
-            "compare_network_scenarios",
-        ]
+        assert s3_trace[-1:] == ["assess_facility_change"]
         assert s2_trace[-4:] == [
             "compare_network_scenarios",
             "prepare_network_comparison_map",

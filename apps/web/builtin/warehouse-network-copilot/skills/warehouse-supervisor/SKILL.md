@@ -13,7 +13,7 @@ description: 当用户要求准备仓网数据、分析覆盖或成本、模拟�
 - 只要用户要求发现、读取、检查、映射、标准化或补全 Workspace 中的 Excel、CSV 或 JSON，就原生创建 `data_agent`。Root 不得自行处理文件，也不得在 Data Agent 返回前声称数据已经准备好。
 - 普通 Workspace 文件路径不是 MCP ResourceRef。只要当前 Thread 中没有由 Data Tool 实际返回且仍可读取的精确 `normalized_network_input.v1` ResourceRef，即使文件名包含 `normalized`、文件来自旧 Task、旧回复声称已经准备好，Root 也必须先创建 `data_agent` 重新检查并发布当前 Resource；不得把文件路径、旧 Artifact、报告内容或模型文本交给 Network Agent 代替 ResourceRef。
 - 只有当新的仓网分析无法从用户目标和当前 Tool 合同确定必要输入时，才先让 `network_agent` 单独定义数据要求。覆盖、成本、模拟或规划目标已经明确时，直接让一个 `data_agent` 在同一 child 任务中连续完成发现、检查、标准化和必要地理补全，直到返回 `ready` 或 typed 缺口；不要先创建“只盘点文件”的 Data Task，再为同一批文件创建第二个 Data Task。
-- Data Agent 返回 `ready` 的 `normalized_network_input.v1` 精确 ResourceRef 后，将该引用交给同一个 `network_agent` 继续分析；返回 `needs_input` 或 `needs_geography` 时，先向用户说明业务缺口，不启动后续计算。
+- Data Agent 返回 `ready` 的 `normalized_network_input.v1` 精确 ResourceRef 后，将该引用交给 `network_agent` 分析，并按下方 handoff 完整性选择新的有界 child 或同 child follow-up；返回 `needs_input` 或 `needs_geography` 时，先向用户说明业务缺口，不启动后续计算。
 - Root 只向 Data Agent 传递用户给出的国家名称或数据中已有的国家标识，不自行猜测、缩写或转换国家代码；两位国家代码由 Data Agent 依据已确认数据和 typed Tool 合同确定。
 - child 报告某项 typed Tool 能力或输出字段不存在时，按能力 owner 收敛：数据读取、映射、标准化和地理字段缺口由 Data Agent 说明，路线、成本、覆盖、模拟、优化和交付能力缺口由 Network Agent 说明。Root 不得把 Network 分析改派给 Data Agent，不得要求 child 在运行时扩写 Tool schema，也不得用模型计算、shell 或反复重试掩盖能力缺口；需要用户决策时通过原生交互返回明确选择，否则报告不可用并停止。
 
@@ -34,13 +34,14 @@ description: 当用户要求准备仓网数据、分析覆盖或成本、模拟�
 
 ## 延续原生交接
 
-- 依赖前轮 Tool refs 的后续工作优先在同一 `network_agent` child 上使用原生 follow-up；仅当原 child 不可用且已持有当前后续 Tool 实际需要、且由前轮 Tool 返回的全部 exact refs 时才 spawn 替代 child，否则返回 typed `needs_context` 并停止；不得 list resources、读取 Resource 正文、扫描 Workspace 或重建 ref/结果。阶段完成 handoff 动态列出本阶段实际 Tool 返回且后续适用的 exact refs。
+- 原 `network_agent` 已处于 safe/terminal 边界，且 handoff 已包含当前 Tool 所需的全部 exact Resource refs、全部非 Resource 参数、用户许可和交付要求时，spawn 新的 `network_agent` 并显式使用 `fork_turns=none`。完整、结构化的 handoff 是新 child 的全部业务输入，不复制或重放原 child 对话。
+- 只有当后续工作的正确性确实依赖原 child 对话中尚未结构化的判断或上下文时，才对同一个 `network_agent` 使用原生 follow-up；不能只因为该 child 曾经参与前轮就复用其完整历史。若当前 Tool 的 required refs 或其他 required 参数不完整，返回 typed `needs_context` 并停止；不得 list resources、读取 Resource 正文、扫描 Workspace 或重建 ref/结果。阶段完成 handoff 动态列出本阶段实际 Tool 返回且后续适用的 exact refs、非 Resource 参数、许可和交付要求。
 - Network final 只原样回传实际 Tool structured result 的 bounded 结论和 exact refs；不发明 ref、不复制内容。final Tool/Artifact typed descriptor 与 Platform terminal state 是权威；不得用 `ls`、`cat`、`find`、`stat`、shell、Workspace 扫描、Resource 重读或自行计算复核成功交付，失败则报告原始终态。
 - 下游 Tool 同时接收 result 与 comparison 时，comparison 必须由同一个 exact result 产生；语义等价的重算 result 不可混用。
 
 ## 使用 Codex 原生协作
 
-- 使用原生 spawn、wait、mailbox、steer 和 follow-up。明确选择 `fork_turns`：child 需要当前业务对话时带入 Root history；任务与输入已完整时使用有界的新 child。
+- 使用原生 spawn、wait、mailbox、steer 和 follow-up。明确选择 `fork_turns`：只有正确性依赖尚未结构化的当前业务对话时才带入或复用历史；任务与输入已完整时使用 `fork_turns=none` 的有界新 child。
 - 不让 Platform 复制 child 上下文、创建第二套调度或传递隐藏业务状态。Root 与 child 之间只传业务要求、Workspace 相对路径和工具实际返回的精确 typed ResourceRef。
 - 不从标题、模型文本或 Workspace 路径猜测 ResourceRef，不手写 Resource URI，不把 Workspace 文件伪装成 MCP Resource。
 - child 运行时向用户说明当前业务阶段。遇到缺失输入、付费导航许可、关闭已有仓库许可或其他业务选择时，使用原生交互路径，不替用户作决定。

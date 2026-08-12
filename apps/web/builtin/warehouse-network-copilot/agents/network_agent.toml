@@ -33,6 +33,7 @@ enabled_tools = [
   "prepare_network_distribution_map",
   "prepare_network_comparison_map",
   "evaluate_network_baseline",
+  "assess_facility_change",
   "evaluate_facility_scenario",
   "solve_p_median",
   "compare_network_scenarios",
@@ -65,6 +66,9 @@ approval_mode = "approve"
 approval_mode = "approve"
 
 [mcp_servers.supply_chain.tools.evaluate_network_baseline]
+approval_mode = "approve"
+
+[mcp_servers.supply_chain.tools.assess_facility_change]
 approval_mode = "approve"
 
 [mcp_servers.supply_chain.tools.evaluate_facility_scenario]

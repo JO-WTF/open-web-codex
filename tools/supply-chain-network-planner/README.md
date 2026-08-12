@@ -25,6 +25,7 @@ validate_route_matrix
 plan_cost_matrix
 prepare_network_distribution_map
 evaluate_network_baseline
+assess_facility_change
 evaluate_facility_scenario
 solve_p_median
 compare_network_scenarios
@@ -41,6 +42,12 @@ Data Tool 会把用户输入中完整的起点、终点、距离、时长与来�
 同时包含未参与本次分析的候选仓而要求 Data 重新发布资源；也无需让模型重读文件或重新估算。基线和比较结果同时返回按城市数量与按需求量
 加权的覆盖指标，并以 typed Resource 支持实际基线、优化基线或场景之间的比较；模型只负责解释，
 不自行汇总这些数值。
+
+`assess_facility_change` 接受精确的标准化输入、路线、可选成本以及 baseline/scenario/facility
+结果引用，以引用中的活动仓集合为起点，一次完成增仓、关仓或迁仓后的分配求解和前后比较。
+它发布完整的 `network_scenario.v2` 与 `network_assignment_comparison.v2` Resource，同时只把
+有界的仓库变化、成本、两种覆盖率和受影响/重分配城市摘要返回给 Agent。旧的
+`evaluate_facility_scenario` 仍明确从全部现有仓起算。
 
 ## Tool 审批
 

@@ -46,6 +46,7 @@ description: 仅供仓网 Supervisor 原生 spawn 的 network_agent child 使用
 ## 仓网模拟与规划
 
 - 模拟增加、关闭或搬迁仓库时，复用当前有效的数据、路线、成本和基线 Resource。搬迁等价于关闭一个已有仓并启用一个候选仓。
+- 当用户要求评估一次增加、关闭或搬迁仓库的影响，且当前 handoff 已提供匹配的 exact `normalized_input_ref`、`route_matrix_ref`、`before_ref`、完整 `scenario`，以及适用时的可选 `cost_matrix_ref` 时，优先只调用一次 `assess_facility_change`，不要再分别调用 `evaluate_facility_scenario` 与 `compare_network_scenarios`。后续地图、报告和 final 只使用该 Tool 同一次 structured result 返回的 exact `scenario_ref`、`comparison_ref`、`summary` 与 bounded metrics；不得重算、混配或读取 Resource 正文来补指标。若当前 Tool 的 required ref 或非 Resource 参数缺失，返回 typed `needs_context` 并停止；不得伪造成本引用。
 - 模拟默认建议成本最优，但要向用户说明；上下文没有时效目标时先询问。输出活动仓库、仓库变动、城市重新分配、总成本、分仓库成本和全网时效满足率；分仓时效同样只能使用 typed Tool 结果。
 - 关闭已有仓库必须得到用户明确许可；只关闭仓库的模拟不运行 p-median，也不创建候选仓。是否补充地图卡片按空间关系是否有助理解判断；完整分析形成业务结果时必须生成 Markdown 结果简报，纯数据需求定义、`needs_input` 或失败终态不生成简报。
 - 用户要求仓网规划时才调用 p-median。默认把全部已有仓库列入固定集合并提前告知；只有用户明确允许时，才把指定已有仓库列入可选集合。固定集合与可选集合必须完整、不重叠。

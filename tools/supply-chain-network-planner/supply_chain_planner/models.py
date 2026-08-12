@@ -17,7 +17,7 @@ from .network_models import (
     RouteQuoteRecord,
     WarehouseRecord,
 )
-from .optimization_models import CoverageMetricSummary
+from .optimization_models import CoverageComparison, CoverageMetricSummary
 
 MCP_SERVER_NAME = "supply_chain"
 
@@ -110,6 +110,45 @@ class NetworkBaselineResourceToolResult(StrictModel):
     uncovered_city_count: int = Field(ge=0)
     uncovered_cities: list[UncoveredCitySummary] = Field(max_length=100)
     uncovered_cities_truncated: bool
+
+
+class FacilityChangeCostComparison(StrictModel):
+    """Bounded cost projection for a before-versus-after facility change."""
+
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    before_total: float | None = Field(default=None, ge=0)
+    after_total: float | None = Field(default=None, ge=0)
+    delta: float | None = None
+    complete: bool
+
+
+class NetworkScenarioResourceRef(_ResourceRef):
+    resource_schema: Literal["network_scenario.v2"] = "network_scenario.v2"
+
+
+class NetworkAssignmentComparisonResourceRef(_ResourceRef):
+    resource_schema: Literal["network_assignment_comparison.v2"] = (
+        "network_assignment_comparison.v2"
+    )
+
+
+class FacilityChangeAssessmentToolResult(StrictModel):
+    """Bounded result of one deterministic facility-change assessment."""
+
+    summary: str = Field(min_length=1, max_length=2048)
+    scenario_ref: NetworkScenarioResourceRef
+    comparison_ref: NetworkAssignmentComparisonResourceRef
+    active_warehouse_count: int = Field(ge=0)
+    added_warehouse_ids: list[str] = Field(max_length=256)
+    removed_warehouse_ids: list[str] = Field(max_length=256)
+    cost: FacilityChangeCostComparison
+    coverage: list[CoverageComparison] = Field(max_length=32)
+    affected_city_count: int = Field(ge=0)
+    affected_city_ids: list[str] = Field(max_length=100)
+    affected_city_ids_truncated: bool
+    reassigned_city_count: int = Field(ge=0)
+    reassigned_city_ids: list[str] = Field(max_length=100)
+    reassigned_city_ids_truncated: bool
 
 
 class NetworkFinalArtifactDescriptor(StrictModel):

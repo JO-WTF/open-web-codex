@@ -24,6 +24,7 @@ from supply_chain_planner.mcp_resources import (
     McpResourceRuntime,
 )
 from supply_chain_planner.models import (
+    FacilityChangeAssessmentToolResult,
     NetworkBaselineReportInput,
     NetworkBaselineResourceToolResult,
     NetworkComparisonReportInput,
@@ -46,6 +47,7 @@ from supply_chain_planner.report_service import (
     NETWORK_PLANNING_MARKDOWN_SCHEMA,
 )
 from supply_chain_planner.resource_store import PublishedResource, ResourceStore
+from supply_chain_planner.solver import compare_assignments, solve_assignment
 
 BEKASI_ID = "WH-CROSS_DOCKING-BEKASI"
 
@@ -216,6 +218,7 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
         "prepare_network_distribution_map",
         "prepare_network_comparison_map",
         "evaluate_network_baseline",
+        "assess_facility_change",
         "evaluate_facility_scenario",
         "compare_network_scenarios",
     }
@@ -259,6 +262,21 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
     scenario = tools["evaluate_facility_scenario"].inputSchema
     assert "ctx" not in scenario["properties"]
     assert {"normalized_input_ref", "route_matrix_ref", "scenario"}.issubset(scenario["required"])
+
+    assessment = tools["assess_facility_change"].inputSchema
+    assert "ctx" not in assessment["properties"]
+    assert {
+        "normalized_input_ref",
+        "route_matrix_ref",
+        "before_ref",
+        "scenario",
+    }.issubset(assessment["required"])
+    assert "cost_matrix_ref" not in assessment["required"]
+    assert assessment["properties"]["before_ref"]["$ref"].endswith("/ComparableResourceRef")
+    assessment_output = tools["assess_facility_change"].outputSchema
+    assert assessment_output["properties"]["coverage"]["maxItems"] == 32
+    assert assessment_output["properties"]["affected_city_ids"]["maxItems"] == 100
+    assert assessment_output["properties"]["reassigned_city_ids"]["maxItems"] == 100
 
     p_median = tools["solve_p_median"].inputSchema
     assert "ctx" not in p_median["properties"]
@@ -313,7 +331,6 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
     assert "allow_closure" in p_median["properties"]["existing_warehouse_policy"]["description"]
     assert "fixed_existing_ids" not in p_median["properties"]
     assert "optional_existing_ids" not in p_median["properties"]
-
     comparison_map = tools["prepare_network_comparison_map"].inputSchema
     assert "ctx" not in comparison_map["properties"]
     assert set(comparison_map["required"]) == {
@@ -337,6 +354,24 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
     report_schema = tools["publish_network_planning_report"].inputSchema
     assert "ctx" not in report_schema["properties"]
     assert set(report_schema["required"]) == {"report_input", "output_relative_path"}
+
+
+def test_facility_scenario_rejects_more_than_32_service_targets_before_loading() -> None:
+    unused_ref = ResourceRef(
+        server=server.MCP_SERVER_NAME,
+        uri="supply-chain://resources/not-loaded",
+        resource_schema="normalized_network_input.v1",
+    )
+    with pytest.raises(McpResourceContractError, match="scenario_service_targets_invalid"):
+        server._load_facility_scenario_inputs(
+            unused_ref,
+            unused_ref.model_copy(update={"resource_schema": "route_matrix.v2"}),
+            None,
+            ScenarioSpec(
+                objective="min_time",
+                service_targets=[float(target) for target in range(1, 34)],
+            ),
+        )
 
 
 def test_s2_creates_inline_comparison_map_and_markdown_report_artifact(
@@ -625,6 +660,139 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(tmp_path: Path, mon
             after_ref=scenario_ref,
             service_targets=[12],
             ctx=ctx,
+        )
+
+
+def test_assess_facility_change_preserves_selected_candidates_and_matches_manual_compute(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace, store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    prepared_ref, route_ref, cost_ref, _existing_ids, _candidate_ids = _published_network(store)
+    facility_ref = _result_ref(
+        server.solve_p_median(
+            prepared_ref,
+            route_ref,
+            cost_ref,
+            2,
+            KeepAllExistingWarehousePolicy(),
+            [6, 12, 18],
+            30,
+            ctx,
+        )
+    )
+    facility = server._runtime().load_model(
+        facility_ref,
+        "facility_location_solution.v3",
+        PMedianSolution,
+    )
+    assert facility.assignment is not None
+    assert facility.opened_candidate_ids
+
+    tool_result = server.assess_facility_change(
+        normalized_input_ref=prepared_ref,
+        route_matrix_ref=route_ref,
+        cost_matrix_ref=cost_ref,
+        before_ref=server.ComparableResourceRef.model_validate(facility_ref.model_dump()),
+        scenario=ScenarioSpec(
+            remove_warehouse_ids=[BEKASI_ID],
+            objective="min_cost",
+            service_targets=[6, 12, 18],
+        ),
+        ctx=ctx,
+    )
+    assert tool_result.structuredContent is not None
+    bounded = FacilityChangeAssessmentToolResult.model_validate(tool_result.structuredContent)
+    assert bounded.active_warehouse_count == len(facility.active_warehouse_ids) - 1
+    assert bounded.added_warehouse_ids == []
+    assert bounded.removed_warehouse_ids == [BEKASI_ID]
+    assert bounded.cost.currency == "IDR"
+    assert bounded.cost.complete
+    assert len(bounded.affected_city_ids) <= 100
+    assert len(bounded.reassigned_city_ids) <= 100
+
+    scenario = server._runtime().load_model(
+        bounded.scenario_ref,
+        "network_scenario.v2",
+        ScenarioResult,
+    )
+    expected_active_ids = set(facility.active_warehouse_ids) - {BEKASI_ID}
+    assert set(facility.opened_candidate_ids) <= set(scenario.active_warehouse_ids)
+    assert set(scenario.active_warehouse_ids) == expected_active_ids
+
+    prepared = server._runtime().load_model(
+        prepared_ref,
+        "normalized_network_input.v1",
+        PreparedNetworkResource,
+    )
+    routes = server._runtime().load_model(
+        route_ref,
+        "route_matrix.v2",
+        server.ComposableRouteMatrix,
+    )
+    costs = server._runtime().load_model(
+        cost_ref,
+        "cost_matrix.v2",
+        server.CostMatrix,
+    )
+    manual_assignment = solve_assignment(
+        prepared.demand_cities,
+        prepared.warehouses,
+        routes,
+        costs,
+        "min_cost",
+        expected_active_ids,
+    )
+    manual_comparison = compare_assignments(
+        facility.assignment,
+        manual_assignment,
+        [6, 12, 18],
+        set(facility.active_warehouse_ids),
+        expected_active_ids,
+    )
+    comparison = server._runtime().load_model(
+        bounded.comparison_ref,
+        "network_assignment_comparison.v2",
+        AssignmentComparison,
+    )
+    assert scenario.assignment == manual_assignment
+    assert comparison == manual_comparison
+    assert bounded.coverage == comparison.coverage
+    assert bounded.affected_city_count == len(comparison.affected_city_ids)
+    assert bounded.reassigned_city_count == len(comparison.reassigned_city_ids)
+
+    wrong_server_ref = server.ComparableResourceRef(
+        server="another_provider",
+        uri=facility_ref.uri,
+        resource_schema="facility_location_solution.v3",
+    )
+    with pytest.raises(McpResourceContractError, match="resource_server_mismatch"):
+        server.assess_facility_change(
+            prepared_ref,
+            route_ref,
+            wrong_server_ref,
+            ScenarioSpec(
+                remove_warehouse_ids=[BEKASI_ID],
+                objective="min_time",
+                service_targets=[12],
+            ),
+            ctx,
+        )
+
+    with pytest.raises(
+        McpResourceContractError,
+        match="min_cost_scenario_requires_cost_matrix",
+    ):
+        server.assess_facility_change(
+            prepared_ref,
+            route_ref,
+            server.ComparableResourceRef.model_validate(facility_ref.model_dump()),
+            ScenarioSpec(
+                remove_warehouse_ids=[BEKASI_ID],
+                objective="min_cost",
+                service_targets=[12],
+            ),
+            ctx,
         )
 
 

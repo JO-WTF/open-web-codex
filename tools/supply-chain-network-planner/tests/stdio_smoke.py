@@ -120,6 +120,7 @@ async def smoke() -> None:
                     "prepare_network_comparison_map",
                     "prepare_network_distribution_map",
                     "evaluate_network_baseline",
+                    "assess_facility_change",
                     "evaluate_facility_scenario",
                     "solve_p_median",
                     "compare_network_scenarios",
