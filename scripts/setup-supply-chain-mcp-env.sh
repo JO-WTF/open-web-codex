@@ -9,6 +9,8 @@ log_dir="${OPEN_WEB_CODEX_LOG_DIR:-$data_dir/logs}"
 venv_dir="${OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV:-$data_dir/tool-envs/supply-chain-network-planner}"
 log_file="${OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_SETUP_LOG:-$log_dir/supply-chain-mcp-env.log}"
 python_cmd="${PYTHON:-python3}"
+dependency_manifest="$tools_root/pyproject.toml"
+dependency_stamp="$venv_dir/.open-web-codex-pyproject.cksum"
 
 mkdir -p "$log_dir" "$(dirname "$venv_dir")"
 
@@ -21,9 +23,20 @@ run_logged() {
   "$@" >>"$log_file" 2>&1
 }
 
-check_imports() {
-  PYTHONPATH="$tools_root" "$venv_dir/bin/python" - <<'PY' >>"$log_file" 2>&1
+manifest_fingerprint() {
+  cksum "$dependency_manifest" | awk '{print $1 ":" $2}'
+}
+
+manifest_stamp_matches() {
+  [[ -r "$dependency_stamp" ]] && [[ "$(<"$dependency_stamp")" == "$dependency_fingerprint" ]]
+}
+
+check_environment() {
+  if ! PYTHONPATH="$tools_root" "$venv_dir/bin/python" - <<'PY' >>"$log_file" 2>&1
 try:
+    from importlib.metadata import version
+
+    version("open-web-codex-supply-chain-network-planner")
     import mcp  # noqa: F401
     import pydantic  # noqa: F401
     import supply_chain_planner.data_server  # noqa: F401
@@ -33,6 +46,10 @@ except Exception as exc:
     raise SystemExit(1)
 print("supply-chain MCP imports ok")
 PY
+  then
+    return 1
+  fi
+  "$venv_dir/bin/python" -m pip check >>"$log_file" 2>&1
 }
 
 log "supply-chain MCP environment setup starting"
@@ -45,6 +62,11 @@ command -v "$python_cmd" >/dev/null 2>&1 || {
   exit 127
 }
 run_logged "$python_cmd" --version
+[[ -f "$dependency_manifest" ]] || {
+  log "dependency manifest not found: $dependency_manifest"
+  exit 66
+}
+dependency_fingerprint="$(manifest_fingerprint)"
 
 if [[ ! -x "$venv_dir/bin/python" ]]; then
   log "creating shared supply-chain MCP virtualenv"
@@ -54,14 +76,23 @@ else
 fi
 
 run_logged "$venv_dir/bin/python" -m pip --version
-if [[ "${OPEN_WEB_CODEX_REFRESH_SUPPLY_CHAIN_MCP_ENV:-0}" == "1" ]] || ! check_imports
-then
+refresh_reason=""
+if [[ "${OPEN_WEB_CODEX_REFRESH_SUPPLY_CHAIN_MCP_ENV:-0}" == "1" ]]; then
+  refresh_reason="explicit refresh requested"
+elif ! manifest_stamp_matches; then
+  refresh_reason="dependency manifest changed or was not previously recorded"
+elif ! check_environment; then
+  refresh_reason="installed environment does not satisfy declared dependencies"
+fi
+if [[ -n "$refresh_reason" ]]; then
+  log "$refresh_reason"
   log "installing or refreshing supply-chain MCP dependencies"
   run_logged "$venv_dir/bin/python" -m pip install --disable-pip-version-check -e "$tools_root"
 else
-  log "supply-chain MCP dependencies already import successfully"
+  log "supply-chain MCP dependencies already satisfy the current manifest"
 fi
-log "verifying supply-chain MCP imports after setup"
-check_imports
+log "verifying supply-chain MCP environment after setup"
+check_environment
+printf '%s\n' "$dependency_fingerprint" >"$dependency_stamp"
 log "supply-chain MCP environment setup complete"
 printf '%s\n' "$venv_dir"

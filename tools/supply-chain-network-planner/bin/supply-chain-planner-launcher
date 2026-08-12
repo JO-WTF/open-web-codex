@@ -47,15 +47,34 @@ fi
 
 export PYTHONPATH="$root_dir${PYTHONPATH:+:$PYTHONPATH}"
 
-if ! "$python_bin" -c 'import mcp, pydantic, supply_chain_planner.server' >/dev/null 2>&1; then
+check_runtime_environment() {
+  if ! "$python_bin" - <<'PY' >/dev/null 2>&1
+from importlib.metadata import version
+
+version("open-web-codex-supply-chain-network-planner")
+import mcp
+import pydantic
+import supply_chain_planner.server
+PY
+  then
+    return 1
+  fi
+  "$python_bin" -m pip check >/dev/null 2>&1
+}
+
+if ! check_runtime_environment; then
   if [[ "${SUPPLY_CHAIN_MCP_AUTO_INSTALL:-0}" != "1" ]]; then
     cat >&2 <<EOF
-supply-chain-network-planner: dependencies are not installed in $venv_dir
+supply-chain-network-planner: the environment does not satisfy dependencies declared in pyproject.toml: $venv_dir
 supply-chain-network-planner: run bin/setup-env or set SUPPLY_CHAIN_MCP_AUTO_INSTALL=1 for manual development.
 EOF
     exit 70
   fi
   "$python_bin" -m pip install --disable-pip-version-check -e "$root_dir" >&2
+  if ! check_runtime_environment; then
+    printf 'supply-chain-network-planner: dependency verification failed after installation\n' >&2
+    exit 70
+  fi
 fi
 
 log "starting server module=$server_module cwd=$(pwd) root_dir=$root_dir"
