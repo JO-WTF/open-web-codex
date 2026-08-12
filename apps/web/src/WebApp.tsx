@@ -112,6 +112,29 @@ type ThreadTranscriptCacheEntry = {
   turnStartedAt: number | null;
 };
 
+const ACTIVE_WORKSPACE_SESSION_KEY = "open-web-codex:active-workspace:v1";
+const activeThreadSessionKey = (workspaceId: string) =>
+  `open-web-codex:active-thread:v1:${workspaceId}`;
+
+function readSessionSelection(key: string): string | null {
+  try {
+    const value = window.sessionStorage.getItem(key)?.trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionSelection(key: string, value: string | null) {
+  try {
+    if (value) window.sessionStorage.setItem(key, value);
+    else window.sessionStorage.removeItem(key);
+  } catch {
+    // Session selection is a disposable Browser projection. Runtime and
+    // Platform state remain authoritative when storage is unavailable.
+  }
+}
+
 function parseThreadStatus(value: unknown): string {
   if (typeof value === "string") return value;
   if (value && typeof value === "object") {
@@ -459,6 +482,12 @@ export default function WebApp() {
   useEffect(() => {
     localStorage.setItem("open-web-codex:theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (activeWorkspaceId) {
+      writeSessionSelection(ACTIVE_WORKSPACE_SESSION_KEY, activeWorkspaceId);
+    }
+  }, [activeWorkspaceId]);
 
   useEffect(() => {
     const narrowScreen = window.matchMedia("(max-width: 760px)");
@@ -1957,8 +1986,20 @@ export default function WebApp() {
     setBusy(true);
     try {
       const next = await client.listWorkspaces();
+      const stored = readSessionSelection(ACTIVE_WORKSPACE_SESSION_KEY);
+      const storedIsAuthorized = Boolean(
+        stored && next.some((workspace) => workspace.id === stored),
+      );
+      if (stored && !storedIsAuthorized) {
+        writeSessionSelection(ACTIVE_WORKSPACE_SESSION_KEY, null);
+        writeSessionSelection(activeThreadSessionKey(stored), null);
+      }
       setWorkspaces(next);
-      setActiveWorkspaceId((cur) => cur ?? next[0]?.id ?? null);
+      setActiveWorkspaceId((current) => {
+        if (current && next.some((workspace) => workspace.id === current)) return current;
+        if (stored && storedIsAuthorized) return stored;
+        return next[0]?.id ?? null;
+      });
     } catch (error) {
       appendLog("error", error instanceof Error ? error.message : String(error));
     } finally {
@@ -2099,10 +2140,12 @@ export default function WebApp() {
       });
       if (activeWorkspaceId === workspaceId) {
         setActiveWorkspaceId(null);
+        writeSessionSelection(ACTIVE_WORKSPACE_SESSION_KEY, null);
         activeThreadIdRef.current = null;
         setActiveThreadId(null);
         setMessages([]);
       }
+      writeSessionSelection(activeThreadSessionKey(workspaceId), null);
       await refreshWorkspaces();
     } catch (error) {
       appendLog("error", error instanceof Error ? error.message : String(error));
@@ -2225,6 +2268,7 @@ export default function WebApp() {
      // may resolve in any order without stealing the currently selected Thread.
      if (activeThreadIdRef.current === temporaryId) {
        activeThreadIdRef.current = tid;
+       writeSessionSelection(activeThreadSessionKey(wid), tid);
        setActiveThreadId(tid);
        setMessages([]);
        setTokenUsage(null);
@@ -2270,6 +2314,7 @@ export default function WebApp() {
       }));
       if (activeThreadId === threadId) {
         activeThreadIdRef.current = null;
+        writeSessionSelection(activeThreadSessionKey(workspaceId), null);
         setActiveThreadId(null);
         setMessages([]);
         setThreadStatus("idle");
@@ -2530,6 +2575,12 @@ export default function WebApp() {
     const hydrationSequence = threadHydrationSequence.current + 1;
     threadHydrationSequence.current = hydrationSequence;
     activeThreadIdRef.current = id;
+    const selected = activeWorkspaceId
+      ? (threadsByWorkspace[activeWorkspaceId] ?? []).find((thread) => thread.id === id)
+      : undefined;
+    if (activeWorkspaceId && selected) {
+      writeSessionSelection(activeThreadSessionKey(activeWorkspaceId), id);
+    }
     // Thread selection is a single visual state transition. Do not let the new
     // transcript inherit live-turn state from the previously selected Thread,
     // otherwise its last historical Turn renders expanded for one frame.
@@ -2537,9 +2588,6 @@ export default function WebApp() {
     setThreadStatus("idle");
     setTurnStartedAt(null);
     setActiveThreadId(id);
-    const selected = activeWorkspaceId
-      ? (threadsByWorkspace[activeWorkspaceId] ?? []).find((thread) => thread.id === id)
-      : undefined;
     const threadProvider = selected?.modelProvider ?? null;
     const threadModel = selected?.model ?? null;
     activeThreadModelSelectionRef.current = threadProvider && threadModel
@@ -2674,6 +2722,20 @@ export default function WebApp() {
       revealHydratedThread();
     }
   }, [activeWorkspaceId, client, modelProviders, threadsByWorkspace]);
+
+  useEffect(() => {
+    const workspaceId = activeWorkspaceId;
+    if (!workspaceId || activeThreadId || activeThreadIdRef.current) return;
+    const listedThreads = threadsByWorkspace[workspaceId];
+    if (!listedThreads) return;
+    const storedThreadId = readSessionSelection(activeThreadSessionKey(workspaceId));
+    if (!storedThreadId) return;
+    if (!listedThreads.some((thread) => thread.id === storedThreadId)) {
+      writeSessionSelection(activeThreadSessionKey(workspaceId), null);
+      return;
+    }
+    void selectThread(storedThreadId);
+  }, [activeThreadId, activeWorkspaceId, selectThread, threadsByWorkspace]);
 
   /* ─── Render ─── */
 

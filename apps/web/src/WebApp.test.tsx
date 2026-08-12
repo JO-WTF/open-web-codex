@@ -1310,6 +1310,106 @@ describe("WebApp workspace-first messaging", () => {
     expect(view.container.querySelector(".web-ws-thread-active")).toBeNull();
   });
 
+  it("restores the selected root Thread and its replayed child approval after remount", async () => {
+    const rootAgent = {
+      run_id: "run-enterprise",
+      thread_id: "thread-root",
+      parent_thread_id: null,
+      source_kind: "root",
+      agent_path: null,
+      agent_nickname: null,
+      agent_role: null,
+      status_type: "active",
+      active_flags: [],
+      is_root: true,
+      first_observed_at: "2026-07-26T00:00:01Z",
+      last_observed_at: "2026-07-26T00:00:01Z",
+    };
+    const dataAgent = {
+      ...rootAgent,
+      thread_id: "thread-data",
+      parent_thread_id: "thread-root",
+      source_kind: "thread_spawn",
+      agent_nickname: "Data Analyst",
+      agent_role: "data_agent",
+      is_root: false,
+    };
+    client.listThreads.mockResolvedValue({
+      data: [{
+        id: "thread-root",
+        name: "Supervisor case",
+        cwd: "/tmp/demo",
+        status: "active",
+        updatedAt: "2026-07-26T00:00:02Z",
+      }],
+    });
+    client.getSupervisorOverview.mockResolvedValue({
+      taskTitle: "Enterprise network planning",
+      policy: null,
+      agents: [rootAgent, dataAgent],
+      activities: [],
+      executions: [],
+      artifacts: [],
+    });
+
+    const first = render(<WebApp />);
+    fireEvent.click(await screen.findByText("Supervisor case"));
+    await waitFor(() => expect(window.sessionStorage.getItem(
+      "open-web-codex:active-thread:v1:workspace-1",
+    )).toBe("thread-root"));
+    first.unmount();
+
+    render(<WebApp />);
+    act(() => {
+      appServerEventHandler?.({
+        workspace_id: "workspace-1",
+        message: {
+          method: "item/commandExecution/requestApproval",
+          id: "approval-child-restored",
+          params: {
+            threadId: "thread-data",
+            turnId: "turn-data",
+            serverName: "supply_chain_data",
+            command: "Allow supply_chain_data to publish the report?",
+          },
+        },
+      });
+    });
+
+    await waitFor(() => expect(client.listThreadTurns).toHaveBeenCalledWith(
+      "workspace-1",
+      "thread-root",
+    ));
+    await waitFor(() => expect(client.getSupervisorOverview).toHaveBeenCalledWith("thread-root"));
+    const taskQueue = await screen.findByRole("region", { name: "Task approvals" });
+    expect(taskQueue.textContent).toContain("Data Analyst");
+    expect(within(taskQueue).getByRole("button", { name: "Accept" })).toBeTruthy();
+  });
+
+  it("clears a stored Thread that is not in the authorized Workspace listing", async () => {
+    window.sessionStorage.setItem("open-web-codex:active-workspace:v1", "workspace-1");
+    window.sessionStorage.setItem(
+      "open-web-codex:active-thread:v1:workspace-1",
+      "thread-missing",
+    );
+    client.listThreads.mockResolvedValue({
+      data: [{
+        id: "thread-first",
+        name: "First thread",
+        cwd: "/tmp/demo",
+        updatedAt: Date.now(),
+      }],
+    });
+
+    const view = render(<WebApp />);
+    await screen.findByText("First thread");
+    await waitFor(() => expect(window.sessionStorage.getItem(
+      "open-web-codex:active-thread:v1:workspace-1",
+    )).toBeNull());
+    expect(view.container.querySelector(".web-ws-thread-active")).toBeNull();
+    expect(client.listThreadTurns).not.toHaveBeenCalled();
+  });
+
   it("converges an interrupted replayed Turn to the Runtime Thread idle status", async () => {
     client.listThreads.mockResolvedValue({
       data: [{
