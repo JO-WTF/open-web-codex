@@ -1,4 +1,0 @@
-interface:
-  display_name: "Create Demo Workspace Data"
-  short_description: "Generate explicit synthetic warehouse-network source files."
-  default_prompt: "After the planning data requirements are confirmed, create the reviewed synthetic warehouse-network source set and continue through the normal intake checkpoints."

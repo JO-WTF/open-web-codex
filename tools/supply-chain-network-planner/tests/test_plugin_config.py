@@ -6,7 +6,20 @@ import tomllib
 from pathlib import Path
 
 from supply_chain_planner import __version__
+from supply_chain_planner import server as network_server
 from supply_chain_planner.server import mcp as network_mcp
+
+REMOVED_CASE_ENTRYPOINTS = (
+    "create_network_case",
+    "get_network_case_status",
+    "archive_network_case",
+    "refresh_case_sources",
+    "inspect_case_sources",
+    "propose_case_mapping",
+    "apply_case_mapping",
+    "normalize_case_input",
+    "define_network_requirements",
+)
 
 
 def test_plugin_manifest_and_mcp_config_are_wired() -> None:
@@ -58,12 +71,16 @@ def test_network_server_exposes_only_network_tools() -> None:
         "solve_p_median",
         "validate_route_matrix",
     }
+    for entrypoint in REMOVED_CASE_ENTRYPOINTS:
+        assert not hasattr(network_server, entrypoint)
 
 
-def test_demo_skill_has_explicit_trigger_and_no_embedded_template() -> None:
+def test_legacy_case_skills_are_removed() -> None:
     root = Path(__file__).resolve().parents[1]
-    skill = (root / "skills" / "create-demo-workspace-data" / "SKILL.md").read_text()
-    assert "用户明确要求" in skill
-    assert "Workspace 为空" in skill
-    assert "create_demo_workspace_sources" not in skill
-    assert "demand-locations.csv" not in skill
+    for skill_name in (
+        "prepare-network-input",
+        "prepare-network-baseline",
+        "create-demo-workspace-data",
+        "validate-network-result",
+    ):
+        assert not (root / "skills" / skill_name).exists()

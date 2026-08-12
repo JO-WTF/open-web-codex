@@ -34,7 +34,6 @@ from .analysis_service import NetworkAnalysisService
 from .case_models import ArtifactRef, NetworkCase, NormalizedNetworkInput
 from .case_repository import CaseRepository, CaseRepositoryError
 from .case_tools import EvidenceSummary, SafeIssue, ToolEnvelopeBuilder
-from .case_types import AnalysisKind, CaseState
 from .core import (
     compare_scenarios,
     create_route_matrix,
@@ -58,7 +57,6 @@ from .map_service import (
     build_network_distribution_geojson,
     build_network_distribution_map_card_handoff,
 )
-from .mapping_service import CaseMappingService
 from .matrix import build_cost_matrix as _build_composable_cost_matrix
 from .matrix import build_provided_route_matrix as _build_provided_route_matrix
 from .matrix import build_route_matrix_with_reuse
@@ -101,13 +99,11 @@ from .models import (
     ValidationResult,
 )
 from .models import RouteMatrix as LegacyRouteMatrix
-from .network_data import SourceInventoryService
 from .network_models import (
     DemandCityRecord,
     NormalizedInputBatch,
     WarehouseRecord,
 )
-from .normalization import NormalizationService
 from .optimization_models import (
     AssignmentComparison,
     AssignmentResult,
@@ -121,7 +117,6 @@ from .optimization_models import (
     ServiceCoverageConstraint,
     ServiceMetric,
 )
-from .readiness import ReadinessEvaluator
 from .report_service import (
     NETWORK_PLANNING_MARKDOWN_SCHEMA,
     NetworkReportService,
@@ -130,7 +125,6 @@ from .report_service import (
     render_network_baseline_assessment_markdown,
     render_network_planning_report_markdown,
 )
-from .requirements import RequirementRequest, RequirementService
 from .resource_store import (
     PublishedResource,
     ResourceStore,
@@ -2975,343 +2969,6 @@ def _legacy_publish_network_planning_report(
                 size=published.size,
             )
         ],
-    )
-
-
-def create_network_case(
-    country_code: str,
-    intent: str,
-    ctx: Context,
-) -> CallToolResult:
-    """Create the authoritative case handle used by all planning Agents."""
-    try:
-        case = _cases().create_case(_workspace(ctx), country_code, intent)
-    except CaseRepositoryError as error:
-        return _case_error_result(error)
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        summary=f"Created Network Case {str(case.case_id)[:8]} for {case.country_code}.",
-        next_action="define_requirements_or_refresh_sources",
-    )
-
-
-def get_network_case_status(
-    case_id: str,
-    requested_analysis: list[AnalysisKind],
-    ctx: Context,
-) -> CallToolResult:
-    """Return bounded readiness and next actions without exposing business rows."""
-    try:
-        status = _cases().get_status(UUID(case_id), _workspace(ctx))
-        evaluated = ReadinessEvaluator().evaluate(status, requested_analysis)
-        case = _cases().get_case(UUID(case_id), _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        if isinstance(error, CaseRepositoryError):
-            return _case_error_result(error)
-        return _case_error_result(CaseRepositoryError("case_id_invalid", "Case id is invalid."))
-    issues = [
-        SafeIssue(
-            code=question.code,
-            severity="warning",
-            business_message=question.business_message,
-        )
-        for question in evaluated.blocking_questions
-    ]
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        summary=(
-            f"Network Case {str(case.case_id)[:8]} is revision {case.revision}; "
-            f"{len(evaluated.available_actions)} action(s) are currently available."
-        ),
-        facet_updates=evaluated.facets,
-        issues=issues,
-        next_action=(evaluated.available_actions[0] if evaluated.available_actions else None),
-    )
-
-
-def archive_network_case(case_id: str, ctx: Context) -> CallToolResult:
-    """Archive a case after every running operation is terminal."""
-    try:
-        parsed = UUID(case_id)
-        case = _cases().get_case(parsed, _workspace(ctx))
-        _cases().archive_case(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        if isinstance(error, CaseRepositoryError):
-            return _case_error_result(error)
-        return _case_error_result(CaseRepositoryError("case_id_invalid", "Case id is invalid."))
-    return ToolEnvelopeBuilder().build(
-        case=case.model_copy(update={"state": CaseState.ARCHIVED}),
-        summary=f"Archived Network Case {str(case.case_id)[:8]}.",
-    )
-
-
-def refresh_case_sources(case_id: str, ctx: Context) -> CallToolResult:
-    """Refresh CSV, JSON and XLSX inventory for a Network Case."""
-    try:
-        parsed = UUID(case_id)
-        sources, changed = SourceInventoryService(_cases()).refresh(parsed, _workspace(ctx))
-        case = _cases().get_case(parsed, _workspace(ctx))
-        status = _cases().get_status(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        if isinstance(error, CaseRepositoryError):
-            return _case_error_result(error)
-        return _case_error_result(CaseRepositoryError("case_id_invalid", "Case id is invalid."))
-    source_facet = next(item for item in status.facets if item.name.value == "sources")
-    evidence = [
-        EvidenceSummary(
-            kind="source",
-            evidence_id=str(source.source_id),
-            label=source.display_name,
-            value=source.byte_size,
-        )
-        for source in sources
-    ]
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        summary=(
-            f"Found {len(sources)} supported Workspace source(s); "
-            f"the inventory {'changed' if changed else 'is unchanged'}."
-        ),
-        facet_updates=[source_facet],
-        evidence=evidence,
-        issues=(
-            []
-            if sources
-            else [
-                SafeIssue(
-                    code="workspace_sources_missing",
-                    severity="warning",
-                    business_message="没有发现 CSV、JSON 或 XLSX 业务文件。",
-                )
-            ]
-        ),
-        next_action="inspect_case_sources" if sources else None,
-    )
-
-
-def inspect_case_sources(
-    case_id: str,
-    source_ids: list[str],
-    ctx: Context,
-) -> CallToolResult:
-    """Inspect bounded source structure without returning complete business rows."""
-    try:
-        parsed = UUID(case_id)
-        inspections = SourceInventoryService(_cases()).inspect(
-            parsed, _workspace(ctx), [UUID(value) for value in source_ids]
-        )
-        case = _cases().get_case(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        if isinstance(error, CaseRepositoryError):
-            return _case_error_result(error)
-        return _case_error_result(
-            CaseRepositoryError("source_selection_invalid", "Source selection is invalid.")
-        )
-    evidence: list[EvidenceSummary] = []
-    for inspection in inspections:
-        evidence.append(
-            EvidenceSummary(
-                kind="source",
-                evidence_id=str(inspection.source.source_id),
-                label=inspection.source.display_name,
-                value=inspection.record_count,
-            )
-        )
-        evidence.extend(
-            EvidenceSummary(
-                kind="field",
-                evidence_id=f"{inspection.source.source_id}:{field.field_name}"[:128],
-                label=field.field_name,
-                value=field.inferred_type,
-            )
-            for field in inspection.fields
-        )
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        summary=f"Inspected {len(inspections)} active Case source(s).",
-        evidence=evidence[:100],
-        next_action="propose_case_mapping",
-    )
-
-
-def propose_case_mapping(case_id: str, ctx: Context) -> CallToolResult:
-    """Produce deterministic, persisted mapping candidates for active Case sources."""
-    try:
-        parsed = UUID(case_id)
-        proposal, result = CaseMappingService(_cases()).propose(parsed, _workspace(ctx))
-        case = _cases().get_case(parsed, _workspace(ctx))
-        status = _cases().get_status(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        if isinstance(error, CaseRepositoryError):
-            return _case_error_result(error)
-        return _case_error_result(
-            CaseRepositoryError("mapping_proposal_failed", "Source mapping could not be proposed.")
-        )
-    evidence = [
-        EvidenceSummary(
-            kind="mapping_candidate",
-            evidence_id=candidate.candidate_id,
-            label=(
-                f"{role.source_name}: {candidate.source_field} -> "
-                f"{candidate.target_entity}.{candidate.target_field}"
-            ),
-            value=candidate.transform.kind.value,
-        )
-        for role in proposal.proposals
-        for candidate in role.field_candidates
-    ]
-    ambiguous = [role for role in proposal.proposals if role.ambiguous]
-    mapping_facet = next(item for item in status.facets if item.name.value == "mapping")
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        operation=result.operation,
-        summary=(
-            f"Proposed {len(evidence)} field mappings across "
-            f"{len(proposal.proposals)} source role candidate(s)."
-        ),
-        facet_updates=[mapping_facet],
-        evidence=evidence[:100],
-        issues=[
-            SafeIssue(
-                code="mapping_role_ambiguous",
-                severity="warning",
-                business_message=(f"{role.source_name} 可能对应多个业务数据角色，需要确认。"),
-            )
-            for role in ambiguous[:20]
-        ],
-        next_action="request_mapping_confirmation" if ambiguous else "apply_case_mapping",
-    )
-
-
-def apply_case_mapping(
-    case_id: str,
-    candidate_ids: list[str],
-    ctx: Context,
-) -> CallToolResult:
-    """Apply only previously persisted mapping candidate IDs."""
-    try:
-        parsed = UUID(case_id)
-        component = CaseMappingService(_cases()).apply(parsed, _workspace(ctx), candidate_ids)
-        case = _cases().get_case(parsed, _workspace(ctx))
-        status = _cases().get_status(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        if isinstance(error, CaseRepositoryError):
-            return _case_error_result(error)
-        return _case_error_result(
-            CaseRepositoryError("mapping_selection_invalid", "Mapping selection is invalid.")
-        )
-    mapping_facet = next(item for item in status.facets if item.name.value == "mapping")
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        summary=f"Applied {component.row_count} persisted mapping candidate(s).",
-        facet_updates=[mapping_facet],
-        next_action="normalize_case_input",
-    )
-
-
-def normalize_case_input(case_id: str, ctx: Context) -> CallToolResult:
-    """Normalize full source rows server-side using the persisted mapping selection."""
-    try:
-        parsed = UUID(case_id)
-        batch, result = NormalizationService(_cases()).normalize(parsed, _workspace(ctx))
-        case = _cases().get_case(parsed, _workspace(ctx))
-        status = _cases().get_status(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError) as error:
-        if isinstance(error, CaseRepositoryError):
-            return _case_error_result(error)
-        return _case_error_result(
-            CaseRepositoryError("normalization_failed", "Network input normalization failed.")
-        )
-    facets = [
-        facet
-        for facet in status.facets
-        if facet.name.value in {"normalized_input", "current_assignment", "geography"}
-    ]
-    issues = [
-        SafeIssue(
-            code=issue.code,
-            severity=issue.severity,
-            business_message=issue.business_message,
-        )
-        for issue in batch.issues
-    ]
-    counts = {
-        "demand": len(batch.demand_cities),
-        "warehouses": len(batch.warehouses),
-        "current_assignments": len(batch.current_assignments),
-        "route_quotes": len(batch.route_quotes),
-    }
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        operation=result.operation if result else None,
-        summary=(
-            "Normalized Case input: "
-            + ", ".join(f"{name}={count}" for name, count in counts.items())
-            + "."
-        ),
-        facet_updates=facets,
-        issues=issues,
-        evidence=[
-            EvidenceSummary(
-                kind="metric",
-                evidence_id=f"normalized:{name}",
-                label=name,
-                value=count,
-            )
-            for name, count in counts.items()
-        ],
-        next_action="resolve_case_geography"
-        if any(facet.name.value == "geography" and facet.state.value != "ready" for facet in facets)
-        else "plan_route_matrix",
-    )
-
-
-def define_network_requirements(
-    case_id: str,
-    requested_analyses: list[AnalysisKind],
-    assignment_objective: Literal["min_time", "min_cost"] | None,
-    service_target_hours: list[float],
-    driver_hours_per_day: float | None,
-    ctx: Context,
-) -> CallToolResult:
-    """Persist the business requirements for the current question."""
-    try:
-        parsed = UUID(case_id)
-        request = RequirementRequest(
-            requested_analyses=requested_analyses,
-            assignment_objective=assignment_objective,
-            service_target_hours=service_target_hours,
-            driver_hours_per_day=driver_hours_per_day,
-        )
-        profile, result = RequirementService(_cases()).define(parsed, _workspace(ctx), request)
-        case = _cases().get_case(parsed, _workspace(ctx))
-        status = _cases().get_status(parsed, _workspace(ctx))
-    except (CaseRepositoryError, ValueError, ValidationError) as error:
-        if isinstance(error, CaseRepositoryError):
-            return _case_error_result(error)
-        return _case_error_result(
-            CaseRepositoryError("requirements_invalid", "Network requirements are invalid.")
-        )
-    facet = next(item for item in status.facets if item.name.value == "requirements")
-    evidence = [
-        EvidenceSummary(
-            kind="parameter",
-            evidence_id=f"required:{entity}",
-            label=entity,
-            value=True,
-        )
-        for entity in profile.required_entities
-    ]
-    return ToolEnvelopeBuilder().build(
-        case=case,
-        operation=result.operation,
-        summary=(
-            f"Defined {len(profile.required_entities)} required and "
-            f"{len(profile.optional_entities)} optional business data entities."
-        ),
-        facet_updates=[facet],
-        evidence=evidence,
-        next_action="refresh_case_sources",
     )
 
 
