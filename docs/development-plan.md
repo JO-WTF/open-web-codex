@@ -4,11 +4,11 @@
 | --- | --- |
 | 文档性质 | 当前与下一里程碑的执行计划 |
 | 更新日期 | 2026-08-12 |
-| 当前阶段 | 阶段一：内置仓网 Copilot 架构纠偏与完整运行闭环 |
-| 当前状态 | 正常业务主链完成；后续进入 hardening 与阶段二 |
+| 当前阶段 | 阶段二：公开 SDK 与 Web 创作体验；先收敛真实运行体验与执行效率 |
+| 当前状态 | 阶段一正常业务主链完成；阶段二首个运行体验切片实施中 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018 已接受并作为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
-| 后续阶段 | 公开 SDK、Studio、Marketplace、第二领域和多用户产品流程 |
+| 阶段二后续 | 公开 SDK、Studio、Marketplace 与第二领域；多用户产品流程属于阶段三 |
 
 本文记录阶段一已完成的正常业务主链、仍有效的边界和后续工作。用户心智统一为：
 
@@ -18,6 +18,24 @@
 Workspace 下的 Task 可按用户意图复用普通文件，也可通过同一授权 MCP provider 的精确
 Resource ref 复用中间数据。保存什么、读取什么、怎样复用、裁剪、合并或覆盖，由用户
 要求、Skill 和 Tool 决定，Platform 不理解仓网数据语义。
+
+## 0. 阶段二当前切片：运行体验与低延迟领域操作
+
+阶段二已经开始，但不从旧 Catalog/Work State 方案恢复实现。当前先处理真实用户运行中已经
+测量到的两个普通问题：Agent activity/等待状态需要可理解，简单仓网 follow-up 的领域计算只有
+毫秒级，却因多个模型回合和重复 child history 变成分钟级。当前修复保持以下边界：
+
+1. 设施增减搬迁的单次影响评估由供应链 MCP domain owner 提供一个 typed 粗粒度 Tool；它以
+   exact before result 为基座，一次求解后直接比较，并返回同次调用产生的 scenario/comparison
+   refs 和有界成本、覆盖、城市变更结果。
+2. Supervisor 拥有 child 使用策略：handoff 已完整结构化时使用 `fork_turns=none` 的新有界
+   Network child；只有正确性依赖尚未结构化的旧对话时才 same-child follow-up。
+3. 不新增 Platform workflow、handoff ledger、业务缓存、自动重试、固定案例流程或 Codex seam。
+4. 先以 Python/stdio/Role/Skill 合同证明结果不变，再用用户原始 follow-up 请求做真实 Web 计时；
+   记录 Tool 时间、模型调用数、输入 token 和总墙钟时间，不在测量前伪造性能承诺。
+
+这一切片不会替代阶段二公开 SDK/Web 创作的退出条件；它先把现有 built-in 正常使用体验变成
+可观察、可解释且不会因完整旧 child 历史持续膨胀的基线。
 
 ## 1. 阶段目标与边界
 
@@ -280,7 +298,7 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
    owning-layer 适配，包括把官方 child Thread/Turn/Item 生命周期投影为可追踪的 Agent activity；
    不建立第二 Runtime、第二上下文、第二执行日志或固定业务流程。
 3. **C — 通用可组合 Tools。** 统一 `supply_chain` provider 和单一 `ResourceRef`，Data4 已完成
-   strict inspect→confirmed-normalize→optional-geography active surface；Network14 active surface
+   strict inspect→confirmed-normalize→optional-geography active surface；Network15 active surface
    已完成 provided/haversine/navigation 路线、route/cost pair-level 复用、双覆盖口径以及 final
    地图卡片、map 文件与单份中文 Markdown 简报的最小交付合同；正文只显示关键结论和 durable Artifact 授权下载链接，不复制整份简报。Stage E non-active compatibility tail 已完成尾删，后续只维护
    Platform 业务状态。
@@ -549,7 +567,7 @@ Runtime history 和 Artifact 权威记录重建浏览器视图。
    MCP Resource，普通文件只走授权 Workspace。
 3. Runtime 原生 discovery/reload、多 Agent、approval、history 与 Workspace metadata 被真实使用；
    pending approval 的整页刷新恢复通过。
-4. Data4/Network14、双覆盖口径、完整规划与场景复用通过 typed 测试、stdio 和 Web 证据。
+4. Data4/Network15、双覆盖口径、完整规划与场景复用通过 typed 测试、stdio 和 Web 证据。
 5. 旧重型路径已从 active 代码、数据库、测试和当前文档删除。
 6. clean DB/Profile/Workspace 从当前 schema/config 初始化成功。
 

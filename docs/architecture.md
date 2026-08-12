@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档性质 | 当前事实 |
 | 快照日期 | 2026-08-12 |
-| 代码快照 | HEAD `073919814` |
+| 代码快照 | HEAD `ca2d29f12` |
 | 当前阶段边界 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 与 [开发计划](development-plan.md) |
 | 接受决策 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
 
@@ -47,7 +47,7 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | Capability Draft/Release/Installation | 无当前生产 owner | Catalog/Studio/Python publish crate、route、DTO、client、UI 与无 owner 数据表均已删除，不参与启动或 readiness |
 | Work State 与 Platform coordination | 无当前 production owner | work-state-service、route、MCP、gate、schema 与第二控制面已由 Slice 4B.2-A 删除；不建设替代状态机 |
 | Data Intake | 无当前 owner | 生产 route、validation crate、SourceAsset/Dataset/Task binding 表与产品入口已删除；阶段一不建设替代状态机 |
-| 仓网规划能力 | 供应链 Python 包的 domain owners | 当前阶段统一拥有 demand/facility/candidate/location/lane/route/cost records，Data mapping/normalization/geography，route/cost fact 与 matrix build/validate/partial reuse，actual/optimized baseline、open/close/relocation scenario、assignment/service/cost evaluation、p-median、before/after comparison、卡片数据和确定性 Markdown 简报；报告输入以 discriminated typed contract 区分单一 baseline 评估和完整 baseline-versus-plan comparison，不为交付伪造方案结果。结构化计算结果与业务简报分离，不拥有通用 Resource/Workspace infrastructure。Stage E 已删除 Case/NetworkSnapshot/source_ref/ArtifactRef 与多层 hashes 旧偏离。未来若第二个供应链 Copilot 证明存在稳定公共领域合同，再评估内部提取，不在阶段一新增实现层 |
+| 仓网规划能力 | 供应链 Python 包的 domain owners | 当前阶段统一拥有 demand/facility/candidate/location/lane/route/cost records，Data mapping/normalization/geography，route/cost fact 与 matrix build/validate/partial reuse，actual/optimized baseline、open/close/relocation scenario、assignment/service/cost evaluation、p-median、before/after comparison、卡片数据和确定性 Markdown 简报。单次增仓、关仓或搬迁评估可由一个 domain Tool 以 exact before result 为基座完成一次求解和比较，并在同一调用中返回 scenario/comparison exact refs 与有界成本、覆盖和城市变更指标；它不引入 Platform workflow、缓存或第二份业务状态。报告输入以 discriminated typed contract 区分单一 baseline 评估和完整 baseline-versus-plan comparison，不为交付伪造方案结果。结构化计算结果与业务简报分离，不拥有通用 Resource/Workspace infrastructure。Stage E 已删除 Case/NetworkSnapshot/source_ref/ArtifactRef 与多层 hashes 旧偏离。未来若第二个供应链 Copilot 证明存在稳定公共领域合同，再评估内部提取 |
 
 Codex Runtime 仍是模型可见对话状态的唯一权威。Platform events、execution、activity
 和协作状态都是投影，不应成为第二个 Thread、Memory 或 Supervisor。
@@ -130,6 +130,12 @@ presentation state 保存；reload 后必须先用授权 Workspace/Thread 列表
 `selectThread` 恢复 official history、Agent activity、overview 和 durable pending approval。
 2026-08-12 的真实 Web 门在 final report approval pending 时刷新，恢复了同一 Root Thread 和
 唯一可操作 approval，接受后原 Network child 继续完成唯一 Markdown Artifact。
+
+Supervisor 的延续策略仍由 Skill 拥有：当一次后续分析已经有完整 exact Resource refs、全部
+普通业务参数、用户许可和交付要求时，使用 `fork_turns=none` 的新有界 child，避免把前一轮
+完整模型历史重复送入 Provider；只有正确性确实依赖尚未结构化的原 child 判断时才使用同 child
+follow-up。缺少当前 Tool 的 required input 时返回 typed `needs_context`，不由 Platform 搜索或
+重建 Resource，也不增加持久 handoff/ledger。
 
 ## 5. 当前文件、Resource 与旧数据边界
 
