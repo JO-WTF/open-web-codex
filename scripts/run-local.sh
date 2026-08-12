@@ -133,6 +133,15 @@ show_failure_log() {
   tail -n 40 "$launcher_log" >&2 || true
 }
 
+cargo_progress_width() {
+  local width="${CARGO_TERM_PROGRESS_WIDTH:-}"
+  if [[ "$width" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s' "$width"
+  else
+    printf '120'
+  fi
+}
+
 run_step() {
   local stream_output="0"
   if [[ "${1:-}" == "--stream-output" ]]; then
@@ -153,7 +162,10 @@ run_step() {
   fi
 
   if [[ "$stream_output" == "1" && "$is_tty" == "1" ]]; then
-    if CARGO_TERM_PROGRESS_WHEN=always "$@" 2>&1 | tee -a "$launcher_log"; then
+    local progress_width
+    progress_width="$(cargo_progress_width)"
+    if CARGO_TERM_PROGRESS_WHEN=always \
+      CARGO_TERM_PROGRESS_WIDTH="$progress_width" "$@" 2>&1 | tee -a "$launcher_log"; then
       result=0
     else
       pipeline_status=("${PIPESTATUS[@]}")
@@ -194,6 +206,21 @@ run_step() {
   fi
   show_failure_log
   return "$result"
+}
+
+run_progress_test() {
+  local command_path="${OPEN_WEB_CODEX_RUN_LOCAL_TEST_COMMAND:-}"
+  [[ -x "$command_path" ]] || {
+    error "OPEN_WEB_CODEX_RUN_LOCAL_TEST_COMMAND must name an executable"
+    return 2
+  }
+  is_tty="1"
+  launcher_log="/dev/null"
+  if [[ "${OPEN_WEB_CODEX_RUN_LOCAL_TEST_STREAM:-1}" == "1" ]]; then
+    run_step --stream-output "progress environment test" "$command_path"
+  else
+    run_step "non-stream environment test" "$command_path"
+  fi
 }
 
 while (($# > 0)); do
@@ -242,6 +269,11 @@ while (($# > 0)); do
   esac
   shift
 done
+
+if [[ "${OPEN_WEB_CODEX_RUN_LOCAL_TEST:-}" == "progress" ]]; then
+  run_progress_test
+  exit $?
+fi
 
 case "$skip_build" in 0|1) ;; *) error "OPEN_WEB_CODEX_SKIP_BUILD must be 0 or 1"; exit 2 ;; esac
 case "$codex_mode" in real|fake) ;; *) error "CODEX_MODE must be real or fake"; exit 2 ;; esac
