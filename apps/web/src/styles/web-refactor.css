@@ -3061,7 +3061,7 @@ body:has(.web-app-shell) {
 .web-composer-chip-button[aria-expanded="true"] { color: #eef3fb; background: rgb(255 255 255 / 9%); }
 .web-model-catalog {
   position: absolute;
-  z-index: 40;
+  z-index: 41;
   bottom: calc(100% + 8px);
   left: 0;
   width: min(640px, calc(100vw - 32px));

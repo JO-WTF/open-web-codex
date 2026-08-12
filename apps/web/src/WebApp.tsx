@@ -444,6 +444,7 @@ export default function WebApp() {
   const [currentProviderId, setCurrentProviderId] = useState<string | null>(null);
   const [providerModels, setProviderModels] = useState<ModelSummary[]>([]);
   const [selectedProviderModelId, setSelectedProviderModelId] = useState<string | null>(null);
+  const [providerCatalogOpenRequest, setProviderCatalogOpenRequest] = useState(0);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const activeThreadModelSelectionRef = useRef<{
@@ -485,11 +486,10 @@ export default function WebApp() {
   const client = useMemo(() => new CodexMonitorWebClient({ baseUrl, token }), [baseUrl, token]);
 
   const refreshModelCatalog = useCallback(async () => {
-    if (!activeWorkspaceId) return;
     setCatalogLoading(true);
     setCatalogError(null);
     try {
-      const providerResponse = await client.listModelProviders(activeWorkspaceId);
+      const providerResponse = await client.listModelProviders();
       const catalog = parseModelProviderCatalog(providerResponse);
       const next = projectModelCatalogState(
         catalog,
@@ -500,12 +500,16 @@ export default function WebApp() {
       setCurrentProviderId(next.currentProviderId);
       setProviderModels(next.providerModels);
       setSelectedProviderModelId(next.selectedProviderModelId);
+      if (!next.currentProviderId || !next.selectedProviderModelId) {
+        setCatalogError("Select a Provider and model before starting.");
+        setProviderCatalogOpenRequest((request) => request + 1);
+      }
     } catch (error) {
-      setCatalogError(error instanceof Error ? error.message : String(error));
+      setCatalogError("Unable to load Provider settings. Try again.");
     } finally {
       setCatalogLoading(false);
     }
-  }, [activeWorkspaceId, client]);
+  }, [client]);
 
   const persistThreadModelSelection = useCallback(async (
     workspaceId: string,
@@ -535,7 +539,7 @@ export default function WebApp() {
     setCatalogLoading(true);
     setCatalogError(null);
     try {
-      await client.writeModelProvider(workspaceId, { action: "select", id: providerId });
+      await client.writeModelProvider({ action: "select", id: providerId });
       switched = true;
       const modelResponse = await client.listModels(workspaceId);
       const nextModels = parseModelListResponse(modelResponse);
@@ -557,7 +561,7 @@ export default function WebApp() {
     } catch (error) {
       if (switched && previousProviderId && previousProviderId !== providerId) {
         try {
-          await client.writeModelProvider(workspaceId, {
+          await client.writeModelProvider({
             action: "select",
             id: previousProviderId,
           });
@@ -604,7 +608,7 @@ export default function WebApp() {
     setCurrentProviderId(null);
     setCatalogError(null);
     activeThreadModelSelectionRef.current = null;
-    if (activeWorkspaceId) void refreshModelCatalog();
+    void refreshModelCatalog();
   }, [activeWorkspaceId, refreshModelCatalog]);
 
   useEffect(() => {
@@ -2114,10 +2118,16 @@ export default function WebApp() {
  ): Promise<string | null> => {
    const wid = workspaceId ?? activeWorkspaceId;
    if (!wid) return null;
-   const providerId = currentProviderId ?? "";
-   const modelId = providerModels.find(
+   const selectedModel = providerModels.find(
      (model) => model.id === selectedProviderModelId,
-   )?.model ?? selectedProviderModelId ?? "";
+   );
+   if (!currentProviderId || !selectedModel) {
+     setCatalogError("Select a Provider and model before starting.");
+     setProviderCatalogOpenRequest((request) => request + 1);
+     return null;
+   }
+   const providerId = currentProviderId;
+   const modelId = selectedModel.model;
    const temporaryId = retryTemporaryId
      ?? `pending-thread:${newLogId()}`;
    const startedAt = Date.now();
@@ -2868,12 +2878,11 @@ export default function WebApp() {
           catalogError={catalogError}
           onRefreshCatalog={() => { void refreshModelCatalog(); }}
           onWriteProvider={async (input) => {
-            if (!activeWorkspaceId) return;
             setCatalogLoading(true);
             setCatalogError(null);
             const action = typeof input.action === "string" ? input.action : "upsert";
             try {
-              const response = await client.writeModelProvider(activeWorkspaceId, input);
+              const response = await client.writeModelProvider(input);
               if (action === "fetch") {
                 const providerId = typeof input.id === "string" ? input.id.trim() : "";
                 const threadSelection = activeThreadModelSelectionRef.current;
@@ -2899,14 +2908,29 @@ export default function WebApp() {
                 return;
               }
               if (action === "upsert" && input.select === true && typeof input.id === "string") {
-                await selectProviderAndDefaultModel(input.id);
+                if (activeWorkspaceId) {
+                  await selectProviderAndDefaultModel(input.id);
+                } else {
+                  const catalog = parseModelProviderCatalog(response);
+                  const next = projectModelCatalogState(catalog, null, null);
+                  setModelProviders(next.providers);
+                  setCurrentProviderId(next.currentProviderId);
+                  setProviderModels(next.providerModels);
+                  setSelectedProviderModelId(next.selectedProviderModelId);
+                  if (!next.currentProviderId || !next.selectedProviderModelId) {
+                    setCatalogError("Select a Provider and model before starting.");
+                    setProviderCatalogOpenRequest((request) => request + 1);
+                  }
+                }
                 return;
               }
               await refreshModelCatalog();
             } catch (error) {
-              setCatalogError(action === "fetch"
+              const message = action === "fetch"
                 ? providerCatalogFailureMessage(error)
-                : error instanceof Error ? error.message : String(error));
+                : "Unable to save Provider settings. Try again.";
+              setCatalogError(message);
+              if (action !== "fetch") appendLog("error", message);
               throw error;
             } finally {
               setCatalogLoading(false);
@@ -2915,6 +2939,7 @@ export default function WebApp() {
           onSelectProvider={(providerId) => { void selectProviderAndDefaultModel(providerId); }}
           selectedModelId={selectedProviderModelId}
           onSelectModel={(modelId) => { void selectThreadModel(modelId); }}
+          providerCatalogOpenRequest={providerCatalogOpenRequest}
         messages={messages}
         finalArtifacts={supervisorOverview?.artifacts ?? []}
         taskApprovals={delegatedTaskApprovals}
@@ -2942,6 +2967,8 @@ export default function WebApp() {
         busy={busy}
         sendDisabled={
           !activeWorkspaceId
+          || !currentProviderId
+          || !providerModels.some((model) => model.id === selectedProviderModelId)
           || threadLoading
           || activeThread?.creationStatus === "creating"
           || activeThread?.creationStatus === "failed"

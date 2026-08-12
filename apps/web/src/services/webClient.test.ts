@@ -524,7 +524,7 @@ describe("WebApp direct Server client", () => {
     vi.stubGlobal("fetch", fetchMock);
     const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
 
-    await client.writeModelProvider(project.id, {
+    await client.writeModelProvider({
       action: "contexts",
       id: "deepseek",
       contexts: [
@@ -544,6 +544,43 @@ describe("WebApp direct Server client", () => {
       },
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("writes a Profile Provider without a Workspace-scoped argument", async () => {
+    const requests: Array<{ path: string; method: string; body: unknown }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      requests.push({
+        path: url.pathname,
+        method: init?.method ?? "GET",
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return json({ currentProviderId: "deepseek", data: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await client.writeModelProvider({
+      action: "upsert",
+      id: "deepseek",
+      name: "DeepSeek",
+      baseUrl: "https://api.deepseek.com",
+      wireApi: "chat",
+      credentialMode: "none",
+      select: true,
+    });
+
+    expect(requests).toEqual([{
+      path: "/api/providers/deepseek",
+      method: "PUT",
+      body: {
+        name: "DeepSeek",
+        baseUrl: "https://api.deepseek.com",
+        wireApi: "chat",
+        credentials: { mode: "none" },
+        select: true,
+      },
+    }]);
   });
 
   it("archives the selected Thread through the typed Server Run route", async () => {

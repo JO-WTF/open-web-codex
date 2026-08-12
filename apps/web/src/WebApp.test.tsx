@@ -79,7 +79,16 @@ describe("WebApp workspace-first messaging", () => {
     });
     client.listThreads.mockResolvedValue({ data: [] });
     client.connectWorkspace.mockResolvedValue({});
-    client.listModelProviders.mockResolvedValue({ data: [] });
+    client.listModelProviders.mockResolvedValue({
+      currentProviderId: "deepseek",
+      currentModelId: "deepseek-v4-flash",
+      data: [{
+        id: "deepseek",
+        name: "DeepSeek",
+        kind: "custom",
+        models: [{ modelId: "deepseek-v4-flash", showInPicker: true }],
+      }],
+    });
     client.listModels.mockResolvedValue({ data: [] });
     client.writeModelProvider.mockResolvedValue({ data: [] });
     client.selectProviderModel.mockResolvedValue({ data: [] });
@@ -168,7 +177,6 @@ describe("WebApp workspace-first messaging", () => {
     await waitFor(() => expect(within(dialog).getAllByText("new-model").length).toBeGreaterThan(0));
     await waitFor(() => expect(client.writeModelProvider).toHaveBeenCalledTimes(1));
     expect(client.writeModelProvider).toHaveBeenCalledWith(
-      "workspace-1",
       { action: "fetch", id: "provider-1" },
     );
     expect(client.listModelProviders).not.toHaveBeenCalled();
@@ -474,7 +482,105 @@ describe("WebApp workspace-first messaging", () => {
     expect(resolveTurnStartedAt(null, null, 1_700_000_120_000)).toBe(1_700_000_120_000);
   });
 
+  it("persists a Profile Provider without requiring a Workspace", async () => {
+    client.listWorkspaces.mockResolvedValue([]);
+    client.listModelProviders.mockResolvedValue({
+      currentProviderId: "openai",
+      data: [{ id: "openai", name: "OpenAI", kind: "builtIn", models: [] }],
+    });
+    client.writeModelProvider.mockResolvedValueOnce({
+      currentProviderId: "deepseek",
+      currentModelId: "deepseek-v4-flash",
+      data: [{
+        id: "deepseek",
+        name: "DeepSeek",
+        kind: "custom",
+        models: [{ modelId: "deepseek-v4-flash", showInPicker: true }],
+      }],
+    });
+    render(<WebApp />);
+
+    const catalog = await screen.findByRole("dialog", { name: "Providers and models" });
+    fireEvent.click(within(catalog).getByRole("button", { name: "Add" }));
+    const editor = within(screen.getByRole("dialog", { name: "Add provider" }));
+    fireEvent.change(editor.getByLabelText("ID"), { target: { value: "deepseek" } });
+    fireEvent.change(editor.getByLabelText("Name"), { target: { value: "DeepSeek" } });
+    fireEvent.change(editor.getByLabelText("Base URL"), {
+      target: { value: "https://api.deepseek.com" },
+    });
+    fireEvent.change(editor.getByLabelText("Credential source"), {
+      target: { value: "none" },
+    });
+    fireEvent.click(editor.getByRole("button", { name: "Save provider" }));
+
+    await waitFor(() => expect(client.writeModelProvider).toHaveBeenCalledWith({
+      action: "upsert",
+      id: "deepseek",
+      name: "DeepSeek",
+      baseUrl: "https://api.deepseek.com",
+      credentialMode: "none",
+      envKey: "",
+      apiKey: "",
+      wireApi: "responses",
+      select: true,
+    }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add provider" })).toBeNull());
+    expect(await screen.findByRole("button", { name: "DeepSeek" })).toBeTruthy();
+  });
+
+  it("keeps the Provider editor open and shows a safe error when Profile persistence fails", async () => {
+    client.listWorkspaces.mockResolvedValue([]);
+    client.listModelProviders.mockResolvedValue({
+      currentProviderId: "openai",
+      data: [{ id: "openai", name: "OpenAI", kind: "builtIn", models: [] }],
+    });
+    client.writeModelProvider.mockRejectedValueOnce(new Error("credential-canary"));
+    render(<WebApp />);
+
+    const catalog = await screen.findByRole("dialog", { name: "Providers and models" });
+    fireEvent.click(within(catalog).getByRole("button", { name: "Add" }));
+    const dialog = screen.getByRole("dialog", { name: "Add provider" });
+    const editor = within(dialog);
+    fireEvent.change(editor.getByLabelText("ID"), { target: { value: "deepseek" } });
+    fireEvent.change(editor.getByLabelText("Name"), { target: { value: "DeepSeek" } });
+    fireEvent.change(editor.getByLabelText("Base URL"), {
+      target: { value: "https://api.deepseek.com" },
+    });
+    fireEvent.change(editor.getByLabelText("Credential source"), {
+      target: { value: "none" },
+    });
+    fireEvent.click(editor.getByRole("button", { name: "Save provider" }));
+
+    await screen.findByText("Unable to save Provider settings. Try again.");
+    expect(screen.getByRole("dialog", { name: "Add provider" })).toBe(dialog);
+    expect(screen.queryByText("credential-canary")).toBeNull();
+  });
+
+  it("opens the Provider catalog and does not create a Thread without a valid model", async () => {
+    client.listModelProviders.mockResolvedValue({ data: [] });
+    render(<WebApp />);
+
+    const catalog = await screen.findByRole("dialog", { name: "Providers and models" });
+    expect(within(catalog).getByText("Select a Provider and model before starting.")).toBeTruthy();
+    const send = screen.getByRole("button", { name: "Send" });
+    expect((send as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(send);
+    fireEvent.click(screen.getByRole("button", { name: "New task in Demo" }));
+    expect(client.startThread).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Providers and models" })).toBe(catalog);
+  });
+
   it("creates a thread before sending when only a workspace is selected", async () => {
+    client.listModelProviders.mockResolvedValue({
+      currentProviderId: "deepseek",
+      currentModelId: "deepseek-v4-flash",
+      data: [{
+        id: "deepseek",
+        name: "DeepSeek",
+        kind: "custom",
+        models: [{ modelId: "deepseek-v4-flash", showInPicker: true }],
+      }],
+    });
     render(<WebApp />);
 
     const composer = await screen.findByPlaceholderText("Ask Codex to do something...");
@@ -493,8 +599,8 @@ describe("WebApp workspace-first messaging", () => {
       "workspace-1",
       "thread-new",
       "Start from this workspace",
-      null,
-      null,
+      "deepseek-v4-flash",
+      "deepseek",
     ));
     expect(client.startThread.mock.invocationCallOrder[0]).toBeLessThan(
       client.sendUserMessage.mock.invocationCallOrder[0],
@@ -853,12 +959,10 @@ describe("WebApp workspace-first messaging", () => {
     await screen.findByText("This Provider has no selectable models");
     expect(client.writeModelProvider).toHaveBeenNthCalledWith(
       1,
-      "workspace-1",
       { action: "select", id: "openai" },
     );
     expect(client.writeModelProvider).toHaveBeenNthCalledWith(
       2,
-      "workspace-1",
       { action: "select", id: "deepseek" },
     );
   });
@@ -1059,6 +1163,7 @@ describe("WebApp workspace-first messaging", () => {
         text: "History without catalog wait",
       }],
     }]);
+    client.listModelProviders.mockResolvedValue({ data: [] });
     client.listModels.mockReturnValue(new Promise((resolve) => {
       resolveModels = resolve;
     }));

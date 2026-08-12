@@ -683,11 +683,11 @@ export class CodexMonitorWebClient {
     return await this.platform.archiveRunThread(context.runId);
   }
 
-  async listModelProviders(_workspaceId: string) {
+  async listModelProviders() {
     return await this.platform.listProviders();
   }
 
-  async writeModelProvider(_workspaceId: string, input: JsonRecord) {
+  async writeModelProvider(input: JsonRecord) {
     const id = String(input.id ?? "").trim();
     if (!id) throw new Error("Provider id is required");
     const action = typeof input.action === "string" ? input.action : "upsert";
