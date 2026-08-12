@@ -1,6 +1,6 @@
 # 印尼仓网案例总览
 
-本案例把一个真实的仓网问题拆成四篇教程。目标不是让模型把所有原始数据读进上下文，而是让用户在 Web 中看到：哪些数据已经准备好、哪个 Agent 正在工作、哪里需要用户决定，以及每个结果由同一个 Network Case 中的哪个确定性组件产生。
+本案例把一个真实的仓网问题拆成四篇教程。目标不是让模型把所有原始数据读进上下文，而是让用户在 Web 中看到：哪些数据已经准备好、哪个 Agent 正在工作、哪里需要用户决定，以及每个结果由同一 `supply_chain` provider 中哪个 typed Resource 和确定性组件产生。
 
 ## 业务背景
 
@@ -23,9 +23,9 @@ fixture 位于 [indonesia-network/base](../../tools/supply-chain-network-planner
 
 ## Agent 分工
 
-Supervisor 先创建 Network Case。Network Agent 根据用户问题把本次数据需求、指标和业务参数写入 Case。Data Agent 只负责发现和检查 CSV、JSON、XLSX，提出显式字段映射，补充行政区和坐标，并把标准化输入及质量状态提交到同一个 Case。Network Agent 再从 Case 构建路线和成本矩阵，执行覆盖、成本、场景和选址分析。
+Root Thread 先发布 typed 数据需求。Network Agent 持有业务参数，Data Agent 只负责发现和检查 CSV、JSON、XLSX，提出显式字段映射，补充行政区和坐标，并发布 `normalized_network_input.v1`；Network Agent 再从严格 `ResourceRef` 构建路线和成本矩阵，执行覆盖、成本、场景和选址分析。
 
-Supervisor 不按固定阶段脚本运行。它根据 Case 的当前缺口和依赖决定是否需要另一个 Agent；无依赖任务可以并行，但没有必要输入时不能提前计算。原始表格只由工具在受限范围内读取，Agent 之间只传同一个 `case_id` 和有限状态。最终报告才发布为 Artifact。
+Supervisor 不按固定阶段脚本运行。它根据当前 Resource 缺口和依赖决定是否需要另一个 Agent；无依赖任务可以并行，但没有必要输入时不能提前计算。原始表格只由工具在受限范围内读取，Agent 之间只传经校验的 typed `ResourceRef` 和有限摘要。最终报告才由 final Tool 创建为 Workspace Markdown 交付物。
 
 ## 四篇教程
 
@@ -34,4 +34,4 @@ Supervisor 不按固定阶段脚本运行。它根据 Case 的当前缺口和依
 3. [当前覆盖和场景](indonesia-network-03-two-level-cost.md)：加入 `current-coverage.csv`，区分 `actual_current` 与 `optimized_existing_footprint`，再模拟增删和搬迁。
 4. [候选仓、选址和地图](indonesia-network-04-optimization-map.md)：加入候选仓，运行 p-median、时效约束选址，并生成确定性方案比较地图。
 
-每篇都可以在 Web 中独立复查。教程只在用户明确写出“使用教程 mock 数据”时使用 Demo fixture；空 Workspace、缺文件或真实工具失败都不会自动回退到示例数据。
+每篇都可以在 Web 中独立复查。教程只在用户明确写出“使用教程 mock 数据”时把 fixture 作为普通 Workspace 文件写入；本包没有独立 Demo MCP，空 Workspace、缺文件或真实工具失败都不会自动回退到示例数据。

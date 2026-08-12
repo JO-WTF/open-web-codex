@@ -104,6 +104,7 @@ EXPECTED = {
         "register_navigation_route_matrix",
         "plan_cost_matrix",
         "prepare_network_distribution_map",
+        "prepare_network_comparison_map",
         "evaluate_network_baseline",
         "evaluate_facility_scenario",
         "solve_p_median",

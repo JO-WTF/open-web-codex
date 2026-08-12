@@ -25,7 +25,15 @@ from supply_chain_planner.mcp_resources import (
 )
 from supply_chain_planner.models import PreparedNetworkResource
 from supply_chain_planner.network_models import ProvidedRouteFactRecord
-from supply_chain_planner.resource_store import ResourceStore
+from supply_chain_planner.resource_store import PublishedResource, ResourceStore
+
+
+def _resource_ref(published: PublishedResource) -> ResourceRef:
+    return ResourceRef(
+        server=server.MCP_SERVER_NAME,
+        resource_schema=published.schema,
+        uri=published.uri,
+    )
 
 
 def _runtime(tmp_path: Path, monkeypatch) -> tuple[Path, ResourceStore]:
@@ -72,7 +80,7 @@ def _prepared_ref(
         route_quotes=[],
         provided_route_facts=provided_route_facts or [],
     )
-    return server.resource_ref(store.publish(prepared.schema_version, prepared))
+    return _resource_ref(store.publish(prepared.schema_version, prepared))
 
 
 def _result_ref(result) -> ResourceRef:
@@ -155,9 +163,8 @@ def test_main_starts_stdio_without_case_repository(tmp_path: Path, monkeypatch) 
     profile.mkdir()
     monkeypatch.chdir(workspace)
     monkeypatch.setenv("CODEX_HOME", str(profile))
-    monkeypatch.setenv("SUPPLY_CHAIN_DATA_ROOT", str(workspace))
     monkeypatch.setattr(sys, "argv", ["supply-chain-planner", "--transport", "stdio"])
-    for name in ("_workspace_root", "_data_root", "_profile_state_root", "_mcp_resource_runtime"):
+    for name in ("_workspace_root", "_profile_state_root", "_mcp_resource_runtime"):
         monkeypatch.setattr(server, name, getattr(server, name))
     captured: dict[str, bool] = {}
 
@@ -273,7 +280,7 @@ def test_route_and_cost_tools_use_exact_pair_reuse(tmp_path: Path, monkeypatch) 
     route_ref = _result_ref(server.build_haversine_route_matrix(prepared_ref, 1.2, 40, ctx))
     original = server._runtime().load_model(route_ref, "route_matrix.v2", RouteMatrix)
     partial = original.model_copy(update={"rows": original.rows[:-2]})
-    partial_ref = server.resource_ref(store.publish(partial.schema_version, partial))
+    partial_ref = _resource_ref(store.publish(partial.schema_version, partial))
     completed_ref = _result_ref(
         server.build_haversine_route_matrix(
             prepared_ref,
@@ -306,7 +313,7 @@ def test_route_and_cost_tools_use_exact_pair_reuse(tmp_path: Path, monkeypatch) 
     )
     original_cost = server._runtime().load_model(cost_ref, "cost_matrix.v2", CostMatrix)
     partial_cost = original_cost.model_copy(update={"rows": original_cost.rows[:-2]})
-    partial_cost_ref = server.resource_ref(store.publish(partial_cost.schema_version, partial_cost))
+    partial_cost_ref = _resource_ref(store.publish(partial_cost.schema_version, partial_cost))
     completed_cost_ref = _result_ref(
         server.plan_cost_matrix(
             prepared_ref,
@@ -419,7 +426,7 @@ def test_navigation_tool_merges_prior_workspace_file_and_reports_counts(
         warehouse_scope="all_warehouses",
         rows=rows[:3],
     )
-    prior_ref = server.resource_ref(store.publish(prior.schema_version, prior))
+    prior_ref = _resource_ref(store.publish(prior.schema_version, prior))
     supplied = RouteMatrix(
         method="navigation",
         warehouse_scope="all_warehouses",

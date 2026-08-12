@@ -47,7 +47,7 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | Capability Draft/Release/Installation | 无当前生产 owner | Catalog/Studio/Python publish crate、route、DTO、client、UI 与无 owner 数据表均已删除，不参与启动或 readiness |
 | Work State 与 Platform coordination | 无当前 production owner | work-state-service、route、MCP、gate、schema 与第二控制面已由 Slice 4B.2-A 删除；不建设替代状态机 |
 | Data Intake | 无当前 owner | 生产 route、validation crate、SourceAsset/Dataset/Task binding 表与产品入口已删除；阶段一不建设替代状态机 |
-| 仓网规划能力 | 供应链 Python 包的 domain owners | 当前阶段统一拥有 demand/facility/candidate/location/lane/route/cost records，Data mapping/normalization/geography，route/cost fact 与 matrix build/validate/partial reuse，actual/optimized baseline、open/close/relocation scenario、assignment/service/cost evaluation、p-median、before/after comparison、卡片数据和确定性 Markdown 简报；报告输入以 discriminated typed contract 区分单一 baseline 评估和完整 baseline-versus-plan comparison，不为交付伪造方案结果。结构化计算结果与业务简报分离，不拥有通用 Resource/Workspace infrastructure。Case/NetworkSnapshot/source_ref/ArtifactRef 与多层 hashes 仍是待删偏离。未来若第二个供应链 Copilot 证明存在稳定公共领域合同，再评估内部提取，不在阶段一新增实现层 |
+| 仓网规划能力 | 供应链 Python 包的 domain owners | 当前阶段统一拥有 demand/facility/candidate/location/lane/route/cost records，Data mapping/normalization/geography，route/cost fact 与 matrix build/validate/partial reuse，actual/optimized baseline、open/close/relocation scenario、assignment/service/cost evaluation、p-median、before/after comparison、卡片数据和确定性 Markdown 简报；报告输入以 discriminated typed contract 区分单一 baseline 评估和完整 baseline-versus-plan comparison，不为交付伪造方案结果。结构化计算结果与业务简报分离，不拥有通用 Resource/Workspace infrastructure。Stage E 已删除 Case/NetworkSnapshot/source_ref/ArtifactRef 与多层 hashes 旧偏离。未来若第二个供应链 Copilot 证明存在稳定公共领域合同，再评估内部提取，不在阶段一新增实现层 |
 
 Codex Runtime 仍是模型可见对话状态的唯一权威。Platform events、execution、activity
 和协作状态都是投影，不应成为第二个 Thread、Memory 或 Supervisor。
@@ -141,19 +141,19 @@ Probe 已证明 Root 与 native spawned child 的 FastMCP 调用都读取 Turn �
 Platform 的 SourceAsset、Data Intake session/draft/mapping/gate、Dataset Release、Task
 attachment/binding/snapshot/projection 生产路径和数据库对象已删除，没有引入 replacement
 registry、revision、binding、fingerprint 或 cache。Platform Work State 与其
-WorkResourceReference 已随 Slice 4B.2-A 完全删除。供应链 `CaseRepository` 仍保存
-source、mapping、revision、operation、dependency、readiness 和 deliverable，是下一切片
-必须从 Platform 之外收敛的领域重复状态。
+WorkResourceReference 已随 Slice 4B.2-A 完全删除。供应链旧 `CaseRepository`、Case
+models/services 及其测试已在 Stage E 删除；当前 provider 不再维护第二套 source、mapping、
+revision、operation、dependency、readiness 或 deliverable 状态。
 
 当前 `ResourceStore` 以内容寻址 URI 为同一 logical `supply_chain` provider 的 Data/Network
 能力提供不可变 Resource 内容，并以 Profile 私有、canonical Workspace 隔离的物理目录保存
-字节；这一 provider content owner 与 Codex 官方 MCP Resource 合同一致，不应与
-CaseRepository 一起删除。Data4 与 Network 的 decorated active surface 已统一使用 strict typed
+字节；这一 provider content owner 与 Codex 官方 MCP Resource 合同一致。Data4 与 Network 的
+decorated active surface 已统一使用 strict typed
 `ResourceRef`：
 Data Server 的 inspect 只发布 `source_profile.v1`，normalize 只接受显式确认的 source
 mapping，prepare-geography 只接受已校验的行政区输入。CaseRepository、NetworkSnapshot、
-ArtifactRef 和其 wrappers 只存在于尚未装饰的 legacy compatibility tail，必须在 Stage E
-原子删除；不能通过新增第二套 resolver 或兼容包装绕过该切换。阶段一允许把
+ArtifactRef 和其 wrappers 已在 Stage E 原子删除；不能通过新增第二套 resolver 或兼容包装
+恢复该切换。阶段一允许把
 scope/ref/store/codec/bounds/error/writer
 的领域无关实现集中在 `supply_chain` 单一模块，供 Data、Network 和 final Tool 共用；这只是
 平台级 Copilot infrastructure 的内嵌孵化位置，不改变 provider 对 Resource 字节和生命周期的所有权。
@@ -162,8 +162,8 @@ Data4 active surface 不再接受 `source_ref/sourceRef/source_refs/sourceRefs/s
 `mappings/entities` 或 `fields/field_mappings/fieldMappings` aliases。discover 可选，inspect
 只产生 source-profile Resource，normalize 使用 `ResourceRef` 加显式 confirmed source decisions，
 并可在缺少坐标时返回 `needs_geography`；prepare-geography 再接收 adapter 已验证的行政区
-catalog 与可选 overrides。Network active surface 已是 strict `ResourceRef`；尚有旧
-Case/ArtifactRef compatibility tail，不能把 Data4 slice 的落地误报为 Stage E 尾删完成。用户文件继续使用经校验的 Workspace 相对路径，provider-owned intermediate
+catalog 与可选 overrides。Network active surface 已是 strict `ResourceRef`；旧
+Case/ArtifactRef compatibility tail 已删除。用户文件继续使用经校验的 Workspace 相对路径，provider-owned intermediate
 继续使用单一 typed MCP Resource ref；Platform 不建立数据 revision/binding/fingerprint/cache
 或通用 Broker。跨 Task 可发现若在阶段一实现，只能是从 official history exact Item 重建的授权
 `{server, uri}` 引用投影。
@@ -216,30 +216,25 @@ SDK 当前只有 `tool init/validate/test/pack`，Web 也没有消费 SDK 包的
 
 ## 8. 当前最重要的边界偏离
 
-1. 供应链 Case/NetworkSnapshot 仍在普通 Workspace 文件和 MCP Resource 之外保存
-   source/mapping/workflow 事实。
-2. 供应链 legacy compatibility tail 中 `source_ref`、MCP Resource、ArtifactRef 和普通 Workspace
-   文件仍混用；active Data/Network ResourceRef surface 已不再保留该混用，legacy tail 的跨 server
-   provider 目录访问和 taskEvidence/content SHA 仍成为额外信任层。
-3. Event Projection 把 generic ResourceLink 提升成 Artifact、执行跨 child Resource lookup 并解析
+1. Event Projection 把 generic ResourceLink 提升成 Artifact、执行跨 child Resource lookup 并解析
    模型文本呈现指令；Run-scoped inline 表和无 writer 的 `retention_state` 又伪装了不存在的
    持久展示与保留生命周期，使 Artifact 超出最终交付 owner。
-4. Profile Runtime 的 HOME 与 process cwd 已隔离，但 Server 仍可默认导入宿主认证；未来
+2. Profile Runtime 的 HOME 与 process cwd 已隔离，但 Server 仍可默认导入宿主认证；未来
    多用户身份隔离尚未成立。
-5. Provider 定义、模型目录和未来 Thread 默认选择已由持久 Profile config/Runtime 拥有，但 Platform 仍在
+3. Provider 定义、模型目录和未来 Thread 默认选择已由持久 Profile config/Runtime 拥有，但 Platform 仍在
    `profile_provider_definitions` 和 global `models.default_selection` 重复保存、启动回放和覆盖
    Runtime 结果；非默认 Provider 刷新还会改写 Profile 默认选择，普通目录更新会安排额外 Runtime 重启。
-6. Task 固定 Workspace、child `sandboxCwd`、通用 Workspace 文件产品入口和旧 Platform
+4. Task 固定 Workspace、child `sandboxCwd`、通用 Workspace 文件产品入口和旧 Platform
    数据路径删除已有独立集成证据，但完整仓网纵向 E2E 尚未形成。
-7. 当前 history overlay 按 Tool 名称或 approval message 推断插入位置，Browser 又以相同用户
+5. 当前 history overlay 按 Tool 名称或 approval message 推断插入位置，Browser 又以相同用户
    文本合并 optimistic/live/history 消息；这些启发式在 Runtime exact Item ID 之外形成第二历史
    关联规则，连续相同消息会被误合并。当前 Codex subtree 还保留旧 legacy response-tool/history
    materialization seam，尚未接受 latest official paginated history 全量实现。
-8. `run_events` 的 sequence 和 run/thread/turn/item provenance 是合理的持久投影，但当前
+6. `run_events` 的 sequence 和 run/thread/turn/item provenance 是合理的持久投影，但当前
    `project_item` 会把未统一限长的 agent text、reasoning、command output、diff 与 Tool result
    同时写入 PostgreSQL 和 WebSocket，且 unknown Runtime method 仍可能被 Browser JSON summary
    放入对话；当前没有 event retention/prune owner。
-9. 通用 Copilot Resource/Workspace primitives 仍内嵌在供应链包中；当前只能保持其领域无关、
+7. 通用 Copilot Resource/Workspace primitives 仍内嵌在供应链包中；当前只能保持其领域无关、
    单一实现且由 Data、Network 与 final binding 共用，并保持依赖方向
    `warehouse planning -> common infrastructure`。出现第二个真实 Copilot，或进入 phase-two public
    Copilot SDK 之前，必须在不改变 `ResourceRef`、Tool 合同和 provider content owner 的前提下，

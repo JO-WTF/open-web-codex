@@ -282,13 +282,13 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
 3. **C — 通用可组合 Tools。** 统一 `supply_chain` provider 和单一 `ResourceRef`，Data4 已完成
    strict inspect→confirmed-normalize→optional-geography active surface；Network14 active surface
    已完成 provided/haversine/navigation 路线、route/cost pair-level 复用、双覆盖口径以及 final
-   地图卡片、map 文件与单份中文 Markdown 简报的最小交付合同；正文只显示关键结论和 durable Artifact 授权下载链接，不复制整份简报。剩余工作是产品 E2E 与 non-active compatibility tail 尾删，不再扩展
+   地图卡片、map 文件与单份中文 Markdown 简报的最小交付合同；正文只显示关键结论和 durable Artifact 授权下载链接，不复制整份简报。Stage E non-active compatibility tail 已完成尾删，后续只维护
    Platform 业务状态。
 4. **D — 完整案例验收。** 把 Indonesia cold E2E 作为通用 Copilot 的一个完整组合示例，同时验证
    partial reuse 与跨 Workspace/未授权 ref denial；案例顺序不成为产品 workflow。
-5. **E — 旧 caller 尾删。** D 通过后再原子删除 Network non-active compatibility tail 中的
-   `CaseRepository`、`NetworkSnapshot`、`ArtifactRef` 等旧 caller，不保留兼容双路径；Data4
-   与 Network active `ResourceRef` surface 不回退为 aliases。
+5. **E — 旧 caller 尾删。** 已原子删除 Network non-active compatibility tail 中的
+   `CaseRepository`、`NetworkSnapshot`、`ArtifactRef`、旧 services/models/tests 与 Demo launcher
+   surface，不保留兼容双路径；Data4 与 Network active `ResourceRef` surface 不回退为 aliases。
 
 R2 真实门退出：fresh local session 可添加并列出 DeepSeek Provider；配置只保存 env ref，Platform
 Secret 重启后仍能注入同一密钥；显式 `deepseek-v4-flash` Turn 完成连续两次 MCP tool call 后给出
@@ -319,7 +319,7 @@ Data child 和一个 Network child，没有单独的需求定义 child、`reques
 一次地图卡片 Tool，唯一审批是 create-new 写正式简报。结果为实际当前归属 29/50 城（58.0%）、
 需求量加权 74.5%；对话地图卡片 Ready，最终只有一个 2,913 字节中文 Markdown Artifact，正文
 区域从授权 Artifact DTO 显示可点击下载链接。该证据只提高当前覆盖纵向切片，不替代三个产品
-样例、恢复矩阵、跨 Workspace 拒绝和 Stage E 尾删。
+样例、恢复矩阵和跨 Workspace 拒绝。
 
 当前用三个彼此独立的产品样例证明这一点：
 
@@ -421,8 +421,8 @@ Artifact。阶段一额外 renderer 只保留仓网 `map.v3`；旧 `report.v1` i
 Data4 的 Stage C active surface 已不再依赖 `source_ref` 及 wire aliases、模型可见
 revision/operation/CAS、ArtifactRef 双重 ref 或隐藏 Task 数据目录；它保留并简化 ResourceStore
 为 MCP provider 的最小内容 owner，重用纯解析、验证与标准化代码。Network decorated active
-surface 已使用 strict `ResourceRef`；未装饰的 `CaseRepository`、`NetworkSnapshot` 和 ArtifactRef
-compatibility tail 仍待 Stage D 完整验收后由 Stage E 原子尾删。
+surface 已使用 strict `ResourceRef`；未装饰的 `CaseRepository`、`NetworkSnapshot`、ArtifactRef
+compatibility tail 已由 Stage E 原子尾删。
 
 退出：所有仓网 Tool 只使用 Workspace 相对路径、typed MCP Resource ref 或普通业务参数；
 Data4 strict ResourceRef、完整仓网清单和 pair-level 部分复用都有确定性测试；两个 Task 可显式

@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict, Field
-
-if TYPE_CHECKING:
-    from .network_data import SourceInspection
+from pydantic import BaseModel, ConfigDict
 
 
 class MappingContract(BaseModel):
@@ -48,33 +42,6 @@ class TransformKind(StrEnum):
 class TransformSpec(MappingContract):
     kind: TransformKind
     factor: Decimal | None = None
-
-
-class FieldMappingCandidate(MappingContract):
-    candidate_id: str = Field(pattern=r"^[0-9a-f]{64}$")
-    source_id: str
-    source_revision: int = Field(ge=1)
-    source_role: SourceRole
-    target_entity: str
-    target_field: str
-    source_field: str
-    transform: TransformSpec
-    score: float = Field(ge=0, le=1)
-    reason_code: str
-
-
-class RoleMappingProposal(MappingContract):
-    source_id: str
-    source_name: str
-    role: SourceRole
-    confidence: float = Field(ge=0, le=1)
-    complete: bool
-    ambiguous: bool
-    field_candidates: list[FieldMappingCandidate]
-
-
-class MappingProposal(MappingContract):
-    proposals: list[RoleMappingProposal]
 
 
 TARGET_ALIASES: dict[SourceRole, dict[str, tuple[str, ...]]] = {
@@ -154,22 +121,8 @@ REQUIRED_FIELDS: dict[SourceRole, frozenset[str]] = {
     ),
 }
 
-TARGET_ENTITIES = {
-    SourceRole.DEMAND: "demand_city",
-    SourceRole.EXISTING_WAREHOUSE: "warehouse",
-    SourceRole.CANDIDATE_WAREHOUSE: "warehouse",
-    SourceRole.CURRENT_ASSIGNMENT: "current_assignment",
-    SourceRole.ROUTE_QUOTE: "route_quote",
-}
-
-
 def _normalized(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
-
-
-def _candidate_id(payload: dict[str, object]) -> str:
-    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(raw).hexdigest()
 
 
 def _transform_for(field: str) -> TransformSpec:
@@ -311,75 +264,6 @@ def _ambiguous_roles(proposals: Sequence[SuggestedRoleMapping]) -> set[SourceRol
     top = max(item.confidence for item in proposals)
     contenders = [item for item in proposals if top - item.confidence < 0.05]
     return {item.role for item in contenders} if len(contenders) > 1 else set()
-
-
-class SourceRoleClassifier:
-    def classify(self, inspection: SourceInspection) -> list[RoleMappingProposal]:
-        proposals: list[RoleMappingProposal] = []
-        suggestions = suggest_role_mappings(
-            [
-                FieldObservation(
-                    name=field.field_name,
-                    sample_values=tuple(field.sample_values),
-                )
-                for field in inspection.fields
-            ]
-        )
-        for suggestion in suggestions:
-            field_candidates: list[FieldMappingCandidate] = []
-            for field_mapping in suggestion.field_mappings:
-                source_field = field_mapping.source_fields[0]
-                payload = {
-                    "source_id": str(inspection.source.source_id),
-                    "source_revision": inspection.source.source_revision,
-                    "source_role": suggestion.role.value,
-                    "target_entity": TARGET_ENTITIES[suggestion.role],
-                    "target_field": field_mapping.target_field,
-                    "source_field": source_field,
-                    "transform": field_mapping.transform.model_dump(mode="json"),
-                }
-                field_candidates.append(
-                    FieldMappingCandidate(
-                        candidate_id=_candidate_id(payload),
-                        source_id=str(inspection.source.source_id),
-                        source_revision=inspection.source.source_revision,
-                        source_role=suggestion.role,
-                        target_entity=TARGET_ENTITIES[suggestion.role],
-                        target_field=field_mapping.target_field,
-                        source_field=source_field,
-                        transform=field_mapping.transform,
-                        score=field_mapping.score,
-                        reason_code=field_mapping.reason_code,
-                    )
-                )
-            proposals.append(
-                RoleMappingProposal(
-                    source_id=str(inspection.source.source_id),
-                    source_name=inspection.source.display_name,
-                    role=suggestion.role,
-                    confidence=suggestion.confidence,
-                    complete=True,
-                    ambiguous=suggestion.ambiguous,
-                    field_candidates=field_candidates,
-                )
-            )
-        return proposals
-
-
-class MappingEngine:
-    def propose(self, inspections: list[SourceInspection]) -> MappingProposal:
-        classifier = SourceRoleClassifier()
-        proposals = [
-            proposal
-            for inspection in inspections
-            for proposal in classifier.classify(inspection)
-        ]
-        return MappingProposal(
-            proposals=sorted(
-                proposals,
-                key=lambda item: (item.source_name, -item.confidence, item.role.value),
-            )
-        )
 
 
 class TransformRegistry:

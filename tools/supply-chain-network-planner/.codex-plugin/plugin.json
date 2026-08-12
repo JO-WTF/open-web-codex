@@ -1,14 +1,14 @@
 {
   "name": "supply-chain-network-planner",
   "version": "0.4.0",
-  "description": "Governed supply-chain evidence, network planning, financial evaluation, and risk registration for Codex",
+  "description": "Governed supply-chain data preparation, network planning, map cards, and Markdown delivery for Codex",
   "author": {
     "name": "Open Web Codex"
   },
   "interface": {
     "displayName": "Supply Chain Network Planner",
     "shortDescription": "Build governed evidence for supply-chain decisions.",
-    "longDescription": "Publishes reviewed planning datasets, prepares immutable network snapshots, evaluates current and candidate networks, calculates bounded investment economics, and publishes evidence-linked risk registers.",
+    "longDescription": "Discovers and normalizes authorized Workspace data, publishes typed network Resources, evaluates current and candidate networks, and delivers evidence-linked maps and Markdown reports.",
     "developerName": "Open Web Codex",
     "category": "Productivity",
     "capabilities": [
@@ -17,9 +17,7 @@
       "Network data preparation",
       "Delivery coverage calculation",
       "Warehouse scenario comparison",
-      "Facility-location optimization",
-      "Financial evaluation",
-      "Risk register publication"
+      "Facility-location optimization"
     ],
     "defaultPrompt": "Analyze the supply-chain decision using the smallest necessary set of source-backed, deterministic planning capabilities."
   },

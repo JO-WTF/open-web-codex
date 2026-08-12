@@ -4,15 +4,13 @@
 
 ## MCP 入口
 
-本包只注册三个入口，均由同一个 launcher 启动，并使用隔离 Python 环境：
+本包只注册两个入口，均由同一个 launcher 启动，并使用隔离 Python 环境：
 
 | Server | 责任 |
 | --- | --- |
 | `supply_chain_data` | 发现和检查授权 Workspace 的 CSV/JSON/XLSX，发布来源画像、映射、标准化输入和行政区结果 |
 | `supply_chain_planner` | 构建路线/成本矩阵，计算覆盖、成本、场景、p-median、服务约束选址、比较地图和报告 |
-| `supply_chain_demo` | 只有用户明确要求 mock/demo/tutorial 时，向空 Workspace 复制已验证的印尼教程 fixture |
-
-没有独立的 Indonesia MCP。国家由用户问题确定，行政区能力属于 `supply_chain_data`；地图由 Network Agent 使用 Planner 的确定性地图工具生成。
+没有独立的 Indonesia 或 Demo MCP。国家由用户问题确定，行政区能力属于 `supply_chain_data`；地图由 Network Agent 使用 Planner 的确定性地图工具生成。示例数据只能由用户显式放入 Workspace，工具不会在失败时自动回退到 Demo fixture。
 
 ## 当前网络工具
 
@@ -105,4 +103,4 @@ PYTHONPATH=tools/supply-chain-network-planner \
   -m ruff check tools/supply-chain-network-planner
 ```
 
-真实 stdio smoke 只在明确设置 `RUN_REAL_STDIO_SMOKE=1` 时启动三个 MCP 入口。任何 MCP Tool 都通过 Runtime 的 MCP 调用路径执行，禁止通过 shell `source`、目录遍历或手工拼接 Resource URI 调用。
+真实 stdio smoke 只在明确设置 `RUN_REAL_STDIO_SMOKE=1` 时启动 Data、Network 和 maps 三个 stdio server 实例。任何 MCP Tool 都通过 Runtime 的 MCP 调用路径执行，禁止通过 shell `source`、目录遍历或手工拼接 Resource URI 调用。

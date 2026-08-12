@@ -7,12 +7,10 @@
 ```mermaid
 flowchart LR
   U[用户问题] --> S[Supervisor]
-  S --> C[创建 Network Case]
-  C --> N[Network Agent 写入本次数据需求]
-  C --> D[Data Agent 发现并标准化文件]
-  D --> C
-  N --> C
-  C --> R[覆盖率与最终报告]
+  S --> N[Network Agent 发布 typed Resource]
+  N --> D[Data Agent inspect/normalize Workspace]
+  D --> N
+  N --> R[覆盖率与最终 Markdown 交付]
 ```
 
 ## 你会用到什么
@@ -22,8 +20,8 @@ flowchart LR
 | Supervisor | 根据缺口协调两个 Agent，不负责计算 |
 | Network Agent | 说明本次问题需要需求城市、已有仓库、路线参数和时效目标 |
 | Data Agent | 检查 CSV/JSON/XLSX、生成字段映射、补充行政区和坐标 |
-| `supply_chain_network` | 在同一个 Case 中发现来源、确认映射、构建矩阵、计算覆盖率并发布报告 |
-| Network Case | 保存来源、映射、标准化数据、矩阵和结果；Agent 消息只传 `case_id` 和有限摘要 |
+| `supply_chain` | Data/Network logical provider；发现来源、确认映射、构建矩阵、计算覆盖率并发布报告 |
+| typed ResourceRef | Agent 消息只传经校验的 `source_profile.v1`、`normalized_network_input.v1` 和分析结果引用 |
 | Artifact | 只保存用户最终需要查看和下载的报告，不承担 Agent 间数据交换 |
 
 本篇只用 `haversine distance × 绕路系数`。它是规划估算，不是导航承诺。导航接口要在后续得到明确许可后批量调用，不能逐个客户调用。
@@ -55,16 +53,16 @@ flowchart LR
    不计算运输成本、不调用导航接口。使用球面距离乘绕路系数估算距离，使用平均行驶速度估算时效，给出 6、12、18 小时需求覆盖率，并说明各省哪些较差。
    ```
 
-“教程 mock 数据”是明确的示例数据意图；没有这句话时，系统不得自动加载 Demo fixture。
+“教程 mock 数据”是明确的示例数据意图；本包已没有独立 Demo MCP，系统只在该意图下把 fixture 作为普通 Workspace 文件写入，失败时不得自动回退。
 
 ## 预期交互
 
-Supervisor 先创建 Network Case。Network Agent 把本次最小数据需求写入 Case，Data Agent 使用同一个 `case_id`：
+Root Thread 先发布 typed 数据需求。Data Agent 和 Network Agent 通过同一 `supply_chain` provider 的 `ResourceRef` 协作：
 
-1. 发现并检查 Workspace 来源，更新 Case 的 `source_inventory` facet。
+1. 发现并检查 Workspace 来源，发布 `source_profile.v1`。
 2. 提出显式字段映射，说明每个源字段如何映射到需求城市、已有仓库和行政区字段。
 3. 如果字段名或城市名有歧义，显示用户输入卡片。`ambiguous` 不能由模型猜测。
-4. 把标准化输入和数据质量状态提交到 Case，不把数据行带回对话。
+4. 把 `normalized_network_input.v1` 和数据质量状态发布为 Resource，不把数据行带回对话。
 
 Network Agent 再请求缺失参数。第一次看到输入卡片时选择：
 
@@ -81,12 +79,12 @@ Network Agent 再请求缺失参数。第一次看到输入卡片时选择：
 
 检查以下事实，而不是只看模型的一段总结：
 
-- Case 的 `normalized_input` facet 为 `ready`，且摘要显示 50 个需求城市和 11 个已有仓。
-- Case 的 `route_matrix` facet 为 `ready`，方法是 `haversine`，路线数等于 11 × 50 = 550。
+- `normalized_network_input.v1` 为 `ready`，且摘要显示 50 个需求城市和 11 个已有仓。
+- `route_matrix.v2` 为 `ready`，方法是 `haversine`，路线数等于 11 × 50 = 550。
 - 路线组件保存绕路系数和平均速度；没有 `navigation` 结果。
-- Case 的 `baseline` facet 为 `ready`，并发布了一个 `network_planning_report.v1` Artifact。
+- `network_baseline.v2` 为 `ready`，并由 final Tool 创建 `network_planning_report_markdown.v1` Workspace 交付物。
 - 报告写明这是 `optimized_existing_footprint`，因为本篇没有上传当前覆盖关系；不能称为实际当前方案。
-- 刷新页面后，输入卡片、Agent 状态和报告 Artifact 仍可恢复。
+- 刷新页面后，输入卡片、Agent 状态和报告交付物仍可恢复。
 
 ## 常见失败
 

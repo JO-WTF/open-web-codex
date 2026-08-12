@@ -4,34 +4,31 @@
 
 Every calculation starts from immutable MCP Resources:
 
-- `planning-dataset.v2`: typed market and source scope, city-period demand, warehouse-to-city
-  coverage, combined city-lane facts, delivery baseline, data quality, reviewed candidates,
-  and exact `network_input`.
-- `network_snapshot.v1`: planning period, currency, service policy, demand points,
-  facilities, and rate rules.
-- `route_matrix.v1`: one provider/method and typed origin-city to destination-city
-  route rows tied to exactly one snapshot. Multiple demand points in one city reuse
+- `normalized_network_input.v1`: the Data Agent's confirmed demand, warehouse,
+  assignment, route-quote and optional provided-route facts.
+- `route_matrix.v2`: one provider/method and typed origin-city to destination-city
+  route rows for an explicit warehouse scope. Multiple demand points in one city reuse
   the same lane.
-- `network_scenario_result.v1`: allocations, issues, and metrics for one explicit
-  facility set and calculation mode.
-- `scenario_comparison.v1`: deltas between compatible scenario results.
-- `facility_location_solution.v1`: target, selected candidates, exact-solver scope,
-  assumptions, and its scenario-result reference.
-- `financial_evaluation.v1`: compatible network inputs, opening investment, recurring
-  savings, NPV, payback, and explicit financial assumptions.
-- `risk_register.v1`: scored material risks, mitigations, triggers, and exact planning
-  evidence references.
+- `network_baseline.v2` and `network_scenario.v2`: allocations, issues and metrics for
+  one explicit current or candidate facility set.
+- `network_assignment_comparison.v1`: deltas between compatible baseline, scenario and
+  facility-location results.
+- `facility_location_solution.v3`: target, selected candidates, exact-solver scope,
+  assumptions and its assignment reference.
+- `network_comparison_map_bundle.v1` and `network_planning_report_markdown.v1`: the
+  bounded map-card projection and final Markdown delivery contracts.
 
-Copy each returned `data_ref` unchanged. It uses server `supply_chain_planner` and an
+Copy each returned `data_ref` unchanged. It uses server `supply_chain` and an
 opaque `supply-chain://resources/...` URI. Data Agent handoffs use server
-`supply_chain_data` and `supply-chain-data://resources/...`. Publishing is
+`supply_chain` and `supply-chain://resources/...`. Publishing is
 content-addressed; changing source facts or assumptions creates a new Resource.
 Resource files default to the owning Profile's `CODEX_HOME`; they are not shared
 application or repository state.
 
-For the Data Agent intake path, `publish_mapping_proposal` accepts only the
-unchanged `source_profile.v1` `data_ref` as `source_profile_ref`. The Data MCP
-loads and validates that Resource from its own store before proposing fields.
+For the Data Agent intake path, `inspect_workspace_sources` publishes the
+`source_profile.v1` Resource and `normalize_network_input` accepts that exact
+`ResourceRef` plus explicit confirmed source decisions. The Data MCP loads and
+validates the Resource from its own store before rereading selected Workspace files.
 The source Profile must retain each source's nested `structure`; a flattened
 copy is invalid, and an empty mapping candidate result is a failed Tool call.
 Workspace `source_ref` values are file-inspection references and must not be
@@ -109,14 +106,14 @@ for arbitrary points on a map.
 
 The Data MCP discovers only supported files in the trusted Turn Workspace and accepts
 opaque source references from that discovery. It has no packaged source catalog, source-ID
-fallback or arbitrary SQL interface. A separate Demo MCP may create one versioned synthetic
-source set only after explicit user authorization and only in an empty Workspace; those files
-still require the normal published-profile, mapping-confirmation and normalization flow.
+fallback or arbitrary SQL interface. There is no separate Demo MCP; the checked-in synthetic
+tutorial fixture is copied as ordinary Workspace files only after explicit user authorization
+and still requires the normal published-profile, mapping-confirmation and normalization flow.
 
-The large Demo template has bounded city-grain sources: 24 city-period demand rows, six
-facilities, 24 warehouse-to-city coverage rows and 144 combined city-to-city lanes. Demand
-does not carry a duplicate coordinate or synthetic order identifier; coordinates are owned by
-the City entity.
+The checked-in tutorial fixture has bounded city-grain sources and is copied as ordinary
+Workspace files only when the user explicitly requests tutorial/mock data. There is no
+separate Demo MCP and no implicit fallback to fixture files. Demand does not carry a duplicate
+coordinate or synthetic order identifier; coordinates are owned by the city records.
 
 The contract does not yet model multi-echelon inventory, safety stock, SKU-specific
 capacity, facility construction schedules, closure decisions, carrier step tariffs,

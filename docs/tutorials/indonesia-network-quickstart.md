@@ -6,7 +6,7 @@
 
 - 服务运行在真实 Runtime 模式；不要用 shell `source` 代替 MCP 调用。
 - Workspace 可写且已授权。
-- `supply_chain_network` 一个 MCP 入口可见。
+- 一个 logical `supply_chain` MCP provider 可见。
 - Supervisor 只绑定 Data Agent `6.0.0` 和 Network Agent `6.0.0`；没有 Visualization Agent 绑定。
 
 ## 2. 准备文件
@@ -25,7 +25,7 @@ administrative-areas.json
 使用教程 mock 数据，把它们复制到当前 Workspace；如果无法复制就报告失败，不要回退到其他数据。
 ```
 
-没有明确的 mock/demo/tutorial 意图时，Demo MCP 不得运行。
+没有明确的 mock/demo/tutorial 意图时，不复制或自动加载任何教程 fixture；本包已没有独立 Demo MCP。
 
 ## 3. 创建并运行 Thread
 
@@ -53,19 +53,17 @@ Network Agent 会要求绕路系数、平均速度和每日驾驶时长。用输
 
 ## 5. 结果检查
 
-成功运行时，Network Case 至少有以下就绪 facet：
+成功运行时，Data/Network Resource 链至少产生以下资源：
 
 ```text
-requirements
-sources
-mapping
-normalized_input
-route_matrix
-baseline
-report
+source_profile.v1
+normalized_network_input.v1
+route_matrix.v2
+network_baseline.v2
+network_planning_report_markdown.v1
 ```
 
-`report` facet 对应一个 `network_planning_report.v1` Artifact。没有 current coverage 时，报告必须使用 `optimized_existing_footprint` 标签。需要实际当前方案时，继续阅读第三篇并上传 `current-coverage.csv`。
+`network_planning_report_markdown.v1` 是 built-in final Tool 创建的 Workspace Markdown 交付物。没有 current coverage 时，报告必须使用 `optimized_existing_footprint` 标签。需要实际当前方案时，继续阅读第三篇并上传 `current-coverage.csv`。
 
 ## 6. 出错时怎么判断
 

@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-import json
-from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
-from uuid import UUID
 
 from pydantic import ValidationError
 
-from .case_repository import CaseRepository
-from .case_types import CaseOperationResult, FacetName, FacetState, SelectedMapping
 from .mapping import SourceRole, TransformRegistry, TransformSpec
 from .network_models import (
     CurrentAssignmentRecord,
@@ -24,7 +18,6 @@ from .network_models import (
     RouteQuoteRecord,
     WarehouseRecord,
 )
-from .workspace_intake import flatten_record, read_rows
 
 NormalizationState = Literal["ready", "needs_input", "needs_geography"]
 
@@ -334,53 +327,3 @@ def _append_normalized_record(
             )
         return
     raise RowNormalizationError("normalization_role_unsupported", role.value)
-
-
-class NormalizationService:
-    def __init__(self, repository: CaseRepository):
-        self.repository = repository
-
-    def normalize(
-        self, case_id: UUID, workspace_root: Path
-    ) -> tuple[NormalizedInputBatch, CaseOperationResult | None]:
-        mappings = self.repository.selected_mappings(case_id, workspace_root)
-        lease = self.repository.begin_operation(
-            case_id,
-            workspace_root,
-            "normalize_case_input",
-            {"candidate_ids": [mapping.candidate_id for mapping in mappings]},
-        )
-        by_source: dict[tuple[str, SourceRole], list[SelectedMapping]] = defaultdict(list)
-        for mapping in mappings:
-            by_source[(mapping.source_ref, SourceRole(mapping.source_role))].append(mapping)
-        sources: list[ConfirmedSourceRows] = []
-        for (source_ref, role), source_mappings in by_source.items():
-            sources.append(
-                ConfirmedSourceRows(
-                    role=role,
-                    rows=[flatten_record(row) for row in read_rows(workspace_root, source_ref)],
-                    mappings=[
-                        ConfirmedFieldMapping(
-                            target_field=mapping.target_field,
-                            source_field=mapping.source_field,
-                            transform=TransformSpec.model_validate(
-                                json.loads(mapping.transform_json)
-                            ),
-                        )
-                        for mapping in source_mappings
-                    ],
-                )
-            )
-        _, validated = normalize_confirmed_rows(sources)
-        if any(issue.severity == "error" for issue in validated.issues):
-            self.repository.complete_operation(lease, workspace_root, [])
-            self.repository.set_facet_state(
-                case_id,
-                workspace_root,
-                FacetName.NORMALIZED_INPUT,
-                FacetState.NEEDS_INPUT,
-                [issue.code for issue in validated.issues],
-            )
-            return validated, None
-        result = self.repository.commit_normalized_input(lease, workspace_root, validated)
-        return validated, result

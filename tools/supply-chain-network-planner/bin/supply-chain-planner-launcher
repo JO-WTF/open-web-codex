@@ -13,7 +13,6 @@ forward_args=()
 
 while (($# > 0)); do
   case "$1" in
-    --demo-server) server_module="supply_chain_planner.demo_server" ;;
     --data-server) server_module="supply_chain_planner.data_server" ;;
     *) forward_args+=("$1") ;;
   esac

@@ -43,9 +43,17 @@ from supply_chain_planner.report_service import (
     NETWORK_PLANNING_MARKDOWN_MARKER,
     NETWORK_PLANNING_MARKDOWN_SCHEMA,
 )
-from supply_chain_planner.resource_store import ResourceStore
+from supply_chain_planner.resource_store import PublishedResource, ResourceStore
 
 BEKASI_ID = "WH-CROSS_DOCKING-BEKASI"
+
+
+def _resource_ref(published: PublishedResource) -> ResourceRef:
+    return ResourceRef(
+        server=server.MCP_SERVER_NAME,
+        resource_schema=published.schema,
+        uri=published.uri,
+    )
 
 
 def _runtime(tmp_path: Path, monkeypatch) -> tuple[Path, ResourceStore]:
@@ -128,9 +136,9 @@ def _published_network(
         warehouse.warehouse_id for warehouse in fixture.warehouses if not warehouse.is_existing
     }
     return (
-        server.resource_ref(store.publish(prepared.schema_version, prepared)),
-        server.resource_ref(store.publish(routes.schema_version, routes)),
-        server.resource_ref(store.publish(costs.schema_version, costs)),
+            _resource_ref(store.publish(prepared.schema_version, prepared)),
+            _resource_ref(store.publish(routes.schema_version, routes)),
+            _resource_ref(store.publish(costs.schema_version, costs)),
         existing_ids,
         candidate_ids,
     )
@@ -681,7 +689,7 @@ def test_baseline_and_p_median_reject_missing_explicit_inputs(tmp_path: Path, mo
         PreparedNetworkResource,
     )
     without_current = prepared.model_copy(update={"current_assignments": []})
-    without_current_ref = server.resource_ref(
+    without_current_ref = _resource_ref(
         store.publish(without_current.schema_version, without_current)
     )
     with pytest.raises(McpResourceContractError, match="current_assignments_required"):

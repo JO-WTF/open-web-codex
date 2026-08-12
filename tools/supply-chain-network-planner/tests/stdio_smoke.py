@@ -56,35 +56,7 @@ async def smoke() -> None:
         state_root = Path(directory)
         workspace = state_root / "workspace"
         workspace.mkdir()
-        demo_workspace = state_root / "demo-workspace"
-        demo_workspace.mkdir()
         environment = server_environment(state_root)
-        demo_parameters = StdioServerParameters(
-            command=str(LAUNCHER),
-            args=["--demo-server"],
-            cwd=str(demo_workspace),
-            env=environment,
-        )
-        async with stdio_client(demo_parameters) as streams:
-            async with ClientSession(*streams) as session:
-                initialized = await asyncio.wait_for(session.initialize(), timeout=10)
-                assert SANDBOX_META in (initialized.capabilities.experimental or {})
-                tools = await asyncio.wait_for(session.list_tools(), timeout=10)
-                assert [tool.name for tool in tools.tools] == ["create_demo_workspace_sources"]
-                missing_meta = await asyncio.wait_for(
-                    session.call_tool("create_demo_workspace_sources", {}), timeout=10
-                )
-                assert missing_meta.isError is True
-                meta = workspace_meta(demo_workspace)
-                created = await asyncio.wait_for(
-                    session.call_tool("create_demo_workspace_sources", {}, meta=meta), timeout=10
-                )
-                reused = await asyncio.wait_for(
-                    session.call_tool("create_demo_workspace_sources", {}, meta=meta), timeout=10
-                )
-                assert created.structuredContent["status"] == "created"
-                assert reused.structuredContent["status"] == "reused"
-                assert created.structuredContent["dataClassification"] == "synthetic_demo"
         (workspace / "network.csv").write_text(
             "city_id,city_name,demand_quantity,latitude,longitude\ncity-1,Jakarta,10,-6.2,106.8\n",
             encoding="utf-8",
