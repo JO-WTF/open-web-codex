@@ -260,8 +260,14 @@ async fn secured_provider_credentials_never_enter_codex_config() {
             SecretCipher::generate("test-v1").expect("generate cipher"),
         ),
     );
-    let initial_environment = service.startup_secret_environment().await.unwrap();
+    let mut initial_environment = service.startup_secret_environment().await.unwrap();
     assert!(initial_environment.is_empty());
+    let external_environment_key = "OPEN_WEB_CODEX_PROVIDER_EXTERNAL_TEST";
+    let external_environment_secret = "external-environment-secret-value";
+    initial_environment.insert(
+        external_environment_key.to_string(),
+        external_environment_secret.to_string(),
+    );
     let host = registry
         .register_with_secret_environment(
             ProfileHostConfig::new(&runtime_key, &home, &workspace).with_codex_bin(codex_bin),
@@ -307,12 +313,17 @@ async fn secured_provider_credentials_never_enter_codex_config() {
             .process_id,
         initial_process_id
     );
+    let mut expected_environment_keys = vec![
+        environment_key.to_string(),
+        external_environment_key.to_string(),
+    ];
+    expected_environment_keys.sort();
     assert_eq!(
         registry
             .secret_environment_keys(&runtime_key)
             .await
             .unwrap(),
-        vec![environment_key.to_string()]
+        expected_environment_keys
     );
 
     service
@@ -334,6 +345,70 @@ async fn secured_provider_credentials_never_enter_codex_config() {
         .expect("secured Provider remains after Profile restart");
     assert_eq!(restarted_provider.model_count, 1);
     assert_eq!(restarted_provider.models[0].model_id, "provider-one-model");
+
+    service
+        .upsert(
+            actor,
+            "environment-provider",
+            UpsertProviderRequest {
+                name: "Environment Provider".to_string(),
+                base_url: format!("{models_uri}/provider-two/v1"),
+                wire_api: "chat".to_string(),
+                credentials: ProviderCredentialInput::Environment {
+                    env_key: external_environment_key.to_string(),
+                },
+                select: false,
+            },
+        )
+        .await
+        .expect("create environment-backed Provider");
+    service
+        .refresh_models(actor, "environment-provider")
+        .await
+        .expect("refresh environment-backed Provider before restore");
+    service
+        .restore_persisted_configuration()
+        .await
+        .expect("restore persisted Provider configuration");
+    let restored_environment_catalog = service
+        .refresh_models(actor, "environment-provider")
+        .await
+        .expect("refresh environment-backed Provider after restore");
+    assert_eq!(
+        restored_environment_catalog
+            .data
+            .iter()
+            .find(|provider| provider.id == "environment-provider")
+            .expect("restored environment-backed Provider")
+            .models[0]
+            .model_id,
+        "provider-two-model"
+    );
+    let persisted_environment_key: Option<String> = sqlx::query_scalar(
+        "SELECT credential_env_key FROM profile_provider_definitions WHERE profile_id = $1 AND provider_id = $2",
+    )
+    .bind(profile_id)
+    .bind("environment-provider")
+    .fetch_one(&db)
+    .await
+    .expect("persisted environment credential source");
+    assert_eq!(
+        persisted_environment_key.as_deref(),
+        Some(external_environment_key)
+    );
+    let persisted_direct_environment_key: Option<String> = sqlx::query_scalar(
+        "SELECT credential_env_key FROM profile_provider_definitions WHERE profile_id = $1 AND provider_id = $2",
+    )
+    .bind(profile_id)
+    .bind("secured-provider")
+    .fetch_one(&db)
+    .await
+    .expect("persisted direct credential source");
+    assert_eq!(persisted_direct_environment_key, None);
+    let config =
+        std::fs::read_to_string(home.join("config.toml")).expect("read restored Codex config");
+    assert!(config.contains(external_environment_key));
+    assert!(!config.contains(external_environment_secret));
     service
         .update_model(
             actor,
@@ -368,6 +443,10 @@ async fn secured_provider_credentials_never_enter_codex_config() {
         .await
         .expect("select built-in Provider");
     service
+        .delete(actor, "environment-provider")
+        .await
+        .expect("delete environment-backed Provider");
+    service
         .delete(actor, "secured-provider")
         .await
         .expect("delete secured Provider");
@@ -378,11 +457,13 @@ async fn secured_provider_credentials_never_enter_codex_config() {
             .await
             .unwrap();
     assert_eq!(remaining, 0);
-    assert!(registry
-        .secret_environment_keys(&runtime_key)
-        .await
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        registry
+            .secret_environment_keys(&runtime_key)
+            .await
+            .unwrap(),
+        vec![external_environment_key.to_string()]
+    );
 
     registry
         .shutdown(&runtime_key)
