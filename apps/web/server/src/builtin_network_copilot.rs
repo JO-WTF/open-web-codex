@@ -756,6 +756,10 @@ mod tests {
             "下游 Tool 同时接收 result 与 comparison 时，comparison 必须由同一个 exact result 产生"
         ));
         assert!(NETWORK_ROLE.contains("call the matching domain Tool directly"));
+        assert!(NETWORK_ROLE.contains("call assess_facility_change exactly once"));
+        assert!(NETWORK_ROLE.contains(
+            "do not call read_mcp_resource, evaluate_facility_scenario, or compare_network_scenarios"
+        ));
         assert!(NETWORK_ROLE.contains("pass its arguments unchanged"));
         for deprecated in [
             "compute_optimal_assignment",
