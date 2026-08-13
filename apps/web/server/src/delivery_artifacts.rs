@@ -1,30 +1,15 @@
 use jsonschema::{Draft, JSONSchema};
 use open_web_codex_platform_contracts::{ArtifactFailureSummary, ArtifactState};
 use serde_json::{json, Map, Value};
-use std::sync::OnceLock;
 use uuid::Uuid;
+
+use crate::delivery_contracts::{ContentVerifier, DeliveryKind, DeliveryRegistry};
 
 const MAX_FINAL_ARTIFACT_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_ARTIFACT_JSON_DEPTH: usize = 32;
 const MAX_ARTIFACT_JSON_NODES: usize = 100_000;
 const MAX_ARTIFACT_JSON_STRING_BYTES: usize = 64 * 1024;
 const MAX_ARTIFACT_MARKDOWN_LINE_BYTES: usize = 16 * 1024;
-const NETWORK_REPORT_MARKDOWN_SCHEMA: &str = "network_planning_report_markdown.v1";
-const NETWORK_REPORT_MARKDOWN_MARKER: &str = "<!-- network_planning_report_markdown.v1 -->";
-
-const NETWORK_MAP_SCHEMA: &str = include_str!(
-    "../../../../copilots/warehouse-network/tools/planner/contracts/schemas/\
-network_comparison_map_bundle.v1.schema.json"
-);
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FinalArtifactContract {
-    pub server: &'static str,
-    pub tool: &'static str,
-    pub schema: &'static str,
-    pub display_name: &'static str,
-    pub mime_type: &'static str,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FinalArtifactCandidate {
     pub schema: String,
@@ -32,40 +17,19 @@ pub(crate) struct FinalArtifactCandidate {
     pub mime_type: String,
     pub workspace_relative_path: String,
     pub byte_size: i64,
+    pub verifier_snapshot: Value,
 }
 
-const CONTRACTS: &[FinalArtifactContract] = &[
-    FinalArtifactContract {
-        server: "supply_chain",
-        tool: "render_network_comparison_map",
-        schema: "network_comparison_map_bundle.v1",
-        display_name: "Warehouse network: baseline vs selected facilities",
-        mime_type: "application/json",
-    },
-    FinalArtifactContract {
-        server: "supply_chain",
-        tool: "publish_network_planning_report",
-        schema: NETWORK_REPORT_MARKDOWN_SCHEMA,
-        display_name: "Warehouse network planning report",
-        mime_type: "text/markdown",
-    },
-];
-
-pub(crate) fn final_artifact_candidate(
+pub(crate) fn final_artifact_candidate_with_registry(
     item: &Map<String, Value>,
+    registry: &DeliveryRegistry,
 ) -> Result<Option<FinalArtifactCandidate>, &'static str> {
-    let Some(server) = item.get("server").and_then(Value::as_str) else {
+    let Some(contract) = registry.for_item(item) else {
         return Ok(None);
     };
-    let Some(tool) = item.get("tool").and_then(Value::as_str) else {
+    if !matches!(contract.kind, DeliveryKind::WorkspaceArtifact { .. }) {
         return Ok(None);
-    };
-    let Some(contract) = CONTRACTS
-        .iter()
-        .find(|contract| contract.server == server && contract.tool == tool)
-    else {
-        return Ok(None);
-    };
+    }
     let status = item.get("status").and_then(Value::as_str);
     if status != Some("completed") {
         return Err("artifact_delivery_invalid");
@@ -110,9 +74,10 @@ pub(crate) fn final_artifact_candidate(
     {
         return Err("final_artifact_descriptor_invalid");
     }
-    if artifact.get("schema").and_then(Value::as_str) != Some(contract.schema)
-        || artifact.get("displayName").and_then(Value::as_str) != Some(contract.display_name)
-        || artifact.get("mimeType").and_then(Value::as_str) != Some(contract.mime_type)
+    if artifact.get("schema").and_then(Value::as_str) != Some(contract.schema.as_str())
+        || artifact.get("displayName").and_then(Value::as_str)
+            != Some(contract.display_name.as_str())
+        || artifact.get("mimeType").and_then(Value::as_str) != Some(contract.mime_type.as_str())
     {
         return Err("final_artifact_contract_mismatch");
     }
@@ -133,52 +98,82 @@ pub(crate) fn final_artifact_candidate(
         mime_type: contract.mime_type.to_string(),
         workspace_relative_path: relative_path.to_string(),
         byte_size,
+        verifier_snapshot: match &contract.kind {
+            DeliveryKind::WorkspaceArtifact { verifier } => verifier.snapshot(),
+            DeliveryKind::InlineGeoJsonMapCard => return Err("artifact_delivery_invalid"),
+        },
     }))
 }
 
-pub(crate) fn validate_materialized_bundle(
+pub(crate) fn validate_materialized_bundle_with_registry(
     declared_schema: &str,
+    declared_mime_type: &str,
     bytes: &[u8],
+    registry: &DeliveryRegistry,
 ) -> Result<(), &'static str> {
-    let contract = CONTRACTS
-        .iter()
-        .find(|contract| contract.schema == declared_schema)
+    let contract = registry
+        .workspace_by_schema_mime(declared_schema, declared_mime_type)
         .ok_or("artifact_schema_unsupported")?;
-    if contract.mime_type == "text/markdown" {
-        return validate_browser_safe_markdown(bytes);
-    }
-    let root = serde_json::from_slice::<Value>(bytes).map_err(|_| "artifact_json_invalid")?;
-    if !root.is_object() {
-        return Err("artifact_bundle_invalid");
-    }
-    let validator = compiled_provider_schema(contract.schema)?;
-    validator
-        .validate(&root)
-        .map_err(|_| "artifact_bundle_contract_mismatch")?;
-    validate_browser_safe_json(bytes, &root)?;
-    Ok(())
-}
-
-fn compiled_provider_schema(schema: &str) -> Result<&'static JSONSchema, &'static str> {
-    fn compile(fixture: &str) -> Result<JSONSchema, ()> {
-        let schema = serde_json::from_str::<Value>(fixture).map_err(|_| ())?;
-        JSONSchema::options()
-            .with_draft(Draft::Draft202012)
-            .compile(&schema)
-            .map_err(|_| ())
-    }
-
-    static MAP: OnceLock<Result<JSONSchema, ()>> = OnceLock::new();
-    let result = match schema {
-        "network_comparison_map_bundle.v1" => MAP.get_or_init(|| compile(NETWORK_MAP_SCHEMA)),
-        _ => return Err("artifact_schema_unsupported"),
+    let DeliveryKind::WorkspaceArtifact { verifier } = &contract.kind else {
+        return Err("artifact_schema_unsupported");
     };
-    result
-        .as_ref()
-        .map_err(|_| "artifact_bundle_contract_mismatch")
+    validate_materialized_bundle_with_snapshot(
+        declared_schema,
+        declared_mime_type,
+        bytes,
+        &verifier.snapshot(),
+    )
 }
 
-fn validate_browser_safe_markdown(bytes: &[u8]) -> Result<(), &'static str> {
+pub(crate) fn validate_materialized_bundle_with_snapshot(
+    _declared_schema: &str,
+    _declared_mime_type: &str,
+    bytes: &[u8],
+    verifier_snapshot: &Value,
+) -> Result<(), &'static str> {
+    let verifier = ContentVerifier::from_snapshot(verifier_snapshot)?;
+    match verifier {
+        ContentVerifier::MarkdownMarker { marker } => {
+            validate_browser_safe_markdown(bytes, &marker)
+        }
+        ContentVerifier::JsonSchema { document } => {
+            let root =
+                serde_json::from_slice::<Value>(bytes).map_err(|_| "artifact_json_invalid")?;
+            if !root.is_object() {
+                return Err("artifact_bundle_invalid");
+            }
+            JSONSchema::options()
+                .with_draft(Draft::Draft202012)
+                .compile(&document)
+                .map_err(|_| "artifact_bundle_contract_mismatch")?
+                .validate(&root)
+                .map_err(|_| "artifact_bundle_contract_mismatch")?;
+            validate_browser_safe_json(bytes, &root)
+        }
+    }
+}
+
+#[cfg(test)]
+fn final_artifact_candidate(
+    item: &Map<String, Value>,
+) -> Result<Option<FinalArtifactCandidate>, &'static str> {
+    final_artifact_candidate_with_registry(
+        item,
+        &crate::delivery_contracts::warehouse_test_registry(),
+    )
+}
+
+#[cfg(test)]
+fn validate_materialized_bundle(declared_schema: &str, bytes: &[u8]) -> Result<(), &'static str> {
+    let registry = crate::delivery_contracts::warehouse_test_registry();
+    let mime_type = registry
+        .workspace_by_schema_mime(declared_schema, "application/json")
+        .map(|_| "application/json")
+        .unwrap_or("text/markdown");
+    validate_materialized_bundle_with_registry(declared_schema, mime_type, bytes, &registry)
+}
+
+fn validate_browser_safe_markdown(bytes: &[u8], marker: &str) -> Result<(), &'static str> {
     if bytes.len() > MAX_FINAL_ARTIFACT_BYTES as usize {
         return Err("artifact_content_unsafe");
     }
@@ -193,7 +188,7 @@ fn validate_browser_safe_markdown(bytes: &[u8]) -> Result<(), &'static str> {
     {
         return Err("artifact_bundle_contract_mismatch");
     }
-    let marker_prefix = format!("\n{NETWORK_REPORT_MARKDOWN_MARKER}\n");
+    let marker_prefix = format!("\n{marker}\n");
     let body = remainder
         .strip_prefix(&marker_prefix)
         .ok_or("artifact_bundle_contract_mismatch")?;

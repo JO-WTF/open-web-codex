@@ -3,6 +3,7 @@ pub mod artifacts;
 pub mod bootstrap;
 pub mod browser_workspaces;
 pub mod configuration;
+pub mod copilots;
 pub mod events;
 pub mod generation;
 pub mod github;
@@ -24,6 +25,8 @@ pub mod workspaces;
 
 use std::sync::Arc;
 
+use crate::copilot_installation::CopilotInstallationService;
+use crate::delivery_contracts::DeliveryRegistry;
 use axum::{Extension, Router};
 use open_web_codex_adapter::CodexAdapter;
 use open_web_codex_approval_service::ApprovalService;
@@ -49,6 +52,8 @@ pub fn router(
     orchestrator: Arc<RunOrchestrator>,
     configuration_secrets: Arc<PostgresSecretStore>,
     profile: RuntimeProfileBinding,
+    deliveries: Arc<DeliveryRegistry>,
+    copilots: Arc<CopilotInstallationService>,
 ) -> Router<AppState> {
     Router::new()
         .route("/bootstrap", axum::routing::post(bootstrap::bootstrap))
@@ -123,6 +128,15 @@ pub fn router(
             axum::routing::get(profile::experimental_features),
         )
         .route("/profile/skills", axum::routing::get(profile::skills))
+        .route("/profile/copilots", axum::routing::get(copilots::status))
+        .route(
+            "/profile/copilots/activate",
+            axum::routing::post(copilots::activate),
+        )
+        .route(
+            "/profile/copilots/deactivate",
+            axum::routing::post(copilots::deactivate),
+        )
         .route(
             "/profile/features/{name}",
             axum::routing::put(profile_content::set_experimental_feature),
@@ -494,4 +508,6 @@ pub fn router(
         .layer(Extension(orchestrator))
         .layer(Extension(configuration_secrets))
         .layer(Extension(profile))
+        .layer(Extension(deliveries))
+        .layer(Extension(copilots))
 }

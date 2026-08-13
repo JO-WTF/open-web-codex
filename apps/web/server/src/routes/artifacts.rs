@@ -16,8 +16,12 @@ use sqlx::{PgPool, Row};
 use tokio::sync::broadcast::Sender;
 use uuid::Uuid;
 
+use crate::delivery_artifacts::{
+    artifact_delivery_projection, validate_materialized_bundle_with_registry,
+    validate_materialized_bundle_with_snapshot,
+};
+use crate::delivery_contracts::DeliveryRegistry;
 use crate::event_projection::LiveProjection;
-use crate::final_artifacts::{artifact_delivery_projection, validate_materialized_bundle};
 use crate::middleware::auth::AuthenticatedUser;
 
 type ApiError = (StatusCode, Json<PlatformError>);
@@ -300,11 +304,11 @@ async fn materialize_artifact(
              SET state = 'materializing', updated_at = now()
              WHERE id = $1 AND state = 'pending'
              RETURNING id, organization_id, workspace_id, source_relative_path,
-                       artifact_schema, mime_type, expected_size
+                       artifact_schema, mime_type, expected_size, delivery_verifier
          )
          SELECT claimed.organization_id, claimed.workspace_id,
                 claimed.source_relative_path, claimed.artifact_schema, claimed.mime_type,
-                claimed.expected_size
+                claimed.expected_size, claimed.delivery_verifier
          FROM claimed",
     )
     .bind(artifact_id)
@@ -333,7 +337,15 @@ async fn materialize_artifact(
         }
     };
     let declared_schema: String = row.get("artifact_schema");
-    if let Err(code) = validate_downloaded_artifact(&declared_schema, expected_size, &bytes) {
+    let declared_mime_type: String = row.get("mime_type");
+    let verifier_snapshot: serde_json::Value = row.get("delivery_verifier");
+    if let Err(code) = validate_downloaded_artifact_with_snapshot(
+        &declared_schema,
+        &declared_mime_type,
+        expected_size,
+        &bytes,
+        &verifier_snapshot,
+    ) {
         return fail_materialization(db, artifact_id, code).await;
     }
 
@@ -615,10 +627,12 @@ fn supported_artifact_mime(value: &str) -> bool {
     )
 }
 
-fn validate_downloaded_artifact(
+fn validate_downloaded_artifact_with_registry(
     declared_schema: &str,
+    declared_mime_type: &str,
     expected_size: i64,
     bytes: &[u8],
+    deliveries: &DeliveryRegistry,
 ) -> Result<(), &'static str> {
     if bytes.len() > MAX_ARTIFACT_BYTES {
         return Err("size_limit");
@@ -626,7 +640,54 @@ fn validate_downloaded_artifact(
     if i64::try_from(bytes.len()).ok() != Some(expected_size) {
         return Err("size_mismatch");
     }
-    validate_materialized_bundle(declared_schema, bytes)
+    validate_materialized_bundle_with_registry(
+        declared_schema,
+        declared_mime_type,
+        bytes,
+        deliveries,
+    )
+}
+
+fn validate_downloaded_artifact_with_snapshot(
+    declared_schema: &str,
+    declared_mime_type: &str,
+    expected_size: i64,
+    bytes: &[u8],
+    verifier_snapshot: &serde_json::Value,
+) -> Result<(), &'static str> {
+    if bytes.len() > MAX_ARTIFACT_BYTES {
+        return Err("size_limit");
+    }
+    if i64::try_from(bytes.len()).ok() != Some(expected_size) {
+        return Err("size_mismatch");
+    }
+    validate_materialized_bundle_with_snapshot(
+        declared_schema,
+        declared_mime_type,
+        bytes,
+        verifier_snapshot,
+    )
+}
+
+#[cfg(test)]
+fn validate_downloaded_artifact(
+    declared_schema: &str,
+    expected_size: i64,
+    bytes: &[u8],
+) -> Result<(), &'static str> {
+    let registry = crate::delivery_contracts::warehouse_test_registry();
+    let mime_type = if declared_schema == "network_planning_report_markdown.v1" {
+        "text/markdown"
+    } else {
+        "application/json"
+    };
+    validate_downloaded_artifact_with_registry(
+        declared_schema,
+        mime_type,
+        expected_size,
+        bytes,
+        &registry,
+    )
 }
 
 fn not_found() -> ApiError {

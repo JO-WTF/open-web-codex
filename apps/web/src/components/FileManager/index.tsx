@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
+import { createPortal } from "react-dom";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import Download from "lucide-react/dist/esm/icons/download";
 import Folder from "lucide-react/dist/esm/icons/folder";
@@ -72,12 +73,16 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
   const [treeOpen, setTreeOpen] = useState(true);
   const [query, setQuery] = useState("");
   const [fileActionPath, setFileActionPath] = useState<string | null>(null);
+  const [pendingDeletePath, setPendingDeletePath] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const uploadInput = useRef<HTMLInputElement | null>(null);
   const resizeSession = useRef<ResizeSession | null>(null);
   const refreshRequest = useRef(0);
   const dragDepth = useRef(0);
+  const deleteTitleId = useId();
+  const deleteDescriptionId = useId();
 
   const refresh = async () => {
     if (!workspaceId) return;
@@ -135,6 +140,22 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
     resizeSession.current?.cleanup(false);
   }, []);
 
+  useEffect(() => {
+    setPendingDeletePath(null);
+    setDeleteError(null);
+  }, [workspaceId]);
+
+  useEffect(() => {
+    if (!pendingDeletePath) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || fileActionPath === pendingDeletePath) return;
+      setPendingDeletePath(null);
+      setDeleteError(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [fileActionPath, pendingDeletePath]);
+
   const handleDownload = async (path: string) => {
     if (!workspaceId || !downloadFile) return;
     setFileActionPath(path);
@@ -160,16 +181,18 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
     }
   };
 
-  const handleDelete = async (path: string) => {
-    if (!workspaceId || !deleteFile || !window.confirm(`Delete ${path}?`)) return;
+  const handleDelete = async () => {
+    const path = pendingDeletePath;
+    if (!workspaceId || !deleteFile || !path) return;
     setFileActionPath(path);
-    setError(null);
+    setDeleteError(null);
     try {
       await deleteFile(workspaceId, path);
       if (selectedPath === path) onSelectedPathChange(null);
+      setPendingDeletePath(null);
       await refresh();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setDeleteError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setFileActionPath(null);
     }
@@ -278,7 +301,7 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
   }, [expanded, files, query]);
   const markdownPreview = Boolean(selectedPath && MARKDOWN_FILE_PATTERN.test(selectedPath));
   const clampPanelWidth = (width: number) => Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, width));
-  return (
+  return <>
     <aside className={`web-file-manager${embedded ? " is-embedded" : ""}`} aria-label="Workspace files">
       {!embedded ? <div
         className="web-file-manager-resizer"
@@ -427,7 +450,11 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
                     aria-label={`Delete ${row.path}`}
                     title="Delete file"
                     disabled={actionPending}
-                    onClick={(event) => { event.stopPropagation(); void handleDelete(row.path); }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setDeleteError(null);
+                      setPendingDeletePath(row.path);
+                    }}
                   ><Trash2 size={13} aria-hidden="true" /></button> : null}
                 </div> : null}
               </div>;
@@ -447,5 +474,54 @@ export default function FileManager({ workspaceId, selectedPath, onSelectedPathC
         ) : <pre><code>{content}</code></pre> : <div className="web-file-empty">Select a file to preview</div>}
       </div>
     </aside>
-  );
+    {pendingDeletePath ? createPortal(
+      <div
+        className="web-settings-backdrop"
+        onMouseDown={(event) => {
+          if (event.target !== event.currentTarget || fileActionPath === pendingDeletePath) return;
+          setPendingDeletePath(null);
+          setDeleteError(null);
+        }}
+      >
+        <section
+          className="web-file-delete-modal"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby={deleteTitleId}
+          aria-describedby={deleteDescriptionId}
+        >
+          <div className="web-file-delete-modal-icon"><Trash2 size={18} aria-hidden="true" /></div>
+          <div className="web-file-delete-modal-copy">
+            <h2 id={deleteTitleId}>Delete file?</h2>
+            <p id={deleteDescriptionId}>
+              “{pendingDeletePath}” will be permanently removed from this Workspace.
+            </p>
+            {deleteError ? <p className="web-file-delete-error" role="alert">{deleteError}</p> : null}
+          </div>
+          <div className="web-file-delete-modal-actions">
+            <button
+              type="button"
+              disabled={fileActionPath === pendingDeletePath}
+              onClick={() => {
+                setPendingDeletePath(null);
+                setDeleteError(null);
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="is-danger"
+              autoFocus
+              disabled={fileActionPath === pendingDeletePath}
+              onClick={() => void handleDelete()}
+            >
+              {fileActionPath === pendingDeletePath ? "Deleting…" : "Delete"}
+            </button>
+          </div>
+        </section>
+      </div>,
+      document.body,
+    ) : null}
+  </>;
 }

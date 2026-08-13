@@ -45,7 +45,7 @@ class CopilotDevProfileTests(unittest.TestCase):
             'name = "worker"\n[[skills.config]]\nname = "supervisor"\nenabled = true\n'
             '[plugins.native]\nenabled = true\n'
             '[plugins.native.mcp_servers.native]\n'
-            'enabled = true\ndefault_tools_approval_mode = "approve"\n'
+            'enabled = true\nrequired = true\ndefault_tools_approval_mode = "approve"\n'
             'enabled_tools = ["health"]\n',
             encoding="utf-8",
         )
@@ -115,6 +115,7 @@ class CopilotDevProfileTests(unittest.TestCase):
                 runtime_role = __import__("tomllib").load(handle)
             policy = runtime_role["plugins"]["native"]["mcp_servers"]["native"]
             self.assertEqual(policy["enabled_tools"], ["health"])
+            self.assertTrue(policy["required"])
             self.assertEqual(policy["default_tools_approval_mode"], "approve")
             self.assertNotIn("mcp_servers", runtime_role)
             self.assertFalse((profile / "tools").exists())

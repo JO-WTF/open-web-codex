@@ -1668,6 +1668,84 @@ pub struct ProviderCatalog {
     pub current_model_id: Option<String>,
 }
 
+// ── Copilot Profile installation ──────────────────────────────────────────
+
+/// Current lifecycle projection for one Profile installation. `Ready` is only
+/// returned after discovery by the current Runtime instance; it is not a
+/// durable database state.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CopilotInstallationState {
+    Installed,
+    Configured,
+    Ready,
+    Unavailable,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CopilotInstallationSummary {
+    pub package_id: String,
+    pub source_revision: String,
+    pub active: bool,
+    pub state: CopilotInstallationState,
+    pub restart_required: bool,
+    pub managed_skill_ids: Vec<String>,
+    pub managed_agent_role_ids: Vec<String>,
+    pub runtime_discovered_skill_ids: Vec<String>,
+    pub runtime_discovered_mcp_server_ids: Vec<String>,
+    /// Agent Roles have no official static list endpoint. This only reports
+    /// that their native files were configured before Runtime startup.
+    pub agent_roles_configured: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_code: Option<String>,
+}
+
+/// Activates one package from the server's explicitly registered application
+/// sources. Filesystem paths are intentionally absent from this browser DTO.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ActivateCopilotRequest {
+    pub package_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AvailableCopilotPackage {
+    pub package_id: String,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CopilotProfileStatus {
+    pub packages: Vec<AvailableCopilotPackage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation: Option<CopilotInstallationSummary>,
+}
+
+#[cfg(test)]
+mod copilot_installation_contract_tests {
+    use super::*;
+
+    #[test]
+    fn activation_accepts_only_a_package_id_and_never_a_server_path() {
+        let request: ActivateCopilotRequest = serde_json::from_value(serde_json::json!({
+            "packageId": "private-package"
+        }))
+        .expect("typed activation");
+        assert_eq!(request.package_id, "private-package");
+        assert!(
+            serde_json::from_value::<ActivateCopilotRequest>(serde_json::json!({
+                "packageId": "private-package",
+                "packageRoot": "/private/server/package"
+            }))
+            .is_err()
+        );
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(
     tag = "mode",

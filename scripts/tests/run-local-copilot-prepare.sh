@@ -8,11 +8,17 @@ launcher="$repo_root/scripts/run-local.sh"
 bash -n "$launcher"
 
 [[ "$(grep -c -- '-m copilot_sdk prepare' "$launcher")" == "1" ]]
-grep -F -- 'copilot_package_root="$repo_root/copilots/warehouse-network"' "$launcher" >/dev/null
-grep -F -- '-m copilot_sdk prepare "$copilot_package_root"' "$launcher" >/dev/null
-grep -F -- '--output-root "$copilot_environment_root"' "$launcher" >/dev/null
-grep -F -- '--copilot-package-root "$copilot_package_root"' "$launcher" >/dev/null
-grep -F -- '--copilot-prepared-descriptor "$copilot_prepared_descriptor"' "$launcher" >/dev/null
+grep -F -- 'warehouse_copilot_package_root="$repo_root/copilots/warehouse-network"' "$launcher" >/dev/null
+grep -F -- 'meeting_copilot_package_root="$repo_root/copilots/meeting-action-review"' "$launcher" >/dev/null
+grep -F -- 'copilot_sdk_environment_root="$data_dir/sdk-environments/copilot"' "$launcher" >/dev/null
+grep -F -- '-e "$repo_root/tools/copilot-provider-sdk"' "$launcher" >/dev/null
+grep -F -- '-e "$repo_root/tools/copilot-sdk"' "$launcher" >/dev/null
+grep -F -- '"$copilot_sdk_python" -m copilot_sdk prepare "$package_root"' "$launcher" >/dev/null
+grep -F -- '--output-root "$environment_root"' "$launcher" >/dev/null
+! grep -F -- 'PYTHONPATH=' "$launcher" >/dev/null
+grep -F -- '--copilot-package-source "warehouse-network-copilot" "$warehouse_copilot_package_root" "$warehouse_copilot_prepared_descriptor"' "$launcher" >/dev/null
+grep -F -- '--copilot-package-source "meeting-action-review" "$meeting_copilot_package_root" "$meeting_copilot_prepared_descriptor"' "$launcher" >/dev/null
+grep -F -- '--default-copilot-package "warehouse-network-copilot"' "$launcher" >/dev/null
 
 for obsolete in \
   OPEN_WEB_CODEX_MAPS_ASSET_ROOT \

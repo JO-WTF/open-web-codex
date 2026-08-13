@@ -46,6 +46,11 @@ Data Tool 会把用户输入中完整的起点、终点、距离、时长与来�
 加权的覆盖指标，并以 typed Resource 支持实际基线、优化基线或场景之间的比较；模型只负责解释，
 不自行汇总这些数值。
 
+地图数据合同只发布仓库、需求城市、分配关系以及逐城市距离、时长和成本等原始事实，不包含
+标题、图层、颜色、大小、标签、悬浮信息或图例。Network Skill 根据用户当次自然语言要求，
+把 Planner 返回的完整 `data_ref` 交给通用 `map_utils/create_map_card`，并用标准 Mapbox Style
+表达本次展示意图；改变样式不会改变或重新发布仓网业务数据。
+
 `assess_facility_change` 接受精确的标准化输入、路线、可选成本以及 baseline/scenario/facility
 结果引用，以引用中的活动仓集合为起点，一次完成增仓、关仓或迁仓后的分配求解和前后比较。
 它发布完整的 `network_scenario.v2` 与 `network_assignment_comparison.v2` Resource，同时只把
@@ -104,7 +109,8 @@ python3 copilots/warehouse-network/tools/planner/scripts/generate_indonesia_tuto
 ## 开发和验证
 
 ```bash
-PYTHONPATH=tools/copilot-sdk python3 -m copilot_sdk prepare copilots/warehouse-network \
+python3 -m pip install -e tools/copilot-provider-sdk -e tools/copilot-sdk
+python3 -m copilot_sdk prepare copilots/warehouse-network \
   --output-root "$PWD/.local/open-web-codex/copilot-environment"
 python3 -m pip install -e 'copilots/warehouse-network/tools/planner[dev]'
 python3 -m pytest copilots/warehouse-network/tools/planner/tests -q

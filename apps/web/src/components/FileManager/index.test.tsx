@@ -76,8 +76,6 @@ describe("FileManager", () => {
       createObjectURL: vi.fn().mockReturnValue("blob:workspace-file"),
       revokeObjectURL: vi.fn(),
     });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-
     render(
       <FileManager
         workspaceId="workspace-1"
@@ -99,8 +97,64 @@ describe("FileManager", () => {
     await waitFor(() => expect(downloadFile).toHaveBeenCalledWith("workspace-1", "README.md"));
 
     fireEvent.click(screen.getByRole("button", { name: "Delete README.md" }));
+    expect(deleteFile).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog", { name: "Delete file?" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Delete$/ }));
     await waitFor(() => expect(deleteFile).toHaveBeenCalledWith("workspace-1", "README.md"));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     await waitFor(() => expect(screen.getByText("No Workspace files yet")).toBeTruthy());
+  });
+
+  it("cancels file deletion without calling the workspace API", async () => {
+    const deleteFile = vi.fn().mockResolvedValue({ status: "deleted", path: "README.md" });
+    render(
+      <FileManager
+        workspaceId="workspace-1"
+        selectedPath={null}
+        onSelectedPathChange={vi.fn()}
+        onClose={vi.fn()}
+        panelWidth={360}
+        onPanelWidthChange={vi.fn()}
+        listFiles={vi.fn().mockResolvedValue(["README.md"])}
+        readFile={vi.fn().mockResolvedValue({ content: "", truncated: false })}
+        deleteFile={deleteFile}
+        loadGitStatus={vi.fn().mockResolvedValue({ files: [] })}
+      />,
+    );
+
+    await screen.findByText("README.md");
+    fireEvent.click(screen.getByRole("button", { name: "Delete README.md" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(deleteFile).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByText("README.md")).toBeTruthy();
+  });
+
+  it("keeps the deletion dialog open when the workspace API rejects the request", async () => {
+    const deleteFile = vi.fn().mockRejectedValue(new Error("Workspace file could not be deleted"));
+    render(
+      <FileManager
+        workspaceId="workspace-1"
+        selectedPath={null}
+        onSelectedPathChange={vi.fn()}
+        onClose={vi.fn()}
+        panelWidth={360}
+        onPanelWidthChange={vi.fn()}
+        listFiles={vi.fn().mockResolvedValue(["README.md"])}
+        readFile={vi.fn().mockResolvedValue({ content: "", truncated: false })}
+        deleteFile={deleteFile}
+        loadGitStatus={vi.fn().mockResolvedValue({ files: [] })}
+      />,
+    );
+
+    await screen.findByText("README.md");
+    fireEvent.click(screen.getByRole("button", { name: "Delete README.md" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Delete$/ }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Workspace file could not be deleted");
+    expect(screen.getByRole("alertdialog", { name: "Delete file?" })).toBeTruthy();
+    expect(screen.getByText("README.md")).toBeTruthy();
   });
 
   it("uploads dropped files into the Workspace and refreshes the tree", async () => {

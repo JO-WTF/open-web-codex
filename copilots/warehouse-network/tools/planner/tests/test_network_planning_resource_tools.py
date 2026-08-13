@@ -12,6 +12,13 @@ from _network_fixtures import (
     indonesia_provided_route_facts,
     indonesia_route_quotes,
 )
+from open_web_codex_provider import (
+    McpResourceRuntime,
+    ProviderContractError,
+    PublishedResource,
+    ResourceRef,
+    ResourceStore,
+)
 from pydantic import ValidationError
 from supply_chain_planner.delivery.map_service import NetworkComparisonMapBundle
 from supply_chain_planner.delivery.report_service import (
@@ -33,12 +40,6 @@ from supply_chain_planner.network.optimization_models import (
     ServiceCoverageConstraint,
 )
 from supply_chain_planner.network.solver import compare_assignments, solve_assignment
-from supply_chain_planner.resources.contracts import ResourceRef
-from supply_chain_planner.resources.runtime import (
-    McpResourceContractError,
-    McpResourceRuntime,
-)
-from supply_chain_planner.resources.store import PublishedResource, ResourceStore
 from supply_chain_planner.shared.models import (
     FacilityChangeAssessmentToolResult,
     NetworkBaselineReportInput,
@@ -48,12 +49,18 @@ from supply_chain_planner.shared.models import (
     PreparedNetworkResource,
 )
 
+McpResourceContractError = ProviderContractError
+
 BEKASI_ID = "WH-CROSS_DOCKING-BEKASI"
 
 
-def _resource_ref(published: PublishedResource) -> ResourceRef:
+def _resource_ref(
+    published: PublishedResource,
+    *,
+    server_name: str = server.NETWORK_MCP_SERVER_NAME,
+) -> ResourceRef:
     return ResourceRef(
-        server=server.MCP_SERVER_NAME,
+        server=server_name,
         resource_schema=published.schema,
         uri=published.uri,
     )
@@ -72,7 +79,7 @@ def _runtime(tmp_path: Path, monkeypatch) -> tuple[Path, ResourceStore]:
         McpResourceRuntime(
             workspace,
             tmp_path / "profile",
-            server.MCP_SERVER_NAME,
+            server.NETWORK_MCP_SERVER_NAME,
             "supply-chain://resources/",
             store=store,
         ),
@@ -139,7 +146,10 @@ def _published_network(
         warehouse.warehouse_id for warehouse in fixture.warehouses if not warehouse.is_existing
     }
     return (
-        _resource_ref(store.publish(prepared.schema_version, prepared)),
+        _resource_ref(
+            store.publish(prepared.schema_version, prepared),
+            server_name=server.DATA_MCP_SERVER_NAME,
+        ),
         _resource_ref(store.publish(routes.schema_version, routes)),
         _resource_ref(store.publish(costs.schema_version, costs)),
         existing_ids,
@@ -149,7 +159,9 @@ def _published_network(
 
 def _result_ref(result) -> ResourceRef:
     assert result.structuredContent is not None
-    return ResourceRef.model_validate(result.structuredContent["resource_ref"])
+    ref = ResourceRef.model_validate(result.structuredContent["resource_ref"])
+    assert ref.server == "supply_chain"
+    return ref
 
 
 def _sample2_resource_refs(
@@ -361,7 +373,7 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
 
 def test_facility_scenario_rejects_more_than_32_service_targets_before_loading() -> None:
     unused_ref = ResourceRef(
-        server=server.MCP_SERVER_NAME,
+        server=server.NETWORK_MCP_SERVER_NAME,
         uri="supply-chain://resources/not-loaded",
         resource_schema="normalized_network_input.v1",
     )
@@ -442,6 +454,10 @@ def test_s2_creates_inline_comparison_map_and_markdown_report_artifact(
         "WH-CANDIDATE-KENDARI",
         "WH-CANDIDATE-MANADO",
     ]
+    map_payload = map_bundle.model_dump(mode="json")
+    assert "title" not in map_payload
+    assert "layers" not in map_payload
+    assert "extensions" not in map_payload
     assert report_markdown.startswith("# 仓网规划结果简报\n")
     assert NETWORK_PLANNING_MARKDOWN_MARKER in report_markdown
     assert "## 执行摘要" in report_markdown
@@ -457,16 +473,25 @@ def test_s2_creates_inline_comparison_map_and_markdown_report_artifact(
 
     assert inline_map_result.structuredContent is not None
     assert inline_map_result.structuredContent["feature_count"] == 187
-    handoff = inline_map_result.structuredContent["map_card_handoff"]
-    assert handoff["schemaVersion"] == "network_comparison_map_card_handoff.v1"
-    assert handoff["tool"] == {
-        "server": "map_utils",
-        "name": "create_map_card",
+    assert set(inline_map_result.structuredContent) == {
+        "summary",
+        "resource_ref",
+        "data_ref",
+        "feature_count",
     }
-    assert [layer["id"] for layer in handoff["arguments"]["layers"]][:2] == [
-        "baseline-assignments",
-        "planned-assignments",
+    inline_payload = store.load(
+        ResourceRef.model_validate(inline_map_result.structuredContent["resource_ref"])
+    )
+    demand_properties = [
+        feature["properties"]
+        for feature in inline_payload["features"]
+        if feature["properties"]["kind"] == "demand"
     ]
+    assert len(demand_properties) == 50
+    assert all(item["baseline_duration_hours"] is not None for item in demand_properties)
+    assert all(item["facility_duration_hours"] is not None for item in demand_properties)
+    assert "layers" not in inline_payload
+    assert "extensions" not in inline_payload
 
     with pytest.raises(McpResourceContractError, match="workspace_file_invalid"):
         server.render_network_comparison_map(
@@ -650,7 +675,7 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(tmp_path: Path, mon
     assert same_scenario.affected_city_ids == []
 
     unsupported_ref = ResourceRef(
-        server=server.MCP_SERVER_NAME,
+        server=server.NETWORK_MCP_SERVER_NAME,
         uri=baseline_ref.uri,
         resource_schema="route_matrix.v2",
     )
@@ -724,7 +749,7 @@ def test_assess_facility_change_preserves_selected_candidates_and_matches_manual
     assert set(facility.opened_candidate_ids) <= set(scenario.active_warehouse_ids)
     assert set(scenario.active_warehouse_ids) == expected_active_ids
 
-    prepared = server._runtime().load_model(
+    prepared = server._data_resource_runtime().load_model(
         prepared_ref,
         "normalized_network_input.v1",
         PreparedNetworkResource,
@@ -988,14 +1013,15 @@ def test_baseline_and_p_median_reject_missing_explicit_inputs(tmp_path: Path, mo
     workspace, store = _runtime(tmp_path, monkeypatch)
     ctx = _context(workspace)
     prepared_ref, route_ref, cost_ref, existing_ids, candidate_ids = _published_network(store)
-    prepared = server._runtime().load_model(
+    prepared = server._data_resource_runtime().load_model(
         prepared_ref,
         "normalized_network_input.v1",
         PreparedNetworkResource,
     )
     without_current = prepared.model_copy(update={"current_assignments": []})
     without_current_ref = _resource_ref(
-        store.publish(without_current.schema_version, without_current)
+        store.publish(without_current.schema_version, without_current),
+        server_name=server.DATA_MCP_SERVER_NAME,
     )
     with pytest.raises(McpResourceContractError, match="current_assignments_required"):
         server.evaluate_network_baseline(

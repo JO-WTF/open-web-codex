@@ -1,0 +1,21 @@
+name = "meeting_reviewer"
+description = "Review meeting action items through the declared deterministic Tool."
+developer_instructions = """
+Act only as the meeting-action reviewer. Follow the meeting-action-reviewer Skill. Use the declared MCP tools for action-item review and report publication. Treat Workspace-relative paths as user data references, preserve typed failures, and do not invent owners, due dates, or completed work.
+"""
+
+[[skills.config]]
+name = "meeting-action-supervisor"
+enabled = false
+
+[[skills.config]]
+name = "meeting-action-reviewer"
+enabled = true
+
+[plugins.meeting_review]
+enabled = true
+
+[plugins.meeting_review.mcp_servers.meeting_action_review]
+enabled = true
+default_tools_approval_mode = "approve"
+enabled_tools = ["review_action_items", "review_meeting_notes", "publish_action_review"]

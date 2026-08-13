@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档性质 | 当前事实与证据 |
 | 观察日期 | 2026-08-13 |
-| 代码快照 | 阶段二通用 Tool 环境工作树（基于 `e492b7248d`） |
+| 代码快照 | 阶段二 Copilot 平台工作树（基于 `9530e5e54b`） |
 | 当前阶段 | 阶段二已进入；阶段一仓网 Copilot 正常业务闭环作为已通过基线 |
 | 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
 
@@ -14,8 +14,9 @@
 ## 1. 结论
 
 当前 checkout 已从 clean DB/Profile、真实 Web Task 入口、真实 Codex Runtime 和真实 Provider
-完成阶段一仓网正常业务闭环。这个结论只覆盖仓网参考 Copilot，不代表公开 Copilot SDK、
-Studio、第二领域、多用户产品或完整 hardening 矩阵已经完成。
+完成阶段一仓网正常业务闭环。这个结论只覆盖仓网参考 Copilot，不代表 Web Studio、
+Marketplace、多用户产品或完整 hardening 矩阵已经完成。第二领域参考包已进入应用可信 source
+注册和 Profile desired 安装合同，但尚未完成真实数据库生命周期或生产模型质量验收。
 
 阶段二 Copilot SDK 已提供 `copilot init` 源码脚手架和 `copilot validate` 静态组合
 验证；`copilot dev` 提供隔离 discovery probe：通过官方 app-server 握手、
@@ -23,8 +24,10 @@ Studio、第二领域、多用户产品或完整 hardening 矩阵已经完成。
 `mcpServerStatus/list` 验证声明能力可被 Runtime 发现。`copilot test` 另以本地确定性 Responses
 fixture 驱动真实 app-server，已从 fresh init 通过 Supervisor Skill、声明 Role、精确 MCP Tool
 参数/结构化结果、child terminal 和 Root terminal 的单条 normal case；PASS 不读取最终文本。
-它没有生产模型质量验收、生产 Profile 安装、readiness 持久化/聚合或 Web 创作链，因此不改变
-产品能力边界。
+它没有生产模型质量验收、Web 创作链、Catalog 或 Marketplace。Platform 现在已有单 Profile
+local/private package 安装正常链：应用显式注册 source，DB 持久 desired/configured/failure，
+Profile Host 在 Runtime 启动前收敛 Skill/Role，当前 Runtime 用官方 `skills/list` 即时证明 Skill
+discovery。`ready` 不持久；Role 静态 configured 与 native spawn acceptance 分开报告。
 当前 Tool 环境合同已收敛到通用 SDK owner：每个 `[[tools]]` 显式引用 `runtime.toml`，Tool
 source 只保留 Python/Node 项目 manifest、hash lock、server entry/env binding 声明与领域代码。
 SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，生成内部
@@ -57,9 +60,9 @@ SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，�
 | Root 用户输入与 execution projection | 阶段一 normal path 可用；pending approval 刷新恢复已通过 |
 | Tool/Skill SDK 与 Studio | Copilot 源码 `init`/`validate`、通用环境 `prepare`、隔离 `dev` 与本地 fixture `test` 存在；旧 Web Studio 已删除 |
 | Agent/Supervisor 创作 | 旧 Web authoring 已删除；阶段一仅直接编辑 Profile Skill/Role |
-| Copilot 编译、Profile 安装和通用 Runtime discovery | 尚无生产安装链；开发者包已有独立真实 gate |
+| Copilot 编译、Profile 安装和通用 Runtime discovery | 单 Profile local/private source 的持久安装、停用与冷启动收敛已实现；当前 Runtime Skill discovery 即时验证，Role spawn 仍由独立真实 gate 证明 |
 | 算法工程师自助扩展 | 未实现 |
-| 第二领域与多用户隔离 | 未验证 |
+| 第二领域与多用户隔离 | `meeting-action-review` 已通过本地第二领域组合验证并加入应用 trusted source；通用单 Profile 安装的真实 PostgreSQL lifecycle 已通过，多用户隔离未验证 |
 
 ## 2. 证据等级
 
@@ -299,12 +302,12 @@ malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除�
 | Root coordination | Platform 第二控制面、Supervisor continuation 与主动 Root Turn 已删除；Runtime 原生 wait/mailbox/steer 是唯一协作路径 | E2 原生 runtime/projection gate；完整业务 E2E 未完成 |
 | Capability Catalog | 无生产 crate、API、Browser DTO/client、UI 或当前 schema 对象 | 不再是阶段一能力 |
 | Package Compiler | 无当前生产 owner；阶段二目标文档保留设计输入 | 不再是阶段一能力 |
-| Profile Installation | 无生产安装路径；built-in 直接使用 Profile 原生 seed/Runtime discovery | 不再是阶段一能力 |
-| Runtime discovery/readiness | built-in clean Profile 已通过官方 Skill/MCP status 与 native Role spawn gate；产品 Run admission 只走 Standard，旧 DB installation/readiness 对象已删除 | built-in gate E2；无独立产品 readiness owner |
-| Copilot / Tool SDK | Copilot `init` 生成以 `runtime.toml`、直接项目 manifest/hash lock 声明 Tool 运行需求的最小组合源码；`validate` 执行静态组合校验，`prepare` 在 Tool/Profile/Workspace 外准备依赖并生成 typed descriptor，`dev` 通过 official selected roots 与 Skill/MCP inventory 输出 `discovery_ready`，`test` 用本地确定性 Responses fixture 和真实 app-server canonical events 验证 Supervisor→Role→MCP→Root 单条正常链 | E2 本地 discovery/normal-case gate；fresh generated init→dev/test 已验证；没有生产模型质量验收、Web、生产安装或持久 readiness |
+| Profile Installation | Platform 按 Profile 持久 local/private package desired state、configured revision、managed Skill/Role IDs 与安全 failure；应用 source 是显式可信启动配置，Browser activate/deactivate 只传 package id；冷启动在 app-server 前收敛或清理精确 native destinations | E2 focused + 真实 PostgreSQL lifecycle；revision refresh、失败保留删除权与 deactivate 清理均已通过。没有 Catalog/Release/Marketplace、多用户产品流或动态热切换 |
+| Runtime discovery/readiness | 当前 instance 用官方 `skills/list` + trusted authorized Workspace 即时验证声明 Skill；DB 不存 ready。Role 无官方静态 list，只报告 configured；可执行性由 native Role spawn/MCP acceptance gate 证明 | built-in native gate E2；ready 不跨 instance/revision复用 |
+| Copilot / Tool SDK | Copilot `init` 生成以 `runtime.toml`、直接项目 manifest/hash lock 声明 Tool 运行需求的最小组合源码；`validate` 执行静态组合校验，`prepare` 在 Tool/Profile/Workspace 外准备依赖并生成 typed descriptor，`dev` 通过 official selected roots 与 Skill/MCP inventory 输出 `discovery_ready`，`test` 用本地确定性 Responses fixture 和真实 app-server canonical events 验证 Supervisor→Role→MCP→Root 单条正常链；checked-in `meeting-action-review` 以会议行动项领域复用同一合同，声明一项 Supervisor Skill、一项 Role/Skill、一项 Python Tool 和一项 Markdown Workspace Artifact delivery | E2 本地 discovery/normal-case gate；fresh generated init→dev/test 与第二领域 validate/prepare/dev/test 已验证；第二领域 native test 956 ms。应用已将它注册为 trusted source，可经 activate API 持久 desired；通用安装的真实 PostgreSQL lifecycle 已通过。没有生产模型质量验收、Web Studio 或 Marketplace |
 | Skill 创作 | 阶段一仅支持直接编辑 Profile Skill；公开 SDK/Web 创作后移 | 无阶段一产品流 |
 | Agent/Supervisor Studio | 旧 Settings/Sidebar Studio 已删除；原生 Profile Agent 配置保留 | 无阶段一 authoring 产品流 |
-| Copilot Builder | 没有 Web 产品入口和安装总览；SDK Atom 1 不是 Builder 或安装链 | E0 |
+| Copilot Builder | 没有 Web 创作入口；现有 Profile 安装状态 API 不是 Builder、Catalog 或 Marketplace | E0 |
 | Browser 产品入口 | 生产 `index.html` 只经 `browser-entry.ts` 渲染 `WebApp`；展开 Vite alias 后 production graph 为 75 个本地 non-test 文件，另 466 个不在图内却仍由 `tsconfig` 编译；完整 `PlatformClient` 又把 dead endpoint methods 带入 bundle | E2 单一生产入口；legacy import graph/client 收缩进入后续 backlog，不阻断当前仓网链 |
 | Web UI parity | 历史 `check-main-ui-parity`、Git/UI overlay 和手工 SHA 清单已删除 | 已删除第二 UI truth；当前以类型检查、组件/合同测试、生产构建和真实浏览器验收为准 |
 | Browser Terminal | 生产 `/web` WebApp 不调用 Terminal API；旧 App 路径仍保留 Workspace Terminal UI。Server 打开 Terminal 时按 `run.updated_at DESC` 猜一个最新 Run，并把输出投影到该 Run | E1 legacy 残余；多 Task/fork 时会错配会话，待确认旧 App 退出后原子删除，当前不建设新 selector |
@@ -316,8 +319,8 @@ malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除�
 | Browser custom prompts | 生产 `/web` 不使用 `/profile/prompts`；Platform 自行扫描和编辑 `$CODEX_HOME/web-prompts/<project>` 与 `$CODEX_HOME/prompts`，但 latest official 没有 prompts discovery/API，只有 cwd-scoped Skills/Plugins | E1 legacy Profile 污染；与旧 App 同片删除，不迁移为另一套 Prompt 系统 |
 | Task→Workspace 固定合同 | Task 持久化唯一 Workspace；Run/fork/recovery 只能继承；Browser 无 Run-level 选择权 | E2；HTTP、数据库、orchestrator 与 Browser 定向测试通过 |
 | 通用 Workspace 文件 | `/workspaces/{id}/files` + `GitRuntime` 是当前唯一用户上传/浏览/编辑文件产品面；Web 逐文件处理 conflict，同 Workspace 两 Task 共享和跨租户拒绝已通过 | E4 normal path；真实 Workspace 文件进入 S1/S2/S3 |
-| MCP Resource | Codex 官方 Tool Item/ResourceLink/read_resource 与供应链 Workspace-scoped ResourceStore 共同形成当前 typed provider 数据链；Root 只复用 Tool 实际返回的 exact refs。完整结构化 handoff 使用 `fork_turns=none` 的新有界 Network child，只有正确性依赖未结构化旧对话时才 same-child follow-up；不建设 Platform Broker 或 handoff ledger | E4 normal path 的 S1→S2 exact handoff 与 S2→S3 same-child reuse 已通过；Phase 2 新策略已有 Skill/Role 静态合同和 domain stdio 证据，真实 Web 耗时待本轮复测 |
-| Final Artifact 与地图卡片 | durable `artifacts` 只接受 built-in exact final Tool 的 typed Workspace-relative descriptor，并有 Task grant、exact Run/Thread/Turn/Item provenance、物化字节和授权读取；generic ResourceLink→Artifact 已删除。正式结果简报为确定性中文 Markdown 文件；Browser 从授权 `ArtifactSummary.download_url` 显示文件链接。对话地图卡片只接受 exact `map_utils/create_map_card`，持久化 bounded renderer/ref 而不复制 provider Resource 字节 | E4 normal path：S2 只有一个 3,930-byte ready Markdown Artifact 与一个 ready `map.v3`；S3 Artifact delta 0。地图视觉细节未验收 |
+| MCP Resource | Codex 官方 Tool Item/ResourceLink/read_resource 与供应链 Workspace-scoped ResourceStore 共同形成当前 typed provider 数据链；ResourceRef/codec/bounds/store/runtime/Workspace primitives 已由领域无关的 `open-web-codex-provider-sdk` 提供，仓网只保留领域模型与算法。Root 只复用 Tool 实际返回的 exact refs；不建设 Platform Broker 或 handoff ledger | E4 normal path 的 S1→S2 exact handoff 与 S2→S3 same-child reuse 已通过；Provider SDK focused、仓网 full Python 与 domain stdio 已通过，真实 Web 耗时待本轮复测 |
+| Final Artifact 与地图卡片 | durable `artifacts` 只接受 active Copilot `[[deliveries]]` 声明的 exact producer、固定 typed kind/schema/MIME/verifier 与 Workspace-relative descriptor，并有 Task grant、exact Run/Thread/Turn/Item provenance、物化字节和授权读取；Platform 不理解包或业务字段，也不把任意 Resource 升为 Artifact。producer-time verifier snapshot 随 Artifact 持久化，恢复不依赖当前 active registry。仓网 Markdown 报告、地图文件、`map.v3` 卡片和 meeting Markdown 报告只是当前声明实例 | E4 仓网 normal path：S2 只有一个 3,930-byte ready Markdown Artifact 与一个 ready `map.v3`；S3 Artifact delta 0。meeting delivery 已通过 package/Tool gate，未做真实 Web 交付 |
 | Data Intake | SourceAsset、session/draft/mapping/gate、Dataset Release、Task binding/snapshot/projection 生产路径与当前 schema 已删除 | 不再是当前能力；阶段一无替代状态机 |
 | 旧数据引用 | Platform 文件面只接受 Workspace 相对路径；Data/Network active surface 只使用 strict `ResourceRef`，Case/NetworkSnapshot、ArtifactRef、taskEvidence hashes 和双重 ref 旧 tail 已删除 | 已完成 Stage E tail deletion；继续保持单一 ResourceStore owner |
 | 仓网算法 | Data4 标准化保留完整的用户路线 pair facts；Network15 可物化 provided/haversine/navigation 路线矩阵，计算成本、场景、求解、交互地图卡片数据和 Markdown 简报，并返回城市数量与需求量加权两种覆盖指标。新增的单次设施变更评估从 exact before result 的活动仓集合起算，一次求解并直接比较，返回同一次调用产生的 scenario/comparison refs 与有界指标 | 阶段一 E4 normal path 保持；Phase 2 Python 合同、120 项全包测试和真实 stdio domain E2E 已通过，真实 Web 计时待复测 |
@@ -337,10 +340,10 @@ ADR-018 是阶段一规范裁决，Codex 子树 seam 只由 Patch Map 分类。�
 | 稳定 ID | 分类 | 已验证问题与源码证据 | 风险 | 当前裁决与阶段/触发条件 | 目标 owner/删除条件 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `P1-R2-CHAT` | 当前关键链 | pinned official Codex 无 Chat transport 和当前 Platform `PUT/list` 所需的 `modelProvider/list`；当前窄 seam 位于 `codex/codex-rs/codex-api/src/chat_translate.rs`、`codex/codex-rs/core/src/client/chat.rs` 与 app-server catalog processor，Platform Secret 位于 `apps/web/crates/provider-service` | 真实 DeepSeek 无法建立 Turn，或 Secret 穿透到普通配置/日志 | 只保留真实仓网 gate 的最小 typed seam：`PUT/list`、密文 Secret restart、显式 `deepseek-v4-flash` Turn、两次串行 MCP 到 final；model refresh/catalog 不在当前 gate | Codex 拥有 wire/app-server typed 执行，Platform 只拥有 CRUD 授权与密文注入；以真实 gate 和零明文负向门为删改条件 | 已通过：Shared `de9cc23b4` 的 fresh 真实门完成 encrypted Secret restart、显式 `deepseek-v4-flash` Turn、两次串行且相互依赖的 MCP 调用和 final；清理与零明文门通过 |
-| `P1-SC-REF` | 当前关键链 | Data4 `data_server.py` 与 `server.py` 的 decorated active tools 已统一使用一个 logical `supply_chain` provider、Workspace-scoped ResourceStore 和 strict `ResourceRef`；Case/ArtifactRef compatibility tail 已在 Stage E 删除 | 跨 provider 越权、Resource 不可达、同一内容多个身份 | 保持单一 provider ResourceStore 与 strict typed refs；不建 Broker/registry/新表 | MCP provider 拥有中间内容；每个 tool 验证启动 scope 与 native `sandboxCwd` | Data4 与 Stage E tail deletion landed |
+| `P1-SC-REF` | 当前关键链 | Data4 `data_server.py` 与 `server.py` 的 decorated active tools 已统一使用一个 logical `supply_chain` provider、Workspace-scoped ResourceStore 和 strict `ResourceRef`；通用 ref/schema/codec/bounds/store/runtime/Workspace primitives 已迁到独立 provider SDK，仓网旧模块和 import 已删除 | 跨 provider 越权、Resource 不可达、同一内容多个身份 | 保持单一 provider ResourceStore 与 strict typed refs；Tool 用 typed `platform_packages` 取得 SDK，不建 Broker/新表或路径 fallback | MCP provider 拥有中间内容；provider SDK 拥有通用 primitives；每个 tool 验证启动 scope 与 native `sandboxCwd` | Provider SDK 6/6、仓网 full Python 120/120 与 stdio normal/domain gates passed |
 | `P1-SC-DATA4` | 当前关键链 | `data_server.py` active path 已删除 hash `source_ref` 重扫和多套 alias/wire shape；inspect 产生 source-profile Resource，normalize 接显式 confirmed decisions 并可返回 `needs_geography`，prepare-geography 接受 adapter 已验证的行政区 catalog 与 overrides | 默认印尼数据准备链曾不可达，模型承担协议翻译或猜字段 | Data4 strict surface 已落地：discover 可选、一次 inspect、typed `ResourceRef`、显式 mapping、分阶段 geography；Indonesia built-in asset 只属于验收 fixture，其他国家无 provider 时 typed unavailable | Tool 拥有格式/映射/标准化；复用 `workspace_intake.py`、`mapping.py`、`normalization.py` 中纯函数与 `geography.py`，不建 source/revision/CAS 包装 | Data4 与 Network15 active surface、Stage E tail deletion 已落地 |
 | `P1-SC-NET9` | 当前关键链 | `server.py` 的 15 个 decorated active Resource/final tools 已使用 strict `ResourceRef`；其中 `assess_facility_change` 组合一次 scenario solve 与直接 before/after compare，并返回同次调用发布的两个 exact refs 和有界指标。9 个未注册 Case lifecycle entry wrappers、11 个 Case-backed wrappers、全部 9 个 legacy Case Skills，以及 Case/ArtifactRef compatibility modules、services、models、tests 和 legacy launcher/demo surface 均已删除。Data Resource 保留完整 provided route facts，Network 可按 scope 物化路线矩阵、确定性返回双覆盖口径，并从 exact comparison 产生地图卡片数据和 Markdown 简报 | Data4 与 Network 必须继续保持单一 provider ResourceStore 与 strict typed refs，不能恢复旧 Case 状态、Demo 入口或 Platform workflow | 保持 current decorated strict `ResourceRef` surface；路线/cost 由 pair/lane fact 自主部分复用；单次设施变更组合留在 domain owner，不以缓存、重试或模型摘要替代 typed result | Network Tool 拥有算法、pair facts 与业务渲染；Data Tool 拥有 mapping/normalization/geography；Provider ResourceStore 拥有中间内容 | Stage E tail deletion landed；Phase 2 focused/full Python、stdio domain、Role/Skill inventory gates通过 |
-| `P1-ART-FINAL` | 当前关键链 | generic ResourceLink→Artifact、Run-scoped通用 inline 表、Artifact 输入回流和旧 `report.v1` JSON inline 卡片已删除；durable final delivery 只认 built-in exact final Tool + typed Workspace-relative descriptor。完整分析只生成一份中文 Markdown 正式简报文件；正文只保留业务摘要，Web 从 durable Artifact DTO 呈现授权下载链接。结构化对应关系保持独立结果。分布/比较展示另有 exact `map_utils/create_map_card` bounded 投影，Resource 字节仍由 provider 持有。Web 另按 Codex 原生语义显示 Thread-scoped HTML 与静态栅格图片，不把它们登记为 Artifact | 把展示卡片误写成文件会触发不必要审批并制造交付物；把 JSON 当报告或 Excel 会混淆业务简报和计算明细；把任意 Resource 升为 Artifact 会形成第二数据面；依赖模型转述文件路径会在刷新或改写时丢失链接 | 完成分析时走一次 final report Tool 交付中文 Markdown 文件，Browser 用授权 Artifact DTO 显示下载链接；当空间关系有助理解时另走 `GeoJSON Resource→create_map_card→embed`，无需用户逐字点名；只有明确导出地图时才创建地图文件。原生 inline-vis 只通过授权 Profile/Thread 文件端点读取 HTML 或签名验证后的 PNG/JPEG/GIF/WebP | Platform 拥有卡片授权投影、原生文件的授权读取和显式最终交付物化；Codex 拥有原生 visualize 引用与 Thread-scoped 文件；MCP provider 拥有 Resource 内容与确定性 Markdown 渲染 | 当前覆盖自然语言案例已通过；完整阶段一案例矩阵仍在途 |
+| `P1-ART-FINAL` | 当前关键链 | generic ResourceLink→Artifact、Run-scoped通用 inline 表、Artifact 输入回流和旧 `report.v1` JSON inline 卡片已删除；durable delivery 只认 active Copilot `[[deliveries]]` 的 exact producer、固定 typed kind/schema/MIME/verifier 与 Workspace-relative descriptor。Platform 只理解通用 delivery kind，不理解仓网、地图或会议字段。Artifact 持久化 producer-time verifier snapshot，恢复和读取不依赖当前 active registry。仓网报告/地图文件/地图卡片与 meeting Markdown 报告是当前声明实例；Resource 字节仍由 provider 持有 | 把展示卡片误写成文件会触发不必要审批并制造交付物；把任意 Resource 升为 Artifact 会形成第二数据面；依赖模型文本或 active package 猜既有 Artifact 合同会在刷新、改写或切包时丢失交付 | producer 只返回其声明 kind 的固定 structuredContent envelope；Platform 按 producing Item provenance 与 verifier snapshot 物化/恢复。原生 inline-vis 继续只通过授权 Profile/Thread 文件端点读取 HTML 或签名验证后的 PNG/JPEG/GIF/WebP | Platform 拥有通用交付授权投影、verifier snapshot、原生文件授权读取和 Artifact 物化；Copilot 包拥有 producer 声明；Codex 拥有原生 visualize；MCP provider 拥有 Resource 内容 | 仓网自然语言案例已通过；meeting package/Tool delivery gate 已通过，真实 Web 交付未运行 |
 | `B-PROVIDER-OWNER` | 后续 backlog | `apps/web/crates/provider-service/src/secured.rs` 的 `profile_provider_definitions`、`apps/web/crates/platform-store/src/configuration.rs` 的 global default 与 Profile config/Runtime 重复 | 默认选择、已物化 Thread 实际 pair 和 refresh 被不同 owner 覆盖 | 当前 R2 只补 exact 真实 gate 依赖；全量 owner 收敛仅在仓网 gate 证明会选错 Provider/model 时提前 | Profile config/Runtime 拥有定义、未来 Thread default 和 Thread actual pair；Platform 只留密文 Secret 与必要 audit | 已证实，不阻断当前关键链 |
 | `B-THREAD-HISTORY` | 后续 backlog | `codex-adapter/src/real.rs` 的 history mode/隐藏 Thread，`routes/threads.rs` 的 overlay，`WebApp.tsx`/`webThreadHistory.ts` 的 live/history 启发式合并 | 连续同文本消息误去重，Task/Run status 可以冒充 official Thread/Turn 事实 | 全量 Thread/Run/history/lease 轻纠偏是后续 backlog；只有当前 E2E 证明消息投递错乱才同原子修复 | Codex Runtime 拥有 Thread/Turn/Item/history，Platform 只做授权和 exact Item 投影 | 已证实，不阻断当前关键链 |
 | `B-EVENT-BOUND` | 后续 backlog | `apps/web/server/src/event_projection.rs` 和 Browser item renderer 仍按动态 Tool 名/文本猜 command/diff，unknown event 可进对话，多类 payload 无统一限长/retention owner | 事件污染、过大持久化与未授权内容暴露 | 保留 `run_events` sequence/provenance；普通 RunEvent 不广播 private Resource ref；若仓网真实 gate 证明泄密才成为当前安全门 | Platform 只投影 bounded typed Runtime 事实；unknown 不猜内容 | 已证实，当前仅保留泄密负向门 |
@@ -402,9 +405,13 @@ ADR-018 是阶段一规范裁决，Codex 子树 seam 只由 Patch Map 分类。�
 
 阶段一内置仓网 Copilot 的正常业务链已经完成：旧跨 owner 数据面与 compatibility island 已删，
 Runtime/bridge、Profile Skill/Role、Workspace 文件、provider Resource、Approval、Agent activity、
-`map.v3` 与最终 Markdown Artifact 在真实 Web 链中闭合。公开 SDK/Web 自助创作、第二领域、
-多用户产品、完整失败/竞态矩阵、a11y 与地图视觉细节仍是后续阶段或 hardening，不是阶段一
-完成定义。
+`map.v3` 与最终 Markdown Artifact 在真实 Web 链中闭合。阶段二已用
+`copilots/meeting-action-review` 验证同一 Copilot/Tool SDK 合同可承载一个非仓网领域，但该证据
+只覆盖本地 validate、prepare、Runtime discovery、Tool focused test 与 native normal case。公开
+SDK/Web 自助创作、该参考包的 Web 运行、多用户产品、完整失败/竞态矩阵、
+a11y 与地图视觉细节仍是后续阶段或 hardening，不是阶段一完成定义。应用已把该包注册为
+trusted source，可经 activate API 持久 desired；一次性真实 PostgreSQL 门已证明 revision
+refresh、失败保留精确删除权、deactivate 清理与 Artifact 幂等物化/恢复。
 
 ## 8. 证据更新规则
 

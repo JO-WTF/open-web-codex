@@ -5,11 +5,17 @@ use std::path::{Component, Path, PathBuf};
 use open_web_codex_adapter::real::ThreadSkillConfig;
 use open_web_codex_profile_host::{CodexFeature, ProfileStartupFile};
 use serde::Deserialize;
+use serde_json::Value;
 use thiserror::Error;
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 
-const ROLE_MCP_SERVER_POLICY_KEYS: [&str; 5] = [
+use crate::delivery_contracts::{
+    ContentVerifier, DeliveryContract, DeliveryKind, DeliveryRegistry,
+};
+
+const ROLE_MCP_SERVER_POLICY_KEYS: [&str; 6] = [
     "enabled",
+    "required",
     "default_tools_approval_mode",
     "enabled_tools",
     "disabled_tools",
@@ -25,6 +31,9 @@ const ALLOWED_HOST_ENVIRONMENT_NAMES: [&str; 8] = [
     "all_proxy",
     "no_proxy",
 ];
+const MAX_PREPARED_DESCRIPTOR_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_DELIVERIES: usize = 32;
+const MAX_DELIVERY_TEXT_BYTES: usize = 256;
 
 /// Keep a local Copilot development Profile focused on the package selected
 /// by the operator. Codex still owns discovery and prompt construction; these
@@ -45,22 +54,24 @@ pub(crate) const fn enabled_codex_features() -> [CodexFeature; 1] {
     [CodexFeature::DefaultModeRequestUserInput]
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct CopilotPackageAssets {
     id: String,
+    source_revision: String,
     supervisor_skill: String,
     skills: Vec<PackageSkill>,
     roles: Vec<PackageRole>,
     capability_roots: BTreeMap<String, PreparedCapabilityRoot>,
+    deliveries: DeliveryRegistry,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct PackageSkill {
     id: String,
     contents: Vec<u8>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct PackageRole {
     id: String,
     template: String,
@@ -94,6 +105,27 @@ struct PreparedDescriptorDocument {
     schema_version: u32,
     composition_descriptor_sha256: String,
     capability_roots: Vec<PreparedDescriptorCapabilityRoot>,
+    deliveries: Vec<PreparedDescriptorDelivery>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PreparedDescriptorDelivery {
+    id: String,
+    server: String,
+    tool: String,
+    kind: String,
+    schema: String,
+    mime_type: String,
+    display_name: String,
+    content_verifier: Option<PreparedContentVerifier>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PreparedContentVerifier {
+    kind: String,
+    value: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,7 +162,8 @@ impl CopilotPackageAssets {
         descriptor_path: &Path,
     ) -> Result<Self, CopilotPackageError> {
         let package = load_copilot_package(package_root)?;
-        let capability_roots = load_prepared_descriptor(descriptor_path)?;
+        let (source_revision, capability_roots, deliveries) =
+            load_prepared_descriptor(descriptor_path)?;
         let prepared_ids = capability_roots.keys().cloned().collect::<BTreeSet<_>>();
         if prepared_ids != package.tool_ids {
             return Err(unavailable_message(
@@ -143,10 +176,12 @@ impl CopilotPackageAssets {
         }
         Ok(Self {
             id: package.id,
+            source_revision,
             supervisor_skill: package.supervisor_skill,
             skills: package.skills,
             roles: package.roles,
             capability_roots,
+            deliveries,
         })
     }
 
@@ -154,12 +189,39 @@ impl CopilotPackageAssets {
         &self.id
     }
 
-    pub(crate) fn root_skill_config(&self) -> Vec<ThreadSkillConfig> {
+    pub(crate) fn source_revision(&self) -> &str {
+        &self.source_revision
+    }
+
+    pub(crate) fn skill_ids(&self) -> Vec<String> {
+        self.skills.iter().map(|skill| skill.id.clone()).collect()
+    }
+
+    pub(crate) fn agent_role_ids(&self) -> Vec<String> {
+        self.roles.iter().map(|role| role.id.clone()).collect()
+    }
+
+    pub(crate) fn mcp_server_ids(&self) -> Vec<String> {
+        self.capability_roots
+            .values()
+            .flat_map(|root| root.servers.keys().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    pub(crate) fn deliveries(&self) -> DeliveryRegistry {
+        self.deliveries.clone()
+    }
+
+    pub(crate) fn root_skill_config(&self, profile_home: &Path) -> Vec<ThreadSkillConfig> {
         self.skills
             .iter()
             .map(|skill| ThreadSkillConfig {
                 name: skill.id.clone(),
                 enabled: skill.id == self.supervisor_skill,
+                main_prompt: (skill.id == self.supervisor_skill)
+                    .then(|| profile_home.join("skills").join(&skill.id).join("SKILL.md")),
             })
             .collect()
     }
@@ -281,6 +343,7 @@ fn load_copilot_package(package_root: &Path) -> Result<LoadedCopilotPackage, Cop
             "agents",
             "tools",
             "tests",
+            "deliveries",
         ],
     )?;
     if manifest.get("schema_version").and_then(Item::as_integer) != Some(1) {
@@ -535,9 +598,36 @@ fn package_directory(
 
 fn load_prepared_descriptor(
     descriptor_path: &Path,
-) -> Result<BTreeMap<String, PreparedCapabilityRoot>, CopilotPackageError> {
+) -> Result<
+    (
+        String,
+        BTreeMap<String, PreparedCapabilityRoot>,
+        DeliveryRegistry,
+    ),
+    CopilotPackageError,
+> {
     const COMPONENT: &str = "prepared Copilot descriptor";
     let descriptor_path = canonical_regular_file(COMPONENT, descriptor_path, false)?;
+    let prepared_output_root = descriptor_path
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| {
+            unavailable_message(
+                COMPONENT,
+                "descriptor path does not identify a prepared output root".to_string(),
+            )
+        })?
+        .to_path_buf();
+    if fs::metadata(&descriptor_path)
+        .map_err(|error| unavailable(COMPONENT, error))?
+        .len()
+        > MAX_PREPARED_DESCRIPTOR_BYTES
+    {
+        return Err(unavailable_message(
+            COMPONENT,
+            "descriptor exceeds 8 MiB".into(),
+        ));
+    }
     let raw =
         fs::read_to_string(&descriptor_path).map_err(|error| unavailable(COMPONENT, error))?;
     let document: PreparedDescriptorDocument =
@@ -559,6 +649,7 @@ fn load_prepared_descriptor(
             "compositionDescriptorSha256 must be a lowercase SHA-256 digest".to_string(),
         ));
     }
+    let source_revision = document.composition_descriptor_sha256.clone();
     if document.capability_roots.is_empty() {
         return Err(unavailable_message(
             COMPONENT,
@@ -566,7 +657,14 @@ fn load_prepared_descriptor(
         ));
     }
 
+    if document.deliveries.len() > MAX_DELIVERIES {
+        return Err(unavailable_message(
+            COMPONENT,
+            "deliveries exceed 32 entries".into(),
+        ));
+    }
     let mut capability_roots = BTreeMap::new();
+    let mut all_server_ids = BTreeSet::new();
     for root in document.capability_roots {
         require_stable_identifier(COMPONENT, "capability root", &root.id)?;
         if root.servers.is_empty() {
@@ -578,6 +676,15 @@ fn load_prepared_descriptor(
         let mut servers = BTreeMap::new();
         for server in root.servers {
             require_stable_identifier(COMPONENT, "MCP server", &server.id)?;
+            if !all_server_ids.insert(server.id.clone()) {
+                return Err(unavailable_message(
+                    COMPONENT,
+                    format!(
+                        "MCP server {} is owned by more than one capability root",
+                        server.id
+                    ),
+                ));
+            }
             if server.transport != "stdio" {
                 return Err(unavailable_message(
                     COMPONENT,
@@ -587,7 +694,7 @@ fn load_prepared_descriptor(
                     ),
                 ));
             }
-            let command = canonical_regular_file(COMPONENT, &server.command, true)?;
+            let command = prepared_command(COMPONENT, &server.command, &prepared_output_root)?;
             let startup_timeout_sec = positive_timeout(
                 COMPONENT,
                 &root.id,
@@ -708,7 +815,155 @@ fn load_prepared_descriptor(
             ));
         }
     }
-    Ok(capability_roots)
+    let mut deliveries = Vec::new();
+    for delivery in document.deliveries {
+        for (field, value) in [
+            ("id", delivery.id.as_str()),
+            ("server", delivery.server.as_str()),
+            ("tool", delivery.tool.as_str()),
+            ("schema", delivery.schema.as_str()),
+            ("mimeType", delivery.mime_type.as_str()),
+            ("displayName", delivery.display_name.as_str()),
+        ] {
+            if value.is_empty() || value.len() > MAX_DELIVERY_TEXT_BYTES {
+                return Err(unavailable_message(
+                    COMPONENT,
+                    format!("delivery {field} is empty or exceeds 256 bytes"),
+                ));
+            }
+        }
+        require_stable_identifier(COMPONENT, "delivery", &delivery.id)?;
+        require_stable_identifier(COMPONENT, "delivery MCP server", &delivery.server)?;
+        require_stable_identifier(COMPONENT, "delivery MCP tool", &delivery.tool)?;
+        if !capability_roots
+            .values()
+            .any(|root| root.servers.contains_key(&delivery.server))
+        {
+            return Err(unavailable_message(
+                COMPONENT,
+                format!(
+                    "delivery {} references undeclared MCP server {}",
+                    delivery.id, delivery.server
+                ),
+            ));
+        }
+        let kind = match delivery.kind.as_str() {
+            "workspace_artifact" => {
+                let verifier = delivery.content_verifier.ok_or_else(|| {
+                    unavailable_message(
+                        COMPONENT,
+                        format!("delivery {} omits contentVerifier", delivery.id),
+                    )
+                })?;
+                let verifier = match verifier.kind.as_str() {
+                    "json_schema" => ContentVerifier::JsonSchema {
+                        document: {
+                            let mut nodes = 0;
+                            validate_bounded_descriptor_json(&verifier.value, 0, &mut nodes)?;
+                            verifier.value
+                        },
+                    },
+                    "markdown_marker" => ContentVerifier::MarkdownMarker {
+                        marker: verifier
+                            .value
+                            .as_str()
+                            .ok_or_else(|| {
+                                unavailable_message(
+                                    COMPONENT,
+                                    format!(
+                                        "delivery {} Markdown marker must be a string",
+                                        delivery.id
+                                    ),
+                                )
+                            })?
+                            .to_string(),
+                    },
+                    other => {
+                        return Err(unavailable_message(
+                            COMPONENT,
+                            format!("delivery {} has unsupported verifier {other}", delivery.id),
+                        ))
+                    }
+                };
+                DeliveryKind::WorkspaceArtifact { verifier }
+            }
+            "inline_geojson_map_card" => {
+                if delivery.content_verifier.is_some() {
+                    return Err(unavailable_message(
+                        COMPONENT,
+                        format!(
+                            "delivery {} inline map card must not declare contentVerifier",
+                            delivery.id
+                        ),
+                    ));
+                }
+                DeliveryKind::InlineGeoJsonMapCard
+            }
+            other => {
+                return Err(unavailable_message(
+                    COMPONENT,
+                    format!("delivery {} has unsupported kind {other}", delivery.id),
+                ))
+            }
+        };
+        deliveries.push(DeliveryContract {
+            id: delivery.id,
+            server: delivery.server,
+            tool: delivery.tool,
+            kind,
+            schema: delivery.schema,
+            mime_type: delivery.mime_type,
+            display_name: delivery.display_name,
+        });
+    }
+    let deliveries = DeliveryRegistry::new(deliveries)
+        .and_then(|registry| {
+            registry.validate()?;
+            Ok(registry)
+        })
+        .map_err(|error| unavailable_message(COMPONENT, error))?;
+    Ok((source_revision, capability_roots, deliveries))
+}
+
+fn validate_bounded_descriptor_json(
+    value: &Value,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<(), CopilotPackageError> {
+    const COMPONENT: &str = "prepared Copilot descriptor";
+    *nodes = nodes.saturating_add(1);
+    if depth > 32 || *nodes > 20_000 {
+        return Err(unavailable_message(
+            COMPONENT,
+            "delivery verifier exceeds structural limits".into(),
+        ));
+    }
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object {
+                if key.len() > 2_000 {
+                    return Err(unavailable_message(
+                        COMPONENT,
+                        "delivery verifier key is oversized".into(),
+                    ));
+                }
+                validate_bounded_descriptor_json(child, depth + 1, nodes)?;
+            }
+        }
+        Value::Array(values) => {
+            for child in values {
+                validate_bounded_descriptor_json(child, depth + 1, nodes)?;
+            }
+        }
+        Value::String(text) if text.len() > 64 * 1024 => {
+            return Err(unavailable_message(
+                COMPONENT,
+                "delivery verifier string is oversized".into(),
+            ));
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn canonical_regular_file(
@@ -730,6 +985,73 @@ fn canonical_regular_file(
         return Err(unavailable_message(
             component,
             format!("expected {expected} at {}", path.display()),
+        ));
+    }
+    Ok(path)
+}
+
+/// Validate a launcher emitted by the trusted preparation output without
+/// replacing it with its resolved executable target. Python virtual
+/// environments intentionally use a final `bin/python` symlink; launching the
+/// resolved system interpreter would discard the virtual-environment prefix
+/// and its installed dependencies.
+fn prepared_command(
+    component: &'static str,
+    path: &Path,
+    prepared_output_root: &Path,
+) -> Result<PathBuf, CopilotPackageError> {
+    let path = require_absolute_path(component, path)?;
+    let prepared_output_root = prepared_output_root
+        .canonicalize()
+        .map_err(|error| unavailable(component, error))?;
+    if path
+        .components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(unavailable_message(
+            component,
+            format!(
+                "prepared MCP command must be lexically normalized: {}",
+                path.display()
+            ),
+        ));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        unavailable_message(
+            component,
+            format!("prepared MCP command has no parent: {}", path.display()),
+        )
+    })?;
+    let parent = parent
+        .canonicalize()
+        .map_err(|error| unavailable(component, error))?;
+    if !parent.starts_with(&prepared_output_root) {
+        return Err(unavailable_message(
+            component,
+            format!(
+                "prepared MCP command is outside the prepared output root: {}",
+                path.display()
+            ),
+        ));
+    }
+    let entry = fs::symlink_metadata(&path).map_err(|error| unavailable(component, error))?;
+    if !entry.is_file() && !entry.file_type().is_symlink() {
+        return Err(unavailable_message(
+            component,
+            format!(
+                "expected an executable regular file or launcher symlink at {}",
+                path.display()
+            ),
+        ));
+    }
+    let target = fs::metadata(&path).map_err(|error| unavailable(component, error))?;
+    if !target.is_file() || !is_executable(&target) {
+        return Err(unavailable_message(
+            component,
+            format!(
+                "expected launcher target to be an executable regular file at {}",
+                path.display()
+            ),
         ));
     }
     Ok(path)
@@ -873,12 +1195,20 @@ fn project_role_mcp_servers(
             let policy = policy.as_table().ok_or_else(|| {
                 invalid_role(role_name, format!("server {server_name} policy is invalid"))
             })?;
-            for (key, _) in policy {
+            for (key, item) in policy {
                 if !ROLE_MCP_SERVER_POLICY_KEYS.contains(&key) {
                     return Err(invalid_role(
                         role_name,
                         format!(
                             "plugins.{capability_root_id}.mcp_servers.{server_name}.{key} is not part of Role MCP server policy"
+                        ),
+                    ));
+                }
+                if matches!(key, "enabled" | "required") && item.as_bool().is_none() {
+                    return Err(invalid_role(
+                        role_name,
+                        format!(
+                            "plugins.{capability_root_id}.mcp_servers.{server_name}.{key} must be a boolean"
                         ),
                     ));
                 }
@@ -995,6 +1325,7 @@ mod tests {
         let prepared = temp.path().join("prepared 运行态");
         let supply_python = prepared.join("dependencies/supply python/bin/python");
         let maps_python = prepared.join("dependencies/maps python/bin/python");
+        let system_python = temp.path().join("system python");
         let style_spec = prepared.join("dependencies/map style spec");
         let profile = temp.path().join("profile 用户");
         let package = temp.path().join("copilot package");
@@ -1073,14 +1404,32 @@ runtime = "tools/maps/runtime.toml"
             "schema_version = 1\n",
             false,
         );
+        write_file(&system_python, "#!/bin/sh\n", true);
+        #[cfg(unix)]
+        {
+            fs::create_dir_all(supply_python.parent().expect("supply Python parent"))
+                .expect("create managed virtual-environment bin");
+            std::os::unix::fs::symlink(&system_python, &supply_python)
+                .expect("link managed virtual-environment Python");
+        }
+        #[cfg(not(unix))]
         write_file(&supply_python, "#!/bin/sh\n", true);
         write_file(&maps_python, "#!/bin/sh\n", true);
-        let descriptor = prepared.join("prepared-tools.v1.json");
+        let descriptor = prepared.join("copilot-sdk/prepared-tools.v1.json");
         write_file(
             &descriptor,
             &serde_json::to_string_pretty(&serde_json::json!({
                 "schemaVersion": 1,
                 "compositionDescriptorSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "deliveries": [{
+                    "id": "map-card",
+                    "server": "map_utils",
+                    "tool": "create_map_card",
+                    "kind": "inline_geojson_map_card",
+                    "schema": "map.v3",
+                    "mimeType": "application/vnd.open-web-codex.map-card+json",
+                    "displayName": "Interactive map"
+                }],
                 "capabilityRoots": [
                     {
                         "id": "supply_chain",
@@ -1142,20 +1491,34 @@ runtime = "tools/maps/runtime.toml"
     fn renders_native_profile_seeds_with_role_local_mcp_only() {
         let (_temp, assets, profile, _descriptor) = fixture();
         assert_eq!(assets.id(), "warehouse-network");
+        assert!(matches!(
+            assets
+                .deliveries()
+                .for_item(
+                    serde_json::json!({"server":"map_utils","tool":"create_map_card"})
+                        .as_object()
+                        .expect("item")
+                )
+                .map(|contract| &contract.kind),
+            Some(DeliveryKind::InlineGeoJsonMapCard)
+        ));
         assert_eq!(
-            assets.root_skill_config(),
+            assets.root_skill_config(&profile),
             vec![
                 ThreadSkillConfig {
                     name: "warehouse-supervisor".to_string(),
                     enabled: true,
+                    main_prompt: Some(profile.join("skills/warehouse-supervisor/SKILL.md"),),
                 },
                 ThreadSkillConfig {
                     name: "warehouse-data".to_string(),
                     enabled: false,
+                    main_prompt: None,
                 },
                 ThreadSkillConfig {
                     name: "warehouse-network".to_string(),
                     enabled: false,
+                    main_prompt: None,
                 },
             ]
         );
@@ -1168,6 +1531,23 @@ runtime = "tools/maps/runtime.toml"
 
         let data = data.parse::<DocumentMut>().expect("parse data role");
         let network = network.parse::<DocumentMut>().expect("parse network role");
+        let supply_python = _temp
+            .path()
+            .join("prepared 运行态/dependencies/supply python/bin/python");
+        assert_eq!(
+            data["mcp_servers"]["supply_chain_data"]["command"].as_str(),
+            supply_python.to_str(),
+            "Role projection must preserve the managed virtual-environment launcher",
+        );
+        #[cfg(unix)]
+        assert_ne!(
+            supply_python
+                .canonicalize()
+                .expect("resolve launcher")
+                .to_str(),
+            data["mcp_servers"]["supply_chain_data"]["command"].as_str(),
+            "Role projection must not replace the launcher with its system executable target",
+        );
         assert_eq!(
             data["nickname_candidates"]
                 .as_array()
@@ -1180,6 +1560,10 @@ runtime = "tools/maps/runtime.toml"
         assert!(data["mcp_servers"]["supply_chain_data"]
             .get("cwd")
             .is_none());
+        assert_eq!(
+            data["mcp_servers"]["supply_chain_data"]["required"].as_bool(),
+            Some(true)
+        );
         assert_eq!(
             data["mcp_servers"]["supply_chain_data"]["args"]
                 .as_array()
@@ -1223,6 +1607,10 @@ runtime = "tools/maps/runtime.toml"
             .expect("data instructions")
             .contains("Do not use shell, Workspace command, Git, jq, or ad-hoc Python"));
         assert!(network["mcp_servers"]["supply_chain"].get("cwd").is_none());
+        assert_eq!(
+            network["mcp_servers"]["supply_chain"]["required"].as_bool(),
+            Some(true)
+        );
         assert_eq!(
             network["mcp_servers"]["supply_chain"]["args"]
                 .as_array()
@@ -1397,6 +1785,17 @@ runtime = "tools/maps/runtime.toml"
             CopilotPackageError::InvalidRoleTemplate { message, .. }
                 if message.contains("plugins.supply_chain.mcp_servers.supply_chain_data.cwd")
         ));
+
+        let mut role = parse_role_template("data", DATA_ROLE).expect("parse data Role");
+        role["plugins"]["supply_chain"]["mcp_servers"]["supply_chain_data"]["required"] =
+            value("yes");
+        let error = project_role_mcp_servers(&mut role, "data", &assets.capability_roots, &profile)
+            .expect_err("non-boolean required policy must be rejected");
+        assert!(matches!(
+            error,
+            CopilotPackageError::InvalidRoleTemplate { message, .. }
+                if message.contains("plugins.supply_chain.mcp_servers.supply_chain_data.required must be a boolean")
+        ));
     }
 
     #[test]
@@ -1504,24 +1903,52 @@ runtime = "tools/maps/runtime.toml"
 
     #[cfg(unix)]
     #[test]
-    fn prepared_descriptor_accepts_canonical_paths_and_rejects_non_executable_command() {
+    fn prepared_command_preserves_final_symlink_and_rejects_unsafe_launchers() {
         use std::os::unix::fs::symlink;
 
         let temp = tempfile::tempdir().expect("temp dir");
-        let real = temp.path().join("real");
-        fs::create_dir_all(&real).expect("real root");
-        let linked = temp.path().join("linked");
-        symlink(&real, &linked).expect("symlink root");
+        let prepared = temp.path().join("prepared");
+        let bin = prepared.join("builds/revision/tool/venv/bin");
+        fs::create_dir_all(&bin).expect("prepared bin");
+        let system_python = temp.path().join("system-python");
+        write_file(&system_python, "#!/bin/sh\n", true);
+        let launcher = bin.join("python");
+        symlink(&system_python, &launcher).expect("virtual-environment launcher");
         assert_eq!(
-            canonical_directory("linked root", &linked).expect("canonical root"),
-            real.canonicalize().expect("canonical real root")
+            prepared_command("prepared command", &launcher, &prepared)
+                .expect("valid virtual-environment launcher"),
+            launcher,
+            "validation must preserve the final launcher symlink path",
         );
 
-        let command = temp.path().join("command");
-        write_file(&command, "not executable\n", false);
-        assert!(matches!(
-            canonical_regular_file("prepared command", &command, true),
-            Err(CopilotPackageError::Unavailable { .. })
-        ));
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&outside).expect("outside directory");
+        let outside_command = outside.join("command");
+        write_file(&outside_command, "#!/bin/sh\n", true);
+        let escaped_parent = prepared.join("escaped");
+        symlink(&outside, &escaped_parent).expect("escaping parent symlink");
+
+        let broken = bin.join("broken");
+        symlink(temp.path().join("missing"), &broken).expect("broken launcher");
+        let non_executable = bin.join("non-executable");
+        write_file(&non_executable, "#!/bin/sh\n", false);
+        let dot_dot = bin.join("../bin/python");
+
+        for rejected in [
+            outside_command,
+            escaped_parent.join("command"),
+            broken,
+            non_executable,
+            dot_dot,
+        ] {
+            assert!(
+                matches!(
+                    prepared_command("prepared command", &rejected, &prepared),
+                    Err(CopilotPackageError::Unavailable { .. })
+                ),
+                "unsafe prepared command was accepted: {}",
+                rejected.display(),
+            );
+        }
     }
 }

@@ -66,6 +66,7 @@ Platform
 但相对路径必须由服务端在当前授权 Workspace 下重新解析。浏览器不能提交可信的：
 
 - 服务器本地路径或 `CODEX_HOME`；
+- Copilot package root、prepared descriptor 路径或其他应用 source 注册参数；
 - `organization_id`、`profile_id`、AgentPath 或 Runtime Role 身份；
 - app-server request ID 或原始 JSON-RPC；
 - Secret 明文或配置文件路径；
@@ -124,6 +125,10 @@ session
 ## Profile 与 Runtime 隔离
 
 - 每个用户的 Profile 拥有独立、持久 `CODEX_HOME`；
+- 单 Profile Copilot activate/deactivate 路由只接受应用已注册的 package id，并先执行
+  Session → Organization → owner Profile 授权；可信 source 路径只来自 Server 启动配置。
+- 安装表的 desired/configured/failure 是 Platform 持久事实；`ready` 只能来自当前 Runtime
+  instance 的官方 discovery，不能由数据库行、文件存在或路径扫描推断。
 - 同一 Profile 同时最多有一个主 app-server 进程；
 - Profile 只能从平台显式授权的 Provider/Secret 与能力配置初始化；不得默认复制、
   挂载或读取服务器操作者的 `$HOME/.codex/auth.json`、Skills、Plugins、MCP 或 Memory；

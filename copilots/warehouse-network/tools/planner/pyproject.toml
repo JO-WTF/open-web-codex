@@ -8,6 +8,7 @@ version = "0.4.0"
 description = "Deterministic supply-chain network planning MCP tools for Codex"
 requires-python = ">=3.11"
 dependencies = [
+  "open-web-codex-provider-sdk>=0.1,<0.2",
   "mcp>=1.27,<2",
   "openpyxl>=3.1,<4",
   "ijson>=3.2,<4",
@@ -31,7 +32,6 @@ packages = [
   "supply_chain_planner.data",
   "supply_chain_planner.delivery",
   "supply_chain_planner.network",
-  "supply_chain_planner.resources",
   "supply_chain_planner.shared",
 ]
 package-dir = { supply_chain_planner = "src" }

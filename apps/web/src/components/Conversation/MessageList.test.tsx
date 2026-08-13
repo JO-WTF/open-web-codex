@@ -83,7 +83,7 @@ describe("MessageList", () => {
     expect(card.textContent).toContain("Supervisor is still active");
     expect(card.textContent).toContain("Waiting");
     expect(view.container.querySelector(".web-tool-card")).toBeNull();
-    expect(screen.queryByText("Working…")).toBeNull();
+    expect(screen.getByText("Working…")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Open Agent activity" }));
     expect(onOpenAgentPanel).toHaveBeenCalledTimes(1);
@@ -208,6 +208,31 @@ describe("MessageList", () => {
       "map_utils / batch_geocode",
     );
     expect(view.container.querySelector(".web-approval-card")).toBeNull();
+  });
+
+  it("keeps Working visible while an MCP tool is awaiting output", () => {
+    const view = render(
+      <MessageList
+        thinking
+        turnStartedAt={Date.now() - 3_000}
+        items={[
+          { id: "user-tool", level: "user", text: "Run the analysis." },
+          {
+            id: "mcp-running",
+            level: "info",
+            kind: "tool",
+            text: "assess facility change",
+            toolType: "MCP",
+            toolTitle: "supply_chain / assess_facility_change",
+            toolStatus: "running",
+            streaming: true,
+          },
+        ]}
+      />,
+    );
+
+    expect(view.container.querySelector(".web-tool-card")).toBeTruthy();
+    expect(screen.getByText("Working…")).toBeTruthy();
   });
 
   it("renders a recoverable connection error as an active status", () => {

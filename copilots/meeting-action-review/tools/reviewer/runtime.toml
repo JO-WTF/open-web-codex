@@ -1,0 +1,17 @@
+schema_version = 1
+
+[[dependencies]]
+id = "python"
+kind = "python-project"
+manifest = "pyproject.toml"
+lock = "requirements.lock"
+platform_packages = ["open-web-codex-provider-sdk"]
+
+[[servers]]
+id = "meeting_action_review"
+entry = { kind = "python-module", dependency = "python", module = "meeting_action_review.server" }
+args = []
+
+[[servers.env]]
+name = "CODEX_HOME"
+source = "profile_home"

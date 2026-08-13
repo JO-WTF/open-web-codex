@@ -1,9 +1,11 @@
+mod copilot_installation;
 mod copilot_package;
 #[cfg(test)]
 mod copilot_package_runtime_tests;
+mod delivery_artifacts;
+mod delivery_contracts;
 mod event_projection;
-mod final_artifacts;
-mod inline_maps;
+mod inline_map_cards;
 mod inline_visualizations;
 mod middleware;
 mod routes;
@@ -19,8 +21,8 @@ use axum::Router;
 use clap::Parser;
 use open_web_codex_approval_service::{ApprovalService, ResolvedApproval};
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
-use open_web_codex_profile_host::ProfileHostConfig;
-use open_web_codex_profile_registry::ProfileRegistry;
+use open_web_codex_profile_host::{ProfileHostConfig, ProfileHostError};
+use open_web_codex_profile_registry::{ProfileRegistry, ProfileRegistryError};
 use open_web_codex_provider_service::secured::{
     AuthorizedProviderOperations, InMemoryAuthorizedProviderService, SecuredProviderService,
 };
@@ -73,13 +75,20 @@ struct Cli {
     /// Codex executable used by the native Profile Host.
     #[arg(long, env = "CODEX_BIN", default_value = "codex")]
     codex_bin: PathBuf,
-    /// Trusted local descriptor produced by the generic Copilot environment
-    /// preparation integration before the Server starts.
-    #[arg(long, env = "OPEN_WEB_CODEX_COPILOT_PREPARED_DESCRIPTOR")]
-    copilot_prepared_descriptor: Option<PathBuf>,
-    /// Developer-authored Copilot package selected for this local Profile.
-    #[arg(long, env = "OPEN_WEB_CODEX_COPILOT_PACKAGE_ROOT")]
-    copilot_package_root: Option<PathBuf>,
+    /// One application-registered local/private Copilot source, expressed as
+    /// three values: PACKAGE_ID PACKAGE_ROOT PREPARED_DESCRIPTOR. Repeat the
+    /// option to register more than one source. These are trusted Server paths
+    /// and never accepted through the browser API.
+    #[arg(
+        long,
+        num_args = 3,
+        value_names = ["PACKAGE_ID", "PACKAGE_ROOT", "PREPARED_DESCRIPTOR"]
+    )]
+    copilot_package_source: Vec<String>,
+    /// Package installed for a clean Profile only. A persisted activation or
+    /// deactivation remains authoritative on later starts.
+    #[arg(long, env = "OPEN_WEB_CODEX_DEFAULT_COPILOT_PACKAGE")]
+    default_copilot_package: Option<String>,
     /// Private root for server-owned repository mirrors and managed Workspaces.
     #[arg(
         long,
@@ -161,78 +170,132 @@ async fn main() -> anyhow::Result<()> {
         &profile_binding.name,
     )
     .await?;
+    let copilot_sources = copilot_installation::CopilotSourceRegistry::load(
+        configured_copilot_sources(&cli.copilot_package_source)?,
+    )?;
+    let copilot_store = copilot_installation::CopilotInstallationStore::new(
+        state.db.clone(),
+        profile_binding.runtime_key.clone(),
+    );
+    if copilot_store.load().await?.is_none() {
+        if let Some(default_id) = cli.default_copilot_package.as_deref() {
+            let assets = copilot_sources.available(default_id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "default Copilot package '{default_id}' is not an available application source"
+                )
+            })?;
+            copilot_store.ensure_default_active(&assets).await?;
+        }
+    }
     let key_version =
         std::env::var("OPEN_WEB_CODEX_MASTER_KEY_VERSION").unwrap_or_else(|_| "v1".to_string());
     let configuration_secrets = Arc::new(PostgresSecretStore::new(
         state.db.clone(),
         SecretCipher::new(master_key, key_version)?,
     ));
-    let (adapter, providers): (Arc<dyn CodexAdapter>, Arc<dyn AuthorizedProviderOperations>) =
-        match cli.codex_mode.as_str() {
-            "fake" => {
-                tracing::info!("starting in fake codex mode");
-                (
-                    Arc::new(FakeCodexAdapter::new().with_demo_workspace().await),
-                    Arc::new(InMemoryAuthorizedProviderService::default()),
-                )
-            }
-            "real" => {
-                let codex_home = cli.codex_home.clone().ok_or_else(|| {
-                    anyhow::anyhow!("--codex-home / CODEX_HOME is required in real Codex mode")
-                })?;
-                prepare_single_profile_auth_import(
-                    cli.import_codex_auth_from.as_deref(),
-                    &codex_home,
-                )?;
-                let copilot_assets = copilot_package::CopilotPackageAssets::resolve(
-                    required_real_path(
-                        cli.copilot_package_root.as_deref(),
-                        "--copilot-package-root / OPEN_WEB_CODEX_COPILOT_PACKAGE_ROOT",
-                    )?,
-                    required_real_path(
-                        cli.copilot_prepared_descriptor.as_deref(),
-                        "--copilot-prepared-descriptor / OPEN_WEB_CODEX_COPILOT_PREPARED_DESCRIPTOR",
-                    )?,
-                )?;
-                let root_skill_config = copilot_assets.root_skill_config();
-                let startup_files = copilot_assets.startup_files(&codex_home)?;
-                let workspace_root = git.workspace_root().to_path_buf();
-                tracing::info!(
-                    profile_id = %cli.profile_id,
-                    workspace_id = %cli.workspace_id,
-                    copilot_id = copilot_assets.id(),
-                    workspace_root = %workspace_root.display(),
-                    "starting native Codex Profile Host with configured Copilot package"
-                );
-                let registry = ProfileRegistry::new();
-                let providers = SecuredProviderService::new(
-                    state.db.clone(),
-                    profile_binding.runtime_key.clone(),
-                    registry.clone(),
-                    configuration_secrets.as_ref().clone(),
-                );
-                let secret_environment = providers.startup_secret_environment().await?;
-                let host_config =
-                    ProfileHostConfig::new(cli.profile_id.clone(), codex_home, workspace_root)
-                        .with_startup_files(startup_files)
-                        .with_disabled_features(copilot_package::disabled_codex_features())
-                        .with_enabled_features(copilot_package::enabled_codex_features())
-                        .with_codex_bin(cli.codex_bin.clone());
-                let workspace_root = host_config.workspace_root.clone();
-                let host = registry
-                    .register_with_secret_environment(host_config, secret_environment)
-                    .await?;
-                providers.restore_persisted_configuration().await?;
-                let real = RealCodexAdapter::from_host_with_root_skill_config(
-                    host,
-                    cli.workspace_id.clone(),
-                    workspace_root,
-                    root_skill_config,
-                )?;
-                (Arc::new(real), Arc::new(providers))
-            }
-            other => anyhow::bail!("unknown --codex-mode '{other}'; expected 'fake' or 'real'"),
-        };
+    let (adapter, providers, deliveries, runtime_host, runtime_workspace): (
+        Arc<dyn CodexAdapter>,
+        Arc<dyn AuthorizedProviderOperations>,
+        Arc<delivery_contracts::DeliveryRegistry>,
+        Option<open_web_codex_profile_host::ProfileHost>,
+        Option<PathBuf>,
+    ) = match cli.codex_mode.as_str() {
+        "fake" => {
+            tracing::info!("starting in fake codex mode");
+            (
+                Arc::new(FakeCodexAdapter::new().with_demo_workspace().await),
+                Arc::new(InMemoryAuthorizedProviderService::default()),
+                Arc::new(delivery_contracts::DeliveryRegistry::default()),
+                None,
+                None,
+            )
+        }
+        "real" => {
+            let codex_home = cli.codex_home.clone().ok_or_else(|| {
+                anyhow::anyhow!("--codex-home / CODEX_HOME is required in real Codex mode")
+            })?;
+            prepare_single_profile_auth_import(cli.import_codex_auth_from.as_deref(), &codex_home)?;
+            let composition = copilot_installation::cold_start_composition(
+                &copilot_store,
+                &copilot_sources,
+                &codex_home,
+            )
+            .await?;
+            let copilot_installation::ColdStartComposition {
+                startup_files,
+                removed_startup_files,
+                root_skill_config,
+                deliveries,
+                active_assets,
+                completion,
+            } = composition;
+            let deliveries = Arc::new(deliveries);
+            let workspace_root = git.workspace_root().to_path_buf();
+            tracing::info!(
+                profile_id = %cli.profile_id,
+                workspace_id = %cli.workspace_id,
+                copilot_id = active_assets.as_ref().map(|assets| assets.id()),
+                workspace_root = %workspace_root.display(),
+                "starting native Codex Profile Host with persisted Copilot installation"
+            );
+            let registry = ProfileRegistry::new();
+            let providers = SecuredProviderService::new(
+                state.db.clone(),
+                profile_binding.runtime_key.clone(),
+                registry.clone(),
+                configuration_secrets.as_ref().clone(),
+            );
+            let secret_environment = providers.startup_secret_environment().await?;
+            let host_config =
+                ProfileHostConfig::new(cli.profile_id.clone(), codex_home, &workspace_root)
+                    .with_startup_files(startup_files)
+                    .with_removed_startup_files(removed_startup_files)
+                    .with_disabled_features(copilot_package::disabled_codex_features())
+                    .with_enabled_features(copilot_package::enabled_codex_features())
+                    .with_codex_bin(cli.codex_bin.clone());
+            let workspace_root = host_config.workspace_root.clone();
+            let host = match registry
+                .register_with_secret_environment(host_config, secret_environment)
+                .await
+            {
+                Ok(host) => host,
+                Err(error) => {
+                    let failure_code = match &error {
+                        ProfileRegistryError::Host(ProfileHostError::StartupFiles(_)) => {
+                            "profile_materialization_failed"
+                        }
+                        _ => "profile_host_start_failed",
+                    };
+                    completion
+                        .mark_host_failed(&copilot_store, failure_code)
+                        .await?;
+                    return Err(error.into());
+                }
+            };
+            completion.mark_host_ready(&copilot_store).await?;
+            providers.restore_persisted_configuration().await?;
+            let real = RealCodexAdapter::from_host_with_root_skill_config(
+                host.clone(),
+                cli.workspace_id.clone(),
+                workspace_root.clone(),
+                root_skill_config,
+            )?;
+            (
+                Arc::new(real),
+                Arc::new(providers),
+                deliveries,
+                Some(host),
+                Some(workspace_root),
+            )
+        }
+        other => anyhow::bail!("unknown --codex-mode '{other}'; expected 'fake' or 'real'"),
+    };
+    let copilots = Arc::new(copilot_installation::CopilotInstallationService::new(
+        copilot_store,
+        copilot_sources,
+        runtime_host,
+        runtime_workspace,
+    ));
     let approvals = Arc::new(ApprovalService::new(
         state.db.clone(),
         profile_binding.runtime_key.clone(),
@@ -266,6 +329,7 @@ async fn main() -> anyhow::Result<()> {
         let git = git.clone();
         let approvals = approvals.clone();
         let projection_db = state.db.clone();
+        let deliveries = deliveries.clone();
         tokio::spawn(async move {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
@@ -334,7 +398,14 @@ async fn main() -> anyhow::Result<()> {
                             continue;
                         }
                     };
-                    persist_and_broadcast(&public_data, &projection_db, &event_bus, &git).await;
+                    persist_and_broadcast(
+                        &public_data,
+                        &projection_db,
+                        &event_bus,
+                        &git,
+                        &deliveries,
+                    )
+                    .await;
                     continue;
                 }
                 let captured = match approvals.capture_event_frame(&data).await {
@@ -354,7 +425,8 @@ async fn main() -> anyhow::Result<()> {
                     },
                     None => data,
                 };
-                persist_and_broadcast(&public_data, &projection_db, &event_bus, &git).await;
+                persist_and_broadcast(&public_data, &projection_db, &event_bus, &git, &deliveries)
+                    .await;
             }
 
             let _ = sub.await;
@@ -378,6 +450,8 @@ async fn main() -> anyhow::Result<()> {
             orchestrator,
             configuration_secrets,
             profile_binding,
+            deliveries.clone(),
+            copilots,
         ),
     );
     if cli.web_dist.is_dir() {
@@ -405,8 +479,9 @@ async fn persist_and_broadcast(
     projection_db: &sqlx::PgPool,
     event_bus: &tokio::sync::broadcast::Sender<open_web_codex_platform_store::LiveEvent>,
     git: &Arc<GitRuntime>,
+    deliveries: &Arc<delivery_contracts::DeliveryRegistry>,
 ) {
-    match event_projection::persist_frame(data, projection_db).await {
+    match event_projection::persist_frame_with_deliveries(data, projection_db, deliveries).await {
         Ok(Some(projected)) => {
             if !projected.pending_artifact_ids.is_empty() {
                 tokio::spawn(routes::artifacts::materialize_artifacts(
@@ -601,8 +676,22 @@ fn public_approval_frame(frame: &[u8], approval_id: uuid::Uuid) -> anyhow::Resul
     Ok(projected)
 }
 
-fn required_real_path<'a>(path: Option<&'a Path>, contract: &str) -> anyhow::Result<&'a Path> {
-    path.ok_or_else(|| anyhow::anyhow!("{contract} is required in real Codex mode"))
+fn configured_copilot_sources(
+    values: &[String],
+) -> anyhow::Result<Vec<copilot_installation::CopilotPackageSource>> {
+    let chunks = values.chunks_exact(3);
+    if !chunks.remainder().is_empty() {
+        anyhow::bail!(
+            "--copilot-package-source requires PACKAGE_ID PACKAGE_ROOT PREPARED_DESCRIPTOR"
+        );
+    }
+    Ok(chunks
+        .map(|values| copilot_installation::CopilotPackageSource {
+            id: values[0].clone(),
+            package_root: PathBuf::from(&values[1]),
+            prepared_descriptor: PathBuf::from(&values[2]),
+        })
+        .collect())
 }
 
 fn prepare_single_profile_auth_import(
@@ -803,9 +892,10 @@ async fn ensure_local_owner(db: &sqlx::PgPool) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        import_file_backed_codex_auth_if_missing, public_approval_frame,
-        public_resolved_approval_frame, runtime_resolved_request,
+        configured_copilot_sources, import_file_backed_codex_auth_if_missing,
+        public_approval_frame, public_resolved_approval_frame, runtime_resolved_request, Cli,
     };
+    use clap::Parser;
     use open_web_codex_approval_service::{
         safe_maps_credential_url, ResolvedApproval, ResolvedApprovalRequestMode,
     };
@@ -813,6 +903,39 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
     use uuid::Uuid;
+
+    #[test]
+    fn application_copilot_sources_are_explicit_typed_triples() {
+        let sources = configured_copilot_sources(&[
+            "private-one".to_string(),
+            "/trusted/packages/one".to_string(),
+            "/trusted/prepared/one.json".to_string(),
+            "private-two".to_string(),
+            "/trusted/packages/two".to_string(),
+            "/trusted/prepared/two.json".to_string(),
+        ])
+        .expect("source triples");
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].id, "private-one");
+        assert!(configured_copilot_sources(&["id-only".to_string()]).is_err());
+    }
+
+    #[test]
+    fn command_line_accepts_multiple_trusted_copilot_sources() {
+        let cli = Cli::try_parse_from([
+            "open-web-codex-server",
+            "--copilot-package-source",
+            "private-one",
+            "/trusted/one",
+            "/trusted/one.json",
+            "--copilot-package-source",
+            "private-two",
+            "/trusted/two",
+            "/trusted/two.json",
+        ])
+        .expect("parse repeated source registration");
+        assert_eq!(cli.copilot_package_source.len(), 6);
+    }
 
     #[test]
     fn single_profile_auth_import_copies_missing_file_backed_login() {

@@ -23,6 +23,10 @@ use crate::{
 pub struct ThreadSkillConfig {
     pub name: String,
     pub enabled: bool,
+    /// Trusted Profile-owned main prompt used to explicitly select the fixed
+    /// Copilot Skill for every Root Turn. This path never crosses the browser
+    /// contract and is omitted for disabled catalog entries.
+    pub main_prompt: Option<PathBuf>,
 }
 
 fn thread_start_params(workspace_root: &str, skill_config: &[ThreadSkillConfig]) -> Value {
@@ -33,6 +37,7 @@ fn thread_start_params(workspace_root: &str, skill_config: &[ThreadSkillConfig])
     });
     if !skill_config.is_empty() {
         params["config"] = json!({
+            "skills.include_instructions": false,
             "skills.config": skill_config
                 .iter()
                 .map(|entry| json!({
@@ -43,6 +48,51 @@ fn thread_start_params(workspace_root: &str, skill_config: &[ThreadSkillConfig])
         });
     }
     params
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RootSkillSelection {
+    name: String,
+    main_prompt: String,
+}
+
+fn resolve_root_skill_selection(
+    skill_config: &[ThreadSkillConfig],
+) -> Result<Option<RootSkillSelection>, AdapterError> {
+    let enabled = skill_config
+        .iter()
+        .filter(|entry| entry.enabled)
+        .collect::<Vec<_>>();
+    let Some(entry) = enabled.first() else {
+        return Ok(None);
+    };
+    if enabled.len() != 1 {
+        return Err(AdapterError::Internal(
+            "a fixed Copilot Root requires exactly one enabled Supervisor Skill".to_string(),
+        ));
+    }
+    let main_prompt = entry.main_prompt.as_ref().ok_or_else(|| {
+        AdapterError::Internal(format!(
+            "enabled Supervisor Skill '{}' omitted its Profile main prompt",
+            entry.name
+        ))
+    })?;
+    let main_prompt = main_prompt.canonicalize().map_err(|error| {
+        AdapterError::Internal(format!(
+            "failed to resolve enabled Supervisor Skill '{}': {error}",
+            entry.name
+        ))
+    })?;
+    if !main_prompt.is_file() {
+        return Err(AdapterError::Internal(format!(
+            "enabled Supervisor Skill '{}' is not a regular file",
+            entry.name
+        )));
+    }
+    Ok(Some(RootSkillSelection {
+        name: entry.name.clone(),
+        main_prompt: main_prompt.to_string_lossy().into_owned(),
+    }))
 }
 
 fn thread_fork_params(thread_id: &str, target_root: &str) -> Value {
@@ -86,6 +136,7 @@ pub struct RealCodexAdapter {
     runtime_instance: Arc<Mutex<Option<uuid::Uuid>>>,
     local_events: broadcast::Sender<Value>,
     root_skill_config: Vec<ThreadSkillConfig>,
+    root_skill_selection: Option<RootSkillSelection>,
 }
 
 impl RealCodexAdapter {
@@ -115,6 +166,7 @@ impl RealCodexAdapter {
         let workspace_root = workspace_root.canonicalize().map_err(|error| {
             AdapterError::Internal(format!("failed to resolve workspace root: {error}"))
         })?;
+        let root_skill_selection = resolve_root_skill_selection(&root_skill_config)?;
         let (local_events, _) = broadcast::channel(256);
         Ok(Self {
             host,
@@ -130,6 +182,7 @@ impl RealCodexAdapter {
             runtime_instance: Arc::new(Mutex::new(None)),
             local_events,
             root_skill_config,
+            root_skill_selection,
         })
     }
 
@@ -452,6 +505,20 @@ impl RealCodexAdapter {
                 ));
             }
             input.push(json!({ "type": "image", "url": image }));
+        }
+        let is_child_thread = self
+            .child_thread_identities
+            .read()
+            .await
+            .contains_key(thread_id);
+        if !is_child_thread {
+            if let Some(skill) = &self.root_skill_selection {
+                input.push(json!({
+                    "type": "skill",
+                    "name": skill.name.as_str(),
+                    "path": skill.main_prompt.as_str(),
+                }));
+            }
         }
         let read_only = options.access_mode.as_deref() == Some("read-only");
         let mut params = json!({
@@ -1926,8 +1993,9 @@ mod tests {
         app_server_event_frame_with_identity, cached_thread_identity_sidecar,
         codex_bubblewrap_is_unavailable, codex_sandbox_disabled_by_environment,
         is_authorized_workspace_root, login_completion, message_parent_thread_id,
-        message_thread_id, parse_runtime_thread_identity, thread_spawn_parent_thread_id,
-        thread_start_params, turn_sandbox_policy, RealCodexAdapter, ThreadSkillConfig,
+        message_thread_id, parse_runtime_thread_identity, resolve_root_skill_selection,
+        thread_spawn_parent_thread_id, thread_start_params, turn_sandbox_policy, RealCodexAdapter,
+        ThreadSkillConfig,
     };
     use crate::{RuntimeThreadIdentity, RuntimeThreadIdentitySidecar};
     use serde_json::{json, Value};
@@ -1957,14 +2025,17 @@ mod tests {
                 ThreadSkillConfig {
                     name: "warehouse-supervisor".to_string(),
                     enabled: true,
+                    main_prompt: Some("/profile/skills/warehouse-supervisor/SKILL.md".into()),
                 },
                 ThreadSkillConfig {
                     name: "warehouse-data".to_string(),
                     enabled: false,
+                    main_prompt: None,
                 },
                 ThreadSkillConfig {
                     name: "warehouse-network".to_string(),
                     enabled: false,
+                    main_prompt: None,
                 },
             ],
         );
@@ -1976,6 +2047,7 @@ mod tests {
                 "approvalPolicy": "on-request",
                 "historyMode": "paginated",
                 "config": {
+                    "skills.include_instructions": false,
                     "skills.config": [
                         { "name": "warehouse-supervisor", "enabled": true },
                         { "name": "warehouse-data", "enabled": false },
@@ -1984,6 +2056,52 @@ mod tests {
                 },
             })
         );
+    }
+
+    #[test]
+    fn root_skill_selection_requires_one_existing_profile_prompt() {
+        let profile = tempfile::tempdir().expect("Profile root");
+        let prompt = profile.path().join("skills/supervisor/SKILL.md");
+        std::fs::create_dir_all(prompt.parent().expect("Skill directory"))
+            .expect("create Skill directory");
+        std::fs::write(
+            &prompt,
+            "---\nname: supervisor\ndescription: test\n---\nbody",
+        )
+        .expect("write Skill prompt");
+
+        let selected = resolve_root_skill_selection(&[ThreadSkillConfig {
+            name: "supervisor".to_string(),
+            enabled: true,
+            main_prompt: Some(prompt.clone()),
+        }])
+        .expect("resolve fixed Root Skill")
+        .expect("selected Root Skill");
+        assert_eq!(selected.name, "supervisor");
+        assert_eq!(
+            selected.main_prompt,
+            prompt
+                .canonicalize()
+                .expect("canonical Skill prompt")
+                .to_string_lossy()
+        );
+
+        let error = resolve_root_skill_selection(&[
+            ThreadSkillConfig {
+                name: "first".to_string(),
+                enabled: true,
+                main_prompt: Some(prompt.clone()),
+            },
+            ThreadSkillConfig {
+                name: "second".to_string(),
+                enabled: true,
+                main_prompt: Some(prompt),
+            },
+        ])
+        .expect_err("multiple enabled Root Skills must fail");
+        assert!(error
+            .to_string()
+            .contains("exactly one enabled Supervisor Skill"));
     }
 
     #[test]

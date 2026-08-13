@@ -6,8 +6,9 @@ import sys
 from pathlib import Path
 
 import pytest
-from supply_chain_planner.resources.contracts import ResourceRef
-from supply_chain_planner.resources.store import (
+from open_web_codex_provider import (
+    ProviderContractError,
+    ResourceRef,
     ResourceStore,
     resource_ref,
     workspace_resource_root,
@@ -47,7 +48,7 @@ def test_workspace_store_is_visible_across_process_and_restart(tmp_path: Path) -
     script = """
 from pathlib import Path
 import sys
-from supply_chain_planner.resources.store import ResourceStore
+from open_web_codex_provider import ResourceStore
 published = ResourceStore(
     Path(sys.argv[1]),
     uri_prefix="supply-chain://resources/",
@@ -118,7 +119,7 @@ def test_workspace_store_denies_same_uri_from_another_workspace(tmp_path: Path) 
         workspace_resource_root(profile, second_workspace, SERVER_NAME),
         uri_prefix=URI_PREFIX,
     )
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ProviderContractError, match="resource_read_invalid"):
         second.load(ref)
 
 

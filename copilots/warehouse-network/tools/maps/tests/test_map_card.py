@@ -13,12 +13,75 @@ def geojson() -> dict[str, object]:
     return {"type": "FeatureCollection", "features": []}
 
 
-def data_ref(uri: str = "maps-data://geojson/map-data-1234") -> dict[str, str]:
+def data_ref(uri: str = "maps-data://geojson/map-data-1234") -> dict[str, object]:
     return {
         "type": "mcp_resource",
         "server": "map_utils",
         "uri": uri,
         "format": "geojson",
+        "profile": {
+            "schema_version": "geojson-profile.v1",
+            "feature_count": 1,
+            "discriminator_property": None,
+            "feature_types": [
+                {
+                    "value": "geometry:mixed",
+                    "feature_count": 1,
+                    "geometry_types": ["LineString", "Point"],
+                    "properties": [
+                        {"name": "distance", "types": ["number"]},
+                        {"name": "name", "types": ["string"]},
+                    ],
+                    "sample_properties": {"distance": 10.0, "name": "Example"},
+                }
+            ],
+        },
+    }
+
+
+def network_data_ref() -> dict[str, object]:
+    return {
+        "type": "mcp_resource",
+        "server": "supply_chain",
+        "uri": "supply-chain://resources/network_distribution_geojson.v1-digest",
+        "format": "geojson",
+        "profile": {
+            "schema_version": "geojson-profile.v1",
+            "feature_count": 61,
+            "discriminator_property": "kind",
+            "feature_types": [
+                {
+                    "value": "demand",
+                    "feature_count": 50,
+                    "geometry_types": ["Point"],
+                    "properties": [
+                        {"name": "kind", "types": ["string"], "enum_values": ["demand"]},
+                        {"name": "city_name", "types": ["string"]},
+                        {"name": "duration_hours", "types": ["number"]},
+                    ],
+                    "sample_properties": {
+                        "kind": "demand",
+                        "city_name": "Alpha",
+                        "duration_hours": 8.0,
+                    },
+                },
+                {
+                    "value": "warehouse",
+                    "feature_count": 11,
+                    "geometry_types": ["Point"],
+                    "properties": [
+                        {"name": "kind", "types": ["string"], "enum_values": ["warehouse"]},
+                        {"name": "warehouse_name", "types": ["string"]},
+                        {"name": "warehouse_type", "types": ["string"]},
+                    ],
+                    "sample_properties": {
+                        "kind": "warehouse",
+                        "warehouse_name": "Center",
+                        "warehouse_type": "center",
+                    },
+                },
+            ],
+        },
     }
 
 
@@ -91,12 +154,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
                 "sources": {
                     "route": {
                         "type": "geojson",
-                        "data_ref": {
-                            "type": "mcp_resource",
-                            "server": "map_utils",
-                            "uri": uri,
-                            "format": "geojson",
-                        },
+                        "data_ref": data_ref(uri),
                     }
                 },
                 "layers": [
@@ -112,6 +170,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
         assert result.structuredContent is not None
         source = result.structuredContent["artifact"]["renderer"]["payload"]["sources"]["route"]
         self.assertEqual(source["data"]["uri"], uri)
+        self.assertNotIn("profile", source["data"])
 
     async def test_rejects_inline_geojson_and_requires_data_ref(self) -> None:
         with self.assertRaises(ValidationError):
@@ -143,12 +202,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
                 "sources": {
                     "network": {
                         "type": "geojson",
-                        "data_ref": {
-                            "type": "mcp_resource",
-                            "server": "supply_chain",
-                            "uri": uri,
-                            "format": "geojson",
-                        },
+                        "data_ref": network_data_ref(),
                     }
                 },
                 "layers": [
@@ -181,10 +235,9 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
                         {
                             "type": "geojson",
                             "data_ref": {
-                                "type": "mcp_resource",
+                                **data_ref(),
                                 "server": server_name,
                                 "uri": uri,
-                                "format": "geojson",
                             },
                         }
                     )
@@ -284,6 +337,83 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
             tool.outputSchema["$defs"]["Renderer"]["properties"]["kind"]["const"],
             "map.v3",
         )
+
+    async def test_rejects_harbor_filters_that_do_not_exist_on_demand_points(self) -> None:
+        with self.assertRaisesRegex(ToolError, "demand_city_id"):
+            await server.mcp.call_tool(
+                "create_map_card",
+                {
+                    "title": "Invalid coverage",
+                    "sources": {
+                        "network": {"type": "geojson", "data_ref": network_data_ref()}
+                    },
+                    "layers": [
+                        {
+                            "id": "covered-cities",
+                            "type": "circle",
+                            "source": "network",
+                            "filter": [
+                                "all",
+                                ["has", "demand_city_id"],
+                                ["<=", ["get", "duration_hours"], 12],
+                            ],
+                            "paint": {"circle-color": "#16A34A"},
+                        }
+                    ],
+                },
+            )
+
+    async def test_validates_fields_within_selected_feature_kind(self) -> None:
+        with self.assertRaisesRegex(ToolError, "warehouse_name"):
+            await server.mcp.call_tool(
+                "create_map_card",
+                {
+                    "title": "Invalid demand hover",
+                    "sources": {
+                        "network": {"type": "geojson", "data_ref": network_data_ref()}
+                    },
+                    "layers": [
+                        {
+                            "id": "demand",
+                            "type": "circle",
+                            "source": "network",
+                            "filter": ["==", ["get", "kind"], "demand"],
+                            "paint": {"circle-color": "#16A34A"},
+                        }
+                    ],
+                    "extensions": {
+                        "hover": {
+                            "layers": [
+                                {
+                                    "layer": "demand",
+                                    "title_property": "city_name",
+                                    "fields": ["warehouse_name"],
+                                }
+                            ]
+                        }
+                    },
+                },
+            )
+
+    async def test_rejects_line_layer_for_point_only_profile(self) -> None:
+        with self.assertRaisesRegex(ToolError, "cannot render profiled geometries"):
+            await server.mcp.call_tool(
+                "create_map_card",
+                {
+                    "title": "Invalid lines",
+                    "sources": {
+                        "network": {"type": "geojson", "data_ref": network_data_ref()}
+                    },
+                    "layers": [
+                        {
+                            "id": "assignments",
+                            "type": "line",
+                            "source": "network",
+                            "paint": {"line-color": "#94A3B8"},
+                        }
+                    ],
+                },
+            )
 
 
 if __name__ == "__main__":

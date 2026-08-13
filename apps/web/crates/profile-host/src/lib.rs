@@ -6,7 +6,10 @@
 
 mod startup_files;
 
-pub use startup_files::{ProfileStartupFile, ProfileStartupFileError};
+pub use startup_files::{
+    reconcile_profile_startup_files, ProfileStartupFile, ProfileStartupFileError,
+    ProfileStartupFileRemoval,
+};
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -138,6 +141,7 @@ pub struct ProfileHostConfig {
     pub request_timeout: Duration,
     pub event_capacity: usize,
     startup_files: Vec<ProfileStartupFile>,
+    removed_startup_files: Vec<ProfileStartupFileRemoval>,
     environment: Vec<(OsString, OsString)>,
 }
 
@@ -182,6 +186,7 @@ impl ProfileHostConfig {
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             event_capacity: DEFAULT_EVENT_CAPACITY,
             startup_files: Vec::new(),
+            removed_startup_files: Vec::new(),
             environment: Vec::new(),
         }
     }
@@ -230,6 +235,17 @@ impl ProfileHostConfig {
         self
     }
 
+    /// Removes exact managed package destinations before the next app-server
+    /// starts. This is used only to reconcile a persisted deactivation; it is
+    /// not a general Profile filesystem deletion API.
+    pub fn with_removed_startup_files(
+        mut self,
+        removed: impl IntoIterator<Item = ProfileStartupFileRemoval>,
+    ) -> Self {
+        self.removed_startup_files.extend(removed);
+        self
+    }
+
     /// Adds a child-process environment value. Values are intentionally
     /// excluded from `Debug` output and host health snapshots.
     pub fn with_environment(
@@ -255,6 +271,10 @@ impl std::fmt::Debug for ProfileHostConfig {
             .field("request_timeout", &self.request_timeout)
             .field("event_capacity", &self.event_capacity)
             .field("startup_file_count", &self.startup_files.len())
+            .field(
+                "removed_startup_file_count",
+                &self.removed_startup_files.len(),
+            )
             .field("environment", &"[redacted]")
             .finish_non_exhaustive()
     }
@@ -490,7 +510,11 @@ impl ProfileHost {
         let (home, runtime) =
             ensure_profile_layout(&config.codex_home).map_err(ProfileHostError::ProfileIo)?;
         let profile_lock = ProfileLock::acquire(&runtime, &config.profile_id)?;
-        startup_files::materialize_profile_startup_files(&home, &config.startup_files)?;
+        startup_files::reconcile_profile_startup_files(
+            &home,
+            &config.startup_files,
+            &config.removed_startup_files,
+        )?;
 
         let process_cwd = ProfileProcessCwd::create().map_err(ProfileHostError::ProfileIo)?;
         let spawned = spawn_app_server(&config, &home, process_cwd.path())?;
@@ -859,7 +883,11 @@ impl ProfileHost {
     }
 
     async fn restart_unlocked(&self, config: &ProfileHostConfig) -> Result<(), ProfileHostError> {
-        startup_files::materialize_profile_startup_files(&self.inner.home, &config.startup_files)?;
+        startup_files::reconcile_profile_startup_files(
+            &self.inner.home,
+            &config.startup_files,
+            &config.removed_startup_files,
+        )?;
         self.inner.process_generation.fetch_add(1, Ordering::SeqCst);
         self.shutdown_unlocked().await?;
         *self.inner.runtime_instance_id.write().await = Uuid::now_v7();

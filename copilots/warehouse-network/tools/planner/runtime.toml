@@ -5,6 +5,7 @@ id = "python"
 kind = "python-project"
 manifest = "pyproject.toml"
 lock = "requirements.lock"
+platform_packages = ["open-web-codex-provider-sdk"]
 
 [[servers]]
 id = "supply_chain_data"

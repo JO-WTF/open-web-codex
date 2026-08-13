@@ -7,6 +7,9 @@ name = "open-web-codex-copilot-sdk"
 version = "0.1.0"
 description = "SDK and CLI for authoring validated Codex Copilot source compositions"
 requires-python = ">=3.11"
+dependencies = [
+  "open-web-codex-provider-sdk>=0.1,<0.2",
+]
 
 [project.scripts]
 copilot = "copilot_sdk.cli:main"

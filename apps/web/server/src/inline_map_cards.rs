@@ -2,13 +2,16 @@ use serde_json::{json, Map, Value};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use crate::delivery_contracts::{DeliveryKind, DeliveryRegistry};
 use crate::event_projection::sanitize_value;
 
-const MAP_SERVER: &str = "map_utils";
-const MAP_TOOL: &str = "create_map_card";
 const MAX_RENDERER_BYTES: usize = 256 * 1024;
 const MAX_SOURCES: usize = 16;
 const MAX_LAYERS: usize = 64;
+#[cfg(test)]
+const MAP_SERVER: &str = "map_utils";
+#[cfg(test)]
+const MAP_TOOL: &str = "create_map_card";
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct InlineMapCandidate {
@@ -23,10 +26,13 @@ pub(crate) struct InlineMapSource {
     pub(crate) uri: String,
 }
 
-pub(crate) fn candidate(item: &Map<String, Value>) -> Option<InlineMapCandidate> {
+pub(crate) fn candidate_with_registry(
+    item: &Map<String, Value>,
+    registry: &DeliveryRegistry,
+) -> Option<InlineMapCandidate> {
+    let contract = registry.for_item(item)?;
     if item.get("type")?.as_str()? != "mcpToolCall"
-        || item.get("server")?.as_str()? != MAP_SERVER
-        || item.get("tool")?.as_str()? != MAP_TOOL
+        || !matches!(contract.kind, DeliveryKind::InlineGeoJsonMapCard)
     {
         return None;
     }
@@ -81,6 +87,11 @@ pub(crate) fn candidate(item: &Map<String, Value>) -> Option<InlineMapCandidate>
     })
 }
 
+#[cfg(test)]
+fn candidate(item: &Map<String, Value>) -> Option<InlineMapCandidate> {
+    candidate_with_registry(item, &crate::delivery_contracts::warehouse_test_registry())
+}
+
 fn validate_warnings(value: Option<&Value>) -> Option<()> {
     let Some(value) = value else {
         return Some(());
@@ -99,12 +110,7 @@ fn validate_warnings(value: Option<&Value>) -> Option<()> {
         {
             return None;
         }
-        if !matches!(
-            warning.get("code")?.as_str()?,
-            "ignored_extra_input" | "mapbox_style_warning"
-        ) {
-            return None;
-        }
+        bounded_text(warning.get("code")?.as_str()?, 80)?;
         bounded_text(warning.get("path")?.as_str()?, 512)?;
         if let Some(message) = warning.get("message") {
             bounded_text(message.as_str()?, 1024)?;

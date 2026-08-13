@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import re
 import stat
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+import tomllib
+
+from .platform_packages import platform_package
 
 DependencyKind = Literal["python-project", "node-project"]
 EnvironmentSource = Literal[
@@ -46,6 +48,7 @@ class RuntimeDependency:
     kind: DependencyKind
     manifest: Path
     lock: Path
+    platform_packages: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -122,7 +125,7 @@ def load_tool_runtime_manifest(
         location = f"{runtime_relative}.dependencies[{index}]"
         if not isinstance(raw, dict):
             _fail("invalid_type", location, "must be a table")
-        _keys(raw, {"id", "kind", "manifest", "lock"}, location)
+        _keys(raw, {"id", "kind", "manifest", "lock", "platform_packages"}, location)
         dependency_id = _identifier(raw.get("id"), f"{location}.id")
         if dependency_id in dependency_ids:
             _fail("duplicate_id", f"{location}.id", f"duplicate id {dependency_id!r}")
@@ -131,6 +134,37 @@ def load_tool_runtime_manifest(
             _fail("invalid_type", f"{location}.kind", "must be python-project or node-project")
         manifest = _tool_file(tool, raw.get("manifest"), f"{location}.manifest")
         lock = _tool_file(tool, raw.get("lock"), f"{location}.lock")
+        raw_platform_packages = raw.get("platform_packages", [])
+        if not isinstance(raw_platform_packages, list) or any(
+            not isinstance(package, str) or not _ID.fullmatch(package)
+            for package in raw_platform_packages
+        ):
+            _fail(
+                "invalid_type",
+                f"{location}.platform_packages",
+                "must be an array of registered package identifiers",
+            )
+        if len(set(raw_platform_packages)) != len(raw_platform_packages):
+            _fail(
+                "duplicate_id",
+                f"{location}.platform_packages",
+                "must not contain duplicate package identifiers",
+            )
+        if kind != "python-project" and raw_platform_packages:
+            _fail(
+                "invalid_field",
+                f"{location}.platform_packages",
+                "is supported only for python-project dependencies",
+            )
+        for package in raw_platform_packages:
+            try:
+                platform_package(package)
+            except ValueError:
+                _fail(
+                    "missing_reference",
+                    f"{location}.platform_packages",
+                    f"references unregistered platform package {package!r}",
+                )
         if kind == "python-project":
             locked_names = _validate_python_lock(lock, f"{location}.lock")
             _validate_python_build_requirements(
@@ -138,9 +172,23 @@ def load_tool_runtime_manifest(
                 locked_names,
                 f"{location}.manifest",
             )
+            _validate_python_project_requirements(
+                manifest,
+                locked_names,
+                set(raw_platform_packages),
+                f"{location}.manifest",
+            )
         else:
             _validate_node_lock(manifest, lock, location)
-        dependencies.append(RuntimeDependency(dependency_id, kind, manifest, lock))
+        dependencies.append(
+            RuntimeDependency(
+                dependency_id,
+                kind,
+                manifest,
+                lock,
+                tuple(raw_platform_packages),
+            )
+        )
         dependency_ids.add(dependency_id)
         dependency_kinds[dependency_id] = kind
 
@@ -304,6 +352,63 @@ def _validate_python_build_requirements(
                 field,
                 f"build requirement {name!r} must have an exact hashed lock entry",
             )
+
+
+def _validate_python_project_requirements(
+    manifest: Path,
+    locked_names: set[str],
+    declared_platform_packages: set[str],
+    location: str,
+) -> None:
+    data = _toml(manifest, location)
+    project = data.get("project")
+    if not isinstance(project, dict):
+        _fail("invalid_manifest", f"{location}.project", "required table is missing")
+    requirements = project.get("dependencies", [])
+    if not isinstance(requirements, list):
+        _fail(
+            "invalid_manifest",
+            f"{location}.project.dependencies",
+            "must be a string array",
+        )
+    project_platform_packages: set[str] = set()
+    for index, requirement in enumerate(requirements):
+        field = f"{location}.project.dependencies[{index}]"
+        if not isinstance(requirement, str):
+            _fail("invalid_manifest", field, "must be a simple package requirement")
+        matched = _SIMPLE_REQUIREMENT.fullmatch(requirement.strip())
+        if matched is None:
+            _fail(
+                "unsupported_requirement",
+                field,
+                "runtime v1 supports only package names with simple version constraints",
+            )
+        name = _normalize_package_name(matched.group(1))
+        try:
+            platform_package(name)
+        except ValueError:
+            if name not in locked_names:
+                _fail(
+                    "invalid_lock",
+                    field,
+                    f"project requirement {name!r} must have an exact hashed lock entry",
+                )
+        else:
+            project_platform_packages.add(name)
+            if name not in declared_platform_packages:
+                _fail(
+                    "missing_reference",
+                    field,
+                    f"platform requirement {name!r} must be declared in platform_packages",
+                )
+    undeclared_requirements = declared_platform_packages - project_platform_packages
+    if undeclared_requirements:
+        package = min(undeclared_requirements)
+        _fail(
+            "missing_reference",
+            f"{location}.project.dependencies",
+            f"declared platform package {package!r} must be a project requirement",
+        )
 
 
 def _normalize_package_name(value: str) -> str:

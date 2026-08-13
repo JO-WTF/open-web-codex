@@ -716,7 +716,7 @@ describe("SupervisorOverview", () => {
     }
   });
 
-  it("keeps separate started and completed events for one Runtime Item", () => {
+  it("merges started and completed events for one Runtime Item", () => {
     const subject = {
       kind: "mcp_tool" as const,
       server: "supply_chain",
@@ -740,19 +740,33 @@ describe("SupervisorOverview", () => {
       subject,
       title: "Completed a tool",
     });
+    const otherCall = activity(42, {
+      thread_id: "network-thread",
+      turn_id: "turn-network",
+      item_id: "item-validate-again",
+      kind: "tool_completed",
+      status: "completed",
+      subject,
+      title: "Completed a tool again",
+    });
+    const merged = orderAndDedupeActivities([completed, started, { ...started }, otherCall]);
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toEqual(completed);
+    expect(merged[1]).toEqual(otherCall);
+
     render(
       <SupervisorOverview
         taskTitle="Network planning"
         agents={[rootAgent, networkAgent]}
-        activities={[completed, started, { ...started }]}
+        activities={[completed, started, { ...started }, otherCall]}
         artifacts={[]}
       />,
     );
 
     const log = screen.getByLabelText("Agent behavior log");
     expect(log.querySelectorAll("ol > li")).toHaveLength(2);
-    expect(log.textContent).toContain("Running");
-    expect(log.textContent).toContain("Completed");
+    expect(log.textContent).not.toContain("Running");
+    expect(screen.getAllByText("Completed")).toHaveLength(2);
   });
 
   it("keeps safe detail keyboard-expandable and exposes status semantics", () => {

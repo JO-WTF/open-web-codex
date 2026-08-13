@@ -40,7 +40,7 @@ const WAREHOUSE_SKILLS: [&str; 3] = [
     "warehouse-network",
     "warehouse-supervisor",
 ];
-const WAREHOUSE_MCP_SERVERS: [&str; 2] = ["map_utils", "supply_chain"];
+const WAREHOUSE_MCP_SERVERS: [&str; 3] = ["map_utils", "supply_chain", "supply_chain_data"];
 const DATA_TOOLS: [&str; 4] = [
     "discover_workspace_sources",
     "inspect_workspace_sources",
@@ -784,6 +784,25 @@ async fn wait_for_model_request(
     .expect("model request marker")
 }
 
+async fn wait_for_function_output(control: &RuntimeModelControl, call_id: &str) -> Value {
+    timeout(Duration::from_secs(30), async {
+        loop {
+            if let Some(output) = control
+                .requests
+                .lock()
+                .await
+                .iter()
+                .find_map(|request| request_function_output(request, call_id).cloned())
+            {
+                return output;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("collaboration function output")
+}
+
 fn assert_role_mcp_inventory(response: &Value, expected: &[(&str, &[&str])]) {
     let expected_names = expected
         .iter()
@@ -815,20 +834,35 @@ fn assert_role_mcp_inventory(response: &Value, expected: &[(&str, &[&str])]) {
     }
 }
 
-fn assert_child_skill_policy(request: &Value, enabled_marker: &str, disabled_markers: &[&str]) {
+fn assert_child_skill_policy(
+    request: &Value,
+    skill_name: &str,
+    enabled_marker: &str,
+    disabled_skills: &[&str],
+) {
     let developer_text = request_developer_text(request);
     assert!(
         developer_text.contains("Act only as the warehouse-network"),
         "native child request omitted Role developer instructions",
     );
+    let entry_prefix = format!("- {skill_name}: ");
+    let entry = developer_text
+        .lines()
+        .find(|line| line.starts_with(&entry_prefix))
+        .unwrap_or_else(|| panic!("Runtime omitted enabled Role Skill `{skill_name}`"));
     assert!(
-        developer_text.contains(enabled_marker),
-        "enabled Role Skill is absent from model-visible instructions: {developer_text}",
+        entry.contains(enabled_marker)
+            && entry.contains("(file: ")
+            && entry.contains(&format!("{skill_name}/SKILL.md)")),
+        "enabled Role Skill catalog entry is incomplete: {entry}",
     );
-    for marker in disabled_markers {
+    for disabled_skill in disabled_skills {
+        let disabled_prefix = format!("- {disabled_skill}: ");
         assert!(
-            !developer_text.contains(marker),
-            "disabled Role Skill leaked into model-visible instructions: {marker}; relevant lines: {:?}",
+            !developer_text
+                .lines()
+                .any(|line| line.starts_with(&disabled_prefix)),
+            "disabled Role Skill leaked into model-visible instructions: {disabled_skill}; relevant lines: {:?}",
             developer_text
                 .lines()
                 .filter(|line| line.to_ascii_lowercase().contains("warehouse"))
@@ -850,42 +884,16 @@ fn request_developer_text(request: &Value) -> String {
         .join("\n")
 }
 
-fn assert_visible_skill_catalog_entry(
-    developer_text: &str,
-    skill_name: &str,
-    description_fragment: &str,
-) {
-    let line_prefix = format!("- {skill_name}: ");
-    let line = developer_text
-        .lines()
-        .find(|line| line.starts_with(&line_prefix))
-        .unwrap_or_else(|| panic!("Runtime omitted Skill catalog entry `{skill_name}`"));
-    assert!(
-        line.contains(description_fragment),
-        "Skill `{skill_name}` catalog entry omitted its frontmatter description: {line}",
-    );
-    assert!(
-        line.contains("(file: ") && line.contains(&format!("{skill_name}/SKILL.md)")),
-        "Skill `{skill_name}` catalog entry omitted its file locator: {line}",
-    );
-}
-
-fn assert_hidden_skill_catalog_entry(
-    developer_text: &str,
-    skill_name: &str,
-    description_fragment: &str,
-) {
-    let line_prefix = format!("- {skill_name}: ");
-    assert!(
-        !developer_text
-            .lines()
-            .any(|line| line.starts_with(&line_prefix)),
-        "disabled Skill `{skill_name}` leaked into the model-visible catalog",
-    );
-    assert!(
-        !developer_text.contains(description_fragment),
-        "disabled Skill `{skill_name}` leaked its frontmatter description",
-    );
+fn request_user_text(request: &Value) -> String {
+    request["input"]
+        .as_array()
+        .expect("Responses input")
+        .iter()
+        .filter(|item| item["role"].as_str() == Some("user"))
+        .flat_map(|item| item["content"].as_array().into_iter().flatten())
+        .filter_map(|content| content["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn request_function_output<'a>(request: &'a Value, call_id: &str) -> Option<&'a Value> {
@@ -1291,7 +1299,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         host.clone(),
         "package-network-runtime-runner",
         runner_root.clone(),
-        assets.root_skill_config(),
+        assets.root_skill_config(&profile_home),
     )
     .expect("construct real Codex adapter");
     let workspace = AuthorizedWorkspace {
@@ -1395,20 +1403,27 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         "the Root skill projection must apply to the first model request",
     );
     let root_developer_text = request_developer_text(&root_request);
-    assert_visible_skill_catalog_entry(
-        &root_developer_text,
-        "warehouse-supervisor",
-        "当用户要求准备仓网数据",
+    let root_user_text = request_user_text(&root_request);
+    assert!(
+        root_user_text.contains("<name>warehouse-supervisor</name>")
+            && root_user_text.contains("Root 只负责理解目标、拆分任务"),
+        "the first Root request omitted the selected Supervisor Skill body: {root_user_text}",
     );
-    assert_hidden_skill_catalog_entry(
-        &root_developer_text,
-        "warehouse-data",
-        "当用户要求检查或准备当前 Workspace 中的仓网",
+    assert!(
+        !root_developer_text.contains("SKILL.md")
+            && !root_developer_text.contains("### Available skills"),
+        "the fixed Root leaked the generic Skill catalog instead of selecting its Supervisor Skill: {root_developer_text}",
     );
-    assert_hidden_skill_catalog_entry(
-        &root_developer_text,
-        "warehouse-network",
-        "当用户要求定义仓网数据需求",
+    assert!(
+        !root_user_text.contains("<name>warehouse-data</name>")
+            && !root_user_text.contains("<name>warehouse-network</name>"),
+        "disabled child Skills leaked into Root context: {root_user_text}",
+    );
+
+    let data_spawn_output = wait_for_function_output(&model_control, DATA_SPAWN_CALL).await;
+    assert!(
+        data_spawn_output.to_string().contains("runtime_gate_data"),
+        "native Data child spawn failed: {data_spawn_output}",
     );
 
     let data_thread_id =
@@ -1417,8 +1432,9 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         wait_for_model_request(&model_control, DATA_CHILD_PROMPT, DATA_SPAWN_CALL).await;
     assert_child_skill_policy(
         &data_request,
-        "当用户要求检查或准备当前 Workspace 中的仓网",
-        &["当用户要求定义仓网数据需求", "当用户要求准备仓网数据"],
+        "warehouse-data",
+        "仅供仓网 Supervisor 原生创建的 data_agent 使用",
+        &["warehouse-network", "warehouse-supervisor"],
     );
     let data_mcp = adapter
         .query_profile(ProfileQuery::McpServers {
@@ -1428,7 +1444,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         })
         .await
         .expect("query Data child MCP inventory");
-    assert_role_mcp_inventory(&data_mcp, &[("supply_chain", &DATA_TOOLS[..])]);
+    assert_role_mcp_inventory(&data_mcp, &[("supply_chain_data", &DATA_TOOLS[..])]);
 
     let network_thread_id = wait_for_direct_child_thread(
         &host,
@@ -1450,11 +1466,9 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     assert!(!network_developer_text.contains("<permissions instructions>"));
     assert_child_skill_policy(
         &network_request,
-        "当用户要求定义仓网数据需求",
-        &[
-            "当用户要求检查或准备当前 Workspace 中的仓网",
-            "当用户要求准备仓网数据",
-        ],
+        "warehouse-network",
+        "仅供仓网 Supervisor 原生创建的 network_agent 使用",
+        &["warehouse-data", "warehouse-supervisor"],
     );
     let network_mcp = adapter
         .query_profile(ProfileQuery::McpServers {
@@ -1486,8 +1500,9 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         wait_for_model_request(&model_control, DATA_FOLLOWUP_PROMPT, DATA_FOLLOWUP_CALL).await;
     assert_child_skill_policy(
         &data_followup_request,
-        "当用户要求检查或准备当前 Workspace 中的仓网",
-        &["当用户要求定义仓网数据需求", "当用户要求准备仓网数据"],
+        "warehouse-data",
+        "仅供仓网 Supervisor 原生创建的 data_agent 使用",
+        &["warehouse-network", "warehouse-supervisor"],
     );
     let reloaded_data_mcp = adapter
         .query_profile(ProfileQuery::McpServers {
@@ -1497,7 +1512,10 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         })
         .await
         .expect("query reloaded Data child MCP inventory");
-    assert_role_mcp_inventory(&reloaded_data_mcp, &[("supply_chain", &DATA_TOOLS[..])]);
+    assert_role_mcp_inventory(
+        &reloaded_data_mcp,
+        &[("supply_chain_data", &DATA_TOOLS[..])],
+    );
     model_control.release_data_followup.add_permits(1);
     model_control.release_network_child.add_permits(1);
 
@@ -1604,8 +1622,9 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         wait_for_model_request(&model_control, HOT_DATA_PROMPT, HOT_DATA_SPAWN_CALL).await;
     assert_child_skill_policy(
         &hot_data_request,
+        "warehouse-data",
         SKILL_HOT_MARKER,
-        &["当用户要求定义仓网数据需求", "当用户要求准备仓网数据"],
+        &["warehouse-network", "warehouse-supervisor"],
     );
     assert!(
         request_developer_text(&hot_data_request).contains(ROLE_HOT_MARKER),

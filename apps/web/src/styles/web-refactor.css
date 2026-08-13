@@ -580,6 +580,40 @@ body:has(.web-app-shell) {
   box-shadow: 0 24px 80px rgb(0 0 0 / 56%);
 }
 
+.web-file-delete-modal {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  width: min(420px, 100%);
+  gap: 12px 14px;
+  padding: 20px;
+  border: 1px solid var(--web-border-strong);
+  border-radius: 14px;
+  color: var(--web-text);
+  background: #151a25;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 56%);
+}
+
+.web-file-delete-modal-icon {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  color: #ff9696;
+  background: rgb(229 92 92 / 16%);
+}
+
+.web-file-delete-modal-copy h2 { color: var(--web-text); font-size: 15px; }
+.web-file-delete-modal-copy p { margin-top: 5px; color: var(--web-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.web-file-delete-modal-copy .web-file-delete-error { color: #ffadad; }
+.web-file-delete-modal-actions { display: flex; grid-column: 1 / -1; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.web-file-delete-modal-actions button { min-height: 34px; padding: 0 14px; border: 1px solid var(--web-border-strong); border-radius: 8px; color: var(--web-text); background: var(--web-surface); cursor: pointer; }
+.web-file-delete-modal-actions button:hover { background: var(--web-surface-hover); }
+.web-file-delete-modal-actions button.is-danger { border-color: #a93a45; color: #fff; background: #b3414c; }
+.web-file-delete-modal-actions button.is-danger:hover { background: #c44b57; }
+.web-file-delete-modal-actions button:disabled { opacity: .5; cursor: wait; }
+
 .web-archive-modal-icon {
   display: inline-flex;
   width: 34px;
@@ -5085,6 +5119,12 @@ body:has(.web-app-shell[data-theme="light"]) .web-settings-modal {
 }
 
 body:has(.web-app-shell[data-theme="light"]) .web-archive-modal {
+  color: var(--web-text);
+  background: #ffffff;
+  box-shadow: 0 24px 72px rgb(63 76 98 / 26%);
+}
+
+body:has(.web-app-shell[data-theme="light"]) .web-file-delete-modal {
   color: var(--web-text);
   background: #ffffff;
   box-shadow: 0 24px 72px rgb(63 76 98 / 26%);

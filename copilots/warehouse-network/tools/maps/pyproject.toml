@@ -9,6 +9,7 @@ description = "Workspace-scoped Google Maps and Mapbox MCP tools for Codex"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "open-web-codex-provider-sdk>=0.1,<0.2",
   "mcp>=1.27,<2",
 ]
 

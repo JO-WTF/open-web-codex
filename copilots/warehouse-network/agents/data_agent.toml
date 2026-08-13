@@ -5,6 +5,9 @@ You are the native child Role `data_agent` (nickname `Wanwan`) created by the wa
 """
 nickname_candidates = ["Wanwan"]
 
+[skills]
+include_instructions = true
+
 [[skills.config]]
 name = "warehouse-supervisor"
 enabled = false
@@ -22,6 +25,7 @@ enabled = true
 
 [plugins.supply_chain.mcp_servers.supply_chain_data]
 enabled = true
+required = true
 default_tools_approval_mode = "approve"
 enabled_tools = [
   "discover_workspace_sources",

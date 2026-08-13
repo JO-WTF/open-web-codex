@@ -15,6 +15,13 @@ from mcp.types import (
     CallToolResult,
     ToolAnnotations,
 )
+from open_web_codex_provider import (
+    McpResourceRuntime,
+    ResourceRef,
+    ResourceStore,
+    bind_runtime,
+    workspace_resource_root,
+)
 from pydantic import BaseModel, ConfigDict, Field
 from supply_chain_planner.data.geography import enrich_network_geography
 from supply_chain_planner.data.geography import (
@@ -34,14 +41,15 @@ from supply_chain_planner.data.workspace_intake import (
     workspace_source_metadata,
 )
 from supply_chain_planner.network.models import NormalizedInputBatch
-from supply_chain_planner.resources.contracts import ResourceRef
-from supply_chain_planner.resources.runtime import McpResourceRuntime, bind_runtime
 from supply_chain_planner.shared.models import (
-    MCP_SERVER_NAME,
     ConfirmedSourceDecision,
     DataAgentResourceToolResult,
     GeographyOverride,
     PreparedNetworkResource,
+)
+from supply_chain_planner.shared.resource_identity import (
+    DATA_MCP_SERVER_NAME,
+    RESOURCE_PROVIDER_NAMESPACE,
 )
 
 RESOURCE_URI_PREFIX = "supply-chain://resources/"
@@ -95,15 +103,28 @@ _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".code
 _mcp_resource_runtime: McpResourceRuntime | None = None
 
 
+def _bind_runtime(workspace_root: Path, profile_state_root: Path) -> McpResourceRuntime:
+    store = ResourceStore(
+        workspace_resource_root(
+            profile_state_root,
+            workspace_root,
+            RESOURCE_PROVIDER_NAMESPACE,
+        ),
+        uri_prefix=RESOURCE_URI_PREFIX,
+    )
+    return bind_runtime(
+        workspace_root,
+        profile_state_root,
+        DATA_MCP_SERVER_NAME,
+        RESOURCE_URI_PREFIX,
+        store=store,
+    )
+
+
 def _runtime() -> McpResourceRuntime:
     global _mcp_resource_runtime
     if _mcp_resource_runtime is None:
-        _mcp_resource_runtime = bind_runtime(
-            _workspace_root,
-            _profile_state_root,
-            MCP_SERVER_NAME,
-            RESOURCE_URI_PREFIX,
-        )
+        _mcp_resource_runtime = _bind_runtime(_workspace_root, _profile_state_root)
     return _mcp_resource_runtime
 
 
@@ -421,12 +442,7 @@ def main() -> None:
     global _workspace_root, _profile_state_root, _mcp_resource_runtime
     _workspace_root = Path.cwd().resolve(strict=True)
     _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
-    _mcp_resource_runtime = bind_runtime(
-        _workspace_root,
-        _profile_state_root,
-        MCP_SERVER_NAME,
-        RESOURCE_URI_PREFIX,
-    )
+    _mcp_resource_runtime = _bind_runtime(_workspace_root, _profile_state_root)
     asyncio.run(run_stdio())
 
 

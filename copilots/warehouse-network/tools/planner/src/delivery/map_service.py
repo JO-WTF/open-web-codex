@@ -1,4 +1,4 @@
-"""Deterministic network comparison map bundles and legacy publication."""
+"""Deterministic warehouse-network GeoJSON and data bundles."""
 
 from __future__ import annotations
 
@@ -6,8 +6,13 @@ from collections.abc import Mapping
 from decimal import Decimal
 from typing import Literal
 
+from open_web_codex_provider import GeoJsonProfile
 from pydantic import Field
-from supply_chain_planner.delivery.models import DeliveryModel, validate_delivery_inputs
+from supply_chain_planner.delivery.models import (
+    DeliveryModel,
+    validate_baseline_delivery_inputs,
+    validate_delivery_inputs,
+)
 from supply_chain_planner.network.models import (
     DemandCityRecord,
     NormalizedInputBatch,
@@ -20,7 +25,16 @@ from supply_chain_planner.network.optimization_models import (
     CoverageComparison,
     PMedianSolution,
 )
-from supply_chain_planner.resources.contracts import MapResourceRef
+
+
+class MapResourceRef(DeliveryModel):
+    """A reviewed local GeoJSON Resource accepted by map-card authoring."""
+
+    type: Literal["mcp_resource"] = "mcp_resource"
+    server: str = Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_.-]*$")
+    uri: str = Field(min_length=1, max_length=2048)
+    format: Literal["geojson"] = "geojson"
+    profile: GeoJsonProfile
 
 
 class PointGeometry(DeliveryModel):
@@ -56,6 +70,18 @@ class DemandMapProperties(DeliveryModel):
     province_id: str | None
     province_name: str | None
     demand_quantity: Decimal
+    assigned_warehouse_id: str | None = None
+    distance_km: float | None = Field(default=None, ge=0)
+    duration_hours: float | None = Field(default=None, ge=0)
+    unit_cost: float | None = Field(default=None, ge=0)
+    baseline_warehouse_id: str | None = None
+    baseline_distance_km: float | None = Field(default=None, ge=0)
+    baseline_duration_hours: float | None = Field(default=None, ge=0)
+    baseline_unit_cost: float | None = Field(default=None, ge=0)
+    facility_warehouse_id: str | None = None
+    facility_distance_km: float | None = Field(default=None, ge=0)
+    facility_duration_hours: float | None = Field(default=None, ge=0)
+    facility_unit_cost: float | None = Field(default=None, ge=0)
 
 
 class AssignmentMapProperties(DeliveryModel):
@@ -111,67 +137,6 @@ class NetworkComparisonGeoJson(DeliveryModel):
     features: list[NetworkMapFeature]
 
 
-class MapCardToolTarget(DeliveryModel):
-    server: Literal["map_utils"] = "map_utils"
-    name: Literal["create_map_card"] = "create_map_card"
-
-
-class MapCardGeoJsonSource(DeliveryModel):
-    type: Literal["geojson"] = "geojson"
-    data_ref: MapResourceRef
-
-
-class NetworkDistributionMapCardArguments(DeliveryModel):
-    title: str
-    intent: Literal["visualization"] = "visualization"
-    fallback_text: str
-    summary: str
-    sources: dict[str, MapCardGeoJsonSource]
-    layers: list[dict[str, object]]
-    extensions: dict[str, object]
-
-
-class NetworkDistributionMapCardHandoff(DeliveryModel):
-    """Exact cross-Tool handoff for the generic map-card provider."""
-
-    schema_version: Literal["network_distribution_map_card_handoff.v1"] = Field(
-        default="network_distribution_map_card_handoff.v1",
-        alias="schemaVersion",
-    )
-    tool: MapCardToolTarget = Field(default_factory=MapCardToolTarget)
-    arguments: NetworkDistributionMapCardArguments
-
-
-class NetworkComparisonMapCardHandoff(DeliveryModel):
-    """Exact comparison-map handoff for the generic map-card provider."""
-
-    schema_version: Literal["network_comparison_map_card_handoff.v1"] = Field(
-        default="network_comparison_map_card_handoff.v1",
-        alias="schemaVersion",
-    )
-    tool: MapCardToolTarget = Field(default_factory=MapCardToolTarget)
-    arguments: NetworkDistributionMapCardArguments
-
-
-class NetworkMapLayer(DeliveryModel):
-    layer_id: str
-    feature_kind: str
-    geometry_type: Literal["Point", "LineString"]
-    scenario: Literal["baseline", "facility"] | None
-    label: str
-
-
-class NetworkMapLegendItem(DeliveryModel):
-    code: str
-    label: str
-    color: str = Field(pattern=r"^#[0-9A-F]{6}$")
-
-
-class NetworkMapExtensions(DeliveryModel):
-    legend: list[NetworkMapLegendItem]
-    hover_fields: dict[str, list[str]]
-
-
 class NetworkMapSummary(DeliveryModel):
     country_code: str = Field(pattern=r"^[A-Z]{2}$")
     baseline_label: str
@@ -190,22 +155,27 @@ class NetworkMapSummary(DeliveryModel):
 class NetworkComparisonMapBundle(DeliveryModel):
     schema_version: Literal["network_comparison_map_bundle.v1"] = "network_comparison_map_bundle.v1"
     kind: Literal["network_comparison_map"] = "network_comparison_map"
-    title: str = "Warehouse network: baseline vs selected facilities"
     summary: NetworkMapSummary
     geojson: NetworkMapFeatureCollection
-    layers: list[NetworkMapLayer]
-    extensions: NetworkMapExtensions
 
 
 def build_network_distribution_geojson(
     normalized: NormalizedInputBatch,
     *,
     include_candidates: bool,
+    baseline: BaselineResult | None = None,
 ) -> NetworkDistributionGeoJson:
-    """Build demand and warehouse points without routing or optimization."""
+    """Build raw map features without prescribing presentation."""
 
+    baseline_rows: Mapping[str, AssignmentRow] = {}
+    if baseline is not None:
+        baseline_rows = validate_baseline_delivery_inputs(
+            normalized,
+            baseline,
+        ).baseline_rows_by_city
     features: list[NetworkMapFeature] = []
     for city in sorted(normalized.demand_cities, key=lambda item: item.city_id):
+        row = baseline_rows.get(city.city_id)
         features.append(
             NetworkMapFeature(
                 id=_feature_id("demand", city.city_id),
@@ -223,6 +193,10 @@ def build_network_distribution_geojson(
                     province_id=city.province_id,
                     province_name=city.province_name,
                     demand_quantity=city.demand_quantity,
+                    assigned_warehouse_id=row.warehouse_id if row else None,
+                    distance_km=row.distance_km if row else None,
+                    duration_hours=row.duration_hours if row else None,
+                    unit_cost=row.cost if row else None,
                 ),
             )
         )
@@ -260,356 +234,6 @@ def build_network_distribution_geojson(
             )
         )
     return NetworkDistributionGeoJson(features=features)
-
-
-def build_network_distribution_map_card_handoff(
-    data_ref: MapResourceRef,
-    *,
-    include_candidates: bool,
-) -> NetworkDistributionMapCardHandoff:
-    """Build the exact generic map-card call without exposing GeoJSON to the model."""
-
-    source_id = "network-distribution"
-    layers: list[dict[str, object]] = [
-        {
-            "id": "demand-cities",
-            "type": "circle",
-            "source": source_id,
-            "filter": ["==", ["get", "kind"], "demand"],
-            "paint": {
-                "circle-color": "#F59E0B",
-                "circle-opacity": 0.78,
-                "circle-radius": [
-                    "interpolate",
-                    ["linear"],
-                    ["to-number", ["get", "demand_quantity"]],
-                    0,
-                    4,
-                    10000,
-                    14,
-                ],
-                "circle-stroke-color": "#7C2D12",
-                "circle-stroke-width": 1,
-            },
-        },
-        {
-            "id": "center-warehouses",
-            "type": "circle",
-            "source": source_id,
-            "filter": [
-                "all",
-                ["==", ["get", "kind"], "warehouse"],
-                ["==", ["get", "is_existing"], True],
-                ["==", ["get", "warehouse_type"], "center"],
-            ],
-            "paint": {
-                "circle-color": "#DC2626",
-                "circle-radius": 9,
-                "circle-stroke-color": "#FFFFFF",
-                "circle-stroke-width": 2,
-            },
-        },
-        {
-            "id": "cross-docking-warehouses",
-            "type": "circle",
-            "source": source_id,
-            "filter": [
-                "all",
-                ["==", ["get", "kind"], "warehouse"],
-                ["==", ["get", "is_existing"], True],
-                ["==", ["get", "warehouse_type"], "cross_docking"],
-            ],
-            "paint": {
-                "circle-color": "#2563EB",
-                "circle-radius": 7,
-                "circle-stroke-color": "#FFFFFF",
-                "circle-stroke-width": 2,
-            },
-        },
-        {
-            "id": "warehouse-labels",
-            "type": "symbol",
-            "source": source_id,
-            "filter": [
-                "all",
-                ["==", ["get", "kind"], "warehouse"],
-                ["==", ["get", "is_existing"], True],
-            ],
-            "layout": {
-                "text-field": ["get", "warehouse_name"],
-                "text-size": 11,
-                "text-offset": [0, 1.3],
-                "text-anchor": "top",
-            },
-            "paint": {
-                "text-color": "#111827",
-                "text-halo-color": "#FFFFFF",
-                "text-halo-width": 1,
-            },
-        },
-    ]
-    legend_items: list[dict[str, object]] = [
-        {"label": "Demand city", "color": "#F59E0B", "type": "circle"},
-        {"label": "Center warehouse", "color": "#DC2626", "type": "circle"},
-        {
-            "label": "Cross-docking warehouse",
-            "color": "#2563EB",
-            "type": "circle",
-        },
-    ]
-    if include_candidates:
-        layers.insert(
-            3,
-            {
-                "id": "candidate-warehouses",
-                "type": "circle",
-                "source": source_id,
-                "filter": [
-                    "all",
-                    ["==", ["get", "kind"], "warehouse"],
-                    ["==", ["get", "is_existing"], False],
-                ],
-                "paint": {
-                    "circle-color": "#16A34A",
-                    "circle-radius": 6,
-                    "circle-stroke-color": "#FFFFFF",
-                    "circle-stroke-width": 2,
-                },
-            },
-        )
-        legend_items.append({"label": "Candidate warehouse", "color": "#16A34A", "type": "circle"})
-
-    summary = "Demand cities and existing warehouses" + (
-        " with candidate warehouses." if include_candidates else "."
-    )
-    return NetworkDistributionMapCardHandoff(
-        arguments=NetworkDistributionMapCardArguments(
-            title="Warehouse network distribution",
-            fallback_text=summary,
-            summary=summary,
-            sources={
-                source_id: MapCardGeoJsonSource(data_ref=data_ref),
-            },
-            layers=layers,
-            extensions={
-                "hover": {
-                    "layers": [
-                        {
-                            "layer": "demand-cities",
-                            "title_property": "city_name",
-                            "fields": ["province_name", "demand_quantity"],
-                        },
-                        {
-                            "layer": "center-warehouses",
-                            "title_property": "warehouse_name",
-                            "fields": ["warehouse_type", "city_name"],
-                        },
-                        {
-                            "layer": "cross-docking-warehouses",
-                            "title_property": "warehouse_name",
-                            "fields": ["warehouse_type", "city_name"],
-                        },
-                    ]
-                    + (
-                        [
-                            {
-                                "layer": "candidate-warehouses",
-                                "title_property": "warehouse_name",
-                                "fields": ["warehouse_type", "city_name"],
-                            }
-                        ]
-                        if include_candidates
-                        else []
-                    ),
-                },
-                "legend": {
-                    "title": "Network features",
-                    "items": legend_items,
-                },
-            },
-        )
-    )
-
-
-def build_network_comparison_map_card_handoff(
-    data_ref: MapResourceRef,
-) -> NetworkComparisonMapCardHandoff:
-    """Build a bounded baseline-versus-plan map-card call from typed GeoJSON."""
-
-    source_id = "network-comparison"
-    layers: list[dict[str, object]] = [
-        {
-            "id": "baseline-assignments",
-            "type": "line",
-            "source": source_id,
-            "filter": [
-                "all",
-                ["==", ["get", "kind"], "last_mile_assignment"],
-                ["==", ["get", "scenario"], "baseline"],
-            ],
-            "paint": {
-                "line-color": "#64748B",
-                "line-opacity": 0.24,
-                "line-width": 1,
-            },
-        },
-        {
-            "id": "planned-assignments",
-            "type": "line",
-            "source": source_id,
-            "filter": [
-                "all",
-                ["==", ["get", "kind"], "last_mile_assignment"],
-                ["==", ["get", "scenario"], "facility"],
-            ],
-            "paint": {
-                "line-color": "#16A34A",
-                "line-opacity": 0.58,
-                "line-width": 2,
-            },
-        },
-        {
-            "id": "demand-cities",
-            "type": "circle",
-            "source": source_id,
-            "filter": ["==", ["get", "kind"], "demand"],
-            "paint": {
-                "circle-color": "#F59E0B",
-                "circle-opacity": 0.78,
-                "circle-radius": 5,
-                "circle-stroke-color": "#7C2D12",
-                "circle-stroke-width": 1,
-            },
-        },
-        {
-            "id": "active-existing-warehouses",
-            "type": "circle",
-            "source": source_id,
-            "filter": [
-                "all",
-                ["==", ["get", "kind"], "warehouse"],
-                ["==", ["get", "is_existing"], True],
-                ["==", ["get", "facility_active"], True],
-            ],
-            "paint": {
-                "circle-color": "#2563EB",
-                "circle-radius": 8,
-                "circle-stroke-color": "#FFFFFF",
-                "circle-stroke-width": 2,
-            },
-        },
-        {
-            "id": "opened-candidates",
-            "type": "circle",
-            "source": source_id,
-            "filter": [
-                "all",
-                ["==", ["get", "kind"], "warehouse"],
-                ["==", ["get", "opened_candidate"], True],
-            ],
-            "paint": {
-                "circle-color": "#16A34A",
-                "circle-radius": 9,
-                "circle-stroke-color": "#FFFFFF",
-                "circle-stroke-width": 2,
-            },
-        },
-        {
-            "id": "closed-existing-warehouses",
-            "type": "circle",
-            "source": source_id,
-            "filter": [
-                "all",
-                ["==", ["get", "kind"], "warehouse"],
-                ["==", ["get", "closed_existing"], True],
-            ],
-            "paint": {
-                "circle-color": "#DC2626",
-                "circle-radius": 9,
-                "circle-stroke-color": "#7F1D1D",
-                "circle-stroke-width": 2,
-            },
-        },
-        {
-            "id": "warehouse-labels",
-            "type": "symbol",
-            "source": source_id,
-            "filter": [
-                "all",
-                ["==", ["get", "kind"], "warehouse"],
-                ["==", ["get", "facility_active"], True],
-            ],
-            "layout": {
-                "text-field": ["get", "warehouse_name"],
-                "text-size": 11,
-                "text-offset": [0, 1.3],
-                "text-anchor": "top",
-            },
-            "paint": {
-                "text-color": "#111827",
-                "text-halo-color": "#FFFFFF",
-                "text-halo-width": 1,
-            },
-        },
-    ]
-    summary = (
-        "Baseline and planned warehouse-to-demand assignments, including "
-        "opened and closed facilities."
-    )
-    return NetworkComparisonMapCardHandoff(
-        arguments=NetworkDistributionMapCardArguments(
-            title="Warehouse network comparison",
-            fallback_text=summary,
-            summary=summary,
-            sources={source_id: MapCardGeoJsonSource(data_ref=data_ref)},
-            layers=layers,
-            extensions={
-                "hover": {
-                    "layers": [
-                        {
-                            "layer": "demand-cities",
-                            "title_property": "city_name",
-                            "fields": ["province_name", "demand_quantity"],
-                        },
-                        {
-                            "layer": "active-existing-warehouses",
-                            "title_property": "warehouse_name",
-                            "fields": ["warehouse_type", "city_name"],
-                        },
-                        {
-                            "layer": "opened-candidates",
-                            "title_property": "warehouse_name",
-                            "fields": ["warehouse_type", "city_name"],
-                        },
-                        {
-                            "layer": "closed-existing-warehouses",
-                            "title_property": "warehouse_name",
-                            "fields": ["warehouse_type", "city_name"],
-                        },
-                    ]
-                },
-                "legend": {
-                    "title": "Network comparison",
-                    "items": [
-                        {"label": "Baseline assignment", "color": "#64748B", "type": "line"},
-                        {"label": "Planned assignment", "color": "#16A34A", "type": "line"},
-                        {"label": "Demand city", "color": "#F59E0B", "type": "circle"},
-                        {
-                            "label": "Active existing warehouse",
-                            "color": "#2563EB",
-                            "type": "circle",
-                        },
-                        {"label": "Opened candidate", "color": "#16A34A", "type": "circle"},
-                        {
-                            "label": "Closed existing warehouse",
-                            "color": "#DC2626",
-                            "type": "circle",
-                        },
-                    ],
-                },
-            },
-        )
-    )
 
 
 def build_network_comparison_map_bundle(
@@ -656,6 +280,8 @@ def build_network_comparison_map_bundle(
         )
     for city_id in sorted(validated.demand_by_id):
         city = validated.demand_by_id[city_id]
+        baseline_row = validated.baseline_rows_by_city[city_id]
+        facility_row = validated.facility_rows_by_city[city_id]
         coordinates = _required_coordinates(
             "demand",
             city_id,
@@ -672,6 +298,14 @@ def build_network_comparison_map_bundle(
                     province_id=city.province_id,
                     province_name=city.province_name,
                     demand_quantity=city.demand_quantity,
+                    baseline_warehouse_id=baseline_row.warehouse_id,
+                    baseline_distance_km=baseline_row.distance_km,
+                    baseline_duration_hours=baseline_row.duration_hours,
+                    baseline_unit_cost=baseline_row.cost,
+                    facility_warehouse_id=facility_row.warehouse_id,
+                    facility_distance_km=facility_row.distance_km,
+                    facility_duration_hours=facility_row.duration_hours,
+                    facility_unit_cost=facility_row.cost,
                 ),
             )
         )
@@ -725,8 +359,6 @@ def build_network_comparison_map_bundle(
             coverage=sorted(comparison.coverage, key=lambda item: item.target_hours),
         ),
         geojson=NetworkMapFeatureCollection(features=features),
-        layers=_map_layers(),
-        extensions=_map_extensions(),
     )
 
 
@@ -852,104 +484,3 @@ def _required_coordinates(
 
 def _feature_id(*parts: str) -> str:
     return "|".join(f"{len(part)}:{part}" for part in parts)
-
-
-def _map_layers() -> list[NetworkMapLayer]:
-    return [
-        NetworkMapLayer(
-            layer_id="warehouses",
-            feature_kind="warehouse",
-            geometry_type="Point",
-            scenario=None,
-            label="Warehouses",
-        ),
-        NetworkMapLayer(
-            layer_id="demand",
-            feature_kind="demand",
-            geometry_type="Point",
-            scenario=None,
-            label="Demand cities",
-        ),
-        NetworkMapLayer(
-            layer_id="baseline-last-mile",
-            feature_kind="last_mile_assignment",
-            geometry_type="LineString",
-            scenario="baseline",
-            label="Baseline last-mile assignments",
-        ),
-        NetworkMapLayer(
-            layer_id="facility-last-mile",
-            feature_kind="last_mile_assignment",
-            geometry_type="LineString",
-            scenario="facility",
-            label="Selected-facility last-mile assignments",
-        ),
-        NetworkMapLayer(
-            layer_id="baseline-linehaul",
-            feature_kind="linehaul_connection",
-            geometry_type="LineString",
-            scenario="baseline",
-            label="Baseline linehaul connections",
-        ),
-        NetworkMapLayer(
-            layer_id="facility-linehaul",
-            feature_kind="linehaul_connection",
-            geometry_type="LineString",
-            scenario="facility",
-            label="Selected-facility linehaul connections",
-        ),
-    ]
-
-
-def _map_extensions() -> NetworkMapExtensions:
-    return NetworkMapExtensions(
-        legend=[
-            NetworkMapLegendItem(
-                code="existing",
-                label="Existing warehouse",
-                color="#2563EB",
-            ),
-            NetworkMapLegendItem(
-                code="opened_candidate",
-                label="Opened candidate",
-                color="#16A34A",
-            ),
-            NetworkMapLegendItem(
-                code="demand",
-                label="Demand city",
-                color="#DC2626",
-            ),
-            NetworkMapLegendItem(
-                code="baseline",
-                label="Baseline connection",
-                color="#64748B",
-            ),
-            NetworkMapLegendItem(
-                code="facility",
-                label="Selected-facility connection",
-                color="#F59E0B",
-            ),
-        ],
-        hover_fields={
-            "warehouse": [
-                "warehouse_name",
-                "warehouse_type",
-                "baseline_active",
-                "facility_active",
-            ],
-            "demand": ["city_name", "province_name", "demand_quantity"],
-            "last_mile_assignment": [
-                "scenario",
-                "warehouse_id",
-                "demand_city_id",
-                "duration_hours",
-                "unit_cost",
-            ],
-            "linehaul_connection": [
-                "scenario",
-                "upstream_center_id",
-                "crossdock_warehouse_id",
-                "assigned_demand",
-            ],
-        },
-    )

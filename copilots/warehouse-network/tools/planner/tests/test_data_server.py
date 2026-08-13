@@ -4,11 +4,9 @@ import asyncio
 import json
 
 import pytest
+from open_web_codex_provider import ResourceRef, ResourceStore, bind_runtime
 from supply_chain_planner.data import server as data_server
-from supply_chain_planner.resources.contracts import ResourceRef
-from supply_chain_planner.resources.runtime import bind_runtime
-from supply_chain_planner.resources.store import ResourceStore
-from supply_chain_planner.shared.models import MCP_SERVER_NAME, ConfirmedSourceDecision
+from supply_chain_planner.shared.models import ConfirmedSourceDecision
 
 RESOURCE_URI_PREFIX = "supply-chain://resources/"
 
@@ -18,7 +16,7 @@ def _use_store(tmp_path, monkeypatch) -> ResourceStore:
     runtime = bind_runtime(
         tmp_path,
         tmp_path / "profile",
-        MCP_SERVER_NAME,
+        data_server.DATA_MCP_SERVER_NAME,
         RESOURCE_URI_PREFIX,
         store=store,
     )
@@ -113,6 +111,7 @@ def test_sample_one_inspect_publishes_counts_and_fields_resource(tmp_path, monke
         "resource_schema",
     }
     ref = ResourceRef.model_validate(result.structuredContent["resource_ref"])
+    assert ref.server == "supply_chain_data"
     profile = store.load(ref)
     sources = {source["relative_path"]: source for source in profile["sources"]}
     assert sources["demand-cities.csv"]["structure"]["record_count"] == 50
@@ -207,6 +206,7 @@ def test_confirmed_rows_normalize_then_prepare_geography_with_country(
 
     normalized = data_server.normalize_network_input(profile_ref, decisions, "ID", object())
     normalized_ref = ResourceRef.model_validate(normalized.structuredContent["resource_ref"])
+    assert normalized_ref.server == "supply_chain_data"
     normalized_payload = store.load(normalized_ref)
     assert normalized_payload["country_code"] == "ID"
     assert normalized_payload["state"] == "needs_geography"
@@ -217,6 +217,7 @@ def test_confirmed_rows_normalize_then_prepare_geography_with_country(
         object(),
     )
     prepared_ref = ResourceRef.model_validate(prepared.structuredContent["resource_ref"])
+    assert prepared_ref.server == "supply_chain_data"
     prepared_payload = store.load(prepared_ref)
     assert prepared_payload["country_code"] == "ID"
     assert prepared_payload["state"] == "ready"

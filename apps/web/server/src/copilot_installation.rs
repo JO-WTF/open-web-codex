@@ -1,0 +1,806 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use open_web_codex_platform_contracts::{
+    AvailableCopilotPackage, CopilotInstallationState, CopilotInstallationSummary,
+    CopilotProfileStatus,
+};
+use open_web_codex_profile_host::{ProfileHost, ProfileStartupFile, ProfileStartupFileRemoval};
+use serde_json::{json, Value};
+use sqlx::{PgPool, Row};
+use thiserror::Error;
+
+use crate::copilot_package::{CopilotPackageAssets, CopilotPackageError};
+use crate::delivery_contracts::DeliveryRegistry;
+
+const MARK_FAILURE_SQL: &str = "UPDATE profile_copilot_installations SET \
+         last_failure_kind = $2, last_failure_code = $3, updated_at = now() \
+     WHERE profile_id = (SELECT id FROM profiles WHERE runtime_key = $1)";
+
+#[derive(Debug, Clone)]
+pub(crate) struct CopilotPackageSource {
+    pub id: String,
+    pub package_root: PathBuf,
+    pub prepared_descriptor: PathBuf,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct CopilotSourceRegistry {
+    sources: Arc<BTreeMap<String, RegisteredSource>>,
+}
+
+#[derive(Clone)]
+enum RegisteredSource {
+    Available(Arc<CopilotPackageAssets>),
+    Unavailable,
+}
+
+impl CopilotSourceRegistry {
+    pub(crate) fn load(
+        sources: Vec<CopilotPackageSource>,
+    ) -> Result<Self, CopilotInstallationError> {
+        let mut registered = BTreeMap::new();
+        for source in sources {
+            validate_id(&source.id)?;
+            if registered.contains_key(&source.id) {
+                return Err(CopilotInstallationError::InvalidSource(format!(
+                    "duplicate application Copilot source id {}",
+                    source.id
+                )));
+            }
+            let loaded = match CopilotPackageAssets::resolve(
+                &source.package_root,
+                &source.prepared_descriptor,
+            ) {
+                Ok(assets) if assets.id() == source.id => {
+                    RegisteredSource::Available(Arc::new(assets))
+                }
+                Ok(assets) => {
+                    return Err(CopilotInstallationError::InvalidSource(format!(
+                        "application source id {} does not match package id {}",
+                        source.id,
+                        assets.id()
+                    )))
+                }
+                Err(error) => {
+                    tracing::warn!(package_id = %source.id, error = %error, "application Copilot source is unavailable");
+                    RegisteredSource::Unavailable
+                }
+            };
+            registered.insert(source.id, loaded);
+        }
+        Ok(Self {
+            sources: Arc::new(registered),
+        })
+    }
+
+    pub(crate) fn available(&self, id: &str) -> Option<Arc<CopilotPackageAssets>> {
+        match self.sources.get(id) {
+            Some(RegisteredSource::Available(assets)) => Some(assets.clone()),
+            _ => None,
+        }
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        self.sources.contains_key(id)
+    }
+
+    fn summaries(&self) -> Vec<AvailableCopilotPackage> {
+        self.sources
+            .iter()
+            .map(|(id, source)| AvailableCopilotPackage {
+                package_id: id.clone(),
+                available: matches!(source, RegisteredSource::Available(_)),
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct InstallationRecord {
+    package_id: String,
+    desired_active: bool,
+    source_revision: String,
+    configured_revision: Option<String>,
+    managed_skill_ids: Vec<String>,
+    managed_agent_role_ids: Vec<String>,
+    last_failure_kind: Option<String>,
+    last_failure_code: Option<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CopilotInstallationStore {
+    db: PgPool,
+    runtime_key: String,
+}
+
+impl CopilotInstallationStore {
+    pub(crate) fn new(db: PgPool, runtime_key: impl Into<String>) -> Self {
+        Self {
+            db,
+            runtime_key: runtime_key.into(),
+        }
+    }
+
+    pub(crate) async fn load(&self) -> Result<Option<InstallationRecord>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT installation.package_id, installation.desired_active, \
+                    installation.source_revision, installation.configured_revision, \
+                    installation.managed_skill_ids, installation.managed_agent_role_ids, \
+                    installation.last_failure_kind, installation.last_failure_code \
+             FROM profile_copilot_installations installation \
+             JOIN profiles profile ON profile.id = installation.profile_id \
+             WHERE profile.runtime_key = $1",
+        )
+        .bind(&self.runtime_key)
+        .fetch_optional(&self.db)
+        .await?;
+        Ok(row.map(|row| InstallationRecord {
+            package_id: row.get("package_id"),
+            desired_active: row.get("desired_active"),
+            source_revision: row.get("source_revision"),
+            configured_revision: row.get("configured_revision"),
+            managed_skill_ids: row.get("managed_skill_ids"),
+            managed_agent_role_ids: row.get("managed_agent_role_ids"),
+            last_failure_kind: row.get("last_failure_kind"),
+            last_failure_code: row.get("last_failure_code"),
+        }))
+    }
+
+    pub(crate) async fn ensure_default_active(
+        &self,
+        assets: &CopilotPackageAssets,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO profile_copilot_installations \
+                 (profile_id, package_id, desired_active, source_revision) \
+             SELECT id, $2, TRUE, $3 FROM profiles WHERE runtime_key = $1 \
+             ON CONFLICT (profile_id) DO NOTHING",
+        )
+        .bind(&self.runtime_key)
+        .bind(assets.id())
+        .bind(assets.source_revision())
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn activate(&self, assets: &CopilotPackageAssets) -> Result<(), sqlx::Error> {
+        self.activate_values(assets.id(), assets.source_revision())
+            .await
+    }
+
+    async fn activate_values(
+        &self,
+        package_id: &str,
+        source_revision: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO profile_copilot_installations \
+                 (profile_id, package_id, desired_active, source_revision) \
+             SELECT id, $2, TRUE, $3 FROM profiles WHERE runtime_key = $1 \
+             ON CONFLICT (profile_id) DO UPDATE SET \
+                 package_id = EXCLUDED.package_id, desired_active = TRUE, \
+                 source_revision = EXCLUDED.source_revision, \
+                 last_failure_kind = NULL, last_failure_code = NULL, updated_at = now()",
+        )
+        .bind(&self.runtime_key)
+        .bind(package_id)
+        .bind(source_revision)
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn deactivate(&self) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE profile_copilot_installations SET desired_active = FALSE, \
+                 last_failure_kind = NULL, last_failure_code = NULL, updated_at = now() \
+             WHERE profile_id = (SELECT id FROM profiles WHERE runtime_key = $1)",
+        )
+        .bind(&self.runtime_key)
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn mark_configured(
+        &self,
+        revision: Option<&str>,
+        skill_ids: &[String],
+        role_ids: &[String],
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE profile_copilot_installations SET configured_revision = $2, \
+                 managed_skill_ids = $3, managed_agent_role_ids = $4, \
+                 last_failure_kind = NULL, last_failure_code = NULL, updated_at = now() \
+             WHERE profile_id = (SELECT id FROM profiles WHERE runtime_key = $1)",
+        )
+        .bind(&self.runtime_key)
+        .bind(revision)
+        .bind(skill_ids)
+        .bind(role_ids)
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+
+    /// The current local/private contract follows the application's registered
+    /// source on cold restart. Preserve the last configured revision and owned
+    /// destinations until the new source has reconciled successfully.
+    pub(crate) async fn refresh_source_revision(&self, revision: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE profile_copilot_installations SET source_revision = $2, \
+                 last_failure_kind = NULL, last_failure_code = NULL, updated_at = now() \
+             WHERE profile_id = (SELECT id FROM profiles WHERE runtime_key = $1) \
+               AND desired_active",
+        )
+        .bind(&self.runtime_key)
+        .bind(revision)
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn mark_failure(&self, kind: &str, code: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(MARK_FAILURE_SQL)
+            .bind(&self.runtime_key)
+            .bind(kind)
+            .bind(code)
+            .execute(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn current_role_thread_ids(
+        &self,
+        role_ids: &[String],
+    ) -> Result<Vec<String>, sqlx::Error> {
+        if role_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        sqlx::query_scalar(
+            "SELECT projection.thread_id
+             FROM runtime_agent_projections projection
+             JOIN profiles profile ON profile.id = projection.profile_id
+             WHERE profile.runtime_key = $1
+               AND projection.agent_role = ANY($2)
+             ORDER BY projection.last_observed_at DESC, projection.thread_id",
+        )
+        .bind(&self.runtime_key)
+        .bind(role_ids)
+        .fetch_all(&self.db)
+        .await
+    }
+}
+
+pub(crate) struct ColdStartComposition {
+    pub startup_files: Vec<ProfileStartupFile>,
+    pub removed_startup_files: Vec<ProfileStartupFileRemoval>,
+    pub root_skill_config: Vec<open_web_codex_adapter::real::ThreadSkillConfig>,
+    pub deliveries: DeliveryRegistry,
+    pub active_assets: Option<Arc<CopilotPackageAssets>>,
+    pub completion: ColdStartCompletion,
+}
+
+/// Persisted installation state is advanced only after ProfileHost has
+/// reconciled the native files, initialized app-server, and registered the
+/// running Profile. A failed Host start keeps the last configured revision and
+/// managed destinations recoverable for the next cold start.
+pub(crate) enum ColdStartCompletion {
+    Unchanged,
+    Configure {
+        revision: String,
+        skill_ids: Vec<String>,
+        role_ids: Vec<String>,
+    },
+    Deactivate,
+}
+
+impl ColdStartCompletion {
+    pub(crate) async fn mark_host_ready(
+        &self,
+        store: &CopilotInstallationStore,
+    ) -> Result<(), sqlx::Error> {
+        match self {
+            Self::Unchanged => Ok(()),
+            Self::Configure {
+                revision,
+                skill_ids,
+                role_ids,
+            } => {
+                store
+                    .mark_configured(Some(revision), skill_ids, role_ids)
+                    .await
+            }
+            Self::Deactivate => store.mark_configured(None, &[], &[]).await,
+        }
+    }
+
+    pub(crate) async fn mark_host_failed(
+        &self,
+        store: &CopilotInstallationStore,
+        code: &str,
+    ) -> Result<(), sqlx::Error> {
+        if matches!(self, Self::Unchanged) {
+            return Ok(());
+        }
+        store.mark_failure("failed", code).await
+    }
+}
+
+pub(crate) async fn cold_start_composition(
+    store: &CopilotInstallationStore,
+    sources: &CopilotSourceRegistry,
+    profile_home: &std::path::Path,
+) -> Result<ColdStartComposition, CopilotInstallationError> {
+    let record = store.load().await?;
+    let mut startup_files = Vec::new();
+    let mut root_skill_config = Vec::new();
+    let mut deliveries = DeliveryRegistry::default();
+    let mut active_assets = None;
+    let mut keep_skills = BTreeSet::new();
+    let mut keep_roles = BTreeSet::new();
+    let mut completion = ColdStartCompletion::Unchanged;
+
+    if let Some(record) = record.as_ref().filter(|record| record.desired_active) {
+        if let Some(assets) = sources.available(&record.package_id) {
+            if source_revision_requires_refresh(&record.source_revision, assets.source_revision()) {
+                store
+                    .refresh_source_revision(assets.source_revision())
+                    .await?;
+            }
+            startup_files = match assets.startup_files(profile_home) {
+                Ok(files) => files,
+                Err(error) => {
+                    store
+                        .mark_failure("failed", "profile_composition_failed")
+                        .await?;
+                    return Err(error.into());
+                }
+            };
+            root_skill_config = assets.root_skill_config(profile_home);
+            deliveries = assets.deliveries();
+            keep_skills.extend(assets.skill_ids());
+            keep_roles.extend(assets.agent_role_ids());
+            completion = ColdStartCompletion::Configure {
+                revision: assets.source_revision().to_string(),
+                skill_ids: assets.skill_ids(),
+                role_ids: assets.agent_role_ids(),
+            };
+            active_assets = Some(assets);
+        }
+    }
+    let removed_startup_files = removals_for(record.as_ref(), &keep_skills, &keep_roles)?;
+    match (record.as_ref(), active_assets.as_ref()) {
+        (Some(record), None) if record.desired_active => {
+            store
+                .mark_failure("unavailable", "application_source_unavailable")
+                .await?;
+        }
+        (Some(record), _) if !record.desired_active => {
+            completion = ColdStartCompletion::Deactivate;
+        }
+        (None, _) => {}
+        _ => {}
+    }
+    Ok(ColdStartComposition {
+        startup_files,
+        removed_startup_files,
+        root_skill_config,
+        deliveries,
+        active_assets,
+        completion,
+    })
+}
+
+fn removals_for(
+    record: Option<&InstallationRecord>,
+    keep_skills: &BTreeSet<String>,
+    keep_roles: &BTreeSet<String>,
+) -> Result<Vec<ProfileStartupFileRemoval>, CopilotInstallationError> {
+    let Some(record) = record else {
+        return Ok(Vec::new());
+    };
+    let mut removals = Vec::new();
+    for id in &record.managed_skill_ids {
+        if !keep_skills.contains(id) {
+            removals.push(ProfileStartupFileRemoval::package_skill(id.clone())?);
+        }
+    }
+    for id in &record.managed_agent_role_ids {
+        if !keep_roles.contains(id) {
+            removals.push(ProfileStartupFileRemoval::package_agent_role(id.clone())?);
+        }
+    }
+    Ok(removals)
+}
+
+#[derive(Clone)]
+pub(crate) struct CopilotInstallationService {
+    store: CopilotInstallationStore,
+    sources: CopilotSourceRegistry,
+    runtime: Option<ProfileHost>,
+    runtime_workspace: Option<PathBuf>,
+    operation: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl CopilotInstallationService {
+    pub(crate) fn new(
+        store: CopilotInstallationStore,
+        sources: CopilotSourceRegistry,
+        runtime: Option<ProfileHost>,
+        runtime_workspace: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            store,
+            sources,
+            runtime,
+            runtime_workspace,
+            operation: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
+    pub(crate) async fn status(&self) -> Result<CopilotProfileStatus, CopilotInstallationError> {
+        let installation = match self.store.load().await? {
+            Some(record) => Some(self.summary(record).await),
+            None => None,
+        };
+        Ok(CopilotProfileStatus {
+            packages: self.sources.summaries(),
+            installation,
+        })
+    }
+
+    pub(crate) async fn activate(
+        &self,
+        package_id: &str,
+    ) -> Result<CopilotProfileStatus, CopilotInstallationError> {
+        let _operation = self.operation.lock().await;
+        validate_id(package_id)?;
+        let assets = self.sources.available(package_id).ok_or_else(|| {
+            if self.sources.contains(package_id) {
+                CopilotInstallationError::Unavailable
+            } else {
+                CopilotInstallationError::NotFound
+            }
+        })?;
+        self.store.activate(&assets).await?;
+        self.status().await
+    }
+
+    pub(crate) async fn deactivate(
+        &self,
+    ) -> Result<CopilotProfileStatus, CopilotInstallationError> {
+        let _operation = self.operation.lock().await;
+        self.store.deactivate().await?;
+        self.status().await
+    }
+
+    async fn summary(&self, record: InstallationRecord) -> CopilotInstallationSummary {
+        let configured = record.desired_active
+            && record.configured_revision.as_deref() == Some(record.source_revision.as_str())
+            && self.sources.available(&record.package_id).is_some();
+        let mut discovered = Vec::new();
+        let mut discovered_mcp_servers = Vec::new();
+        let mut state = if let Some(kind) = record.last_failure_kind.as_deref() {
+            if kind == "unavailable" {
+                CopilotInstallationState::Unavailable
+            } else {
+                CopilotInstallationState::Failed
+            }
+        } else if configured {
+            CopilotInstallationState::Configured
+        } else {
+            CopilotInstallationState::Installed
+        };
+        if configured {
+            if let (Some(runtime), Some(workspace), Some(assets)) = (
+                &self.runtime,
+                &self.runtime_workspace,
+                self.sources.available(&record.package_id),
+            ) {
+                match runtime
+                    .request(
+                        "skills/list",
+                        json!({"cwds": [workspace], "forceReload": true}),
+                    )
+                    .await
+                {
+                    Ok(response) => {
+                        discovered = discovered_skill_ids(&response);
+                        let discovered_set = discovered.iter().cloned().collect::<BTreeSet<_>>();
+                        if assets
+                            .skill_ids()
+                            .iter()
+                            .all(|id| discovered_set.contains(id))
+                            && discovery_errors_empty(&response)
+                        {
+                            match self
+                                .store
+                                .current_role_thread_ids(&assets.agent_role_ids())
+                                .await
+                            {
+                                Ok(role_threads) if role_threads.is_empty() => {}
+                                Ok(role_threads) => {
+                                    let mut mcp_servers = BTreeSet::new();
+                                    let mut inventory_unavailable = false;
+                                    for thread_id in role_threads {
+                                        match runtime
+                                            .request(
+                                                "mcpServerStatus/list",
+                                                json!({
+                                                    "threadId": thread_id,
+                                                    "detail": "toolsAndAuthOnly",
+                                                    "limit": 100,
+                                                }),
+                                            )
+                                            .await
+                                        {
+                                            Ok(response) => {
+                                                mcp_servers
+                                                    .extend(discovered_mcp_server_ids(&response));
+                                            }
+                                            Err(_) => inventory_unavailable = true,
+                                        }
+                                    }
+                                    discovered_mcp_servers = mcp_servers.iter().cloned().collect();
+                                    if inventory_unavailable {
+                                        state = CopilotInstallationState::Unavailable;
+                                    } else if mcp_inventory_ready(
+                                        &assets.mcp_server_ids(),
+                                        &mcp_servers,
+                                    ) {
+                                        state = CopilotInstallationState::Ready;
+                                    }
+                                }
+                                Err(_) => state = CopilotInstallationState::Unavailable,
+                            }
+                        } else {
+                            state = CopilotInstallationState::Failed;
+                        }
+                    }
+                    Err(_) => state = CopilotInstallationState::Unavailable,
+                }
+            }
+        }
+        let restart_required = (!record.desired_active
+            && (!record.managed_skill_ids.is_empty() || !record.managed_agent_role_ids.is_empty()))
+            || (record.desired_active && !configured);
+        CopilotInstallationSummary {
+            package_id: record.package_id,
+            source_revision: record.source_revision,
+            active: record.desired_active,
+            state,
+            restart_required,
+            managed_skill_ids: record.managed_skill_ids,
+            agent_roles_configured: configured,
+            managed_agent_role_ids: record.managed_agent_role_ids,
+            runtime_discovered_skill_ids: discovered,
+            runtime_discovered_mcp_server_ids: discovered_mcp_servers,
+            failure_code: record.last_failure_code,
+        }
+    }
+}
+
+fn discovered_skill_ids(response: &Value) -> Vec<String> {
+    let mut ids = response["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|entry| entry["skills"].as_array().into_iter().flatten())
+        .filter(|skill| skill["scope"].as_str() == Some("user"))
+        .filter_map(|skill| skill["name"].as_str().map(str::to_string))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
+fn discovered_mcp_server_ids(response: &Value) -> Vec<String> {
+    response["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entry| {
+            entry["tools"]
+                .as_object()
+                .is_some_and(|tools| !tools.is_empty())
+        })
+        .filter_map(|entry| entry["name"].as_str().map(str::to_string))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn mcp_inventory_ready(expected: &[String], discovered: &BTreeSet<String>) -> bool {
+    !expected.is_empty() && expected.iter().all(|id| discovered.contains(id))
+}
+
+fn source_revision_requires_refresh(persisted: &str, registered: &str) -> bool {
+    persisted != registered
+}
+
+fn discovery_errors_empty(response: &Value) -> bool {
+    response["data"].as_array().is_some_and(|entries| {
+        entries
+            .iter()
+            .all(|entry| entry["errors"].as_array().is_some_and(Vec::is_empty))
+    })
+}
+
+fn validate_id(id: &str) -> Result<(), CopilotInstallationError> {
+    let valid = !id.is_empty()
+        && id.len() <= 96
+        && id.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+        })
+        && id
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && id
+            .as_bytes()
+            .last()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric());
+    if valid {
+        Ok(())
+    } else {
+        Err(CopilotInstallationError::InvalidSource(
+            "invalid Copilot package id".into(),
+        ))
+    }
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum CopilotInstallationError {
+    #[error("invalid application Copilot source: {0}")]
+    InvalidSource(String),
+    #[error("Copilot package was not found")]
+    NotFound,
+    #[error("Copilot package is unavailable")]
+    Unavailable,
+    #[error(transparent)]
+    Database(#[from] sqlx::Error),
+    #[error(transparent)]
+    Package(#[from] CopilotPackageError),
+    #[error(transparent)]
+    StartupFile(#[from] open_web_codex_profile_host::ProfileStartupFileError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn official_skill_projection_requires_empty_discovery_errors() {
+        let response = json!({"data": [{"skills": [{"name": "alpha", "scope": "user"}, {"name": "repo-collision", "scope": "repo"}], "errors": []}]});
+        assert_eq!(discovered_skill_ids(&response), vec!["alpha"]);
+        assert!(discovery_errors_empty(&response));
+        assert!(!discovery_errors_empty(
+            &json!({"data": [{"skills": [], "errors": [{}]}]})
+        ));
+    }
+
+    #[test]
+    fn official_role_thread_mcp_inventory_requires_every_declared_server() {
+        let response = json!({"data": [
+            {"name": "meeting_action_review", "tools": {"review_action_items": {}}},
+            {"name": "empty", "tools": {}},
+        ]});
+        let discovered = discovered_mcp_server_ids(&response)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        assert!(mcp_inventory_ready(
+            &["meeting_action_review".to_string()],
+            &discovered
+        ));
+        assert!(!mcp_inventory_ready(
+            &[
+                "meeting_action_review".to_string(),
+                "another_server".to_string(),
+            ],
+            &discovered
+        ));
+    }
+
+    #[test]
+    fn application_source_ids_are_typed_not_paths() {
+        assert!(validate_id("warehouse-network").is_ok());
+        assert!(validate_id("../warehouse").is_err());
+        assert!(validate_id("Warehouse").is_err());
+    }
+
+    #[test]
+    fn failure_update_preserves_last_configured_revision_and_owned_destinations() {
+        assert!(!MARK_FAILURE_SQL.contains("configured_revision"));
+        assert!(!MARK_FAILURE_SQL.contains("managed_skill_ids"));
+        assert!(!MARK_FAILURE_SQL.contains("managed_agent_role_ids"));
+    }
+
+    #[test]
+    fn changed_registered_source_revision_requires_cold_start_refresh() {
+        assert!(source_revision_requires_refresh(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ));
+        assert!(!source_revision_requires_refresh(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL pointing at a disposable PostgreSQL database"]
+    async fn persisted_installation_converges_revision_failure_and_deactivation() {
+        let database_url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .expect("connect test database");
+        open_web_codex_platform_store::migrate::run(&pool)
+            .await
+            .expect("migrate test database");
+        crate::ensure_local_owner(&pool).await.expect("local owner");
+        let runtime_key = format!("copilot-installation-test-{}", uuid::Uuid::now_v7());
+        crate::ensure_transitional_profile_binding(&pool, &runtime_key, "Copilot Test Profile")
+            .await
+            .expect("test Profile");
+        let store = CopilotInstallationStore::new(pool, &runtime_key);
+        let first = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let second = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        store
+            .activate_values("test-package", first)
+            .await
+            .expect("activate");
+        store
+            .mark_configured(
+                Some(first),
+                &["managed-skill".to_string()],
+                &["managed_role".to_string()],
+            )
+            .await
+            .expect("mark configured");
+        store
+            .refresh_source_revision(second)
+            .await
+            .expect("follow registered source");
+        let configure_second = ColdStartCompletion::Configure {
+            revision: second.to_string(),
+            skill_ids: vec!["next-skill".to_string()],
+            role_ids: vec!["next_role".to_string()],
+        };
+        configure_second
+            .mark_host_failed(&store, "profile_host_start_failed")
+            .await
+            .expect("record failed Host start");
+        let failed = store.load().await.expect("load failure").expect("record");
+        assert_eq!(failed.source_revision, second);
+        assert_eq!(failed.configured_revision.as_deref(), Some(first));
+        assert_eq!(failed.managed_skill_ids, vec!["managed-skill"]);
+        assert_eq!(failed.managed_agent_role_ids, vec!["managed_role"]);
+
+        configure_second
+            .mark_host_ready(&store)
+            .await
+            .expect("record successful Host start");
+        let configured = store.load().await.expect("load ready").expect("record");
+        assert_eq!(configured.configured_revision.as_deref(), Some(second));
+        assert_eq!(configured.managed_skill_ids, vec!["next-skill"]);
+        assert_eq!(configured.managed_agent_role_ids, vec!["next_role"]);
+
+        store.deactivate().await.expect("deactivate");
+        ColdStartCompletion::Deactivate
+            .mark_host_ready(&store)
+            .await
+            .expect("complete deactivation");
+        let inactive = store.load().await.expect("load inactive").expect("record");
+        assert!(!inactive.desired_active);
+        assert!(inactive.configured_revision.is_none());
+        assert!(inactive.managed_skill_ids.is_empty());
+        assert!(inactive.managed_agent_role_ids.is_empty());
+    }
+}

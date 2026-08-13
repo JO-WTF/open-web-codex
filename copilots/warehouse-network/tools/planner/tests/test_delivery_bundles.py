@@ -204,6 +204,16 @@ def test_sample2_builds_complete_self_contained_map_and_report(
     assert all(
         warehouse_properties[warehouse_id].baseline_active for warehouse_id in zero_demand_active
     )
+    demand_properties = [
+        feature.properties
+        for feature in map_bundle.geojson.features
+        if feature.properties.kind == "demand"
+    ]
+    assert all(item.baseline_duration_hours is not None for item in demand_properties)
+    assert all(item.facility_duration_hours is not None for item in demand_properties)
+    assert "title" not in type(map_bundle).model_fields
+    assert "layers" not in type(map_bundle).model_fields
+    assert "extensions" not in type(map_bundle).model_fields
     assert report_bundle.scope.model_dump(mode="python") == {
         "demand_city_count": 50,
         "warehouse_count": 23,
@@ -233,6 +243,19 @@ def test_sample2_builds_complete_self_contained_map_and_report(
 
     map_payload = map_bundle.model_dump(mode="json")
     report_payload = report_bundle.model_dump(mode="json")
+    serialized_map = json.dumps(map_payload, ensure_ascii=False, sort_keys=True)
+    for presentation_key in (
+        "color",
+        "extensions",
+        "filter",
+        "hover_fields",
+        "layers",
+        "layout",
+        "legend",
+        "paint",
+        "title",
+    ):
+        assert f'"{presentation_key}"' not in serialized_map
     assert NetworkComparisonMapBundle.model_validate(map_payload) == map_bundle
     assert NetworkPlanningReportBundle.model_validate(report_payload) == report_bundle
     _assert_no_external_delivery_identity(map_payload)

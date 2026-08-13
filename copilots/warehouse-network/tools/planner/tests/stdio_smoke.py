@@ -92,6 +92,7 @@ async def smoke() -> None:
                 )
                 assert profiled.isError is not True
                 profile_ref = profiled.structuredContent["resource_ref"]
+                assert profile_ref["server"] == "supply_chain_data"
                 assert profile_ref["resource_schema"] == "source_profile.v1"
                 profile = await read_resource(session, profile_ref)
                 assert profile["sources"][0]["relative_path"] == "network.csv"

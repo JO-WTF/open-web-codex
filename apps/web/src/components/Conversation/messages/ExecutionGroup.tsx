@@ -84,7 +84,8 @@ export default function ExecutionGroup({
             onOpenAgentPanel={onOpenAgentPanel}
           />
         </div>
-      ) : active ? (
+      ) : null}
+      {active ? (
         <div className="web-execution-working" role="status">
           <span className="web-thinking-spinner" aria-hidden="true" />
           <span className="web-execution-elapsed">{elapsedLabel}</span>

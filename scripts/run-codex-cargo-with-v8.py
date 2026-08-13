@@ -3,6 +3,7 @@
 
 import os
 import sys
+from importlib import import_module
 from pathlib import Path
 
 
@@ -15,8 +16,23 @@ from codex_package.targets import TARGET_SPECS, default_target  # noqa: E402
 from codex_package.v8 import resolve_codex_v8_cargo_env  # noqa: E402
 
 
+def configure_native_certificate_store() -> None:
+    """Use macOS Keychain trust for the official V8 artifact download."""
+    if sys.platform != "darwin":
+        return
+
+    for module_name in ("truststore", "pip._vendor.truststore"):
+        try:
+            truststore = import_module(module_name)
+        except ImportError:
+            continue
+        truststore.inject_into_ssl()
+        return
+
+
 def cargo_environment() -> dict[str, str]:
     """Merge the official Codex V8 overrides into the current environment."""
+    configure_native_certificate_store()
     target = default_target()
     spec = TARGET_SPECS[target]
     environment = dict(os.environ)

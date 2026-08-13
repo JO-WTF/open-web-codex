@@ -1,59 +1,4 @@
 {
-  "extensions": {
-    "hover_fields": {
-      "demand": [
-        "city_name",
-        "province_name",
-        "demand_quantity"
-      ],
-      "last_mile_assignment": [
-        "scenario",
-        "warehouse_id",
-        "demand_city_id",
-        "duration_hours",
-        "unit_cost"
-      ],
-      "linehaul_connection": [
-        "scenario",
-        "upstream_center_id",
-        "crossdock_warehouse_id",
-        "assigned_demand"
-      ],
-      "warehouse": [
-        "warehouse_name",
-        "warehouse_type",
-        "baseline_active",
-        "facility_active"
-      ]
-    },
-    "legend": [
-      {
-        "code": "existing",
-        "color": "#2563EB",
-        "label": "Existing warehouse"
-      },
-      {
-        "code": "opened_candidate",
-        "color": "#16A34A",
-        "label": "Opened candidate"
-      },
-      {
-        "code": "demand",
-        "color": "#DC2626",
-        "label": "Demand city"
-      },
-      {
-        "code": "baseline",
-        "color": "#64748B",
-        "label": "Baseline connection"
-      },
-      {
-        "code": "facility",
-        "color": "#F59E0B",
-        "label": "Selected-facility connection"
-      }
-    ]
-  },
   "geojson": {
     "features": [
       {
@@ -664,12 +609,24 @@
         },
         "id": "6:demand|12:IDN-CITY-001",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 21.187968,
+          "baseline_duration_hours": 0.504475,
+          "baseline_unit_cost": 143563.904,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-001",
           "city_name": "Jakarta",
           "demand_quantity": "10563",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 0.0,
+          "facility_duration_hours": 0.0,
+          "facility_unit_cost": 40000.0,
+          "facility_warehouse_id": "WH-CENTER-JAKARTA",
           "kind": "demand",
           "province_id": "IDN-PROV-JAKARTA",
-          "province_name": "Jakarta"
+          "province_name": "Jakarta",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -683,12 +640,24 @@
         },
         "id": "6:demand|12:IDN-CITY-002",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 284.861653,
+          "baseline_duration_hours": 6.78242,
+          "baseline_unit_cost": 934584.9589999999,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-002",
           "city_name": "Surabaya",
           "demand_quantity": "2875",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 0.0,
+          "facility_duration_hours": 0.0,
+          "facility_unit_cost": 40000.0,
+          "facility_warehouse_id": "WH-CENTER-SURABAYA",
           "kind": "demand",
           "province_id": "IDN-PROV-EAST-JAVA",
-          "province_name": "East Java"
+          "province_name": "East Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -702,12 +671,24 @@
         },
         "id": "6:demand|12:IDN-CITY-003",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 0.0,
+          "baseline_duration_hours": 0.0,
+          "baseline_unit_cost": 123002.8205,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-BEKASI",
           "city_id": "IDN-CITY-003",
           "city_name": "Bekasi",
           "demand_quantity": "2544",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 28.668547,
+          "facility_duration_hours": 0.682584,
+          "facility_unit_cost": 83002.8205,
+          "facility_warehouse_id": "WH-CENTER-JAKARTA",
           "kind": "demand",
           "province_id": "IDN-PROV-WEST-JAVA",
-          "province_name": "West Java"
+          "province_name": "West Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -721,12 +702,24 @@
         },
         "id": "6:demand|12:IDN-CITY-004",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 0.0,
+          "baseline_duration_hours": 0.0,
+          "baseline_unit_cost": 287698.64300000004,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
           "city_id": "IDN-CITY-004",
           "city_name": "Bandung",
           "demand_quantity": "2511",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 138.465762,
+          "facility_duration_hours": 3.296804,
+          "facility_unit_cost": 247698.643,
+          "facility_warehouse_id": "WH-CENTER-JAKARTA",
           "kind": "demand",
           "province_id": "IDN-PROV-WEST-JAVA",
-          "province_name": "West Java"
+          "province_name": "West Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -740,12 +733,24 @@
         },
         "id": "6:demand|12:IDN-CITY-005",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 1681.51237,
+          "baseline_duration_hours": 40.036009,
+          "baseline_unit_cost": 2634050.5069999998,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-005",
           "city_name": "Medan",
           "demand_quantity": "2436",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 0.0,
+          "facility_duration_hours": 0.0,
+          "facility_unit_cost": 40000.0,
+          "facility_warehouse_id": "WH-CENTER-MEDAN",
           "kind": "demand",
           "province_id": "IDN-PROV-NORTH-SUMATRA",
-          "province_name": "North Sumatra"
+          "province_name": "North Sumatra",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -759,12 +764,24 @@
         },
         "id": "6:demand|12:IDN-CITY-006",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 31.010556,
+          "baseline_duration_hours": 0.738347,
+          "baseline_unit_cost": 169518.6545,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-BEKASI",
           "city_id": "IDN-CITY-006",
           "city_name": "Depok",
           "demand_quantity": "2057",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 24.067007,
+          "facility_duration_hours": 0.573024,
+          "facility_unit_cost": 76100.5105,
+          "facility_warehouse_id": "WH-CENTER-JAKARTA",
           "kind": "demand",
           "province_id": "IDN-PROV-WEST-JAVA",
-          "province_name": "West Java"
+          "province_name": "West Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -778,12 +795,24 @@
         },
         "id": "6:demand|12:IDN-CITY-007",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 0.0,
+          "baseline_duration_hours": 0.0,
+          "baseline_unit_cost": 111781.952,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-007",
           "city_name": "Tangerang",
           "demand_quantity": "1931",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 21.187968,
+          "facility_duration_hours": 0.504475,
+          "facility_unit_cost": 71781.952,
+          "facility_warehouse_id": "WH-CENTER-JAKARTA",
           "kind": "demand",
           "province_id": "IDN-PROV-BANTEN",
-          "province_name": "Banten"
+          "province_name": "Banten",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -797,12 +826,24 @@
         },
         "id": "6:demand|12:IDN-CITY-008",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 491.787913,
+          "baseline_duration_hours": 11.709236,
+          "baseline_unit_cost": 849463.8215000001,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-008",
           "city_name": "Palembang",
           "demand_quantity": "1669",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 0.0,
+          "facility_duration_hours": 0.0,
+          "facility_unit_cost": 40000.0,
+          "facility_warehouse_id": "WH-CENTER-PALEMBANG",
           "kind": "demand",
           "province_id": "IDN-PROV-SOUTH-SUMATRA",
-          "province_name": "South Sumatra"
+          "province_name": "South Sumatra",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -816,12 +857,24 @@
         },
         "id": "6:demand|12:IDN-CITY-009",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 0.0,
+          "baseline_duration_hours": 0.0,
+          "baseline_unit_cost": 507292.47949999996,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-009",
           "city_name": "Semarang",
           "demand_quantity": "1654",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 284.861653,
+          "facility_duration_hours": 6.78242,
+          "facility_unit_cost": 467292.47949999996,
+          "facility_warehouse_id": "WH-CENTER-SURABAYA",
           "kind": "demand",
           "province_id": "IDN-PROV-CENTRAL-JAVA",
-          "province_name": "Central Java"
+          "province_name": "Central Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -835,12 +888,24 @@
         },
         "id": "6:demand|12:IDN-CITY-010",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 1229.235837,
+          "baseline_duration_hours": 29.26752,
+          "baseline_unit_cost": 2351146.235,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-010",
           "city_name": "Makassar",
           "demand_quantity": "1424",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 0.0,
+          "facility_duration_hours": 0.0,
+          "facility_unit_cost": 40000.0,
+          "facility_warehouse_id": "WH-CENTER-MAKASSAR",
           "kind": "demand",
           "province_id": "IDN-PROV-SOUTH-SULAWESI",
-          "province_name": "South Sulawesi"
+          "province_name": "South Sulawesi",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -854,12 +919,24 @@
         },
         "id": "6:demand|12:IDN-CITY-011",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 18.169171,
+          "baseline_duration_hours": 0.432599,
+          "baseline_unit_cost": 139035.7085,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-011",
           "city_name": "Tangerang Selatan",
           "demand_quantity": "1355",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 13.334766,
+          "facility_duration_hours": 0.317494,
+          "facility_unit_cost": 60002.149000000005,
+          "facility_warehouse_id": "WH-CENTER-JAKARTA",
           "kind": "demand",
           "province_id": "IDN-PROV-BANTEN",
-          "province_name": "Banten"
+          "province_name": "Banten",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -873,12 +950,24 @@
         },
         "id": "6:demand|12:IDN-CITY-012",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 1017.543752,
+          "baseline_duration_hours": 24.227232,
+          "baseline_unit_cost": 1638097.58,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-012",
           "city_name": "Batam",
           "demand_quantity": "1197",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 541.04402,
+          "facility_duration_hours": 12.882,
+          "facility_unit_cost": 851566.03,
+          "facility_warehouse_id": "WH-CENTER-PALEMBANG",
           "kind": "demand",
           "province_id": "IDN-PROV-RIAU-ISLANDS",
-          "province_name": "Riau Islands"
+          "province_name": "Riau Islands",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -892,12 +981,24 @@
         },
         "id": "6:demand|12:IDN-CITY-013",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 211.734064,
+          "baseline_duration_hours": 5.041287,
+          "baseline_unit_cost": 429383.04799999995,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-013",
           "city_name": "Bandar Lampung",
           "demand_quantity": "1167",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 232.153982,
+          "facility_duration_hours": 5.527476,
+          "facility_unit_cost": 388230.973,
+          "facility_warehouse_id": "WH-CENTER-JAKARTA",
           "kind": "demand",
           "province_id": "IDN-PROV-LAMPUNG",
-          "province_name": "Lampung"
+          "province_name": "Lampung",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -911,12 +1012,24 @@
         },
         "id": "6:demand|12:IDN-CITY-014",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 27.83419,
+          "baseline_duration_hours": 0.662719,
+          "baseline_unit_cost": 157851.7955,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-DEPOK",
           "city_id": "IDN-CITY-014",
           "city_name": "Bogor",
           "demand_quantity": "1044",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 40.364051,
+          "facility_duration_hours": 0.961049,
+          "facility_unit_cost": 100546.0765,
+          "facility_warehouse_id": "WH-CENTER-JAKARTA",
           "kind": "demand",
           "province_id": "IDN-PROV-WEST-JAVA",
-          "province_name": "West Java"
+          "province_name": "West Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -930,12 +1043,24 @@
         },
         "id": "6:demand|12:IDN-CITY-015",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 1120.144053,
+          "baseline_duration_hours": 26.670097,
+          "baseline_unit_cost": 1791998.0315,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-015",
           "city_name": "Pekanbaru",
           "demand_quantity": "984",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 561.925759,
+          "facility_duration_hours": 13.379185,
+          "facility_unit_cost": 882888.6385,
+          "facility_warehouse_id": "WH-CENTER-MEDAN",
           "kind": "demand",
           "province_id": "IDN-PROV-RIAU",
-          "province_name": "Riau"
+          "province_name": "Riau",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -949,12 +1074,24 @@
         },
         "id": "6:demand|12:IDN-CITY-016",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 1099.661656,
+          "baseline_duration_hours": 26.18242,
+          "baseline_unit_cost": 1749494.633,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SOUTH_TANGERANG",
           "city_id": "IDN-CITY-016",
           "city_name": "Padang",
           "demand_quantity": "910",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 642.220642,
+          "facility_duration_hours": 15.290968,
+          "facility_unit_cost": 1003330.963,
+          "facility_warehouse_id": "WH-CENTER-PALEMBANG",
           "kind": "demand",
           "province_id": "IDN-PROV-WEST-SUMATRA",
-          "province_name": "West Sumatra"
+          "province_name": "West Sumatra",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -968,12 +1105,24 @@
         },
         "id": "6:demand|12:IDN-CITY-017",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 310.53318,
+          "baseline_duration_hours": 7.393647,
+          "baseline_unit_cost": 973092.2494999999,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-017",
           "city_name": "Malang",
           "demand_quantity": "844",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 97.812042,
+          "facility_duration_hours": 2.328858,
+          "facility_unit_cost": 186718.063,
+          "facility_warehouse_id": "WH-CENTER-SURABAYA",
           "kind": "demand",
           "province_id": "IDN-PROV-EAST-JAVA",
-          "province_name": "East Java"
+          "province_name": "East Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -987,12 +1136,24 @@
         },
         "id": "6:demand|12:IDN-CITY-018",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 1240.406237,
+          "baseline_duration_hours": 29.533482,
+          "baseline_unit_cost": 2367901.835,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-018",
           "city_name": "Samarinda",
           "demand_quantity": "828",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 699.904572,
+          "facility_duration_hours": 16.664395,
+          "facility_unit_cost": 1089856.858,
+          "facility_warehouse_id": "WH-CENTER-MAKASSAR",
           "kind": "demand",
           "province_id": "IDN-PROV-EAST-KALIMANTAN",
-          "province_name": "East Kalimantan"
+          "province_name": "East Kalimantan",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1006,12 +1167,24 @@
         },
         "id": "6:demand|12:IDN-CITY-019",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 663.989608,
+          "baseline_duration_hours": 15.809276,
+          "baseline_unit_cost": 1503276.8915,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-019",
           "city_name": "Denpasar",
           "demand_quantity": "726",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 393.621628,
+          "facility_duration_hours": 9.371944,
+          "facility_unit_cost": 630432.4419999999,
+          "facility_warehouse_id": "WH-CENTER-SURABAYA",
           "kind": "demand",
           "province_id": "IDN-PROV-BALI",
-          "province_name": "Bali"
+          "province_name": "Bali",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1025,12 +1198,24 @@
         },
         "id": "6:demand|12:IDN-CITY-020",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 109.363409,
+          "baseline_duration_hours": 2.603891,
+          "baseline_unit_cost": 451743.7565,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
           "city_id": "IDN-CITY-020",
           "city_name": "Tasikmalaya",
           "demand_quantity": "734",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 247.723671,
+          "facility_duration_hours": 5.898183,
+          "facility_unit_cost": 411585.5065,
+          "facility_warehouse_id": "WH-CENTER-JAKARTA",
           "kind": "demand",
           "province_id": "IDN-PROV-WEST-JAVA",
-          "province_name": "West Java"
+          "province_name": "West Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1044,12 +1229,24 @@
         },
         "id": "6:demand|12:IDN-CITY-021",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 1467.942418,
+          "baseline_duration_hours": 34.95101,
+          "baseline_unit_cost": 2489612.2700000005,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
           "city_id": "IDN-CITY-021",
           "city_name": "Balikpapan",
           "demand_quantity": "705",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 618.588423,
+          "facility_duration_hours": 14.728296,
+          "facility_unit_cost": 967882.6345,
+          "facility_warehouse_id": "WH-CENTER-MAKASSAR",
           "kind": "demand",
           "province_id": "IDN-PROV-EAST-KALIMANTAN",
-          "province_name": "East Kalimantan"
+          "province_name": "East Kalimantan",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1063,12 +1260,24 @@
         },
         "id": "6:demand|12:IDN-CITY-022",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 64.557221,
+          "baseline_duration_hours": 1.537077,
+          "baseline_unit_cost": 208617.78350000002,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-022",
           "city_name": "Serang",
           "demand_quantity": "693",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 81.341267,
+          "facility_duration_hours": 1.936697,
+          "facility_unit_cost": 162011.9005,
+          "facility_warehouse_id": "WH-CENTER-JAKARTA",
           "kind": "demand",
           "province_id": "IDN-PROV-BANTEN",
-          "province_name": "Banten"
+          "province_name": "Banten",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1082,12 +1291,24 @@
         },
         "id": "6:demand|12:IDN-CITY-023",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 880.781608,
+          "baseline_duration_hours": 20.970991,
+          "baseline_unit_cost": 1444175.2325,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-BEKASI",
           "city_id": "IDN-CITY-023",
           "city_name": "Pontianak",
           "demand_quantity": "659",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 733.041208,
+          "facility_duration_hours": 17.453362,
+          "facility_unit_cost": 1139561.812,
+          "facility_warehouse_id": "WH-CENTER-PALEMBANG",
           "kind": "demand",
           "province_id": "IDN-PROV-WEST-KALIMANTAN",
-          "province_name": "West Kalimantan"
+          "province_name": "West Kalimantan",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1101,12 +1322,24 @@
         },
         "id": "6:demand|12:IDN-CITY-024",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 729.88643,
+          "baseline_duration_hours": 17.378248,
+          "baseline_unit_cost": 1602122.1245,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-024",
           "city_name": "Banjarmasin",
           "demand_quantity": "658",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 576.040627,
+          "facility_duration_hours": 13.715253,
+          "facility_unit_cost": 904060.9404999999,
+          "facility_warehouse_id": "WH-CENTER-SURABAYA",
           "kind": "demand",
           "province_id": "IDN-PROV-SOUTH-KALIMANTAN",
-          "province_name": "South Kalimantan"
+          "province_name": "South Kalimantan",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1120,12 +1353,24 @@
         },
         "id": "6:demand|12:IDN-CITY-025",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 733.555431,
+          "baseline_duration_hours": 17.465605,
+          "baseline_unit_cost": 1212115.0985,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-025",
           "city_name": "Jambi",
           "demand_quantity": "605",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 244.191987,
+          "facility_duration_hours": 5.814095,
+          "facility_unit_cost": 406287.9805,
+          "facility_warehouse_id": "WH-CENTER-PALEMBANG",
           "kind": "demand",
           "province_id": "IDN-PROV-JAMBI",
-          "province_name": "Jambi"
+          "province_name": "Jambi",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1139,12 +1384,24 @@
         },
         "id": "6:demand|12:IDN-CITY-026",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 2564.425374,
+          "baseline_duration_hours": 61.057747,
+          "baseline_unit_cost": 4134336.704,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
           "city_id": "IDN-CITY-026",
           "city_name": "Manado",
           "demand_quantity": "452",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 1133.088553,
+          "facility_duration_hours": 26.978299,
+          "facility_unit_cost": 1739632.8295,
+          "facility_warehouse_id": "WH-CENTER-MAKASSAR",
           "kind": "demand",
           "province_id": "IDN-PROV-NORTH-SULAWESI",
-          "province_name": "North Sulawesi"
+          "province_name": "North Sulawesi",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1158,12 +1415,24 @@
         },
         "id": "6:demand|12:IDN-CITY-027",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 1789.232636,
+          "baseline_duration_hours": 42.600777,
+          "baseline_unit_cost": 3191141.4335,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-027",
           "city_name": "Kupang",
           "demand_quantity": "443",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 868.507178,
+          "facility_duration_hours": 20.678742,
+          "facility_unit_cost": 1342760.767,
+          "facility_warehouse_id": "WH-CENTER-MAKASSAR",
           "kind": "demand",
           "province_id": "IDN-PROV-EAST-NUSA-TENGGARA",
-          "province_name": "East Nusa Tenggara"
+          "province_name": "East Nusa Tenggara",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1177,12 +1446,24 @@
         },
         "id": "6:demand|12:IDN-CITY-028",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 779.558735,
+          "baseline_duration_hours": 18.560922,
+          "baseline_unit_cost": 1676630.582,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-028",
           "city_name": "Mataram",
           "demand_quantity": "442",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 502.295852,
+          "facility_duration_hours": 11.959425,
+          "facility_unit_cost": 793443.778,
+          "facility_warehouse_id": "WH-CENTER-SURABAYA",
           "kind": "demand",
           "province_id": "IDN-PROV-WEST-NUSA-TENGGARA",
-          "province_name": "West Nusa Tenggara"
+          "province_name": "West Nusa Tenggara",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1196,12 +1477,24 @@
         },
         "id": "6:demand|12:IDN-CITY-029",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 91.046464,
+          "baseline_duration_hours": 2.167773,
+          "baseline_unit_cost": 248351.648,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-029",
           "city_name": "Cilegon",
           "demand_quantity": "435",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 109.510878,
+          "facility_duration_hours": 2.607402,
+          "facility_unit_cost": 204266.317,
+          "facility_warehouse_id": "WH-CENTER-JAKARTA",
           "kind": "demand",
           "province_id": "IDN-PROV-BANTEN",
-          "province_name": "Banten"
+          "province_name": "Banten",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1215,12 +1508,24 @@
         },
         "id": "6:demand|12:IDN-CITY-030",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 106.464155,
+          "baseline_duration_hours": 2.534861,
+          "baseline_unit_cost": 666988.7119999999,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-030",
           "city_name": "Yogyakarta",
           "demand_quantity": "415",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 306.723045,
+          "facility_duration_hours": 7.30293,
+          "facility_unit_cost": 500084.5675,
+          "facility_warehouse_id": "WH-CENTER-SURABAYA",
           "kind": "demand",
           "province_id": "IDN-PROV-SPECIAL-REGION-OF-YOGYAKARTA",
-          "province_name": "Special Region of Yogyakarta"
+          "province_name": "Special Region of Yogyakarta",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1234,12 +1539,24 @@
         },
         "id": "6:demand|12:IDN-CITY-031",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 4446.311123,
+          "baseline_duration_hours": 105.864551,
+          "baseline_unit_cost": 6957165.327500001,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
           "city_id": "IDN-CITY-031",
           "city_name": "Jayapura",
           "demand_quantity": "399",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 2843.192597,
+          "facility_duration_hours": 67.695062,
+          "facility_unit_cost": 4304788.895500001,
+          "facility_warehouse_id": "WH-CENTER-MAKASSAR",
           "kind": "demand",
           "province_id": "IDN-PROV-PAPUA",
-          "province_name": "Papua"
+          "province_name": "Papua",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1253,12 +1570,24 @@
         },
         "id": "6:demand|12:IDN-CITY-032",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 667.057537,
+          "baseline_duration_hours": 15.882322,
+          "baseline_unit_cost": 1112368.2575,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-032",
           "city_name": "Bengkulu",
           "demand_quantity": "374",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 345.694656,
+          "facility_duration_hours": 8.230825,
+          "facility_unit_cost": 558541.9839999999,
+          "facility_warehouse_id": "WH-CENTER-PALEMBANG",
           "kind": "demand",
           "province_id": "IDN-PROV-BENGKULU",
-          "province_name": "Bengkulu"
+          "province_name": "Bengkulu",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1272,12 +1601,24 @@
         },
         "id": "6:demand|12:IDN-CITY-033",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 1491.406702,
+          "baseline_duration_hours": 35.509683,
+          "baseline_unit_cost": 2744402.5324999997,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-033",
           "city_name": "Palu",
           "demand_quantity": "374",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 557.29224,
+          "facility_duration_hours": 13.268863,
+          "facility_unit_cost": 875938.36,
+          "facility_warehouse_id": "WH-CENTER-MAKASSAR",
           "kind": "demand",
           "province_id": "IDN-PROV-CENTRAL-SULAWESI",
-          "province_name": "Central Sulawesi"
+          "province_name": "Central Sulawesi",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1291,12 +1632,24 @@
         },
         "id": "6:demand|12:IDN-CITY-034",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 73.171915,
+          "baseline_duration_hours": 1.742188,
+          "baseline_unit_cost": 225858.383,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-DEPOK",
           "city_id": "IDN-CITY-034",
           "city_name": "Sukabumi",
           "demand_quantity": "354",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 94.194113,
+          "facility_duration_hours": 2.242717,
+          "facility_unit_cost": 181291.1695,
+          "facility_warehouse_id": "WH-CENTER-JAKARTA",
           "kind": "demand",
           "province_id": "IDN-PROV-WEST-JAVA",
-          "province_name": "West Java"
+          "province_name": "West Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1310,12 +1663,24 @@
         },
         "id": "6:demand|12:IDN-CITY-035",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 2394.999601,
+          "baseline_duration_hours": 57.0238,
+          "baseline_unit_cost": 4099791.881,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-035",
           "city_name": "Ambon",
           "demand_quantity": "348",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 1166.897419,
+          "facility_duration_hours": 27.783272,
+          "facility_unit_cost": 1790346.1284999999,
+          "facility_warehouse_id": "WH-CENTER-MAKASSAR",
           "kind": "demand",
           "province_id": "IDN-PROV-MALUKU",
-          "province_name": "Maluku"
+          "province_name": "Maluku",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1329,12 +1694,24 @@
         },
         "id": "6:demand|12:IDN-CITY-036",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 2020.678854,
+          "baseline_duration_hours": 48.111401,
+          "baseline_unit_cost": 3318716.924,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
           "city_id": "IDN-CITY-036",
           "city_name": "Kendari",
           "demand_quantity": "346",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 422.076992,
+          "facility_duration_hours": 10.049452,
+          "facility_unit_cost": 673115.488,
+          "facility_warehouse_id": "WH-CENTER-MAKASSAR",
           "kind": "demand",
           "province_id": "IDN-PROV-SOUTHEAST-SULAWESI",
-          "province_name": "Southeast Sulawesi"
+          "province_name": "Southeast Sulawesi",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1348,12 +1725,24 @@
         },
         "id": "6:demand|12:IDN-CITY-037",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 132.570687,
+          "baseline_duration_hours": 3.156445,
+          "baseline_unit_cost": 486554.67350000003,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
           "city_id": "IDN-CITY-037",
           "city_name": "Cirebon",
           "demand_quantity": "342",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 241.87054,
+          "facility_duration_hours": 5.758822,
+          "facility_unit_cost": 402805.81,
+          "facility_warehouse_id": "WH-CENTER-JAKARTA",
           "kind": "demand",
           "province_id": "IDN-PROV-WEST-JAVA",
-          "province_name": "West Java"
+          "province_name": "West Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1367,12 +1756,24 @@
         },
         "id": "6:demand|12:IDN-CITY-038",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 1295.488195,
+          "baseline_duration_hours": 30.844957,
+          "baseline_unit_cost": 2055014.2444999998,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-038",
           "city_name": "Dumai",
           "demand_quantity": "324",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 404.304648,
+          "facility_duration_hours": 9.626301,
+          "facility_unit_cost": 646456.972,
+          "facility_warehouse_id": "WH-CENTER-MEDAN",
           "kind": "demand",
           "province_id": "IDN-PROV-RIAU",
-          "province_name": "Riau"
+          "province_name": "Riau",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1386,12 +1787,24 @@
         },
         "id": "6:demand|12:IDN-CITY-039",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 1694.451984,
+          "baseline_duration_hours": 40.344095,
+          "baseline_unit_cost": 2653459.9280000003,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-039",
           "city_name": "Binjai",
           "demand_quantity": "292",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 33.374889,
+          "facility_duration_hours": 0.79464,
+          "facility_unit_cost": 90062.33350000001,
+          "facility_warehouse_id": "WH-CENTER-MEDAN",
           "kind": "demand",
           "province_id": "IDN-PROV-NORTH-SUMATRA",
-          "province_name": "North Sumatra"
+          "province_name": "North Sumatra",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1405,12 +1818,24 @@
         },
         "id": "6:demand|12:IDN-CITY-040",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 228.908889,
+          "baseline_duration_hours": 5.450212,
+          "baseline_unit_cost": 850655.813,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-040",
           "city_name": "Kediri",
           "demand_quantity": "290",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 114.944622,
+          "facility_duration_hours": 2.736777,
+          "facility_unit_cost": 212416.933,
+          "facility_warehouse_id": "WH-CENTER-SURABAYA",
           "kind": "demand",
           "province_id": "IDN-PROV-EAST-JAVA",
-          "province_name": "East Java"
+          "province_name": "East Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1424,12 +1849,24 @@
         },
         "id": "6:demand|12:IDN-CITY-041",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 3267.4122,
+          "baseline_duration_hours": 77.795529,
+          "baseline_unit_cost": 5188816.943000001,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
           "city_id": "IDN-CITY-041",
           "city_name": "Sorong",
           "demand_quantity": "285",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 1673.938838,
+          "facility_duration_hours": 39.855687,
+          "facility_unit_cost": 2550908.257,
+          "facility_warehouse_id": "WH-CENTER-MAKASSAR",
           "kind": "demand",
           "province_id": "IDN-PROV-SOUTHWEST-PAPUA",
-          "province_name": "Southwest Papua"
+          "province_name": "Southwest Papua",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1443,12 +1880,24 @@
         },
         "id": "6:demand|12:IDN-CITY-042",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 176.668496,
+          "baseline_duration_hours": 4.206393,
+          "baseline_unit_cost": 772295.2235,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-042",
           "city_name": "Tegal",
           "demand_quantity": "274",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 324.139283,
+          "facility_duration_hours": 7.717602,
+          "facility_unit_cost": 526208.9245,
+          "facility_warehouse_id": "WH-CENTER-JAKARTA",
           "kind": "demand",
           "province_id": "IDN-PROV-CENTRAL-JAVA",
-          "province_name": "Central Java"
+          "province_name": "Central Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1462,12 +1911,24 @@
         },
         "id": "6:demand|12:IDN-CITY-043",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 1578.744298,
+          "baseline_duration_hours": 37.58915,
+          "baseline_unit_cost": 2479898.399,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-043",
           "city_name": "Pematang Siantar",
           "demand_quantity": "269",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 104.722475,
+          "facility_duration_hours": 2.493392,
+          "facility_unit_cost": 197083.7125,
+          "facility_warehouse_id": "WH-CENTER-MEDAN",
           "kind": "demand",
           "province_id": "IDN-PROV-NORTH-SUMATRA",
-          "province_name": "North Sumatra"
+          "province_name": "North Sumatra",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1481,12 +1942,24 @@
         },
         "id": "6:demand|12:IDN-CITY-044",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 2175.696043,
+          "baseline_duration_hours": 51.802287,
+          "baseline_unit_cost": 3375326.0165,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-044",
           "city_name": "Banda Aceh",
           "demand_quantity": "253",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 518.373422,
+          "facility_duration_hours": 12.342224,
+          "facility_unit_cost": 817560.133,
+          "facility_warehouse_id": "WH-CENTER-MEDAN",
           "kind": "demand",
           "province_id": "IDN-PROV-ACEH",
-          "province_name": "Aceh"
+          "province_name": "Aceh",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1500,12 +1973,24 @@
         },
         "id": "6:demand|12:IDN-CITY-045",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 1672.359543,
+          "baseline_duration_hours": 39.818084,
+          "baseline_unit_cost": 3015831.7939999998,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-045",
           "city_name": "Tarakan",
           "demand_quantity": "243",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 1146.383116,
+          "facility_duration_hours": 27.294836,
+          "facility_unit_cost": 1759574.6739999999,
+          "facility_warehouse_id": "WH-CENTER-MAKASSAR",
           "kind": "demand",
           "province_id": "IDN-PROV-NORTH-KALIMANTAN",
-          "province_name": "North Kalimantan"
+          "province_name": "North Kalimantan",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1519,12 +2004,24 @@
         },
         "id": "6:demand|12:IDN-CITY-046",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 750.119722,
+          "baseline_duration_hours": 17.859993,
+          "baseline_unit_cost": 1412878.226,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-BANDUNG",
           "city_id": "IDN-CITY-046",
           "city_name": "Probolinggo",
           "demand_quantity": "240",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 103.787206,
+          "facility_duration_hours": 2.471124,
+          "facility_unit_cost": 195680.809,
+          "facility_warehouse_id": "WH-CENTER-SURABAYA",
           "kind": "demand",
           "province_id": "IDN-PROV-EAST-JAVA",
-          "province_name": "East Java"
+          "province_name": "East Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1538,12 +2035,24 @@
         },
         "id": "6:demand|12:IDN-CITY-047",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 969.85442,
+          "baseline_duration_hours": 23.091772,
+          "baseline_unit_cost": 1577784.4505,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-BEKASI",
           "city_id": "IDN-CITY-047",
           "city_name": "Singkawang",
           "demand_quantity": "236",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 755.838793,
+          "facility_duration_hours": 17.996162,
+          "facility_unit_cost": 1173758.1895,
+          "facility_warehouse_id": "WH-CENTER-PALEMBANG",
           "kind": "demand",
           "province_id": "IDN-PROV-WEST-KALIMANTAN",
-          "province_name": "West Kalimantan"
+          "province_name": "West Kalimantan",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1557,12 +2066,24 @@
         },
         "id": "6:demand|12:IDN-CITY-048",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 293.933155,
+          "baseline_duration_hours": 6.998408,
+          "baseline_unit_cost": 948192.2119999999,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-048",
           "city_name": "Batu",
           "demand_quantity": "214",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 70.857994,
+          "facility_duration_hours": 1.687095,
+          "facility_unit_cost": 146286.991,
+          "facility_warehouse_id": "WH-CENTER-SURABAYA",
           "kind": "demand",
           "province_id": "IDN-PROV-EAST-JAVA",
-          "province_name": "East Java"
+          "province_name": "East Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1576,12 +2097,24 @@
         },
         "id": "6:demand|12:IDN-CITY-049",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 332.511717,
+          "baseline_duration_hours": 7.916946,
+          "baseline_unit_cost": 1006060.0549999999,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-SEMARANG",
           "city_id": "IDN-CITY-049",
           "city_name": "Pasuruan",
           "demand_quantity": "209",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 68.953638,
+          "facility_duration_hours": 1.641753,
+          "facility_unit_cost": 143430.457,
+          "facility_warehouse_id": "WH-CENTER-SURABAYA",
           "kind": "demand",
           "province_id": "IDN-PROV-EAST-JAVA",
-          "province_name": "East Java"
+          "province_name": "East Java",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -1595,12 +2128,24 @@
         },
         "id": "6:demand|12:IDN-CITY-050",
         "properties": {
+          "assigned_warehouse_id": null,
+          "baseline_distance_km": 1971.225081,
+          "baseline_duration_hours": 46.93393,
+          "baseline_unit_cost": 3068619.5735,
+          "baseline_warehouse_id": "WH-CROSS_DOCKING-TANGERANG",
           "city_id": "IDN-CITY-050",
           "city_name": "Lhokseumawe",
           "demand_quantity": "189",
+          "distance_km": null,
+          "duration_hours": null,
+          "facility_distance_km": 291.113017,
+          "facility_duration_hours": 6.931262,
+          "facility_unit_cost": 476669.52550000005,
+          "facility_warehouse_id": "WH-CENTER-MEDAN",
           "kind": "demand",
           "province_id": "IDN-PROV-ACEH",
-          "province_name": "Aceh"
+          "province_name": "Aceh",
+          "unit_cost": null
         },
         "type": "Feature"
       },
@@ -4744,50 +5289,6 @@
     "type": "FeatureCollection"
   },
   "kind": "network_comparison_map",
-  "layers": [
-    {
-      "feature_kind": "warehouse",
-      "geometry_type": "Point",
-      "label": "Warehouses",
-      "layer_id": "warehouses",
-      "scenario": null
-    },
-    {
-      "feature_kind": "demand",
-      "geometry_type": "Point",
-      "label": "Demand cities",
-      "layer_id": "demand",
-      "scenario": null
-    },
-    {
-      "feature_kind": "last_mile_assignment",
-      "geometry_type": "LineString",
-      "label": "Baseline last-mile assignments",
-      "layer_id": "baseline-last-mile",
-      "scenario": "baseline"
-    },
-    {
-      "feature_kind": "last_mile_assignment",
-      "geometry_type": "LineString",
-      "label": "Selected-facility last-mile assignments",
-      "layer_id": "facility-last-mile",
-      "scenario": "facility"
-    },
-    {
-      "feature_kind": "linehaul_connection",
-      "geometry_type": "LineString",
-      "label": "Baseline linehaul connections",
-      "layer_id": "baseline-linehaul",
-      "scenario": "baseline"
-    },
-    {
-      "feature_kind": "linehaul_connection",
-      "geometry_type": "LineString",
-      "label": "Selected-facility linehaul connections",
-      "layer_id": "facility-linehaul",
-      "scenario": "facility"
-    }
-  ],
   "schema_version": "network_comparison_map_bundle.v1",
   "summary": {
     "after_cost": 17977937966.86,
@@ -4919,6 +5420,5 @@
       "WH-CANDIDATE-BALIKPAPAN",
       "WH-CANDIDATE-BANDAR_LAMPUNG"
     ]
-  },
-  "title": "Warehouse network: baseline vs selected facilities"
+  }
 }

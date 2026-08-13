@@ -232,6 +232,7 @@ async def _prepare_normalized_resource(
                 workspace,
             )
             ref = normalized.structuredContent["resource_ref"]
+            assert ref["server"] == "supply_chain_data"
             payload = await _read_resource(session, ref)
             assert payload["state"] == "ready"
             assert len(payload["demand_cities"]) == 50
@@ -472,10 +473,26 @@ async def _run_network_s3_then_s2(
                 final_refs,
                 workspace,
             )
-            assert inline_map_result.structuredContent["map_card_handoff"]["tool"] == {
-                "server": "map_utils",
-                "name": "create_map_card",
-            }
+            inline_map = await _read_resource(
+                session,
+                inline_map_result.structuredContent["resource_ref"],
+            )
+            demand_features = [
+                feature
+                for feature in inline_map["features"]
+                if feature["properties"]["kind"] == "demand"
+            ]
+            assert demand_features
+            assert all(
+                feature["properties"]["baseline_duration_hours"] is not None
+                for feature in demand_features
+            )
+            assert all(
+                feature["properties"]["facility_duration_hours"] is not None
+                for feature in demand_features
+            )
+            assert "layers" not in inline_map
+            assert "extensions" not in inline_map
             s2_trace.append("render_network_comparison_map")
             map_result = await _call(
                 session,

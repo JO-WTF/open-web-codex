@@ -9,7 +9,7 @@
 需要 Python 3.11 或更高版本。在仓库根目录安装当前 checkout：
 
 ```bash
-python3 -m pip install -e tools/copilot-sdk
+python3 -m pip install -e tools/copilot-provider-sdk -e tools/copilot-sdk
 ```
 
 ## 创建源码目录
@@ -53,6 +53,11 @@ Workspace 之外准备依赖：Python 使用 `pip --require-hashes` 和 staged �
 launcher 或 transport 文件。准备失败会明确返回 `EnvironmentUnavailable`；Runtime 启动时不再
 安装。随后 `dev` 完成 app-server 握手，核对 `skills/list` 与线程范围的 `mcpServerStatus/list`。全部声明项
 都被发现才返回 `discovery_ready`；额外系统或用户能力被安全忽略。
+
+需要平台 provider primitives 的 Python Tool，必须在 `pyproject.toml` 写正式 distribution
+依赖，并在对应 `runtime.toml` dependency 中写
+`platform_packages = ["open-web-codex-provider-sdk"]`。SDK 只接受单一 registry 中的包，并从
+当前 SDK 环境的已安装 distribution 注入 Tool 环境；这里没有源码路径、`PYTHONPATH` 或隐式安装。
 
 默认 Profile 会在成功或失败后删除。调试时可用 `--keep-profile` 保留临时 Profile，或用
 `--profile /absolute/profile-dir` 选择并保留显式目录。显式目录必须为空，或已由同一源码身份

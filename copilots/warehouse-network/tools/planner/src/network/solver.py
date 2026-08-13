@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from collections.abc import Iterable
+from functools import lru_cache
 from typing import Any
 
 from supply_chain_planner.network.matrix_models import CostMatrix, RouteMatrix
@@ -27,14 +28,20 @@ from supply_chain_planner.network.optimization_models import (
     ServiceMetric,
 )
 
-try:
-    from ortools.sat.python import cp_model
-except ImportError:  # pragma: no cover - exercised by the explicit unavailable path
-    cp_model = None
-
 
 class SolverUnavailable(RuntimeError):
     """The declared deterministic solver dependency is not installed."""
+
+
+@lru_cache(maxsize=1)
+def _load_cp_model():
+    """Load the native solver only when a facility-location solve needs it."""
+
+    try:
+        from ortools.sat.python import cp_model
+    except ImportError:  # pragma: no cover - exercised by the explicit unavailable path
+        return None
+    return cp_model
 
 
 def _route_index(matrix: RouteMatrix):
@@ -448,6 +455,7 @@ def enumerate_p_median(
     time_limit_seconds: float,
     service_constraints: list[tuple[float, float]] | None = None,
 ):
+    cp_model = _load_cp_model()
     if cp_model is None:
         raise SolverUnavailable("ortools is not installed")
     if number_to_open < 0 or time_limit_seconds <= 0:

@@ -14,6 +14,7 @@ cargo_fingerprint_tool="$script_dir/cargo-dep-fingerprint.mjs"
 source "$cargo_cache_lib"
 
 action="foreground"
+refresh_local_requested="0"
 skip_build="${OPEN_WEB_CODEX_SKIP_BUILD:-0}"
 codex_mode="${CODEX_MODE:-real}"
 build_profile="${OPEN_WEB_CODEX_BUILD_PROFILE:-debug}"
@@ -21,7 +22,10 @@ bind_host="${OPEN_WEB_CODEX_BIND_HOST:-127.0.0.1}"
 server_port="${OPEN_WEB_CODEX_SERVER_PORT:-4800}"
 data_dir="${OPEN_WEB_CODEX_DATA_DIR:-$repo_root/.local/open-web-codex}"
 database_url="${DATABASE_URL:-}"
+database_url_environment_set="${DATABASE_URL+x}"
 database_url_file=""
+database_url_option_set="0"
+database_url_file_option_set="0"
 default_database_url_file="$data_dir/database-url"
 database_max_connections="${DATABASE_MAX_CONNECTIONS:-10}"
 
@@ -43,6 +47,9 @@ Usage: ./scripts/run-local.sh [options]
 Options:
   --background              Start the platform in the background.
   --restart                 Build, then restart the background platform.
+  --refresh-local           Explicitly rebuild launcher-owned local development
+                            database and Copilot environments, then start in
+                            the background.
   --stop                    Stop the platform recorded for the data directory.
   --status                  Show process and health status.
   --no-build                Reuse existing browser and Rust build outputs.
@@ -58,7 +65,6 @@ Options:
 
 Environment:
   CODEX_MODE                         real (default) or fake
-  CODEX_BIN                          Codex CLI binary used in real mode
   CODEX_HOME                         Persistent Profile home
   OPEN_WEB_CODEX_IMPORT_CODEX_AUTH_FROM
                                      Single-Profile transition: import
@@ -213,10 +219,27 @@ run_progress_test() {
 
 while (($# > 0)); do
   case "$1" in
-    --background) action="background" ;;
-    --restart) action="restart" ;;
-    --stop) action="stop" ;;
-    --status) action="status" ;;
+    --background)
+      [[ "$refresh_local_requested" == "0" ]] || { error "--refresh-local cannot be combined with another action"; exit 2; }
+      action="background"
+      ;;
+    --restart)
+      [[ "$refresh_local_requested" == "0" ]] || { error "--refresh-local cannot be combined with another action"; exit 2; }
+      action="restart"
+      ;;
+    --refresh-local)
+      [[ "$refresh_local_requested" == "0" && "$action" == "foreground" ]] || { error "--refresh-local cannot be combined with another action"; exit 2; }
+      action="refresh-local"
+      refresh_local_requested="1"
+      ;;
+    --stop)
+      [[ "$refresh_local_requested" == "0" ]] || { error "--refresh-local cannot be combined with another action"; exit 2; }
+      action="stop"
+      ;;
+    --status)
+      [[ "$refresh_local_requested" == "0" ]] || { error "--refresh-local cannot be combined with another action"; exit 2; }
+      action="status"
+      ;;
     --no-build) skip_build="1" ;;
     --release) build_profile="release" ;;
     --fake) codex_mode="fake" ;;
@@ -233,11 +256,13 @@ while (($# > 0)); do
     --database-url)
       (($# >= 2)) || { error "$1 requires a value"; exit 2; }
       database_url="$2"
+      database_url_option_set="1"
       shift
       ;;
     --database-url-file)
       (($# >= 2)) || { error "$1 requires a value"; exit 2; }
       database_url_file="$2"
+      database_url_file_option_set="1"
       shift
       ;;
     --database-max-connections)
@@ -304,6 +329,35 @@ if [[ "$bind_host" == *:* && "$bind_host" != \[*\] ]]; then
 fi
 health_url="http://$health_url_host:$server_port/api/health"
 web_url="http://$health_url_host:$server_port/web"
+
+validate_refresh_local_authority() {
+  local expected_data_dir="$repo_root/.local/open-web-codex"
+  [[ -z "${OPEN_WEB_CODEX_DATA_DIR+x}" && "$data_dir" == "$expected_data_dir" ]] || {
+    error "--refresh-local only accepts the launcher default data directory: $expected_data_dir"
+    return 2
+  }
+  [[ ! -L "$repo_root/.local" && ! -L "$data_dir" ]] || {
+    error "--refresh-local refuses symlinked launcher data directories"
+    return 2
+  }
+  [[ -z "$database_url_environment_set" && "$database_url_option_set" == "0" ]] || {
+    error "--refresh-local refuses DATABASE_URL and --database-url"
+    return 2
+  }
+  [[ "$database_url_file_option_set" == "0" \
+    && ! -e "$default_database_url_file" && ! -L "$default_database_url_file" ]] || {
+    error "--refresh-local refuses database URL files"
+    return 2
+  }
+  [[ "$skip_build" == "0" ]] || {
+    error "--refresh-local requires a current build and cannot be combined with --no-build"
+    return 2
+  }
+  [[ "$codex_mode" == "real" ]] || {
+    error "--refresh-local requires the real Codex mode so prepared environments are rebuilt"
+    return 2
+  }
+}
 
 read_pid() {
   [[ -f "$pid_file" ]] && tr -d '[:space:]' <"$pid_file"
@@ -404,8 +458,14 @@ case "$action" in
   status) show_status; exit 0 ;;
 esac
 
+if [[ "$action" == "refresh-local" ]]; then
+  validate_refresh_local_authority || exit $?
+fi
+
 existing_pid="$(read_pid || true)"
-if [[ "$action" != "restart" ]] && is_server_running "$existing_pid"; then
+if [[ "$action" != "restart" && "$action" != "refresh-local" ]] \
+  && is_server_running "$existing_pid"
+then
   error "open-web-codex is already running (PID $existing_pid); use --restart to rebuild and replace it"
   exit 1
 fi
@@ -427,9 +487,54 @@ fi
 case "$database_url" in postgres://*|postgresql://*) ;; *) error "database URL must use postgres:// or postgresql://"; exit 2 ;; esac
 
 mkdir -p "$run_dir" "$log_dir" "$profile_home" "$runner_root"
-copilot_package_root="$repo_root/copilots/warehouse-network"
-copilot_environment_root="$data_dir/tool-environments/warehouse-network"
-copilot_prepared_descriptor="$copilot_environment_root/copilot-sdk/prepared-tools.v1.json"
+warehouse_copilot_package_root="$repo_root/copilots/warehouse-network"
+warehouse_copilot_environment_root="$data_dir/tool-environments/warehouse-network-copilot"
+warehouse_copilot_prepared_descriptor="$warehouse_copilot_environment_root/copilot-sdk/prepared-tools.v1.json"
+meeting_copilot_package_root="$repo_root/copilots/meeting-action-review"
+meeting_copilot_environment_root="$data_dir/tool-environments/meeting-action-review"
+meeting_copilot_prepared_descriptor="$meeting_copilot_environment_root/copilot-sdk/prepared-tools.v1.json"
+copilot_sdk_environment_root="$data_dir/sdk-environments/copilot"
+copilot_sdk_python="$copilot_sdk_environment_root/bin/python"
+copilot_sdk_source_marker="$copilot_sdk_environment_root/source-fingerprint"
+
+refresh_local_state() {
+  local expected_environment_parent="$data_dir/tool-environments"
+  local database_name="open_web_codex" database_host="127.0.0.1" database_port="5432"
+  [[ "$(dirname "$warehouse_copilot_environment_root")" == "$expected_environment_parent" \
+    && "$(dirname "$meeting_copilot_environment_root")" == "$expected_environment_parent" ]] || {
+    error "launcher-owned Copilot environment roots are invalid"
+    return 2
+  }
+  [[ ! -L "$expected_environment_parent" ]] || {
+    error "launcher-owned Copilot environment parent must not be a symlink"
+    return 2
+  }
+  [[ "$database_user" =~ ^[A-Za-z0-9_.-]{1,128}$ ]] || {
+    error "local PostgreSQL user is invalid"
+    return 2
+  }
+  command -v dropdb >/dev/null 2>&1 || { error "dropdb is required by --refresh-local"; return 1; }
+  command -v createdb >/dev/null 2>&1 || { error "createdb is required by --refresh-local"; return 1; }
+
+  stop_server
+  dropdb --if-exists --host "$database_host" --port "$database_port" \
+    --username "$database_user" "$database_name"
+  createdb --host "$database_host" --port "$database_port" \
+    --username "$database_user" "$database_name"
+  printf 'Rebuilt local development database %s on %s:%s.\n' \
+    "$database_name" "$database_host" "$database_port"
+  rm -rf -- "$warehouse_copilot_environment_root" "$meeting_copilot_environment_root"
+  printf 'Removed launcher-owned Copilot environments; Profile and Workspace data were preserved.\n'
+}
+
+if [[ "$action" == "refresh-local" ]]; then
+  refresh_local_state
+  action="background"
+  if [[ "${OPEN_WEB_CODEX_RUN_LOCAL_TEST:-}" == "refresh-local" ]]; then
+    exit 0
+  fi
+fi
+
 if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
   if [[ ! -f "$master_key_file" ]]; then
     command -v openssl >/dev/null 2>&1 || { error "openssl is required to create the local Secret Store key"; exit 1; }
@@ -440,9 +545,14 @@ if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
   export OPEN_WEB_CODEX_MASTER_KEY
 fi
 
-codex_bin="${CODEX_BIN:-}"
+if [[ "$codex_mode" == "real" && -n "${CODEX_BIN:-}" ]]; then
+  error "run-local requires the Codex binary built from this checkout; CODEX_BIN is not supported"
+  exit 2
+fi
+
+codex_bin=""
 using_repository_codex="0"
-if [[ "$codex_mode" == "real" && -z "$codex_bin" ]]; then
+if [[ "$codex_mode" == "real" ]]; then
   codex_bin="$runtime_target_dir/$cargo_profile_dir/codex"
   using_repository_codex="1"
 fi
@@ -648,10 +758,38 @@ build_stale_codex_runtime_components() {
 }
 
 prepare_copilot_environment() {
-  PYTHONPATH="$repo_root/tools/copilot-sdk${PYTHONPATH:+:$PYTHONPATH}" \
-    "$python_cmd" -m copilot_sdk prepare "$copilot_package_root" \
-      --output-root "$copilot_environment_root" \
-      --json
+  local package_root="$1" environment_root="$2"
+  local expected_fingerprint installed_fingerprint=""
+  expected_fingerprint="$(
+    "$python_cmd" -c \
+      'import hashlib, pathlib, sys; h=hashlib.sha256(); [(h.update(pathlib.Path(p).read_bytes())) for p in sys.argv[1:]]; print(h.hexdigest())' \
+      "$repo_root/tools/copilot-provider-sdk/pyproject.toml" \
+      "$repo_root/tools/copilot-sdk/pyproject.toml"
+  )"
+  if [[ -r "$copilot_sdk_source_marker" ]]; then
+    IFS= read -r installed_fingerprint <"$copilot_sdk_source_marker" || true
+  fi
+  if [[ ! -x "$copilot_sdk_python" || "$installed_fingerprint" != "$expected_fingerprint" ]]; then
+    if [[ ! -x "$copilot_sdk_python" ]]; then
+      "$python_cmd" -m venv "$copilot_sdk_environment_root"
+    fi
+    "$copilot_sdk_python" -m pip install --disable-pip-version-check \
+      -e "$repo_root/tools/copilot-provider-sdk" \
+      -e "$repo_root/tools/copilot-sdk"
+    printf '%s\n' "$expected_fingerprint" >"$copilot_sdk_source_marker"
+  fi
+  "$copilot_sdk_python" -c \
+    'import importlib.metadata as m; assert m.version("open-web-codex-provider-sdk").startswith("0.1."); assert m.version("open-web-codex-copilot-sdk").startswith("0.1.")'
+  "$copilot_sdk_python" -m copilot_sdk prepare "$package_root" \
+    --output-root "$environment_root" \
+    --json
+}
+
+prepare_copilot_environments() {
+  prepare_copilot_environment \
+    "$warehouse_copilot_package_root" "$warehouse_copilot_environment_root"
+  prepare_copilot_environment \
+    "$meeting_copilot_package_root" "$meeting_copilot_environment_root"
 }
 
 prepare_build_tools() {
@@ -691,9 +829,13 @@ if [[ "$codex_mode" == "real" ]]; then
     [[ -x "$code_mode_host_bin" ]] || { error "Codex code-mode host is missing: $code_mode_host_bin"; exit 1; }
     export CODEX_CODE_MODE_HOST_PATH="$code_mode_host_bin"
   fi
-  run_step "Copilot environment" prepare_copilot_environment
-  [[ -f "$copilot_prepared_descriptor" ]] || {
-    error "Copilot prepared descriptor is missing: $copilot_prepared_descriptor"
+  run_step "Copilot environments" prepare_copilot_environments
+  [[ -f "$warehouse_copilot_prepared_descriptor" ]] || {
+    error "Copilot prepared descriptor is missing: $warehouse_copilot_prepared_descriptor"
+    exit 1
+  }
+  [[ -f "$meeting_copilot_prepared_descriptor" ]] || {
+    error "Copilot prepared descriptor is missing: $meeting_copilot_prepared_descriptor"
     exit 1
   }
 fi
@@ -710,8 +852,9 @@ if [[ "$codex_mode" == "real" ]]; then
   server_command+=(
     --codex-home "$profile_home"
     --codex-bin "$codex_bin"
-    --copilot-package-root "$copilot_package_root"
-    --copilot-prepared-descriptor "$copilot_prepared_descriptor"
+    --copilot-package-source "warehouse-network-copilot" "$warehouse_copilot_package_root" "$warehouse_copilot_prepared_descriptor"
+    --copilot-package-source "meeting-action-review" "$meeting_copilot_package_root" "$meeting_copilot_prepared_descriptor"
+    --default-copilot-package "warehouse-network-copilot"
   )
 fi
 
@@ -735,11 +878,9 @@ export OPEN_WEB_CODEX_WEB_DIST="$web_dist"
 if [[ "$codex_mode" == "real" ]]; then
   export CODEX_HOME="$profile_home"
   export CODEX_BIN="$codex_bin"
-  export OPEN_WEB_CODEX_COPILOT_PACKAGE_ROOT="$copilot_package_root"
-  export OPEN_WEB_CODEX_COPILOT_PREPARED_DESCRIPTOR="$copilot_prepared_descriptor"
+  export OPEN_WEB_CODEX_DEFAULT_COPILOT_PACKAGE="warehouse-network-copilot"
 else
-  unset CODEX_HOME CODEX_BIN OPEN_WEB_CODEX_COPILOT_PACKAGE_ROOT \
-    OPEN_WEB_CODEX_COPILOT_PREPARED_DESCRIPTOR
+  unset CODEX_HOME CODEX_BIN OPEN_WEB_CODEX_DEFAULT_COPILOT_PACKAGE
 fi
 
 start_background_server() {

@@ -284,6 +284,17 @@ function activitySortKey(activity: RuntimeAgentActivity): string {
   ].join("\u001f");
 }
 
+function toolLifecycleIdentity(activity: RuntimeAgentActivity): string | null {
+  if (!activity.item_id || ![
+    "tool_started",
+    "tool_completed",
+    "tool_failed",
+  ].includes(activity.kind)) {
+    return null;
+  }
+  return [activity.run_id, activity.thread_id, activity.item_id].join("\u001f");
+}
+
 /**
  * Runtime history and live projections can contain the same official Item.
  * Keep this a pure projection helper: no component cache, event synthesis or
@@ -293,7 +304,9 @@ export function orderAndDedupeActivities(
   activities: RuntimeAgentActivity[],
 ): RuntimeAgentActivity[] {
   const seen = new Set<string>();
-  return [...activities]
+  const lifecycleIndexes = new Map<string, number>();
+  const projected: RuntimeAgentActivity[] = [];
+  [...activities]
     .sort((left, right) => {
       const sequenceOrder = left.sequence - right.sequence;
       if (sequenceOrder !== 0) return sequenceOrder;
@@ -301,12 +314,28 @@ export function orderAndDedupeActivities(
       const rightKey = activitySortKey(right);
       return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
     })
-    .filter((activity) => {
+    .forEach((activity) => {
       const identity = activityIdentity(activity);
-      if (seen.has(identity)) return false;
+      if (seen.has(identity)) return;
       seen.add(identity);
-      return true;
+      const lifecycleIdentity = toolLifecycleIdentity(activity);
+      const lifecycleIndex = lifecycleIdentity
+        ? lifecycleIndexes.get(lifecycleIdentity)
+        : undefined;
+      if (lifecycleIdentity && lifecycleIndex !== undefined) {
+        projected[lifecycleIndex] = activity;
+        return;
+      }
+      if (lifecycleIdentity) lifecycleIndexes.set(lifecycleIdentity, projected.length);
+      projected.push(activity);
     });
+  return projected.sort((left, right) => {
+    const sequenceOrder = left.sequence - right.sequence;
+    if (sequenceOrder !== 0) return sequenceOrder;
+    const leftKey = activitySortKey(left);
+    const rightKey = activitySortKey(right);
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
 }
 
 function activityKindLabel(kind: RuntimeAgentActivity["kind"]): string {

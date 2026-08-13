@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -37,6 +37,7 @@ class CodexCargoAdapterTests(unittest.TestCase):
 
         with (
             patch.object(adapter, "default_target", return_value=target),
+            patch.object(adapter, "configure_native_certificate_store") as configure_trust,
             patch.object(
                 adapter,
                 "resolve_codex_v8_cargo_env",
@@ -48,6 +49,7 @@ class CodexCargoAdapterTests(unittest.TestCase):
             result = adapter.main(["cargo", "build", "--locked"])
 
         self.assertEqual(result, 0)
+        configure_trust.assert_called_once_with()
         resolve.assert_called_once()
         self.assertIs(resolve.call_args.args[0], adapter.TARGET_SPECS[target])
         self.assertEqual(resolver_input, {"ADAPTER_TEST_SENTINEL": "preserve"})
@@ -58,6 +60,24 @@ class CodexCargoAdapterTests(unittest.TestCase):
         self.assertEqual(environment["ADAPTER_TEST_SENTINEL"], "preserve")
         self.assertEqual(environment["RUSTY_V8_ARCHIVE"], "/tmp/v8/archive.a.gz")
         self.assertEqual(environment["RUSTY_V8_SRC_BINDING_PATH"], "/tmp/v8/binding.rs")
+
+    def test_macos_uses_pip_vendored_native_trust_store(self) -> None:
+        vendored_truststore = Mock()
+
+        def fake_import(name: str):
+            if name == "truststore":
+                raise ImportError
+            if name == "pip._vendor.truststore":
+                return vendored_truststore
+            raise AssertionError(name)
+
+        with (
+            patch.object(adapter.sys, "platform", "darwin"),
+            patch.object(adapter, "import_module", side_effect=fake_import),
+        ):
+            adapter.configure_native_certificate_store()
+
+        vendored_truststore.inject_into_ssl.assert_called_once_with()
 
     def test_official_source_build_path_does_not_add_v8_values(self) -> None:
         captured: dict[str, object] = {}

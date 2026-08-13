@@ -161,6 +161,18 @@ async fn task_creation_binds_only_an_authorized_project_workspace() {
                     SecretCipher::generate("task-workspace-test-v1").expect("test Secret cipher"),
                 )),
                 profile,
+                Arc::new(crate::delivery_contracts::DeliveryRegistry::default()),
+                Arc::new(
+                    crate::copilot_installation::CopilotInstallationService::new(
+                        crate::copilot_installation::CopilotInstallationStore::new(
+                            pool.clone(),
+                            runtime_key,
+                        ),
+                        crate::copilot_installation::CopilotSourceRegistry::default(),
+                        None,
+                        None,
+                    ),
+                ),
             ),
         )
         .with_state(AppState::new(pool.clone()));
@@ -489,6 +501,18 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
                     SecretCipher::generate("security-test-v1").expect("test Secret cipher"),
                 )),
                 profile,
+                Arc::new(crate::delivery_contracts::DeliveryRegistry::default()),
+                Arc::new(
+                    crate::copilot_installation::CopilotInstallationService::new(
+                        crate::copilot_installation::CopilotInstallationStore::new(
+                            pool.clone(),
+                            "security-test-profile",
+                        ),
+                        crate::copilot_installation::CopilotSourceRegistry::default(),
+                        None,
+                        None,
+                    ),
+                ),
             ),
         )
         .with_state(state.clone());
@@ -732,11 +756,14 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         "INSERT INTO artifacts (
             id, organization_id, profile_id, workspace_id, artifact_schema, display_name,
             source_relative_path, mime_type, expected_size, byte_size,
-            content, content_sha256, state
+            content, content_sha256, state, delivery_verifier
          ) VALUES (
             $1, $2, $3, $4, 'network_planning_report_markdown.v1',
             'Warehouse network planning report', 'deliverables/security-report.md',
-            'text/markdown', $5, $5, $6, $7, 'ready'
+            'text/markdown', $5, $5, $6, $7, 'ready', jsonb_build_object(
+                'kind', 'markdown_marker',
+                'marker', '<!-- network_planning_report_markdown.v1 -->'
+            )
          )",
     )
     .bind(artifact_id)

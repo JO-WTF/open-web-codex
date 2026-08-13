@@ -9,7 +9,7 @@ Copilot SDK 提供一个面向开发者的最小源码入口：创建和静态�
 需要 Python 3.11 或更高版本。在仓库根目录安装当前 checkout：
 
 ```bash
-python3 -m pip install -e tools/copilot-sdk
+python3 -m pip install -e tools/copilot-provider-sdk -e tools/copilot-sdk
 ```
 
 创建一个新的 Copilot 源码目录：
@@ -75,6 +75,11 @@ ID、绝对路径或原始请求。
 握手阶段不安装依赖。组合中只修改 Skill、Agent 或提示词时，缓存会更新组合描述，但不会
 重新安装未变化的 Tool 依赖。
 
+Tool 若需要平台提供的领域无关 provider primitives，必须同时在 Python 项目依赖和
+`runtime.toml` 的 `platform_packages` 中声明 `open-web-codex-provider-sdk`。Copilot SDK 只从
+单一 registry 解析当前 SDK 环境里已安装的 distribution，再把它作为 wheel 注入外置 Tool
+环境；Tool manifest 不接受平台源码路径，也不依赖 `PYTHONPATH` 或运行时安装。
+
 平台本地启动使用同一编译入口：
 
 ```bash
@@ -84,9 +89,14 @@ copilot prepare copilots/warehouse-network \
 
 `prepare` 只返回有界的 Copilot、capability-root 与 server 标识，并在给定的 SDK-owned output
 root 写入内部 `copilot-sdk/prepared-tools.v1.json`。该描述符包含已准备的 stdio transport、参数
-和 typed 环境绑定，供 Platform Server 在具体 Profile 下解析；它不固定 MCP server cwd，Runtime
+和 typed 环境绑定，以及 `copilot.toml` 已验证的 delivery 声明，供 Platform Server 在具体 Profile
+下解析；它不固定 MCP server cwd，Runtime
 会使用 Thread 已授权的 Workspace cwd。该描述符不是 Browser DTO，也不包含
 安装命令、安装日志或 Secret。
+
+`[[deliveries]]` 用精确 MCP `server`/`tool` 声明显式交付。目前只有固定 envelope 的
+`workspace_artifact`（JSON Schema 或 Markdown marker 验证）与 `inline_geojson_map_card`；
+Platform 不从模型文字推断交付，也不会把普通 MCP Resource 自动提升为 Artifact。
 
 ## 显式 source root
 

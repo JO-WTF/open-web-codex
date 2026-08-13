@@ -56,6 +56,7 @@ class PluginConfigTests(unittest.TestCase):
                     "kind": "python-project",
                     "manifest": "pyproject.toml",
                     "lock": "requirements.lock",
+                    "platform_packages": ["open-web-codex-provider-sdk"],
                 },
                 {
                     "id": "style-spec",

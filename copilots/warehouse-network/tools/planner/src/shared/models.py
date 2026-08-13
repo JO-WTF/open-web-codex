@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Annotated, Literal
 
+from open_web_codex_provider import ResourceRef as _ResourceRef
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from supply_chain_planner.data.mapping import (
     REQUIRED_FIELDS,
@@ -25,9 +26,6 @@ from supply_chain_planner.network.optimization_models import (
     CoverageComparison,
     CoverageMetricSummary,
 )
-from supply_chain_planner.resources.contracts import ResourceRef as _ResourceRef
-
-MCP_SERVER_NAME = "supply_chain"
 
 
 class StrictModel(BaseModel):

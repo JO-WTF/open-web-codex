@@ -5,10 +5,10 @@
 | 文档性质 | 当前与下一里程碑的执行计划 |
 | 更新日期 | 2026-08-13 |
 | 当前阶段 | 阶段二：公开 SDK 与 Web 创作体验 |
-| 当前状态 | 阶段一正常业务主链完成；Copilot SDK 已形成源码、discovery 与单条原生正常链入口 |
+| 当前状态 | 阶段一正常业务主链完成；Copilot SDK、单 Profile local/private 安装正常链与第二领域参考包已落地 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018 已接受并作为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
-| 阶段二后续 | 公开 SDK、Studio、Marketplace 与第二领域；多用户产品流程属于阶段三 |
+| 阶段二后续 | Web Studio、Marketplace、生产模型质量与真实产品 E2E；多用户产品流程属于阶段三 |
 
 本文记录阶段一已完成的正常业务主链、仍有效的边界和后续工作。用户心智统一为：
 
@@ -19,7 +19,7 @@ Workspace 下的 Task 可按用户意图复用普通文件，也可通过同一�
 Resource ref 复用中间数据。保存什么、读取什么、怎样复用、裁剪、合并或覆盖，由用户
 要求、Skill 和 Tool 决定，Platform 不理解仓网数据语义。
 
-## 0. 阶段二当前切片：Copilot SDK 源码、discovery 与原生正常链
+## 0. 阶段二当前切片：Copilot SDK 与单 Profile 安装正常链
 
 Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码入口：
 
@@ -45,8 +45,16 @@ Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码�
    fixture 驱动真实 app-server，按 canonical 事件验证 Supervisor Skill→声明 Role→精确 MCP
    Tool→child terminal→Root final/turn complete；最终文本不能作为 PASS 依据。公开结果不含
    Runtime ID、绝对路径或原始请求。
-7. 当前仍不建立生产 Profile 安装、真实生产模型质量验收、readiness 持久化/聚合、Web Builder、
-   Catalog 或 Marketplace，也不把 Settings Agents 误写成 Copilot 创作入口。
+7. Atom 2b 增加单 Profile local/private package 安装正常链。应用启动配置显式注册一个或多个
+   `{package id, source root, prepared descriptor}`；Browser 只能请求已注册 id。Platform 持久
+   desired active、source/configured revision、managed Skill/Role IDs 与 safe failure；冷启动在
+   app-server 前预检/stage/publish或精确清理 managed destinations。运行中变更返回
+   `restartRequired`，不伪造热切换。
+8. `ready` 不进入数据库；GET 状态只在当前 Runtime instance 对 trusted authorized Workspace
+   调用官方 `skills/list(forceReload)` 后给出。Role 没有官方静态 list，保持 configured 单列，
+   真实执行仍由 native spawn/MCP acceptance 证明。
+9. 当前仍不建立真实生产模型质量验收、Web Builder、Catalog、Release 或 Marketplace，也不把
+   Settings Agents 误写成 Copilot 创作入口。
 
 当前验证 reference 是：
 
@@ -62,7 +70,8 @@ copilot validate copilots/warehouse-network
 同一个 generic prepare owner；`dev`/`test` 默认复用稳定 Tool 环境缓存，Skill/Role/提示词变化
 不会重装未变化依赖。平台 real 启动只调用一次
 `copilot prepare` 并把内部 descriptor 交给 Server，不再按 supply/maps 分叉安装。能力基线和教程明确本地 E2 gate 与未实现边界；生产
-模型质量、安装和持久 readiness 只有在各自 owner 的后续 Atom 具备真实证据后才能更新。
+模型质量、Web 创作和 Marketplace 只有在各自 owner 的后续 Atom 具备真实证据后才能更新；
+Runtime ready 刻意保持 instance-scoped observation，不建设持久 readiness truth。
 
 ### 已验证的运行体验与低延迟领域操作基线
 
@@ -122,7 +131,7 @@ mailbox、Workflow DSL、Run Completion Controller、签名链或 exactly-once�
 | 普通数据文件 | Workspace 文件系统 | 同 Workspace Task 天然可见；没有 Task→文件 binding 或数据生命周期 |
 | typed intermediate 内容与生命周期 | MCP provider | 通过官方 Resource URI/template/read 使用；Platform 不存内容或建通用 Broker |
 | Workspace authority | Platform/Runner | authenticated Workspace capability、canonical containment/no-follow、final file atomic create-new 与 Artifact 授权物化 |
-| 通用 Copilot provider primitives | 长期为平台提供的 provider library；阶段一内嵌在 `supply_chain` | `ResourceRef` envelope、expected-schema validation、canonical codec、payload bounds、typed errors、provider-scoped load/publish；必须领域无关并由 Data/Network/final 共用 |
+| 通用 Copilot provider primitives | `tools/copilot-provider-sdk` | 独立提供 `ResourceRef` envelope、expected-schema validation、canonical codec、payload bounds、typed errors、Workspace scope/writer 与 provider-scoped load/publish；Tool 通过 `runtime.toml.platform_packages` 声明，generic provisioner 从单一 SDK registry 注入，不依赖仓网路径 |
 | Resource ref 可发现与授权 | Codex official Item + 有界 Platform projection | 只引用 exact itemId 与 `{server, uri}`，可重建，不猜模型文本 |
 | 文件选择、字段、映射、标准化、复用和合并 | 用户 + Skill + Tool | Platform 不分类、不猜测、不限制业务复用 |
 | Agent 协同方法 | Supervisor Skill | 不落 Platform workflow 状态机 |
@@ -292,7 +301,8 @@ stdio probe 启动 Data/Demo/Network/maps 并断言 Role 所需 inventory，两�
 3B.2 已有证据：使用当前 checkout 构建的 Codex、真实 Profile Host、生产 built-in
 composition 与本地 mock Responses provider，clean Profile 的官方 `skills/list` 精确发现三项
 仓网 Skill，Root 不发现仓网 MCP，Data/Network native child 只看到各自 Skill 和精确
-`8+1`/`14+5` MCP tool inventory。原生 wait/mailbox、同 Data child follow-up 与所有 terminal
+`8+1`/`14+5` MCP tool inventory。Root 每个 Turn 由 adapter 使用官方 typed Skill input 直接注入
+Supervisor 正文并隐藏通用 Skill 目录；child 继续由 Role 只展示唯一启用 Skill。原生 wait/mailbox、同 Data child follow-up 与所有 terminal
 通过；Profile Skill 修改触发 `skills/changed` 并由 force reload 读取，Profile Role 修改只影响
 下一次 spawn。既有 child 的无 delta MCP reload 在 safe boundary 保持同一 inventory，不伪造
 startup transition。malformed Role 发出 config warning，spawn 明确失败、不创建 child，Root
@@ -371,11 +381,12 @@ Provider owner 全量重构和 Browser dead graph 仍不属于阶段一关键门
 Terminal/Usage/prompts、Provider 重复 owner、Task creation selection、Run lease/history overlay 与
 physical-cwd join 必须按 owner 原子收敛，但不得再次插到上述仓网关键路径之前。
 
-通用 Copilot infrastructure 的阶段一内嵌实现不改变 A→E 顺序：当前只要求它集中、领域无关，
-由 Data、Network 与 final Tool 共用。出现第二个真实 Copilot，或进入 phase-two public Copilot
-SDK 之前，必须把 ResourceRef/schema/codec/bounds/error/provider primitives 迁到平台提供的通用
-provider library，把 Workspace authority/writer/Artifact 物化留在 Platform/Runner；迁出时保持
-现有 ResourceRef 与 Tool 合同不变，MCP provider 继续拥有 Resource 字节和生命周期。
+阶段二已把领域无关的 ResourceRef/schema/codec/bounds/error/store/runtime/Workspace file
+primitives 从仓网包迁到 `tools/copilot-provider-sdk`。Tool 的 Python 项目 metadata 与
+`runtime.toml.platform_packages` 共同形成声明合同；Copilot SDK 的单一 registry 解析已安装的
+平台 distribution，并由 generic provisioner 注入外置 Tool 环境。仓网不再拥有安装器、通用
+Resource/Workspace 模块或 repo 路径 fallback；MCP provider 继续拥有 Resource 字节和生命周期，
+Platform/Runner 继续拥有 Workspace 授权与 Artifact 物化。
 
 Indonesia 完整验收可以组合为：Root 确定国家和目标；Network child 定义数据要求；Data child
 检查与准备文件；Root 使用 native wait/mailbox 并保持可与用户互动；再由 Network child 完成
@@ -451,16 +462,18 @@ progress、approval 与 terminal outcome 可区分，且没有第二 Thread/hist
 Data/Network 新 Resource 工具进入 Role allowlist、真实调用或 E2E 之前，必须删除 generic
 `ResourceLink→Artifact` 注册、任意 renderer 注册、跨 child Resource 搜索和 Artifact 输入回流，
 否则每个中间 profile、mapping、matrix、scenario Resource 都会被 Platform 二次物化为 Artifact，
-形成第二数据面。对话内地图只保留一条窄展示合同：exact `map_utils/create_map_card` 返回 bounded
-`map.v3` renderer，Assistant 原样输出其独立行 `::codex-inline-vis{...}` embed；Platform 只保存
-renderer 与 producing Thread 的精确 Resource ref，并在浏览器授权读取时调用 official
-`mcpServer/resource/read`，不保存 Resource 字节、不登记 durable Artifact。final Artifact 子片尚未
-就绪时，导出/下载显式 unavailable；不得借地图卡片冒充文件交付。
+形成第二数据面。当前对话内额外展示只接受 active Copilot `[[deliveries]]` 声明的 exact producer
+与固定 typed delivery kind；Platform 不按 Tool 名或业务字段猜测。仓网包当前用
+`inline_geojson`/`map_card` 声明 `map.v3` renderer，Platform 只保存 renderer 与 producing Thread
+的精确 Resource ref，并在浏览器授权读取时调用 official `mcpServer/resource/read`，不保存
+Resource 字节、不登记 durable Artifact。文件交付同样由 exact producer、固定
+`workspace_artifact` envelope 与 content verifier 声明；不得借展示卡片冒充文件交付。
 
 Web 同时保留 Codex 原生 inline visualization 语义：仅从当前授权 Profile/Thread 读取原生 HTML
 和签名验证后的 PNG/JPEG/GIF/WebP；不引入 SVG/Markdown renderer，也不把临时可视化登记为
-Artifact。阶段一额外 renderer 只保留仓网 `map.v3`；旧 `report.v1` inline 卡片已删除，正式简报
-继续只走中文 Markdown 最终文件与 durable 下载链接。
+Artifact。仓网 `map.v3` 是当前声明的额外 renderer 实例；旧 `report.v1` inline 卡片已删除。
+仓网 Markdown 报告/地图文件和 meeting Markdown 报告是当前文件 delivery 实例。Artifact 保存
+producer-time verifier snapshot，恢复不依赖届时 active package registry，切包不会使既有交付失效。
 
 #### 数据准备
 

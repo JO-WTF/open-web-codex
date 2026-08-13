@@ -25,11 +25,16 @@ warehouse-network/
 `supply_chain_planner` 只是 Planner 发布后的 Python 导入名，由 `pyproject.toml` 映射到
 物理 `src/`；源码树中不再存在第二个同名 Planner 目录。
 
+最终地图文件、中文 Markdown 简报与对话内 GeoJSON 地图卡片都由 `copilot.toml` 的三条
+`[[deliveries]]` 精确声明其 MCP producer 和通用交付类型；Platform 不包含仓网 Tool 名、业务
+schema 或 marker 的硬编码。
+
 在仓库根目录验证和准备：
 
 ```bash
-PYTHONPATH=tools/copilot-sdk python3 -m copilot_sdk validate copilots/warehouse-network
-PYTHONPATH=tools/copilot-sdk python3 -m copilot_sdk prepare copilots/warehouse-network \
+python3 -m pip install -e tools/copilot-provider-sdk -e tools/copilot-sdk
+python3 -m copilot_sdk validate copilots/warehouse-network
+python3 -m copilot_sdk prepare copilots/warehouse-network \
   --output-root "$PWD/.local/open-web-codex/tool-environments/warehouse-network"
 ```
 

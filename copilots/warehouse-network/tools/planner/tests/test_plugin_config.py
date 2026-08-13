@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -9,6 +11,10 @@ from supply_chain_planner import __version__
 from supply_chain_planner.data.server import mcp as data_mcp
 from supply_chain_planner.network import server as network_server
 from supply_chain_planner.network.server import mcp as network_mcp
+from supply_chain_planner.shared.resource_identity import (
+    DATA_MCP_SERVER_NAME,
+    NETWORK_MCP_SERVER_NAME,
+)
 
 REMOVED_CASE_ENTRYPOINTS = (
     "create_network_case",
@@ -104,13 +110,16 @@ def test_generic_runtime_declaration_owns_dependencies_and_server_entries() -> N
     assert runtime["dependencies"] == [
         {
             "id": "python",
-            "kind": "python-project",
-            "manifest": "pyproject.toml",
-            "lock": "requirements.lock",
-        }
+                "kind": "python-project",
+                "manifest": "pyproject.toml",
+                "lock": "requirements.lock",
+                "platform_packages": ["open-web-codex-provider-sdk"],
+            }
     ]
     servers = {server["id"]: server for server in runtime["servers"]}
     assert set(servers) == {"supply_chain_data", "supply_chain"}
+    assert DATA_MCP_SERVER_NAME == "supply_chain_data"
+    assert NETWORK_MCP_SERVER_NAME == "supply_chain"
     assert servers["supply_chain_data"]["entry"] == {
         "kind": "python-module",
         "dependency": "python",
@@ -143,6 +152,26 @@ def test_network_server_exposes_only_network_tools() -> None:
         assert not hasattr(network_server, entrypoint)
     for module_name in REMOVED_MODULES:
         assert importlib.util.find_spec(f"supply_chain_planner.{module_name}") is None
+
+
+def test_network_server_startup_does_not_eagerly_load_native_solver() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "import supply_chain_planner.network.server; "
+                "assert not any(name == 'ortools' or name.startswith('ortools.') "
+                "for name in sys.modules)"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_data_server_exposes_only_data_tools() -> None:

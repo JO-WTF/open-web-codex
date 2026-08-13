@@ -1,4 +1,4 @@
-"""Race-safe create-new writes inside one authorized Workspace."""
+"""Turn Workspace scope parsing and race-safe create-new writes."""
 
 from __future__ import annotations
 
@@ -8,23 +8,38 @@ import secrets
 import stat
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Any
+from urllib.parse import unquote, urlparse
 
+from .errors import WorkspaceFileError
+
+SANDBOX_META = "codex/sandbox-state-meta"
 MAX_WORKSPACE_FILE_BYTES = 32 * 1024 * 1024
 MAX_WORKSPACE_RELATIVE_PATH_CHARS = 1024
-
-
-class WorkspaceFileError(ValueError):
-    """Stable failure for a rejected or failed Workspace file creation."""
-
-    def __init__(self, code: str):
-        self.code = code
-        super().__init__(code)
 
 
 @dataclass(frozen=True)
 class CreatedWorkspaceFile:
     relative_path: str
     byte_size: int
+
+
+def trusted_workspace_root(meta: Any) -> Path:
+    extra = getattr(meta, "model_extra", None)
+    state = extra.get(SANDBOX_META) if isinstance(extra, dict) else None
+    sandbox_cwd = state.get("sandboxCwd") if isinstance(state, dict) else None
+    if not isinstance(sandbox_cwd, str):
+        raise WorkspaceFileError("workspace_scope_unavailable")
+    parsed = urlparse(sandbox_cwd)
+    if parsed.scheme != "file" or parsed.netloc not in ("", "localhost"):
+        raise WorkspaceFileError("workspace_scope_invalid")
+    try:
+        root = Path(unquote(parsed.path)).resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise WorkspaceFileError("workspace_scope_invalid") from error
+    if not root.is_dir():
+        raise WorkspaceFileError("workspace_scope_invalid")
+    return root
 
 
 def create_workspace_file(
@@ -34,11 +49,12 @@ def create_workspace_file(
     *,
     max_bytes: int = MAX_WORKSPACE_FILE_BYTES,
 ) -> CreatedWorkspaceFile:
-    """Atomically create one file without following links or replacing a target."""
     parts = _relative_parts(relative_path)
     if not isinstance(content, bytes):
         raise WorkspaceFileError("workspace_content_invalid")
-    if max_bytes < 0 or len(content) > max_bytes:
+    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0:
+        raise WorkspaceFileError("workspace_bound_invalid")
+    if len(content) > max_bytes:
         raise WorkspaceFileError("workspace_file_too_large")
     try:
         root = workspace_root.resolve(strict=True)
@@ -61,11 +77,10 @@ def create_workspace_file(
         temporary_name, temporary_fd = _create_temporary(parent_fd)
         try:
             _write_all(temporary_fd, content)
-            try:
-                os.fsync(temporary_fd)
-                temporary_identity = os.fstat(temporary_fd)
-            except OSError as error:
-                raise WorkspaceFileError("workspace_write_failed") from error
+            os.fsync(temporary_fd)
+            temporary_identity = os.fstat(temporary_fd)
+        except OSError as error:
+            raise WorkspaceFileError("workspace_write_failed") from error
         finally:
             os.close(temporary_fd)
         target_linked = False
@@ -143,11 +158,7 @@ def _open_child_directory(parent_fd: int, name: str) -> int:
     try:
         return os.open(name, flags, dir_fd=parent_fd)
     except OSError as error:
-        code = (
-            "workspace_symlink_rejected"
-            if error.errno == errno.ELOOP
-            else "workspace_parent_invalid"
-        )
+        code = "workspace_symlink_rejected" if error.errno == errno.ELOOP else "workspace_parent_invalid"
         raise WorkspaceFileError(code) from error
 
 
@@ -170,26 +181,22 @@ def _create_temporary(parent_fd: int) -> tuple[str, int]:
     for _attempt in range(16):
         name = f".open-web-codex-{secrets.token_hex(12)}.tmp"
         try:
-            descriptor = os.open(name, flags, 0o600, dir_fd=parent_fd)
+            return name, os.open(name, flags, 0o600, dir_fd=parent_fd)
         except FileExistsError:
             continue
         except OSError as error:
             raise WorkspaceFileError("workspace_write_failed") from error
-        return name, descriptor
     raise WorkspaceFileError("workspace_write_failed")
 
 
 def _write_all(descriptor: int, content: bytes) -> None:
     view = memoryview(content)
     written = 0
-    try:
-        while written < len(view):
-            count = os.write(descriptor, view[written:])
-            if count <= 0:
-                raise OSError("short write")
-            written += count
-    except OSError as error:
-        raise WorkspaceFileError("workspace_write_failed") from error
+    while written < len(view):
+        count = os.write(descriptor, view[written:])
+        if count <= 0:
+            raise OSError("short write")
+        written += count
 
 
 def _unlink_matching_target(parent_fd: int, name: str, identity: os.stat_result) -> None:

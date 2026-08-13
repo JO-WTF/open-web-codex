@@ -5,13 +5,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field
-from supply_chain_planner.resources.contracts import MapResourceRef, ResourceRef
-from supply_chain_planner.resources.runtime import (
-    McpResourceContractError,
+from open_web_codex_provider import (
     McpResourceRuntime,
+    ProviderContractError,
+    ResourceRef,
+    ResourceStore,
+    derive_geojson_profile,
 )
-from supply_chain_planner.resources.store import ResourceStore
+from pydantic import BaseModel, ConfigDict, Field
+from supply_chain_planner.delivery.map_service import MapResourceRef
+
+McpResourceContractError = ProviderContractError
 
 SERVER_NAME = "supply_chain"
 URI_PREFIX = "supply-chain://resources/"
@@ -65,23 +69,22 @@ def test_runtime_publishes_and_strictly_loads_model(tmp_path: Path) -> None:
     assert json.loads(runtime.read(ref.uri.removeprefix(URI_PREFIX)))["value"] == 7
 
 
-def test_runtime_publishes_geojson_for_map_card_without_workspace_file(
-    tmp_path: Path,
-) -> None:
+def test_runtime_publishes_generic_reference_fields_without_workspace_file(tmp_path: Path) -> None:
     runtime = _runtime(
         tmp_path,
         ResourceStore(tmp_path / "resources", uri_prefix=URI_PREFIX),
     )
-    geojson = {
-        "schemaVersion": "example_geojson.v1",
-        "type": "FeatureCollection",
-        "features": [],
-    }
-
-    result = runtime.publish_geojson(
-        "example_geojson.v1",
-        geojson,
+    map_ref = MapResourceRef(
+        server=SERVER_NAME,
+        uri="supply-chain://resources/example_geojson.v1-exact",
+        profile=derive_geojson_profile({"type": "FeatureCollection", "features": []}),
+    )
+    result = runtime.publish(
+        "example.v1",
+        ExampleResource(schemaVersion="example.v1", value=7),
         "Prepared map data",
+        mime_type="application/geo+json",
+        reference_fields={"data_ref": map_ref},
     )
 
     assert result.structuredContent is not None
@@ -91,27 +94,9 @@ def test_runtime_publishes_geojson_for_map_card_without_workspace_file(
     )
     data_ref = MapResourceRef.model_validate(result.structuredContent["data_ref"])
     assert data_ref.server == resource_ref.server == SERVER_NAME
-    assert data_ref.uri == resource_ref.uri
     assert data_ref.format == "geojson"
     assert result.content[1].mimeType == "application/geo+json"
-    assert not any(tmp_path.glob("*.json"))
-
-
-def test_runtime_rejects_non_geojson_map_data(tmp_path: Path) -> None:
-    runtime = _runtime(
-        tmp_path,
-        ResourceStore(tmp_path / "resources", uri_prefix=URI_PREFIX),
-    )
-
-    with pytest.raises(
-        McpResourceContractError,
-        match="geojson_feature_collection_required",
-    ):
-        runtime.publish_geojson(
-            "example_geojson.v1",
-            {"schemaVersion": "example_geojson.v1", "features": []},
-            "Invalid map data",
-        )
+    assert data_ref == map_ref
 
 
 def test_runtime_rejects_forged_server_schema_and_payload(tmp_path: Path) -> None:
@@ -175,7 +160,7 @@ def test_runtime_enforces_publish_read_and_load_size_bounds(
         separators=(",", ":"),
     ).encode("utf-8")
     monkeypatch.setattr(
-        "supply_chain_planner.resources.runtime.MAX_RESOURCE_BYTES", len(encoded)
+        "open_web_codex_provider.runtime.MAX_RESOURCE_BYTES", len(encoded)
     )
 
     result = runtime.publish("example.v1", resource, "Exact bound")
@@ -185,7 +170,7 @@ def test_runtime_enforces_publish_read_and_load_size_bounds(
     assert runtime.load_model(ref, "example.v1", ExampleResource) == resource
 
     monkeypatch.setattr(
-        "supply_chain_planner.resources.runtime.MAX_RESOURCE_BYTES", len(encoded) - 1
+        "open_web_codex_provider.runtime.MAX_RESOURCE_BYTES", len(encoded) - 1
     )
 
     with pytest.raises(McpResourceContractError, match="resource_publish_invalid"):

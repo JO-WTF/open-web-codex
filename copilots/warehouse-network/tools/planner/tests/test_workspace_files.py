@@ -6,7 +6,7 @@ from pathlib import Path
 from threading import Barrier
 
 import pytest
-from supply_chain_planner.shared.workspace_files import (
+from open_web_codex_provider import (
     WorkspaceFileError,
     create_workspace_file,
 )

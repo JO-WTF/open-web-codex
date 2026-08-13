@@ -247,6 +247,69 @@
     "DemandMapProperties": {
       "additionalProperties": false,
       "properties": {
+        "assigned_warehouse_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assigned Warehouse Id"
+        },
+        "baseline_distance_km": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Baseline Distance Km"
+        },
+        "baseline_duration_hours": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Baseline Duration Hours"
+        },
+        "baseline_unit_cost": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Baseline Unit Cost"
+        },
+        "baseline_warehouse_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Baseline Warehouse Id"
+        },
         "city_id": {
           "title": "City Id",
           "type": "string"
@@ -266,6 +329,83 @@
             }
           ],
           "title": "Demand Quantity"
+        },
+        "distance_km": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance Km"
+        },
+        "duration_hours": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Hours"
+        },
+        "facility_distance_km": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Facility Distance Km"
+        },
+        "facility_duration_hours": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Facility Duration Hours"
+        },
+        "facility_unit_cost": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Facility Unit Cost"
+        },
+        "facility_warehouse_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Facility Warehouse Id"
         },
         "kind": {
           "const": "demand",
@@ -294,6 +434,19 @@
             }
           ],
           "title": "Province Name"
+        },
+        "unit_cost": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit Cost"
         }
       },
       "required": [
@@ -403,34 +556,6 @@
       "title": "LinehaulMapProperties",
       "type": "object"
     },
-    "NetworkMapExtensions": {
-      "additionalProperties": false,
-      "properties": {
-        "hover_fields": {
-          "additionalProperties": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "title": "Hover Fields",
-          "type": "object"
-        },
-        "legend": {
-          "items": {
-            "$ref": "#/$defs/NetworkMapLegendItem"
-          },
-          "title": "Legend",
-          "type": "array"
-        }
-      },
-      "required": [
-        "legend",
-        "hover_fields"
-      ],
-      "title": "NetworkMapExtensions",
-      "type": "object"
-    },
     "NetworkMapFeature": {
       "additionalProperties": false,
       "properties": {
@@ -502,80 +627,6 @@
         "features"
       ],
       "title": "NetworkMapFeatureCollection",
-      "type": "object"
-    },
-    "NetworkMapLayer": {
-      "additionalProperties": false,
-      "properties": {
-        "feature_kind": {
-          "title": "Feature Kind",
-          "type": "string"
-        },
-        "geometry_type": {
-          "enum": [
-            "Point",
-            "LineString"
-          ],
-          "title": "Geometry Type",
-          "type": "string"
-        },
-        "label": {
-          "title": "Label",
-          "type": "string"
-        },
-        "layer_id": {
-          "title": "Layer Id",
-          "type": "string"
-        },
-        "scenario": {
-          "anyOf": [
-            {
-              "enum": [
-                "baseline",
-                "facility"
-              ],
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Scenario"
-        }
-      },
-      "required": [
-        "layer_id",
-        "feature_kind",
-        "geometry_type",
-        "scenario",
-        "label"
-      ],
-      "title": "NetworkMapLayer",
-      "type": "object"
-    },
-    "NetworkMapLegendItem": {
-      "additionalProperties": false,
-      "properties": {
-        "code": {
-          "title": "Code",
-          "type": "string"
-        },
-        "color": {
-          "pattern": "^#[0-9A-F]{6}$",
-          "title": "Color",
-          "type": "string"
-        },
-        "label": {
-          "title": "Label",
-          "type": "string"
-        }
-      },
-      "required": [
-        "code",
-        "label",
-        "color"
-      ],
-      "title": "NetworkMapLegendItem",
       "type": "object"
     },
     "NetworkMapSummary": {
@@ -813,9 +864,6 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "extensions": {
-      "$ref": "#/$defs/NetworkMapExtensions"
-    },
     "geojson": {
       "$ref": "#/$defs/NetworkMapFeatureCollection"
     },
@@ -825,13 +873,6 @@
       "title": "Kind",
       "type": "string"
     },
-    "layers": {
-      "items": {
-        "$ref": "#/$defs/NetworkMapLayer"
-      },
-      "title": "Layers",
-      "type": "array"
-    },
     "schema_version": {
       "const": "network_comparison_map_bundle.v1",
       "default": "network_comparison_map_bundle.v1",
@@ -840,18 +881,11 @@
     },
     "summary": {
       "$ref": "#/$defs/NetworkMapSummary"
-    },
-    "title": {
-      "default": "Warehouse network: baseline vs selected facilities",
-      "title": "Title",
-      "type": "string"
     }
   },
   "required": [
     "summary",
-    "geojson",
-    "layers",
-    "extensions"
+    "geojson"
   ],
   "title": "Network comparison map bundle",
   "type": "object"

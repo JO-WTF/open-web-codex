@@ -17,6 +17,7 @@ from .app_server_client import AppServerClient, AppServerClientError
 from .dev_profile import (
     CopilotDevError,
     load_dev_composition,
+    prepared_deliveries,
     prepare_dev_profile,
     prepare_dev_tool_composition,
     validate_workspace,
@@ -97,6 +98,8 @@ def _print_copilot_summary(
     summary: object, *, manifest: Path, as_json: bool
 ) -> None:
     payload = asdict(summary)
+    for delivery in payload.get("deliveries", []):
+        delivery.pop("verifier_value", None)
     if as_json:
         print(json.dumps({"ok": True, "copilot": payload}, ensure_ascii=False, indent=2))
         return
@@ -357,6 +360,7 @@ def _run_prepare(args: argparse.Namespace) -> dict[str, object]:
             composition_descriptor_sha256=(
                 composition.summary.composition_descriptor_sha256
             ),
+            deliveries=prepared_deliveries(composition.summary),
         )
     except ToolEnvironmentError as error:
         raise CopilotDevError(

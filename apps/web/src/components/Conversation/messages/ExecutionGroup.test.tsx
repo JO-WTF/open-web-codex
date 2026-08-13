@@ -101,6 +101,21 @@ describe("ExecutionGroup", () => {
     })).toBeTruthy();
   });
 
+  it("keeps the working indicator beside a live activity card", () => {
+    render(
+      <ExecutionGroup
+        items={[]}
+        active
+        activeItem={<div>Tool is running</div>}
+      >
+        {null}
+      </ExecutionGroup>,
+    );
+
+    expect(screen.getByText("Tool is running")).toBeTruthy();
+    expect(screen.getByText("Working…")).toBeTruthy();
+  });
+
   it("does not count approval cards as tool calls", () => {
     render(
       <ExecutionGroup

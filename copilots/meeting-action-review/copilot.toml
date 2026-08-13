@@ -1,0 +1,45 @@
+schema_version = 1
+id = "meeting-action-review"
+display_name = "Meeting Action Review"
+
+[supervisor]
+skill = "meeting-action-supervisor"
+
+[[skills]]
+id = "meeting-action-supervisor"
+path = "skills/meeting-action-supervisor"
+
+[[skills]]
+id = "meeting-action-reviewer"
+path = "skills/meeting-action-reviewer"
+
+[[agents]]
+id = "meeting_reviewer"
+role = "agents/meeting_reviewer.toml"
+
+[[tools]]
+id = "meeting_review"
+root = "tools/reviewer"
+runtime = "tools/reviewer/runtime.toml"
+
+[[deliveries]]
+id = "meeting-action-report"
+server = "meeting_action_review"
+tool = "publish_action_review"
+kind = "workspace_artifact"
+schema = "meeting_action_review_markdown.v1"
+mime_type = "text/markdown"
+display_name = "Meeting action review"
+content_verifier = { kind = "markdown_marker", marker = "<!-- meeting_action_review_markdown.v1 -->" }
+
+[[tests]]
+id = "review-inline-action-items"
+prompt = "Review the supplied meeting action items and return the exact typed result."
+agent = "meeting_reviewer"
+tool = "meeting_review"
+server = "meeting_action_review"
+tool_name = "review_action_items"
+arguments = { notes = "- [ ] Prepare launch checklist | owner: Mei | due: 2026-09-01\n- [ ] Confirm budget | owner: | due:" }
+
+[tests.expect]
+structured_content = { schema = "meeting_action_review.v1", document = "inline", summary = { action_item_count = 2, complete_count = 1, incomplete_count = 1 }, action_items = [{ description = "Prepare launch checklist", owner = "Mei", due_date = "2026-09-01", missing_fields = [] }, { description = "Confirm budget", owner = "", due_date = "", missing_fields = ["owner", "due_date"] }] }

@@ -24,6 +24,14 @@ pub struct ProfileStartupFile {
     contents: Vec<u8>,
 }
 
+/// One exact managed package destination to remove during Profile
+/// reconciliation. Construction remains limited to native Skill and Agent
+/// Role roots.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfileStartupFileRemoval {
+    destination: ProfileStartupFileDestination,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProfileStartupFileOwnership {
     Seed,
@@ -129,6 +137,35 @@ impl ProfileStartupFile {
     }
 }
 
+impl ProfileStartupFileRemoval {
+    pub fn package_skill(id: impl Into<String>) -> Result<Self, ProfileStartupFileError> {
+        let id = id.into();
+        validate_identifier(&id, "Skill id")?;
+        Ok(Self {
+            destination: ProfileStartupFileDestination::Skill { id },
+        })
+    }
+
+    pub fn package_agent_role(name: impl Into<String>) -> Result<Self, ProfileStartupFileError> {
+        let name = name.into();
+        validate_identifier(&name, "Agent Role name")?;
+        Ok(Self {
+            destination: ProfileStartupFileDestination::AgentRole { name },
+        })
+    }
+
+    fn relative_path(&self) -> PathBuf {
+        match &self.destination {
+            ProfileStartupFileDestination::Skill { id } => {
+                PathBuf::from("skills").join(id).join("SKILL.md")
+            }
+            ProfileStartupFileDestination::AgentRole { name } => {
+                PathBuf::from("agents").join(format!("{name}.toml"))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ProfileStartupFileError {
     #[error("invalid Profile startup file: {0}")]
@@ -146,13 +183,26 @@ pub enum ProfileStartupFileError {
     },
 }
 
-pub(crate) fn materialize_profile_startup_files(
+/// Reconcile one validated batch before an app-server starts. Every write is
+/// staged and every destination is preflighted before publication. A publish
+/// failure rolls back changes already made by this process.
+pub fn reconcile_profile_startup_files(
     home: &Path,
     files: &[ProfileStartupFile],
+    removed: &[ProfileStartupFileRemoval],
 ) -> Result<(), ProfileStartupFileError> {
     let mut destinations = HashSet::new();
     for file in files {
         let relative_path = file.relative_path();
+        if !destinations.insert(relative_path.clone()) {
+            return Err(ProfileStartupFileError::InvalidInput(format!(
+                "duplicate Profile startup destination '{}'",
+                relative_path.display()
+            )));
+        }
+    }
+    for removal in removed {
+        let relative_path = removal.relative_path();
         if !destinations.insert(relative_path.clone()) {
             return Err(ProfileStartupFileError::InvalidInput(format!(
                 "duplicate Profile startup destination '{}'",
@@ -166,53 +216,64 @@ pub(crate) fn materialize_profile_startup_files(
             relative_path: ".".to_string(),
             source,
         })?;
+    let mut changes = Vec::new();
     for file in files {
-        let relative_path = file.relative_path();
-        materialize_profile_startup_file(&home, &relative_path, file.ownership, &file.contents)?;
+        match prepare_write(&home, file) {
+            Ok(Some(change)) => changes.push(change),
+            Ok(None) => {}
+            Err(error) => {
+                cleanup_staged(&changes);
+                return Err(error);
+            }
+        }
     }
-    Ok(())
+    for removal in removed {
+        match prepare_removal(&home, &removal.relative_path()) {
+            Ok(Some(change)) => changes.push(change),
+            Ok(None) => {}
+            Err(error) => {
+                cleanup_staged(&changes);
+                return Err(error);
+            }
+        }
+    }
+    publish_changes(changes)
 }
 
-fn materialize_profile_startup_file(
-    home: &Path,
-    relative_path: &Path,
-    ownership: ProfileStartupFileOwnership,
-    contents: &[u8],
-) -> Result<(), ProfileStartupFileError> {
-    let label = relative_path_label(relative_path);
-    let parent_relative = relative_path.parent().ok_or_else(|| {
-        ProfileStartupFileError::InvalidInput("Profile startup destination has no parent".into())
-    })?;
-    let parent = ensure_private_relative_directory(home, parent_relative, &label)?;
-    let file_name = relative_path.file_name().ok_or_else(|| {
-        ProfileStartupFileError::InvalidInput("Profile startup destination has no filename".into())
-    })?;
-    let target = parent.join(file_name);
+struct PreparedChange {
+    label: String,
+    target: PathBuf,
+    staged: Option<PathBuf>,
+    replaces_existing: bool,
+}
 
-    let replace_existing = match fs::symlink_metadata(&target) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err(ProfileStartupFileError::UnsafePath {
-                relative_path: label,
-                message: "target must not be a symlink".to_string(),
-            });
-        }
-        Ok(metadata) if !metadata.is_file() => {
+enum PublishedChange {
+    New { target: PathBuf },
+    Replaced { target: PathBuf, backup: PathBuf },
+    Removed { target: PathBuf, backup: PathBuf },
+}
+
+fn prepare_write(
+    home: &Path,
+    file: &ProfileStartupFile,
+) -> Result<Option<PreparedChange>, ProfileStartupFileError> {
+    let relative_path = file.relative_path();
+    let (label, parent, target) = checked_target(home, &relative_path)?;
+    let replaces_existing = match fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
             return Err(ProfileStartupFileError::UnsafePath {
                 relative_path: label,
                 message: "target must be a regular file".to_string(),
             });
         }
-        // Ordinary startup files only seed a clean Profile. Managed package
-        // files reserve their exact destination and converge it before Runtime
-        // discovery so a selected Tool/Role contract cannot remain stale.
-        Ok(_) if ownership == ProfileStartupFileOwnership::Seed => return Ok(()),
+        Ok(_) if file.ownership == ProfileStartupFileOwnership::Seed => return Ok(None),
         Ok(_) => {
             let current = fs::read(&target).map_err(|source| ProfileStartupFileError::Io {
                 relative_path: label.clone(),
                 source,
             })?;
-            if current == contents {
-                return Ok(());
+            if current == file.contents {
+                return Ok(None);
             }
             true
         }
@@ -225,78 +286,171 @@ fn materialize_profile_startup_file(
         }
     };
 
-    let temporary = parent.join(format!(
+    let file_name = target
+        .file_name()
+        .expect("checked startup target has a filename");
+    let staged = parent.join(format!(
         ".{}.{}.tmp",
         file_name.to_string_lossy(),
         Uuid::now_v7()
     ));
     let write_result = (|| -> io::Result<()> {
-        let mut staged = OpenOptions::new()
+        let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&temporary)?;
-        restrict_file_permissions(&staged)?;
-        staged.write_all(contents)?;
-        staged.sync_all()
+            .open(&staged)?;
+        restrict_file_permissions(&output)?;
+        output.write_all(&file.contents)?;
+        output.sync_all()
     })();
     if let Err(source) = write_result {
-        let _ = fs::remove_file(&temporary);
+        let _ = fs::remove_file(&staged);
         return Err(ProfileStartupFileError::Io {
             relative_path: label,
             source,
         });
     }
+    Ok(Some(PreparedChange {
+        label,
+        target,
+        staged: Some(staged),
+        replaces_existing,
+    }))
+}
 
-    if replace_existing {
-        let result =
-            fs::rename(&temporary, &target).map_err(|source| ProfileStartupFileError::Io {
+fn prepare_removal(
+    home: &Path,
+    relative_path: &Path,
+) -> Result<Option<PreparedChange>, ProfileStartupFileError> {
+    let (label, _parent, target) = checked_target(home, relative_path)?;
+    match fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(ProfileStartupFileError::UnsafePath {
                 relative_path: label,
+                message: "target must be a regular file".to_string(),
+            })
+        }
+        Ok(_) => Ok(Some(PreparedChange {
+            label,
+            target,
+            staged: None,
+            replaces_existing: true,
+        })),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(ProfileStartupFileError::Io {
+            relative_path: label,
+            source,
+        }),
+    }
+}
+
+fn checked_target(
+    home: &Path,
+    relative_path: &Path,
+) -> Result<(String, PathBuf, PathBuf), ProfileStartupFileError> {
+    let label = relative_path_label(relative_path);
+    let parent_relative = relative_path.parent().ok_or_else(|| {
+        ProfileStartupFileError::InvalidInput("Profile startup destination has no parent".into())
+    })?;
+    let parent = ensure_private_relative_directory(home, parent_relative, &label)?;
+    let file_name = relative_path.file_name().ok_or_else(|| {
+        ProfileStartupFileError::InvalidInput("Profile startup destination has no filename".into())
+    })?;
+    let target = parent.join(file_name);
+    Ok((label, parent, target))
+}
+
+fn publish_changes(changes: Vec<PreparedChange>) -> Result<(), ProfileStartupFileError> {
+    let mut published = Vec::new();
+    for change in &changes {
+        let result = publish_change(change, &mut published);
+        if let Err(source) = result {
+            rollback_changes(&published);
+            cleanup_staged(&changes);
+            return Err(ProfileStartupFileError::Io {
+                relative_path: change.label.clone(),
                 source,
             });
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
         }
-        return result;
     }
+    cleanup_staged(&changes);
+    for change in published {
+        let backup = match change {
+            PublishedChange::Replaced { backup, .. } | PublishedChange::Removed { backup, .. } => {
+                Some(backup)
+            }
+            PublishedChange::New { .. } => None,
+        };
+        if let Some(backup) = backup {
+            if let Err(error) = fs::remove_file(&backup) {
+                tracing::warn!(path = %backup.display(), error = %error, "failed to remove Profile startup rollback file");
+            }
+        }
+    }
+    Ok(())
+}
 
-    match fs::hard_link(&temporary, &target) {
-        Ok(()) => {
-            if let Err(error) = fs::remove_file(&temporary) {
-                tracing::warn!(
-                    path = %temporary.display(),
-                    error = %error,
-                    "failed to remove published Profile startup staging file"
-                );
-            }
-            Ok(())
-        }
-        Err(source) => {
-            let _ = fs::remove_file(&temporary);
-            if source.kind() == io::ErrorKind::AlreadyExists {
-                match fs::symlink_metadata(&target) {
-                    Ok(metadata) if metadata.file_type().is_symlink() => {
-                        Err(ProfileStartupFileError::UnsafePath {
-                            relative_path: label,
-                            message: "target must not be a symlink".to_string(),
-                        })
-                    }
-                    Ok(metadata) if metadata.is_file() => Ok(()),
-                    Ok(_) => Err(ProfileStartupFileError::UnsafePath {
-                        relative_path: label,
-                        message: "target must be a regular file".to_string(),
-                    }),
-                    Err(source) => Err(ProfileStartupFileError::Io {
-                        relative_path: label,
-                        source,
-                    }),
+fn publish_change(change: &PreparedChange, published: &mut Vec<PublishedChange>) -> io::Result<()> {
+    if change.replaces_existing {
+        let file_name = change
+            .target
+            .file_name()
+            .expect("checked startup target has a filename");
+        let backup = change.target.with_file_name(format!(
+            ".{}.{}.rollback",
+            file_name.to_string_lossy(),
+            Uuid::now_v7()
+        ));
+        fs::rename(&change.target, &backup)?;
+        match &change.staged {
+            Some(staged) => {
+                if let Err(error) = fs::rename(staged, &change.target) {
+                    let _ = fs::rename(&backup, &change.target);
+                    return Err(error);
                 }
-            } else {
-                Err(ProfileStartupFileError::Io {
-                    relative_path: label,
-                    source,
-                })
+                published.push(PublishedChange::Replaced {
+                    target: change.target.clone(),
+                    backup,
+                });
+            }
+            None => published.push(PublishedChange::Removed {
+                target: change.target.clone(),
+                backup,
+            }),
+        }
+    } else {
+        let staged = change
+            .staged
+            .as_ref()
+            .expect("new startup file has staged contents");
+        fs::hard_link(staged, &change.target)?;
+        published.push(PublishedChange::New {
+            target: change.target.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn rollback_changes(changes: &[PublishedChange]) {
+    for change in changes.iter().rev() {
+        match change {
+            PublishedChange::New { target } => {
+                let _ = fs::remove_file(target);
+            }
+            PublishedChange::Replaced { target, backup } => {
+                let _ = fs::remove_file(target);
+                let _ = fs::rename(backup, target);
+            }
+            PublishedChange::Removed { target, backup } => {
+                let _ = fs::rename(backup, target);
             }
         }
+    }
+}
+
+fn cleanup_staged(changes: &[PreparedChange]) {
+    for staged in changes.iter().filter_map(|change| change.staged.as_ref()) {
+        let _ = fs::remove_file(staged);
     }
 }
 
@@ -429,8 +583,8 @@ mod tests {
             )
             .expect("role"),
         ];
-        materialize_profile_startup_files(&home, &files).expect("materialize");
-        materialize_profile_startup_files(&home, &files).expect("idempotent materialize");
+        reconcile_profile_startup_files(&home, &files, &[]).expect("materialize");
+        reconcile_profile_startup_files(&home, &files, &[]).expect("idempotent materialize");
 
         assert_eq!(
             fs::read(home.join("skills/warehouse-supervisor/SKILL.md")).expect("read skill"),
@@ -466,7 +620,8 @@ mod tests {
             ProfileStartupFile::agent_role("data_agent", b"built-in".to_vec()).expect("role");
         let skill = ProfileStartupFile::skill("warehouse-data", b"seed".to_vec()).expect("skill");
 
-        materialize_profile_startup_files(&home, &[role, skill]).expect("materialize missing seed");
+        reconcile_profile_startup_files(&home, &[role, skill], &[])
+            .expect("materialize missing seed");
         assert_eq!(
             fs::read_to_string(home.join("agents/data_agent.toml")).expect("read profile role"),
             "profile-owned"
@@ -497,8 +652,8 @@ mod tests {
             ProfileStartupFile::package_agent_role("network_agent", b"current-role".to_vec())
                 .expect("managed role"),
         ];
-        materialize_profile_startup_files(&home, &files).expect("refresh managed files");
-        materialize_profile_startup_files(&home, &files).expect("idempotent refresh");
+        reconcile_profile_startup_files(&home, &files, &[]).expect("refresh managed files");
+        reconcile_profile_startup_files(&home, &files, &[]).expect("idempotent refresh");
 
         assert_eq!(
             fs::read_to_string(home.join("skills/warehouse-network/SKILL.md"))
@@ -529,7 +684,7 @@ mod tests {
             ProfileStartupFile::agent_role("data_agent", b"built-in".to_vec()).expect("role");
 
         assert!(matches!(
-            materialize_profile_startup_files(&home, &[role.clone(), role]),
+            reconcile_profile_startup_files(&home, &[role.clone(), role], &[]),
             Err(ProfileStartupFileError::InvalidInput(_))
         ));
         assert!(!home.join("agents/data_agent.toml").exists());
@@ -551,7 +706,7 @@ mod tests {
             ProfileStartupFile::agent_role("data_agent", b"built-in".to_vec()).expect("role");
 
         assert!(matches!(
-            materialize_profile_startup_files(&home, &[role]),
+            reconcile_profile_startup_files(&home, &[role], &[]),
             Err(ProfileStartupFileError::UnsafePath { .. })
         ));
         assert!(fs::read_dir(&outside)
@@ -581,7 +736,7 @@ mod tests {
         ];
 
         assert!(matches!(
-            materialize_profile_startup_files(&home, &files),
+            reconcile_profile_startup_files(&home, &files, &[]),
             Err(ProfileStartupFileError::UnsafePath { .. })
         ));
         assert!(!home.join("skills/warehouse-data/SKILL.md").exists());
@@ -592,6 +747,68 @@ mod tests {
                 .file_name()
                 .to_string_lossy()
                 .contains(".tmp")));
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn unsafe_removal_does_not_publish_an_earlier_managed_update() {
+        let root = temp_root("startup-removal-preflight");
+        let home = root.join("profile");
+        fs::create_dir_all(home.join("skills/managed")).expect("create managed skill");
+        fs::create_dir_all(home.join("agents/unsafe.toml"))
+            .expect("create directory at removal target");
+        fs::write(home.join("skills/managed/SKILL.md"), "old").expect("write old skill");
+
+        let update =
+            ProfileStartupFile::package_skill("managed", b"new".to_vec()).expect("managed update");
+        let removal =
+            ProfileStartupFileRemoval::package_agent_role("unsafe").expect("managed removal");
+        assert!(matches!(
+            reconcile_profile_startup_files(&home, &[update], &[removal]),
+            Err(ProfileStartupFileError::UnsafePath { .. })
+        ));
+        assert_eq!(
+            fs::read_to_string(home.join("skills/managed/SKILL.md")).expect("read managed skill"),
+            "old"
+        );
+        assert!(fs::read_dir(home.join("skills/managed"))
+            .expect("managed entries")
+            .all(|entry| !entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp")));
+        fs::remove_dir_all(root).expect("remove temp root");
+    }
+
+    #[test]
+    fn removes_only_exact_managed_package_destinations() {
+        let root = temp_root("startup-deactivate");
+        let home = root.join("profile");
+        fs::create_dir_all(home.join("skills/managed")).expect("create managed skill");
+        fs::create_dir_all(home.join("skills/user-skill")).expect("create user skill");
+        fs::create_dir_all(home.join("agents")).expect("create agents");
+        fs::write(home.join("skills/managed/SKILL.md"), "managed").expect("write managed skill");
+        fs::write(home.join("skills/user-skill/SKILL.md"), "user").expect("write user skill");
+        fs::write(home.join("agents/managed_agent.toml"), "managed").expect("write managed role");
+        fs::write(home.join("agents/user_agent.toml"), "user").expect("write user role");
+
+        let removals = [
+            ProfileStartupFileRemoval::package_skill("managed").expect("skill removal"),
+            ProfileStartupFileRemoval::package_agent_role("managed_agent").expect("role removal"),
+        ];
+        reconcile_profile_startup_files(&home, &[], &removals).expect("deactivate package");
+
+        assert!(!home.join("skills/managed/SKILL.md").exists());
+        assert!(!home.join("agents/managed_agent.toml").exists());
+        assert_eq!(
+            fs::read_to_string(home.join("skills/user-skill/SKILL.md")).expect("read user skill"),
+            "user"
+        );
+        assert_eq!(
+            fs::read_to_string(home.join("agents/user_agent.toml")).expect("read user role"),
+            "user"
+        );
         fs::remove_dir_all(root).expect("remove temp root");
     }
 }

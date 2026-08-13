@@ -2,20 +2,28 @@
 
 from __future__ import annotations
 
-import json
+import base64
+import csv
 import hashlib
+import io
+import json
 import os
-import signal
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
+import zipfile
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Mapping, Sequence
+from typing import Any, Literal
 
+from .platform_packages import (
+    ResolvedPlatformPackage,
+    resolve_installed_platform_package,
+)
 from .tool_runtime_manifest import ToolRuntimeManifest, load_tool_runtime_manifest
-
 
 PREPARED_DESCRIPTOR = Path("copilot-sdk/prepared-tools.v1.json")
 OWNER_MARKER = ".copilot-tool-environment.json"
@@ -69,10 +77,23 @@ class PreparedCapabilityRoot:
 
 
 @dataclass(frozen=True)
+class PreparedDelivery:
+    id: str
+    server: str
+    tool: str
+    kind: str
+    schema: str
+    mime_type: str
+    display_name: str
+    content_verifier: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
 class PreparedToolComposition:
     descriptor_path: Path
     capability_roots: tuple[PreparedCapabilityRoot, ...]
     state: Literal["built", "reused"]
+    deliveries: tuple[PreparedDelivery, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -100,6 +121,7 @@ class MaterializedToolComposition:
 
 CommandRunner = Callable[[Sequence[str], Path, Mapping[str, str]], None]
 ExecutableIdentityResolver = Callable[[str, Mapping[str, str]], tuple[Path, int, int]]
+PlatformPackageResolver = Callable[[str], ResolvedPlatformPackage]
 
 
 def prepare_tool_composition(
@@ -108,9 +130,11 @@ def prepare_tool_composition(
     tools: Sequence[ToolRuntimeSource],
     output_root: Path,
     composition_descriptor_sha256: str,
+    deliveries: Sequence[PreparedDelivery] = (),
     host_environment: Mapping[str, str] | None = None,
     run_command: CommandRunner | None = None,
     executable_identity_resolver: ExecutableIdentityResolver | None = None,
+    platform_package_resolver: PlatformPackageResolver | None = None,
 ) -> PreparedToolComposition:
     """Prepare declared dependencies once and emit an unresolved internal descriptor."""
 
@@ -121,6 +145,11 @@ def prepare_tool_composition(
         _resolve_executable_identity
         if executable_identity_resolver is None
         else executable_identity_resolver
+    )
+    package_resolver = (
+        resolve_installed_platform_package
+        if platform_package_resolver is None
+        else platform_package_resolver
     )
     declared = [
         (tool, load_tool_runtime_manifest(source_root, tool.root, tool.runtime))
@@ -140,13 +169,35 @@ def prepare_tool_composition(
     identities = {
         name: identity_resolver(name, environment) for name in sorted(executable_names)
     }
-    fingerprint = _preparation_fingerprint(declared, identities)
+    platform_package_ids = sorted(
+        {
+            package_id
+            for _, manifest in declared
+            for dependency in manifest.dependencies
+            for package_id in dependency.platform_packages
+        }
+    )
+    try:
+        platform_packages = {
+            package_id: package_resolver(package_id)
+            for package_id in platform_package_ids
+        }
+    except ValueError as error:
+        raise ToolEnvironmentError(
+            "EnvironmentUnavailable",
+            "platform_packages",
+            "a declared platform package is not installed in the Copilot SDK environment",
+        ) from error
+    fingerprint = _preparation_fingerprint(declared, identities, platform_packages)
     output_root, existing_marker = _inspect_owned_output_root(output_root, source_root)
     if (
         existing_marker is not None
         and existing_marker.get("preparationFingerprint") == fingerprint
     ):
-        reused = _load_prepared_composition(output_root / PREPARED_DESCRIPTOR)
+        reused = _load_prepared_composition(
+            output_root / PREPARED_DESCRIPTOR,
+            existing_marker.get("compositionDescriptorSha256"),
+        )
         if reused is not None:
             _write_owner_marker(
                 output_root,
@@ -158,11 +209,13 @@ def prepare_tool_composition(
                 output_root / PREPARED_DESCRIPTOR,
                 composition_descriptor_sha256,
                 reused.capability_roots,
+                deliveries,
             )
             return PreparedToolComposition(
                 output_root / PREPARED_DESCRIPTOR,
                 reused.capability_roots,
                 "reused",
+                tuple(deliveries),
             )
 
     _write_owner_marker(
@@ -188,18 +241,20 @@ def prepare_tool_composition(
                     environment,
                     runner,
                     {name: identity[0] for name, identity in identities.items()},
+                    platform_packages,
                 )
             )
         _write_prepared_descriptor(
             descriptor_path,
             composition_descriptor_sha256,
             tuple(prepared_roots),
+            deliveries,
         )
     except Exception:
         shutil.rmtree(build_root, ignore_errors=True)
         raise
     return PreparedToolComposition(
-        output_root / PREPARED_DESCRIPTOR, tuple(prepared_roots), "built"
+        output_root / PREPARED_DESCRIPTOR, tuple(prepared_roots), "built", tuple(deliveries)
     )
 
 
@@ -210,6 +265,7 @@ def _prepare_tool(
     host_environment: Mapping[str, str],
     run_command: CommandRunner,
     executables: Mapping[str, Path],
+    platform_packages: Mapping[str, ResolvedPlatformPackage],
 ) -> PreparedCapabilityRoot:
     tool_root = source.root.resolve(strict=True)
     managed_root = output_root / "tool-environments" / source.id
@@ -229,6 +285,7 @@ def _prepare_tool(
                 run_command,
                 host_environment,
                 executables["python3"],
+                tuple(platform_packages[item] for item in dependency.platform_packages),
             )
         elif dependency.kind == "node-project":
             _prepare_node_dependency(
@@ -276,6 +333,7 @@ def _prepare_python_dependency(
     run_command: CommandRunner,
     host_environment: Mapping[str, str],
     python: Path,
+    platform_packages: Sequence[ResolvedPlatformPackage],
 ) -> Path:
     venv = dependency_root / "venv"
     run_command((str(python), "-m", "venv", str(venv)), tool_root, host_environment)
@@ -288,6 +346,15 @@ def _prepare_python_dependency(
         tool_root,
         pip_env,
     )
+    platform_wheel_dir = dependency_root / "platform-wheels"
+    platform_wheel_dir.mkdir(parents=True, exist_ok=True)
+    for package in platform_packages:
+        wheel = _build_platform_package_wheel(package, platform_wheel_dir)
+        run_command(
+            (str(venv_python), "-m", "pip", "install", "--no-deps", str(wheel)),
+            tool_root,
+            pip_env,
+        )
     build_source = Path(tempfile.mkdtemp(prefix="tool-build-", dir=process_data / "tmp"))
     wheel_dir = dependency_root / "wheel"
     wheel_dir.mkdir(parents=True, exist_ok=True)
@@ -521,6 +588,7 @@ def _resolve_executable_identity(
 def _preparation_fingerprint(
     declared: Sequence[tuple[ToolRuntimeSource, ToolRuntimeManifest]],
     identities: Mapping[str, tuple[Path, int, int]],
+    platform_packages: Mapping[str, ResolvedPlatformPackage],
 ) -> str:
     digest = hashlib.sha256()
     _digest_item(digest, ADAPTER_FINGERPRINT_VERSION.encode())
@@ -533,7 +601,57 @@ def _preparation_fingerprint(
         _digest_item(digest, name.encode())
         _digest_item(digest, str(path).encode())
         _digest_item(digest, f"{size}:{mtime_ns}".encode())
+    for package_id, package in sorted(platform_packages.items()):
+        _digest_item(digest, package_id.encode())
+        _digest_item(digest, package.spec.distribution.encode())
+        _digest_item(digest, package.version.encode())
+        for root in package.package_roots:
+            for relative, contents in _source_regular_files(root):
+                _digest_item(digest, f"{root.name}/{relative.as_posix()}".encode())
+                _digest_item(digest, contents)
     return digest.hexdigest()
+
+
+def _build_platform_package_wheel(
+    package: ResolvedPlatformPackage,
+    wheel_dir: Path,
+) -> Path:
+    """Repack one trusted installed pure-Python distribution for a managed Tool venv."""
+
+    wheel_name = package.spec.distribution.replace("-", "_")
+    wheel_path = wheel_dir / f"{wheel_name}-{package.version}-py3-none-any.whl"
+    dist_info = f"{wheel_name}-{package.version}.dist-info"
+    files: dict[str, bytes] = {}
+    for root in package.package_roots:
+        for relative, contents in _source_regular_files(root):
+            files[f"{root.name}/{relative.as_posix()}"] = contents
+    files[f"{dist_info}/METADATA"] = (
+        "Metadata-Version: 2.1\n"
+        f"Name: {package.spec.distribution}\n"
+        f"Version: {package.version}\n"
+        "Requires-Python: >=3.11\n\n"
+    ).encode()
+    files[f"{dist_info}/WHEEL"] = (
+        b"Wheel-Version: 1.0\n"
+        b"Generator: open-web-codex-copilot-sdk\n"
+        b"Root-Is-Purelib: true\n"
+        b"Tag: py3-none-any\n\n"
+    )
+    record_path = f"{dist_info}/RECORD"
+    rows: list[tuple[str, str, str]] = []
+    for path, contents in sorted(files.items()):
+        digest = base64.urlsafe_b64encode(hashlib.sha256(contents).digest()).rstrip(b"=").decode()
+        rows.append((path, f"sha256={digest}", str(len(contents))))
+    rows.append((record_path, "", ""))
+    record = io.StringIO(newline="")
+    csv.writer(record, lineterminator="\n").writerows(rows)
+    files[record_path] = record.getvalue().encode()
+    temporary = wheel_path.with_suffix(".tmp")
+    with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path, contents in sorted(files.items()):
+            archive.writestr(path, contents)
+    temporary.replace(wheel_path)
+    return wheel_path
 
 
 def _source_regular_files(root: Path) -> list[tuple[Path, bytes]]:
@@ -566,10 +684,19 @@ def _digest_item(digest: Any, value: bytes) -> None:
     digest.update(value)
 
 
-def _load_prepared_composition(descriptor_path: Path) -> PreparedToolComposition | None:
+def _load_prepared_composition(
+    descriptor_path: Path,
+    expected_composition_descriptor_sha256: object,
+) -> PreparedToolComposition | None:
     try:
         payload = json.loads(descriptor_path.read_text(encoding="utf-8"))
         if payload.get("schemaVersion") != 1:
+            return None
+        if (
+            not isinstance(expected_composition_descriptor_sha256, str)
+            or payload.get("compositionDescriptorSha256")
+            != expected_composition_descriptor_sha256
+        ):
             return None
         roots: list[PreparedCapabilityRoot] = []
         for root in payload["capabilityRoots"]:
@@ -594,7 +721,20 @@ def _load_prepared_composition(descriptor_path: Path) -> PreparedToolComposition
                     )
                 )
             roots.append(PreparedCapabilityRoot(root["id"], tuple(servers)))
-        return PreparedToolComposition(descriptor_path, tuple(roots), "reused")
+        deliveries = tuple(
+            PreparedDelivery(
+                id=item["id"],
+                server=item["server"],
+                tool=item["tool"],
+                kind=item["kind"],
+                schema=item["schema"],
+                mime_type=item["mimeType"],
+                display_name=item["displayName"],
+                content_verifier=item.get("contentVerifier"),
+            )
+            for item in payload.get("deliveries", [])
+        )
+        return PreparedToolComposition(descriptor_path, tuple(roots), "reused", deliveries)
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError):
         return None
 
@@ -603,12 +743,30 @@ def _write_prepared_descriptor(
     descriptor_path: Path,
     composition_descriptor_sha256: str,
     capability_roots: Sequence[PreparedCapabilityRoot],
+    deliveries: Sequence[PreparedDelivery],
 ) -> None:
     descriptor_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schemaVersion": 1,
         "compositionDescriptorSha256": composition_descriptor_sha256,
         "capabilityRoots": [_descriptor_root(root) for root in capability_roots],
+        "deliveries": [
+            {
+                "id": delivery.id,
+                "server": delivery.server,
+                "tool": delivery.tool,
+                "kind": delivery.kind,
+                "schema": delivery.schema,
+                "mimeType": delivery.mime_type,
+                "displayName": delivery.display_name,
+                **(
+                    {"contentVerifier": delivery.content_verifier}
+                    if delivery.content_verifier is not None
+                    else {}
+                ),
+            }
+            for delivery in deliveries
+        ],
     }
     descriptor_temp = descriptor_path.with_suffix(".tmp")
     descriptor_temp.write_text(

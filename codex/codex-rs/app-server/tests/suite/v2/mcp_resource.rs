@@ -7,6 +7,8 @@ use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use app_test_support::create_fake_rollout_with_source;
+use app_test_support::rollout_path;
 use app_test_support::write_chatgpt_auth;
 use axum::Router;
 use codex_app_server::in_process;
@@ -31,7 +33,12 @@ use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
+use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
+use codex_rollout::append_rollout_item_to_path;
+use codex_rollout::read_session_meta_line;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
@@ -116,6 +123,94 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
             params: McpResourceReadParams {
                 thread_id: Some(thread.id),
                 server: "codex_apps".to_string(),
+                uri: TEST_RESOURCE_URI.to_string(),
+            },
+        })
+        .await?;
+    assert_eq!(read_response, expected_resource_read_response());
+
+    apps_server_handle.abort();
+    let _ = apps_server_handle.await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cold_resumed_v2_child_reads_resource_from_role_mcp_server() -> Result<()> {
+    let responses_server = responses::start_mock_server().await;
+    let (apps_server_url, _apps_server_calls, apps_server_handle) =
+        start_resource_apps_mcp_server().await?;
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&responses_server.uri())
+        .with_approval_policy("untrusted")
+        .write(codex_home.path())?;
+    let agents_dir = codex_home.path().join("agents");
+    std::fs::create_dir_all(&agents_dir)?;
+    std::fs::write(
+        agents_dir.join("resource_reader.toml"),
+        format!(
+            r#"name = "resource_reader"
+description = "Read provider-owned test resources."
+developer_instructions = "Read the exact resource reference."
+
+[mcp_servers.role_resources]
+url = "{apps_server_url}/api/codex/ps/mcp"
+required = true
+"#
+        ),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let parent_thread_id = codex_protocol::ThreadId::new();
+    let filename_ts = "2025-01-05T12-00-00";
+    let child_thread_id = create_fake_rollout_with_source(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        "Read the persisted Resource",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 1,
+            agent_path: None,
+            agent_nickname: Some("Reader".to_string()),
+            agent_role: Some("resource_reader".to_string()),
+        }),
+    )?;
+    let path = rollout_path(codex_home.path(), filename_ts, &child_thread_id);
+    let mut session_meta = read_session_meta_line(&path).await?;
+    session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V2);
+    append_rollout_item_to_path(&path, &RolloutItem::SessionMeta(session_meta)).await?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .build_initialized()
+        .await?;
+    let resume_id = mcp
+        .send_thread_resume_request(codex_app_server_protocol::ThreadResumeParams {
+            thread_id: child_thread_id.clone(),
+            path: Some(path),
+            exclude_turns: true,
+            ..Default::default()
+        })
+        .await?;
+    let _: codex_app_server_protocol::ThreadResumeResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
+
+    let read_response: McpResourceReadResponse = mcp
+        .request(|request_id| ClientRequest::McpResourceRead {
+            request_id,
+            params: McpResourceReadParams {
+                thread_id: Some(child_thread_id),
+                server: "role_resources".to_string(),
                 uri: TEST_RESOURCE_URI.to_string(),
             },
         })

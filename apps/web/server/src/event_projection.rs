@@ -5,11 +5,12 @@ use sqlx::PgPool;
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::final_artifacts::{
-    artifact_delivery_failure, artifact_delivery_projection, final_artifact_candidate,
-    FinalArtifactCandidate,
+use crate::delivery_artifacts::{
+    artifact_delivery_failure, artifact_delivery_projection,
+    final_artifact_candidate_with_registry, FinalArtifactCandidate,
 };
-use crate::inline_maps::{self, InlineMapCandidate};
+use crate::delivery_contracts::DeliveryRegistry;
+use crate::inline_map_cards::{self, InlineMapCandidate};
 
 const PROJECTION_VERSION: i16 = 1;
 
@@ -63,11 +64,15 @@ pub struct LiveProjection {
     pub pending_artifact_ids: Vec<Uuid>,
 }
 
-pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjection>, String> {
+pub async fn persist_frame_with_deliveries(
+    data: &[u8],
+    db: &PgPool,
+    deliveries: &DeliveryRegistry,
+) -> Result<Option<LiveProjection>, String> {
     if let Some(projection) = persist_terminal_frame(data, db).await? {
         return Ok(Some(projection));
     }
-    let Some(mut event) = project_frame(data)? else {
+    let Some(mut event) = project_frame_with_deliveries(data, deliveries)? else {
         return Ok(None);
     };
 
@@ -97,7 +102,7 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
             event.turn_id.as_deref(),
             event.item_id.as_deref(),
         ) {
-            inline_maps::register(
+            inline_map_cards::register(
                 &mut transaction,
                 context.organization_id,
                 context.run_id,
@@ -108,7 +113,8 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
             )
             .await?;
         }
-        inline_maps::resolve_in_transaction(&mut transaction, run_id, &mut event.payload).await?;
+        inline_map_cards::resolve_in_transaction(&mut transaction, run_id, &mut event.payload)
+            .await?;
         Ok::<Vec<Uuid>, String>(
             registered
                 .into_iter()
@@ -533,7 +539,10 @@ async fn persist_terminal_frame(
     }))
 }
 
-fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
+fn project_frame_with_deliveries(
+    data: &[u8],
+    deliveries: &DeliveryRegistry,
+) -> Result<Option<ProjectedEvent>, String> {
     let Some(frame) = internal_frame(data)? else {
         return Ok(None);
     };
@@ -571,7 +580,7 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
     let (event_type, lifecycle) = classify_method(runtime_method);
     let item_type = item.and_then(|item| string_field(item, "type"));
     let (artifacts, artifact_delivery_error, final_delivery_seen) = match item
-        .map(final_artifact_candidate)
+        .map(|item| final_artifact_candidate_with_registry(item, deliveries))
     {
         Some(Ok(Some(artifact))) if event_type == "codex.item.completed" => {
             (vec![artifact], None, true)
@@ -580,7 +589,7 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
         _ => (Vec::new(), None, false),
     };
     let inline_map = if event_type == "codex.item.completed" {
-        item.and_then(inline_maps::candidate)
+        item.and_then(|item| inline_map_cards::candidate_with_registry(item, deliveries))
     } else {
         None
     };
@@ -622,6 +631,21 @@ fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
         artifacts,
         inline_map,
     }))
+}
+
+#[cfg(test)]
+pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjection>, String> {
+    persist_frame_with_deliveries(
+        data,
+        db,
+        &crate::delivery_contracts::warehouse_test_registry(),
+    )
+    .await
+}
+
+#[cfg(test)]
+fn project_frame(data: &[u8]) -> Result<Option<ProjectedEvent>, String> {
+    project_frame_with_deliveries(data, &crate::delivery_contracts::warehouse_test_registry())
 }
 
 fn mark_artifact_delivery_failure(payload: &mut Value, code: &str) {
@@ -2364,7 +2388,8 @@ async fn register_artifacts(
         let existing_for_item = sqlx::query(
             "SELECT artifact.id, artifact.profile_id, artifact.workspace_id,
                     artifact.artifact_schema, artifact.display_name, artifact.mime_type,
-                    artifact.source_relative_path, artifact.expected_size, artifact.state,
+                    artifact.source_relative_path, artifact.expected_size,
+                    artifact.delivery_verifier, artifact.state,
                     artifact.byte_size, artifact.failure_code,
                     provenance.producer_task_id
              FROM artifact_provenance provenance
@@ -2395,6 +2420,7 @@ async fn register_artifacts(
                     || existing.get::<String, _>("source_relative_path")
                         != artifact.workspace_relative_path
                     || existing.get::<i64, _>("expected_size") != expected_size
+                    || existing.get::<Value, _>("delivery_verifier") != artifact.verifier_snapshot
                 {
                     return Err(
                         "Artifact producer Item was replayed with different metadata".to_string(),
@@ -2410,8 +2436,9 @@ async fn register_artifacts(
                 let inserted = sqlx::query(
                     "INSERT INTO artifacts (
                 organization_id, profile_id, workspace_id, artifact_schema,
-                display_name, mime_type, source_relative_path, expected_size
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                display_name, mime_type, source_relative_path, expected_size,
+                delivery_verifier
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              ON CONFLICT (organization_id, workspace_id, source_relative_path)
              DO NOTHING
              RETURNING id, state, byte_size, failure_code",
@@ -2424,6 +2451,7 @@ async fn register_artifacts(
                 .bind(&artifact.mime_type)
                 .bind(&artifact.workspace_relative_path)
                 .bind(expected_size)
+                .bind(&artifact.verifier_snapshot)
                 .fetch_optional(&mut **transaction)
                 .await
                 .map_err(|error| format!("Artifact registration error: {error}"))?;
@@ -2437,7 +2465,7 @@ async fn register_artifacts(
                 } else {
                     let existing = sqlx::query(
                         "SELECT id, profile_id, artifact_schema, display_name, mime_type,
-                            expected_size, byte_size, state, failure_code
+                            expected_size, delivery_verifier, byte_size, state, failure_code
                      FROM artifacts
                      WHERE organization_id = $1 AND workspace_id = $2
                        AND source_relative_path = $3",
@@ -2454,6 +2482,8 @@ async fn register_artifacts(
                         || existing.get::<String, _>("display_name") != artifact.display_name
                         || existing.get::<String, _>("mime_type") != artifact.mime_type
                         || existing.get::<i64, _>("expected_size") != expected_size
+                        || existing.get::<Value, _>("delivery_verifier")
+                            != artifact.verifier_snapshot
                     {
                         return Err("Workspace Artifact path was reused with different metadata"
                             .to_string());

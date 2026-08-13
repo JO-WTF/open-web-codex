@@ -54,7 +54,7 @@ pub async fn read_inline_map_source(
     Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
 ) -> ApiResult<Value> {
     let context = authorized_thread(&state, &auth, run_id).await?;
-    let source = crate::inline_maps::source(
+    let source = crate::inline_map_cards::source(
         &state.db,
         auth.organization_id,
         run_id,
@@ -582,14 +582,33 @@ async fn project_turn_with_refs(
     run_id: Uuid,
 ) -> Result<ThreadHistoryTurn, ApiError> {
     let mut turn = project_turn(value)?;
+    let item_ids = turn
+        .items
+        .iter()
+        .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect::<Vec<_>>();
+    let artifacts_by_item = persisted_artifacts_by_item(state, run_id, &item_ids).await?;
     for item in &mut turn.items {
+        if let Some(item_id) = item.get("id").and_then(Value::as_str) {
+            if let Some(artifacts) = artifacts_by_item.get(item_id) {
+                if let Some(object) = item.as_object_mut() {
+                    object
+                        .get_mut("result")
+                        .and_then(Value::as_object_mut)
+                        .and_then(|result| result.get_mut("structuredContent"))
+                        .and_then(Value::as_object_mut)
+                        .map(|structured| structured.remove("artifact"));
+                    object.insert("artifacts".to_string(), Value::Array(artifacts.clone()));
+                }
+            }
+        }
         if item.get("type").and_then(Value::as_str) != Some("agentMessage") {
             continue;
         }
         let Some(text) = item.get("text").and_then(Value::as_str) else {
             continue;
         };
-        let cards = crate::inline_maps::resolve(&state.db, run_id, text)
+        let cards = crate::inline_map_cards::resolve(&state.db, run_id, text)
             .await
             .map_err(database_error)?;
         if !cards.is_empty() {
@@ -599,6 +618,51 @@ async fn project_turn_with_refs(
         }
     }
     Ok(turn)
+}
+
+async fn persisted_artifacts_by_item(
+    state: &AppState,
+    run_id: Uuid,
+    item_ids: &[String],
+) -> Result<HashMap<String, Vec<Value>>, ApiError> {
+    if item_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query(
+        "SELECT provenance.producer_item_id, artifact.id, artifact.artifact_schema,
+                artifact.display_name, artifact.mime_type, artifact.expected_size,
+                artifact.byte_size, artifact.state, artifact.failure_code
+         FROM artifact_provenance provenance
+         JOIN artifacts artifact ON artifact.id = provenance.artifact_id
+           AND artifact.organization_id = provenance.organization_id
+         WHERE provenance.producer_run_id = $1
+           AND provenance.producer_item_id = ANY($2)
+         ORDER BY provenance.producer_item_id, artifact.created_at, artifact.id",
+    )
+    .bind(run_id)
+    .bind(item_ids)
+    .fetch_all(&state.db)
+    .await
+    .map_err(database_error)?;
+    let mut by_item = HashMap::<String, Vec<Value>>::new();
+    for row in rows {
+        let artifact = crate::delivery_artifacts::artifact_delivery_projection(
+            row.get("id"),
+            &row.get::<String, _>("artifact_schema"),
+            &row.get::<String, _>("display_name"),
+            &row.get::<String, _>("mime_type"),
+            row.get("expected_size"),
+            row.get("byte_size"),
+            &row.get::<String, _>("state"),
+            row.get::<Option<String>, _>("failure_code").as_deref(),
+        )
+        .map_err(|_| bad_gateway("Artifact history projection was invalid"))?;
+        by_item
+            .entry(row.get("producer_item_id"))
+            .or_default()
+            .push(artifact);
+    }
+    Ok(by_item)
 }
 
 #[derive(Default)]

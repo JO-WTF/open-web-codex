@@ -11,6 +11,7 @@ from uuid import uuid4
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
 from mcp.types import CallToolResult, ResourceLink, TextContent, ToolAnnotations
+from open_web_codex_provider import GeoJsonProfile, derive_geojson_profile
 from pydantic import BaseModel, ConfigDict, Field
 
 from .clients import GoogleMapsClient, MapboxMapsClient
@@ -29,6 +30,7 @@ from .map_card import (
     renderer_sources,
     sanitized_extensions,
     validate_extension_graph,
+    validate_profile_graph,
     validate_style,
 )
 
@@ -73,6 +75,12 @@ class McpResourceMapData(BaseModel):
         ),
     )
     format: Literal["geojson"] = "geojson"
+    profile: GeoJsonProfile = Field(
+        description=(
+            "Bounded profile derived from this exact GeoJSON. Copy it unchanged with the "
+            "rest of data_ref so create_map_card can validate property references."
+        )
+    )
 
 
 class GeoJsonToolResult(BaseModel):
@@ -92,8 +100,9 @@ class GeoJsonToolResult(BaseModel):
 mcp = FastMCP(
     "Map Utils",
     instructions=(
-        "Geocoding and routing tools publish GeoJSON as MCP Resources. Copy structuredContent."
-        "data_ref unchanged into create_map_card sources.<source-id>.data_ref. For "
+        "Geocoding and routing tools publish GeoJSON as MCP Resources plus a bounded profile "
+        "derived from that exact content. Copy structuredContent.data_ref, including profile, "
+        "unchanged into create_map_card sources.<source-id>.data_ref. For "
         "read_mcp_resource, pass "
         "data_ref.server as server and data_ref.uri as uri unchanged. References produced by "
         "this server use map_utils; create_map_card may also consume an unchanged GeoJSON "
@@ -170,7 +179,11 @@ def _resource_result(
         provider=str(provider),
         summary=summary,
         feature_count=len(geojson.get("features", [])),
-        data_ref=McpResourceMapData(server=MCP_SERVER_NAME, uri=published.uri),
+        data_ref=McpResourceMapData(
+            server=MCP_SERVER_NAME,
+            uri=published.uri,
+            profile=derive_geojson_profile(geojson),
+        ),
     ).model_dump(mode="json")
     return CallToolResult(
         content=[
@@ -311,8 +324,10 @@ async def create_map_card(
 
     An MCP Resource data_ref must be copied unchanged from an earlier data tool result in the
     same Run and Thread. ``sources`` is an object keyed by source ID; every source is
-    {type:"geojson", data_ref:<complete data_ref>}. GeoJSON contents must remain in the
-    authorized Resource and must not be passed through the model context. ``layers`` uses the
+    {type:"geojson", data_ref:<complete data_ref including its derived profile>}. GeoJSON
+    contents must remain in the authorized Resource and must not be passed through the model
+    context. Layer expressions, labels, hover fields, and geometry types are validated against
+    that bounded profile. ``layers`` uses the
     official Mapbox Style Specification and
     is passed to ``map.addLayer`` unchanged except that each authorized source ID is replaced
     by its browser-local source ID. Standard Mapbox layer types, paint/layout properties,
@@ -354,6 +369,7 @@ async def create_map_card(
     if extensions is not None and not isinstance(extensions, MapExtensions):
         extensions = MapExtensions.model_validate(extensions)
     validate_extension_graph(extensions, layers)
+    validate_profile_graph(sources, layers, extensions)
     warnings = validate_style(
         sources,
         layers,

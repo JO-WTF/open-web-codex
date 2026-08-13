@@ -12,15 +12,25 @@ from typing import Annotated, Literal
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from open_web_codex_provider import (
+    MAX_WORKSPACE_FILE_BYTES,
+    McpResourceRuntime,
+    ProviderContractError,
+    ResourceRef,
+    ResourceStore,
+    bind_runtime,
+    derive_geojson_profile,
+    workspace_resource_root,
+)
 from pydantic import Field, ValidationError
 from supply_chain_planner.data.workspace_intake import read_json_document
 from supply_chain_planner.delivery.map_service import (
+    MapResourceRef,
     NetworkComparisonGeoJson,
     NetworkComparisonMapBundle,
+    NetworkDistributionGeoJson,
     build_network_comparison_map_bundle,
-    build_network_comparison_map_card_handoff,
     build_network_distribution_geojson,
-    build_network_distribution_map_card_handoff,
 )
 from supply_chain_planner.delivery.report_service import (
     NETWORK_PLANNING_MARKDOWN_SCHEMA,
@@ -71,13 +81,6 @@ from supply_chain_planner.network.solver import (
     solve_current_assignment,
     summarize_assignment_cost,
 )
-from supply_chain_planner.resources.contracts import MapResourceRef, ResourceRef
-from supply_chain_planner.resources.runtime import (
-    McpResourceContractError,
-    McpResourceRuntime,
-    bind_runtime,
-)
-from supply_chain_planner.resources.store import ResourceStore
 from supply_chain_planner.shared.models import (
     FacilityChangeAssessmentToolResult,
     FacilityChangeCostComparison,
@@ -90,10 +93,15 @@ from supply_chain_planner.shared.models import (
     PreparedNetworkResource,
     UncoveredCitySummary,
 )
-from supply_chain_planner.shared.workspace_files import MAX_WORKSPACE_FILE_BYTES
+from supply_chain_planner.shared.resource_identity import (
+    DATA_MCP_SERVER_NAME,
+    NETWORK_MCP_SERVER_NAME,
+    RESOURCE_PROVIDER_NAMESPACE,
+)
+
+McpResourceContractError = ProviderContractError
 
 SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
-MCP_SERVER_NAME = "supply_chain"
 RESOURCE_URI_PREFIX = "supply-chain://resources/"
 
 CONTENT_ADDRESSED_RESOURCE_TOOL = ToolAnnotations(
@@ -237,10 +245,21 @@ def _runtime() -> McpResourceRuntime:
         _mcp_resource_runtime = bind_runtime(
             _workspace_root,
             _profile_state_root,
-            MCP_SERVER_NAME,
+            NETWORK_MCP_SERVER_NAME,
             RESOURCE_URI_PREFIX,
         )
     return _mcp_resource_runtime
+
+
+def _data_resource_runtime() -> McpResourceRuntime:
+    runtime = _runtime()
+    return McpResourceRuntime(
+        runtime.startup_workspace,
+        _profile_state_root,
+        DATA_MCP_SERVER_NAME,
+        RESOURCE_URI_PREFIX,
+        store=runtime.store,
+    )
 
 
 @mcp.resource(
@@ -337,7 +356,7 @@ def compare_network_scenarios(
 
 
 def _load_ready_network(resource_ref: ResourceRef) -> PreparedNetworkResource:
-    prepared = _runtime().load_model(
+    prepared = _data_resource_runtime().load_model(
         resource_ref,
         "normalized_network_input.v1",
         PreparedNetworkResource,
@@ -347,13 +366,50 @@ def _load_ready_network(resource_ref: ResourceRef) -> PreparedNetworkResource:
     return prepared
 
 
+def _publish_geojson(
+    schema: str,
+    value: NetworkComparisonGeoJson | NetworkDistributionGeoJson,
+    description: str,
+) -> CallToolResult:
+    payload = value.model_dump(mode="json", by_alias=True)
+    if payload.get("type") != "FeatureCollection" or not isinstance(
+        payload.get("features"), list
+    ):
+        raise McpResourceContractError("geojson_feature_collection_required")
+    result = _runtime().publish(
+        schema,
+        value,
+        description,
+        mime_type="application/geo+json",
+    )
+    structured = result.structuredContent
+    if structured is None:
+        raise McpResourceContractError("map_data_result_missing")
+    resource_ref = ResourceRef.model_validate(structured["resource_ref"])
+    structured["data_ref"] = MapResourceRef(
+        server=resource_ref.server,
+        uri=resource_ref.uri,
+        profile=derive_geojson_profile(payload),
+    ).model_dump(mode="json")
+    return result
+
+
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def prepare_network_distribution_map(
     normalized_input_ref: ResourceRef,
     ctx: Context,
     include_candidates: bool = False,
+    baseline_ref: Annotated[
+        ResourceRef | None,
+        Field(
+            description=(
+                "Optional exact network_baseline.v2 result for adding raw per-city "
+                "assignment, distance, duration, and unit-cost properties."
+            )
+        ),
+    ] = None,
 ) -> CallToolResult:
-    """Publish map points and exact map_utils.create_map_card handoff arguments."""
+    """Publish raw GeoJSON facts for a separately authored map presentation."""
     _runtime().require_workspace(ctx)
     prepared = _load_ready_network(normalized_input_ref)
     normalized = NormalizedInputBatch(
@@ -364,9 +420,15 @@ def prepare_network_distribution_map(
         provided_route_facts=prepared.provided_route_facts,
         issues=prepared.issues,
     )
+    baseline = (
+        _runtime().load_model(baseline_ref, "network_baseline.v2", BaselineResult)
+        if baseline_ref is not None
+        else None
+    )
     geojson = build_network_distribution_geojson(
         normalized,
         include_candidates=include_candidates,
+        baseline=baseline,
     )
     demand_count = len(prepared.demand_cities)
     existing_count = sum(warehouse.is_existing for warehouse in prepared.warehouses)
@@ -379,22 +441,18 @@ def prepare_network_distribution_map(
         f"Prepared interactive map data with {demand_count} demand cities, "
         f"{existing_count} existing warehouses, and {candidate_count} candidates."
     )
-    result = _runtime().publish_geojson(geojson.schema_version, geojson, summary)
+    result = _publish_geojson(geojson.schema_version, geojson, summary)
     structured = result.structuredContent
     if structured is None:
         raise McpResourceContractError("map_data_result_missing")
     structured.update(
         {
             "feature_count": len(geojson.features),
-            "layer_counts": {
+            "feature_counts": {
                 "demand": demand_count,
                 "existing_warehouses": existing_count,
                 "candidate_warehouses": candidate_count,
             },
-            "map_card_handoff": build_network_distribution_map_card_handoff(
-                MapResourceRef.model_validate(structured["data_ref"]),
-                include_candidates=include_candidates,
-            ).model_dump(mode="json", by_alias=True),
         }
     )
     return result
@@ -1221,7 +1279,7 @@ def _write_final_delivery_json_bundle(
         summary=summary,
         artifact=NetworkFinalArtifactDescriptor(
             schema=bundle.schema_version,
-            displayName=bundle.title,
+            displayName="Warehouse network comparison data",
             mimeType="application/json",
             workspaceRelativePath=created.relative_path,
             byteSize=created.byte_size,
@@ -1299,7 +1357,7 @@ def prepare_network_comparison_map(
     ],
     ctx: Context,
 ) -> CallToolResult:
-    """Publish exact baseline-versus-plan GeoJSON and map-card arguments."""
+    """Publish raw baseline-versus-plan GeoJSON for a separately authored map."""
     _runtime().require_workspace(ctx)
     prepared, normalized, baseline, facility, comparison = _load_final_delivery_inputs(
         normalized_input_ref,
@@ -1319,16 +1377,13 @@ def prepare_network_comparison_map(
         f"Prepared an interactive comparison map with {len(geojson.features)} "
         "features from the validated baseline and facility result."
     )
-    result = _runtime().publish_geojson(geojson.schema_version, geojson, summary)
+    result = _publish_geojson(geojson.schema_version, geojson, summary)
     structured = result.structuredContent
     if structured is None:
         raise McpResourceContractError("map_data_result_missing")
     structured.update(
         {
             "feature_count": len(geojson.features),
-            "map_card_handoff": build_network_comparison_map_card_handoff(
-                MapResourceRef.model_validate(structured["data_ref"]),
-            ).model_dump(mode="json", by_alias=True),
         }
     )
     return result
@@ -1454,11 +1509,20 @@ def main() -> None:
     global _workspace_root, _profile_state_root, _mcp_resource_runtime
     _workspace_root = Path.cwd().resolve(strict=True)
     _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
+    store = ResourceStore(
+        workspace_resource_root(
+            _profile_state_root,
+            _workspace_root,
+            RESOURCE_PROVIDER_NAMESPACE,
+        ),
+        uri_prefix=RESOURCE_URI_PREFIX,
+    )
     _mcp_resource_runtime = bind_runtime(
         _workspace_root,
         _profile_state_root,
-        MCP_SERVER_NAME,
+        NETWORK_MCP_SERVER_NAME,
         RESOURCE_URI_PREFIX,
+        store=store,
     )
     if args.transport == "stdio":
         asyncio.run(run_stdio())

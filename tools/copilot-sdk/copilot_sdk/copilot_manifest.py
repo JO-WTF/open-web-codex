@@ -19,12 +19,16 @@ from .tool_runtime_manifest import (
 ROLE_MCP_SERVER_POLICY_FIELDS = frozenset(
     {
         "enabled",
+        "required",
         "default_tools_approval_mode",
         "enabled_tools",
         "disabled_tools",
         "tools",
     }
 )
+MAX_DELIVERIES = 32
+MAX_DELIVERY_TEXT = 256
+MAX_DELIVERY_SCHEMA_BYTES = 1024 * 1024
 
 
 class CopilotPackageError(ValueError):
@@ -48,6 +52,22 @@ class CopilotPackageSummary:
     tool_ids: tuple[str, ...]
     test_ids: tuple[str, ...]
     composition_descriptor_sha256: str
+    deliveries: tuple[CopilotDelivery, ...] = ()
+
+
+@dataclass(frozen=True)
+class CopilotDelivery:
+    """One package-owned declaration using a versioned Platform envelope."""
+
+    id: str
+    server: str
+    tool: str
+    kind: str
+    schema: str
+    mime_type: str
+    display_name: str
+    verifier_kind: str | None = None
+    verifier_value: str | dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -175,6 +195,7 @@ def validate_copilot_package(
             )
 
     tool_server_ids: dict[str, set[str]] = {}
+    server_owners: dict[str, str] = {}
     for index, entry in enumerate(tools):
         relative = _authored_relative_path(entry["root"], f"tools[{index}].root")
         tool_root = _safe_package_path(root, relative, kind="directory")
@@ -186,6 +207,16 @@ def validate_copilot_package(
         except ToolRuntimeManifestError as error:
             _fail(error.code, error.relative_path, error.message)
         tool_server_ids[entry["id"]] = {server.id for server in runtime.servers}
+        for server_id in tool_server_ids[entry["id"]]:
+            previous = server_owners.get(server_id)
+            if previous is not None:
+                _fail(
+                    "duplicate_id",
+                    f"tools[{index}].runtime",
+                    f"MCP server {server_id!r} is declared by both capability roots "
+                    f"{previous!r} and {entry['id']!r}",
+                )
+            server_owners[server_id] = entry["id"]
         author_files[runtime_relative.as_posix()] = runtime.path
         for dependency in runtime.dependencies:
             for dependency_file in (dependency.manifest, dependency.lock):
@@ -199,6 +230,8 @@ def validate_copilot_package(
                 f"tests[{index}].server",
                 f"capability root {test.tool!r} does not declare MCP server {test.server!r}",
             )
+
+    deliveries = _delivery_entries(manifest, root, server_owners, author_files)
 
     digest = hashlib.sha256()
     for relative_path in sorted(author_files):
@@ -217,6 +250,7 @@ def validate_copilot_package(
         tool_ids=tool_ids,
         test_ids=tuple(test.id for test in tests),
         composition_descriptor_sha256=digest.hexdigest(),
+        deliveries=tuple(deliveries),
     )
 
 
@@ -363,6 +397,130 @@ def _tool_entries(manifest: dict[str, Any]) -> list[dict[str, str]]:
             }
         )
     return entries
+
+
+def _delivery_entries(
+    manifest: dict[str, Any],
+    root: Path,
+    server_owners: dict[str, str],
+    author_files: dict[str, Path],
+) -> list[CopilotDelivery]:
+    raw_entries = manifest.get("deliveries", [])
+    if not isinstance(raw_entries, list):
+        _fail("invalid_type", "deliveries", "must be an array of tables")
+    if len(raw_entries) > MAX_DELIVERIES:
+        _fail("invalid_type", "deliveries", f"must not exceed {MAX_DELIVERIES} entries")
+    deliveries: list[CopilotDelivery] = []
+    seen_ids: set[str] = set()
+    seen_producers: set[tuple[str, str]] = set()
+    for index, raw_entry in enumerate(raw_entries):
+        location = f"deliveries[{index}]"
+        if not isinstance(raw_entry, dict):
+            _fail("invalid_type", location, "must be a table")
+        allowed = {
+            "id", "server", "tool", "kind", "schema", "mime_type",
+            "display_name", "content_verifier",
+        }
+        unknown = sorted(set(raw_entry) - allowed)
+        if unknown:
+            _fail("invalid_field", f"{location}.{unknown[0]}", "field is not part of schema v1")
+        delivery_id = _required_string(raw_entry, "id", location)
+        if delivery_id in seen_ids:
+            _fail("duplicate_id", f"{location}.id", f"duplicate id {delivery_id!r}")
+        seen_ids.add(delivery_id)
+        server = _required_string(raw_entry, "server", location)
+        tool = _required_string(raw_entry, "tool", location)
+        if server not in server_owners:
+            _fail("missing_reference", f"{location}.server", f"references undeclared MCP server {server!r}")
+        producer = (server, tool)
+        if producer in seen_producers:
+            _fail("duplicate_id", f"{location}.tool", f"duplicate delivery producer {server!r}/{tool!r}")
+        seen_producers.add(producer)
+        kind = _required_string(raw_entry, "kind", location)
+        if kind not in ("workspace_artifact", "inline_geojson_map_card"):
+            _fail("invalid_type", f"{location}.kind", "must be workspace_artifact or inline_geojson_map_card")
+        schema = _required_string(raw_entry, "schema", location)
+        mime_type = _required_string(raw_entry, "mime_type", location)
+        display_name = _required_string(raw_entry, "display_name", location)
+        for field_name, value in (
+            ("id", delivery_id), ("server", server), ("tool", tool),
+            ("schema", schema), ("mime_type", mime_type), ("display_name", display_name),
+        ):
+            if len(value) > MAX_DELIVERY_TEXT:
+                _fail("invalid_type", f"{location}.{field_name}", f"must not exceed {MAX_DELIVERY_TEXT} characters")
+        verifier = raw_entry.get("content_verifier")
+        verifier_kind: str | None = None
+        verifier_value: str | dict[str, Any] | None = None
+        if kind == "workspace_artifact":
+            if not isinstance(verifier, dict):
+                _fail("required_field", f"{location}.content_verifier", "workspace_artifact requires a content verifier table")
+            verifier_unknown = sorted(set(verifier) - {"kind", "schema_path", "marker"})
+            if verifier_unknown:
+                _fail("invalid_field", f"{location}.content_verifier.{verifier_unknown[0]}", "field is not part of schema v1")
+            verifier_kind = _required_string(verifier, "kind", f"{location}.content_verifier")
+            if verifier_kind == "json_schema":
+                if set(verifier) != {"kind", "schema_path"}:
+                    _fail("invalid_field", f"{location}.content_verifier", "json_schema requires only kind and schema_path")
+                relative = _authored_relative_path(
+                    _required_string(verifier, "schema_path", f"{location}.content_verifier"),
+                    f"{location}.content_verifier.schema_path",
+                )
+                schema_file = _safe_package_path(root, relative, kind="file")
+                if schema_file.stat().st_size > MAX_DELIVERY_SCHEMA_BYTES:
+                    _fail("invalid_type", relative.as_posix(), "delivery JSON Schema must not exceed 1 MiB")
+                schema_document = _load_json(schema_file, relative.as_posix())
+                _validate_bounded_schema(schema_document, relative.as_posix())
+                if schema_document.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
+                    _fail("invalid_type", relative.as_posix(), "must declare JSON Schema draft 2020-12")
+                verifier_value = schema_document
+                author_files[relative.as_posix()] = schema_file
+            elif verifier_kind == "markdown_marker":
+                if set(verifier) != {"kind", "marker"}:
+                    _fail("invalid_field", f"{location}.content_verifier", "markdown_marker requires only kind and marker")
+                marker = _required_string(verifier, "marker", f"{location}.content_verifier")
+                if len(marker) > 256 or "\n" in marker or "\r" in marker:
+                    _fail("invalid_type", f"{location}.content_verifier.marker", "must be one line of at most 256 characters")
+                verifier_value = marker
+            else:
+                _fail("invalid_type", f"{location}.content_verifier.kind", "must be json_schema or markdown_marker")
+        elif verifier is not None:
+            _fail("invalid_field", f"{location}.content_verifier", "inline_geojson_map_card uses its versioned Platform verifier")
+        if kind == "inline_geojson_map_card" and mime_type != "application/vnd.open-web-codex.map-card+json":
+            _fail("invalid_type", f"{location}.mime_type", "inline_geojson_map_card requires its versioned media type")
+        deliveries.append(CopilotDelivery(
+            id=delivery_id,
+            server=server,
+            tool=tool,
+            kind=kind,
+            schema=schema,
+            mime_type=mime_type,
+            display_name=display_name,
+            verifier_kind=verifier_kind,
+            verifier_value=verifier_value,
+        ))
+    return deliveries
+
+
+def _validate_bounded_schema(value: Any, location: str) -> None:
+    nodes = 0
+
+    def visit(current: Any, depth: int) -> None:
+        nonlocal nodes
+        nodes += 1
+        if nodes > 20_000 or depth > 32:
+            _fail("invalid_type", location, "delivery JSON Schema exceeds structural limits")
+        if isinstance(current, dict):
+            for key, child in current.items():
+                if not isinstance(key, str) or len(key) > 2_000:
+                    _fail("invalid_type", location, "delivery JSON Schema has an invalid key")
+                visit(child, depth + 1)
+        elif isinstance(current, list):
+            for child in current:
+                visit(child, depth + 1)
+        elif isinstance(current, str) and len(current) > 64 * 1024:
+            _fail("invalid_type", location, "delivery JSON Schema contains an oversized string")
+
+    visit(value, 0)
 
 
 def _test_entries(
@@ -594,6 +752,13 @@ def _role_tool_policies(
                     f"{server_location}.{unknown[0]}",
                     "field is not part of Role MCP server policy schema v1",
                 )
+            for boolean_field in ("enabled", "required"):
+                if boolean_field in server and not isinstance(server[boolean_field], bool):
+                    _fail(
+                        "invalid_type",
+                        f"{server_location}.{boolean_field}",
+                        "must be a boolean",
+                    )
             enabled = server.get("enabled_tools")
             if enabled is not None and (
                 not isinstance(enabled, list)

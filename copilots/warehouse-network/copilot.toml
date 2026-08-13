@@ -25,6 +25,10 @@ role = "agents/data_agent.toml"
 id = "network_agent"
 role = "agents/network_agent.toml"
 
+[[agents]]
+id = "warehouse_agent"
+role = "agents/warehouse_agent.toml"
+
 [[tools]]
 id = "supply_chain"
 root = "tools/planner"
@@ -34,6 +38,35 @@ runtime = "tools/planner/runtime.toml"
 id = "map_utils"
 root = "tools/maps"
 runtime = "tools/maps/runtime.toml"
+
+[[deliveries]]
+id = "network-comparison-map"
+server = "supply_chain"
+tool = "render_network_comparison_map"
+kind = "workspace_artifact"
+schema = "network_comparison_map_bundle.v1"
+mime_type = "application/json"
+display_name = "Warehouse network: baseline vs selected facilities"
+content_verifier = { kind = "json_schema", schema_path = "tools/planner/contracts/schemas/network_comparison_map_bundle.v1.schema.json" }
+
+[[deliveries]]
+id = "network-planning-report"
+server = "supply_chain"
+tool = "publish_network_planning_report"
+kind = "workspace_artifact"
+schema = "network_planning_report_markdown.v1"
+mime_type = "text/markdown"
+display_name = "Warehouse network planning report"
+content_verifier = { kind = "markdown_marker", marker = "<!-- network_planning_report_markdown.v1 -->" }
+
+[[deliveries]]
+id = "network-map-card"
+server = "map_utils"
+tool = "create_map_card"
+kind = "inline_geojson_map_card"
+schema = "map.v3"
+mime_type = "application/vnd.open-web-codex.map-card+json"
+display_name = "Interactive map"
 
 [[tests]]
 id = "empty-workspace-source-discovery"

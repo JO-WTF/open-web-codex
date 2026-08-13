@@ -53,7 +53,8 @@ For manual repository development, invoke the same platform preparation contract
 repository root:
 
 ```bash
-PYTHONPATH=tools/copilot-sdk python3 -m copilot_sdk prepare copilots/warehouse-network \
+python3 -m pip install -e tools/copilot-provider-sdk -e tools/copilot-sdk
+python3 -m copilot_sdk prepare copilots/warehouse-network \
   --output-root "$PWD/.local/open-web-codex/copilot-environment"
 ```
 

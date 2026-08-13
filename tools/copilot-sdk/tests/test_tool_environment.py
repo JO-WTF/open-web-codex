@@ -6,7 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from copilot_sdk.platform_packages import PlatformPackageSpec, ResolvedPlatformPackage
 from copilot_sdk.tool_environment import (
+    PreparedDelivery,
     ToolEnvironmentError,
     ToolRuntimeSource,
     materialize_capability_roots,
@@ -117,6 +119,21 @@ class ToolEnvironmentTests(unittest.TestCase):
                 tools=(ToolRuntimeSource("demo", tool, Path("tools/demo/runtime.toml")),),
                 output_root=process_data / "prepared",
                 composition_descriptor_sha256="abc",
+                deliveries=(
+                    PreparedDelivery(
+                        "result",
+                        "demo",
+                        "publish_result",
+                        "workspace_artifact",
+                        "demo.v1",
+                        "application/json",
+                        "Demo result",
+                        {
+                            "kind": "json_schema",
+                            "value": {"type": "object"},
+                        },
+                    ),
+                ),
                 host_environment={
                     "HTTP_PROXY": "http://proxy",
                     "PATH": os.environ["PATH"],
@@ -159,6 +176,22 @@ class ToolEnvironmentTests(unittest.TestCase):
             self.assertEqual(descriptor["schemaVersion"], 1)
             self.assertEqual(descriptor["compositionDescriptorSha256"], "abc")
             self.assertEqual(descriptor["capabilityRoots"][0]["id"], "demo")
+            self.assertEqual(
+                descriptor["deliveries"][0],
+                {
+                    "contentVerifier": {
+                        "kind": "json_schema",
+                        "value": {"type": "object"},
+                    },
+                    "displayName": "Demo result",
+                    "id": "result",
+                    "kind": "workspace_artifact",
+                    "mimeType": "application/json",
+                    "schema": "demo.v1",
+                    "server": "demo",
+                    "tool": "publish_result",
+                },
+            )
             self.assertEqual(
                 descriptor_bindings,
                 [
@@ -321,6 +354,84 @@ class ToolEnvironmentTests(unittest.TestCase):
                 ).read_text(encoding="utf-8")
             )["mcpServers"]["demo"]
             self.assertNotIn("cwd", projection_server)
+
+    def test_installs_registered_platform_package_from_sdk_distribution(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tool = self._write_python_tool(root)
+            runtime = tool / "runtime.toml"
+            runtime.write_text(
+                runtime.read_text(encoding="utf-8").replace(
+                    "lock='requirements.lock'",
+                    "lock='requirements.lock'\n"
+                    "platform_packages=['open-web-codex-provider-sdk']",
+                ),
+                encoding="utf-8",
+            )
+            manifest = tool / "pyproject.toml"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "version='0.1.0'",
+                    "version='0.1.0'\n"
+                    "dependencies=['open-web-codex-provider-sdk>=0.1,<0.2']",
+                ),
+                encoding="utf-8",
+            )
+            installed_package = root / "installed/open_web_codex_provider"
+            installed_package.mkdir(parents=True)
+            (installed_package / "__init__.py").write_text(
+                "VALUE = 'provider'\n", encoding="utf-8"
+            )
+            resolved = ResolvedPlatformPackage(
+                PlatformPackageSpec(
+                    "open-web-codex-provider-sdk",
+                    "open-web-codex-provider-sdk",
+                    "0.1.",
+                    ("open_web_codex_provider",),
+                ),
+                "0.1.0",
+                (installed_package,),
+            )
+            commands: list[tuple[str, ...]] = []
+
+            def fake_run(command, cwd, environment):
+                commands.append(tuple(command))
+                if command[1:3] == ("-m", "venv"):
+                    python = Path(command[3]) / "bin/python"
+                    python.parent.mkdir(parents=True)
+                    python.write_text("python", encoding="utf-8")
+                elif "wheel" in command:
+                    wheel_dir = Path(command[command.index("--wheel-dir") + 1])
+                    wheel_dir.mkdir(parents=True, exist_ok=True)
+                    (wheel_dir / "demo-0.1.0-py3-none-any.whl").write_text(
+                        "tool wheel", encoding="utf-8"
+                    )
+
+            prepared = prepare_tool_composition(
+                source_root=root,
+                tools=(ToolRuntimeSource("demo", tool, Path("tools/demo/runtime.toml")),),
+                output_root=root / "data/prepared",
+                composition_descriptor_sha256="abc",
+                host_environment={"PATH": os.environ["PATH"]},
+                run_command=fake_run,
+                executable_identity_resolver=lambda name, env: (
+                    Path("/fake") / name,
+                    100,
+                    200,
+                ),
+                platform_package_resolver=lambda package_id: resolved,
+            )
+
+            self.assertEqual(prepared.state, "built")
+            platform_installs = [
+                command
+                for command in commands
+                if "pip" in command
+                and "install" in command
+                and any(item.endswith("py3-none-any.whl") for item in command)
+                and any("provider_sdk" in item for item in command)
+            ]
+            self.assertEqual(len(platform_installs), 1)
 
     def test_rejects_nested_source_symlink_without_copying_external_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

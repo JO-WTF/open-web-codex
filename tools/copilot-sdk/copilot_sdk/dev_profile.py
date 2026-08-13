@@ -18,6 +18,7 @@ from .copilot_manifest import CopilotPackageSummary, validate_copilot_package
 from .tool_environment import (
     MaterializedCapabilityRoot,
     MaterializedToolComposition,
+    PreparedDelivery,
     ToolEnvironmentError,
     ToolRuntimeSource,
     materialize_capability_roots,
@@ -317,6 +318,7 @@ def prepare_dev_tool_composition(
             composition_descriptor_sha256=(
                 composition.summary.composition_descriptor_sha256
             ),
+            deliveries=prepared_deliveries(composition.summary),
             host_environment=host_environment,
         )
     except ToolEnvironmentError as error:
@@ -341,6 +343,28 @@ def prepare_dev_tool_composition(
             roots,
         )
     return tools
+
+
+def prepared_deliveries(summary: CopilotPackageSummary) -> tuple[PreparedDelivery, ...]:
+    """Project validated package declarations into the internal Runtime descriptor."""
+
+    return tuple(
+        PreparedDelivery(
+            id=delivery.id,
+            server=delivery.server,
+            tool=delivery.tool,
+            kind=delivery.kind,
+            schema=delivery.schema,
+            mime_type=delivery.mime_type,
+            display_name=delivery.display_name,
+            content_verifier=(
+                {"kind": delivery.verifier_kind, "value": delivery.verifier_value}
+                if delivery.verifier_kind is not None
+                else None
+            ),
+        )
+        for delivery in summary.deliveries
+    )
 
 
 def default_tool_environment_root(composition: DevComposition) -> Path:
@@ -499,6 +523,7 @@ def _materialize_role(
                 runtime_server["tool_timeout_sec"] = transport.tool_timeout_sec
             allowed_policy = {
                 "enabled",
+                "required",
                 "default_tools_approval_mode",
                 "enabled_tools",
                 "disabled_tools",

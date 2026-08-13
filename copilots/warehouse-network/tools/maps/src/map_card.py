@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 from typing import Literal
 
+from open_web_codex_provider import GeoJsonFeatureTypeProfile, GeoJsonProfile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _VALIDATOR = Path(__file__).parent / "assets" / "validate-mapbox-style.mjs"
@@ -38,6 +39,12 @@ class MapResourceRef(BaseModel):
         description=("Canonical non-public MCP Resource URI returned by the producing Tool."),
     )
     format: Literal["geojson"] = "geojson"
+    profile: GeoJsonProfile = Field(
+        description=(
+            "Bounded profile derived by the GeoJSON-producing Tool. Copy it unchanged; "
+            "create_map_card validates layer and hover property references against it."
+        )
+    )
 
     @model_validator(mode="after")
     def validate_local_resource_identity(self) -> MapResourceRef:
@@ -131,9 +138,18 @@ class MapExtensions(ExtensibleModel):
     legend: LegendExtension | None = None
 
 
+class RendererResourceRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["mcp_resource"] = "mcp_resource"
+    server: str
+    uri: str
+    format: Literal["geojson"] = "geojson"
+
+
 class RendererSource(ExtensibleModel):
     type: Literal["geojson"]
-    data: MapResourceRef
+    data: RendererResourceRef
 
 
 class MapPayload(BaseModel):
@@ -210,7 +226,13 @@ def renderer_sources(
             exclude={"data_ref"},
             exclude_none=True,
         )
-        rendered[source_id] = RendererSource(data=source.data_ref, **options)
+        rendered[source_id] = RendererSource(
+            data=RendererResourceRef(
+                server=source.data_ref.server,
+                uri=source.data_ref.uri,
+            ),
+            **options,
+        )
     return rendered
 
 
@@ -351,3 +373,125 @@ def validate_extension_graph(
             raise ValueError(f"hover references unknown Mapbox layer: {hover.layer}")
         if not isinstance(layer.get("source"), str):
             raise ValueError(f"hover requires a source-backed Mapbox layer: {hover.layer}")
+
+
+def validate_profile_graph(
+    sources: dict[str, GeoJsonSource],
+    layers: list[dict[str, object]],
+    extensions: MapExtensions | None,
+) -> None:
+    """Reject style and hover fields absent from the producing Resource profile."""
+
+    layer_profiles: dict[str, tuple[GeoJsonFeatureTypeProfile, ...]] = {}
+    for layer in layers:
+        layer_id = layer.get("id")
+        source_id = layer.get("source")
+        if not isinstance(layer_id, str) or not isinstance(source_id, str):
+            continue
+        source = sources.get(source_id)
+        if source is None:
+            continue
+        selected = _selected_feature_types(source.data_ref.profile, layer.get("filter"))
+        layer_profiles[layer_id] = selected
+        available_fields = {
+            item.name for feature_type in selected for item in feature_type.properties
+        }
+        unknown = sorted(_property_references(layer) - available_fields)
+        if unknown:
+            raise ValueError(
+                f"Mapbox layer {layer_id} references properties absent from its GeoJSON "
+                f"profile: {', '.join(unknown)}"
+            )
+        _validate_layer_geometry(layer_id, layer.get("type"), selected)
+
+    if extensions is None or extensions.hover is None:
+        return
+    for hover in extensions.hover.layers:
+        selected = layer_profiles.get(hover.layer, ())
+        available_fields = {
+            item.name for feature_type in selected for item in feature_type.properties
+        }
+        requested = {
+            field if isinstance(field, str) else field.property for field in hover.fields
+        }
+        if hover.title_property is not None:
+            requested.add(hover.title_property)
+        unknown = sorted(requested - available_fields)
+        if unknown:
+            raise ValueError(
+                f"hover layer {hover.layer} references properties absent from its GeoJSON "
+                f"profile: {', '.join(unknown)}"
+            )
+
+
+def _selected_feature_types(
+    profile: GeoJsonProfile,
+    filter_expression: object,
+) -> tuple[GeoJsonFeatureTypeProfile, ...]:
+    selected = tuple(profile.feature_types)
+    discriminator = profile.discriminator_property
+    if discriminator is None:
+        return selected
+    values = _required_equal_values(filter_expression, discriminator)
+    if not values:
+        return selected
+    selected = tuple(item for item in selected if item.value in values)
+    if not selected:
+        raise ValueError(
+            f"Mapbox filter selects unknown {discriminator} value: {', '.join(sorted(values))}"
+        )
+    return selected
+
+
+def _required_equal_values(expression: object, property_name: str) -> set[str]:
+    if not isinstance(expression, list) or not expression:
+        return set()
+    if expression[0] == "==" and len(expression) == 3:
+        left, right = expression[1], expression[2]
+        if left == ["get", property_name] and isinstance(right, str):
+            return {right}
+        if right == ["get", property_name] and isinstance(left, str):
+            return {left}
+        return set()
+    if expression[0] != "all":
+        return set()
+    values: set[str] = set()
+    for child in expression[1:]:
+        child_values = _required_equal_values(child, property_name)
+        if not child_values:
+            continue
+        values = child_values if not values else values & child_values
+    return values
+
+
+def _property_references(value: object) -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, list):
+        if len(value) >= 2 and value[0] in {"get", "has"} and isinstance(value[1], str):
+            found.add(value[1])
+        for child in value:
+            found.update(_property_references(child))
+    elif isinstance(value, dict):
+        for child in value.values():
+            found.update(_property_references(child))
+    return found
+
+
+def _validate_layer_geometry(
+    layer_id: str,
+    layer_type: object,
+    selected: tuple[GeoJsonFeatureTypeProfile, ...],
+) -> None:
+    geometries = {
+        geometry for feature_type in selected for geometry in feature_type.geometry_types
+    }
+    supported = {
+        "circle": {"Point", "MultiPoint"},
+        "line": {"LineString", "MultiLineString", "Polygon", "MultiPolygon"},
+        "fill": {"Polygon", "MultiPolygon"},
+    }.get(layer_type)
+    if supported is not None and geometries.isdisjoint(supported):
+        raise ValueError(
+            f"Mapbox layer {layer_id} type {layer_type} cannot render profiled geometries: "
+            f"{', '.join(sorted(geometries)) or 'none'}"
+        )

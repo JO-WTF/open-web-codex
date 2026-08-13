@@ -32,6 +32,7 @@ class CopilotManifestTests(unittest.TestCase):
             "[skills]\nconfig = [{ name = \"worker\", enabled = true }]\n\n"
             "[plugins.routes]\nenabled = true\n"
             "[plugins.routes.mcp_servers.routing_api]\n"
+            "required = true\n"
             "enabled_tools = [\"health\"]\n",
             encoding="utf-8",
         )
@@ -125,6 +126,48 @@ structured_content = {{ status = "ok" }}
         self.assertEqual(summary.test_ids, ("health",))
         self.assertEqual(case.tool, "routes")
         self.assertEqual(case.server, "routing_api")
+
+    def test_workspace_delivery_uses_fixed_envelope_and_embeds_validated_schema(self) -> None:
+        schema = self.root / "tools/routes/result.schema.json"
+        schema.write_text(
+            '{"$schema":"https://json-schema.org/draft/2020-12/schema",'
+            '"type":"object","required":["result"]}',
+            encoding="utf-8",
+        )
+        manifest = (self.root / "copilot.toml").read_text(encoding="utf-8")
+        manifest += '''
+[[deliveries]]
+id = "routing-result"
+server = "routing_api"
+tool = "publish_result"
+kind = "workspace_artifact"
+schema = "routing_result.v1"
+mime_type = "application/json"
+display_name = "Routing result"
+content_verifier = { kind = "json_schema", schema_path = "tools/routes/result.schema.json" }
+'''
+        self.write_manifest(manifest)
+
+        summary = validate_copilot_package(self.root)
+
+        self.assertEqual(summary.deliveries[0].server, "routing_api")
+        self.assertEqual(summary.deliveries[0].verifier_kind, "json_schema")
+        self.assertEqual(summary.deliveries[0].verifier_value["type"], "object")
+
+    def test_delivery_rejects_undeclared_server(self) -> None:
+        manifest = (self.root / "copilot.toml").read_text(encoding="utf-8")
+        manifest += '''
+[[deliveries]]
+id = "routing-card"
+server = "missing"
+tool = "create_card"
+kind = "inline_geojson_map_card"
+schema = "map.v3"
+mime_type = "application/vnd.open-web-codex.map-card+json"
+display_name = "Map"
+'''
+        self.write_manifest(manifest)
+        self.assert_code("missing_reference")
 
     def test_test_requires_server(self) -> None:
         self.add_test()
@@ -250,6 +293,24 @@ structured_content = {{ status = "ok" }}
         self.assertEqual(
             caught.exception.relative_path,
             "agents/planner.toml.plugins.routes.mcp_servers.routing_api.cwd",
+        )
+
+    def test_rejects_non_boolean_required_role_mcp_policy(self) -> None:
+        role = self.root / "agents" / "planner.toml"
+        role.write_text(
+            role.read_text(encoding="utf-8").replace(
+                "required = true", 'required = "yes"'
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(CopilotPackageError) as caught:
+            validate_copilot_package(self.root)
+
+        self.assertEqual(caught.exception.code, "invalid_type")
+        self.assertEqual(
+            caught.exception.relative_path,
+            "agents/planner.toml.plugins.routes.mcp_servers.routing_api.required",
         )
 
     def test_rejects_missing_runtime_descriptor(self) -> None:

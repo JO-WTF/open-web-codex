@@ -10,7 +10,6 @@ from copilot_sdk.tool_runtime_manifest import (
     load_tool_runtime_manifest,
 )
 
-
 LOCK = """mcp==1.27.1 \\
     --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 setuptools==80.9.0 \\
@@ -27,7 +26,9 @@ class ToolRuntimeManifestTests(unittest.TestCase):
         (self.tool / "pyproject.toml").write_text(
             '[build-system]\nrequires=["setuptools>=77"]\n'
             'build-backend="setuptools.build_meta"\n'
-            '[project]\nname="routes"\nversion="0.1.0"\n', encoding="utf-8"
+            '[project]\nname="routes"\nversion="0.1.0"\n'
+            'dependencies=["open-web-codex-provider-sdk>=0.1,<0.2", "mcp>=1.27,<2"]\n',
+            encoding="utf-8",
         )
         (self.tool / "requirements.lock").write_text(LOCK, encoding="utf-8")
         (self.tool / "package.json").write_text(
@@ -57,6 +58,7 @@ id = "python"
 kind = "python-project"
 manifest = "pyproject.toml"
 lock = "requirements.lock"
+platform_packages = ["open-web-codex-provider-sdk"]
 
 [[dependencies]]
 id = "assets"
@@ -95,6 +97,11 @@ source = "host"
             self.root, self.tool, "tools/routes/runtime.toml"
         )
         self.assertEqual([item.id for item in runtime.dependencies], ["python", "assets"])
+        self.assertEqual(
+            runtime.dependencies[0].platform_packages,
+            ("open-web-codex-provider-sdk",),
+        )
+        self.assertEqual(runtime.dependencies[1].platform_packages, ())
         self.assertEqual(runtime.servers[0].entry.module, "routes.server")
         self.assertEqual(runtime.servers[0].env[2].dependency, "assets")
 
@@ -105,6 +112,35 @@ source = "host"
         with self.assertRaises(ToolRuntimeManifestError) as caught:
             load_tool_runtime_manifest(self.root, self.tool, "tools/routes/runtime.toml")
         self.assertEqual(caught.exception.code, "invalid_lock")
+
+    def test_rejects_unregistered_platform_package(self) -> None:
+        runtime = self.tool / "runtime.toml"
+        runtime.write_text(
+            runtime.read_text(encoding="utf-8").replace(
+                "open-web-codex-provider-sdk", "warehouse-private-runtime"
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(ToolRuntimeManifestError) as caught:
+            load_tool_runtime_manifest(self.root, self.tool, "tools/routes/runtime.toml")
+
+        self.assertEqual(caught.exception.code, "missing_reference")
+
+    def test_rejects_platform_requirement_without_runtime_declaration(self) -> None:
+        runtime = self.tool / "runtime.toml"
+        runtime.write_text(
+            runtime.read_text(encoding="utf-8").replace(
+                'platform_packages = ["open-web-codex-provider-sdk"]',
+                "platform_packages = []",
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(ToolRuntimeManifestError) as caught:
+            load_tool_runtime_manifest(self.root, self.tool, "tools/routes/runtime.toml")
+
+        self.assertEqual(caught.exception.code, "missing_reference")
 
     def test_rejects_unlocked_python_build_backend(self) -> None:
         (self.tool / "requirements.lock").write_text(

@@ -9,6 +9,14 @@ from types import SimpleNamespace
 
 import pytest
 from _network_fixtures import network_case
+from open_web_codex_provider import (
+    McpResourceRuntime,
+    ProviderContractError,
+    PublishedResource,
+    ResourceRef,
+    ResourceStore,
+)
+from supply_chain_planner.delivery.map_service import MapResourceRef
 from supply_chain_planner.network import server
 from supply_chain_planner.network.matrix import build_haversine_route_matrix
 from supply_chain_planner.network.matrix_models import (
@@ -18,18 +26,18 @@ from supply_chain_planner.network.matrix_models import (
     RouteMatrix,
 )
 from supply_chain_planner.network.models import ProvidedRouteFactRecord
-from supply_chain_planner.resources.contracts import MapResourceRef, ResourceRef
-from supply_chain_planner.resources.runtime import (
-    McpResourceContractError,
-    McpResourceRuntime,
-)
-from supply_chain_planner.resources.store import PublishedResource, ResourceStore
 from supply_chain_planner.shared.models import PreparedNetworkResource
 
+McpResourceContractError = ProviderContractError
 
-def _resource_ref(published: PublishedResource) -> ResourceRef:
+
+def _resource_ref(
+    published: PublishedResource,
+    *,
+    server_name: str = server.NETWORK_MCP_SERVER_NAME,
+) -> ResourceRef:
     return ResourceRef(
-        server=server.MCP_SERVER_NAME,
+        server=server_name,
         resource_schema=published.schema,
         uri=published.uri,
     )
@@ -48,7 +56,7 @@ def _runtime(tmp_path: Path, monkeypatch) -> tuple[Path, ResourceStore]:
         McpResourceRuntime(
             workspace,
             tmp_path / "profile",
-            server.MCP_SERVER_NAME,
+            server.NETWORK_MCP_SERVER_NAME,
             "supply-chain://resources/",
             store=store,
         ),
@@ -79,13 +87,18 @@ def _prepared_ref(
         route_quotes=[],
         provided_route_facts=provided_route_facts or [],
     )
-    return _resource_ref(store.publish(prepared.schema_version, prepared))
+    return _resource_ref(
+        store.publish(prepared.schema_version, prepared),
+        server_name=server.DATA_MCP_SERVER_NAME,
+    )
 
 
 def _result_ref(result) -> ResourceRef:
     assert result.structuredContent is not None
     assert set(result.structuredContent) == {"summary", "resource_ref"}
-    return ResourceRef.model_validate(result.structuredContent["resource_ref"])
+    ref = ResourceRef.model_validate(result.structuredContent["resource_ref"])
+    assert ref.server == "supply_chain"
+    return ref
 
 
 def _cost_policy() -> CostCalculationPolicy:
@@ -144,6 +157,7 @@ def test_matrix_tools_expose_composable_resource_schemas() -> None:
     distribution = tools["prepare_network_distribution_map"].inputSchema
     assert "ctx" not in distribution["properties"]
     assert distribution["required"] == ["normalized_input_ref"]
+    assert "baseline_ref" in distribution["properties"]
 
 
 def test_network_stdio_advertises_native_workspace_metadata(monkeypatch) -> None:
@@ -210,12 +224,23 @@ def test_distribution_map_publishes_geojson_for_map_card_only(
         "resource_ref",
         "data_ref",
         "feature_count",
-        "layer_counts",
-        "map_card_handoff",
+        "feature_counts",
     }
     data_ref = MapResourceRef.model_validate(result.structuredContent["data_ref"])
     assert data_ref.server == "supply_chain"
     assert data_ref.format == "geojson"
+    assert data_ref.profile.feature_count == result.structuredContent["feature_count"]
+    assert data_ref.profile.discriminator_property == "kind"
+    assert [item.value for item in data_ref.profile.feature_types] == [
+        "demand",
+        "warehouse",
+    ]
+    demand_profile = data_ref.profile.feature_types[0]
+    assert {item.name for item in demand_profile.properties} >= {
+        "city_name",
+        "duration_hours",
+        "kind",
+    }
     resource_ref = ResourceRef.model_validate(result.structuredContent["resource_ref"])
     payload = store.load(resource_ref)
     assert payload["type"] == "FeatureCollection"
@@ -225,36 +250,53 @@ def test_distribution_map_publishes_geojson_for_map_card_only(
     expected_existing = sum(warehouse.is_existing for warehouse in fixture.warehouses)
     assert kinds.count("demand") == expected_demands
     assert kinds.count("warehouse") == expected_existing
-    assert result.structuredContent["layer_counts"] == {
+    assert result.structuredContent["feature_counts"] == {
         "demand": expected_demands,
         "existing_warehouses": expected_existing,
         "candidate_warehouses": 0,
     }
-    handoff = result.structuredContent["map_card_handoff"]
-    assert handoff["schemaVersion"] == "network_distribution_map_card_handoff.v1"
-    assert handoff["tool"] == {
-        "server": "map_utils",
-        "name": "create_map_card",
-    }
-    arguments = handoff["arguments"]
-    assert arguments["sources"] == {
-        "network-distribution": {
-            "type": "geojson",
-            "data_ref": result.structuredContent["data_ref"],
-        }
-    }
-    assert [layer["id"] for layer in arguments["layers"]] == [
-        "demand-cities",
-        "center-warehouses",
-        "cross-docking-warehouses",
-        "warehouse-labels",
+    demand_properties = [
+        feature["properties"]
+        for feature in payload["features"]
+        if feature["properties"]["kind"] == "demand"
     ]
-    assert [item["label"] for item in arguments["extensions"]["legend"]["items"]] == [
-        "Demand city",
-        "Center warehouse",
-        "Cross-docking warehouse",
-    ]
+    assert all(item["duration_hours"] is None for item in demand_properties)
+    assert "layers" not in payload
+    assert "extensions" not in payload
     assert not list(workspace.rglob("*.json"))
+
+    route_ref = _result_ref(
+        server.build_haversine_route_matrix(prepared_ref, 1.2, 40, ctx)
+    )
+    baseline_result = server.evaluate_network_baseline(
+        prepared_ref,
+        route_ref,
+        "min_time",
+        [12],
+        "optimized_existing_footprint",
+        ctx,
+    )
+    assert baseline_result.structuredContent is not None
+    baseline_ref = ResourceRef.model_validate(
+        baseline_result.structuredContent["resource_ref"]
+    )
+    with_baseline = server.prepare_network_distribution_map(
+        prepared_ref,
+        ctx,
+        baseline_ref=baseline_ref,
+    )
+    assert with_baseline.structuredContent is not None
+    baseline_payload = store.load(
+        ResourceRef.model_validate(with_baseline.structuredContent["resource_ref"])
+    )
+    timed_demands = [
+        feature["properties"]
+        for feature in baseline_payload["features"]
+        if feature["properties"]["kind"] == "demand"
+    ]
+    assert all(item["assigned_warehouse_id"] for item in timed_demands)
+    assert all(item["distance_km"] is not None for item in timed_demands)
+    assert all(item["duration_hours"] is not None for item in timed_demands)
 
     with_candidates = server.prepare_network_distribution_map(
         prepared_ref,
@@ -264,18 +306,19 @@ def test_distribution_map_publishes_geojson_for_map_card_only(
     assert with_candidates.structuredContent is not None
     expected_candidates = sum(not warehouse.is_existing for warehouse in fixture.warehouses)
     assert (
-        with_candidates.structuredContent["layer_counts"]["candidate_warehouses"]
+        with_candidates.structuredContent["feature_counts"]["candidate_warehouses"]
         == expected_candidates
     )
-    candidate_handoff = with_candidates.structuredContent["map_card_handoff"]
-    assert "candidate-warehouses" in [
-        layer["id"] for layer in candidate_handoff["arguments"]["layers"]
+    candidate_payload = store.load(
+        ResourceRef.model_validate(with_candidates.structuredContent["resource_ref"])
+    )
+    candidate_features = [
+        feature
+        for feature in candidate_payload["features"]
+        if feature["properties"]["kind"] == "warehouse"
+        and not feature["properties"]["is_existing"]
     ]
-    assert candidate_handoff["arguments"]["extensions"]["legend"]["items"][-1] == {
-        "label": "Candidate warehouse",
-        "color": "#16A34A",
-        "type": "circle",
-    }
+    assert len(candidate_features) == expected_candidates
 
 
 def test_route_and_cost_tools_use_exact_pair_reuse(tmp_path: Path, monkeypatch) -> None:

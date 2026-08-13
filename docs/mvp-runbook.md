@@ -21,7 +21,8 @@ Gateway、原始 JSON-RPC 路由或桌面应用。
 - Node.js 20+、npm、稳定 Rust、Git。
 - PostgreSQL Server 已运行；Release 部署器可以创建或连接固定名称的
   `open_web_codex` 数据库，开发脚本要求该数据库已存在。
-- 真实模式需要当前仓库构建的 Codex，或通过 `CODEX_BIN` 指定兼容 Binary。
+- 真实模式由 `run-local` 使用当前仓库按精确构建指纹生成的 Codex。外部 Binary 即使能够启动，
+  也不能证明包含本项目 Patch Map 保留的 Runtime seam，因此本地启动入口不接受 `CODEX_BIN`。
 
 开发脚本默认优先读取受保护的本地连接文件：
 
@@ -94,12 +95,6 @@ Secret Manager 注入 `OPEN_WEB_CODEX_MASTER_KEY`。
 前端需要热更新时，先保持 4800 Server 运行，再从 `apps/web` 执行
 `npm run dev`。Vite 默认监听 `http://127.0.0.1:1420`，只作为可丢弃的开发工具，
 并将 API 与 WebSocket 代理到 4800；它不属于平台服务生命周期。
-
-已有兼容 Binary 时可以显式指定：
-
-```bash
-CODEX_BIN=/absolute/path/to/codex ./scripts/run-local.sh --background
-```
 
 含密码的数据库 URL 推荐放在仅当前用户可读的文件中：
 
@@ -176,7 +171,6 @@ Project、主 Thread 与延时 Thread，并验证消息流事件顺序、代码�
 | `DATABASE_URL` | PostgreSQL 连接 |
 | `DATABASE_MAX_CONNECTIONS` | 连接池大小，默认 10 |
 | `CODEX_MODE` | `real` 或 `fake` |
-| `CODEX_BIN` | Codex Binary |
 | `CODEX_HOME` | 当前 Profile 的持久目录 |
 | `OPEN_WEB_CODEX_MASTER_KEY` | Base64 32-byte Secret Store key |
 | `OPEN_WEB_CODEX_RUNNER_ROOT` | 私有 mirror/workspace 根目录 |
