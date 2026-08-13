@@ -173,7 +173,9 @@ def _run_dev_probe(args: argparse.Namespace) -> dict[str, object]:
     client: AppServerClient | None = None
     runtime_deadline: float | None = None
     try:
-        prepared_tools = prepare_dev_tool_composition(prepared)
+        prepared_tools = prepare_dev_tool_composition(
+            prepared, output_root=args.tool_environment_root
+        )
         environment: dict[str, str] = {}
         client = AppServerClient.launch(
             codex_bin,
@@ -428,6 +430,7 @@ def main(argv: list[str] | None = None) -> int:
     dev_copilot.add_argument("--profile", type=Path)
     dev_copilot.add_argument("--keep-profile", action="store_true")
     dev_copilot.add_argument("--codex-bin", type=Path)
+    dev_copilot.add_argument("--tool-environment-root", type=Path)
     dev_copilot.add_argument("--timeout-seconds", type=float, default=90.0)
     dev_copilot.add_argument("--json", action="store_true")
 
@@ -436,6 +439,7 @@ def main(argv: list[str] | None = None) -> int:
     test_copilot.add_argument("--workspace", type=Path, required=True)
     test_copilot.add_argument("--manifest", type=Path, default=Path("copilot.toml"))
     test_copilot.add_argument("--codex-bin", type=Path)
+    test_copilot.add_argument("--tool-environment-root", type=Path)
     test_copilot.add_argument("--timeout-seconds", type=float, default=45.0)
     test_copilot.add_argument("--json", action="store_true")
 
@@ -467,6 +471,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.workspace,
                 _resolve_codex_bin(args.codex_bin),
                 timeout_seconds=args.timeout_seconds,
+                tool_environment_root=args.tool_environment_root,
             )
             _print_test_result(payload, as_json=args.json)
             return 0

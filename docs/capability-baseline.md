@@ -5,7 +5,7 @@
 | 文档性质 | 当前事实与证据 |
 | 观察日期 | 2026-08-13 |
 | 代码快照 | 阶段二通用 Tool 环境工作树（基于 `e492b7248d`） |
-| 当前阶段 | 阶段二已进入；阶段一内置仓网 Copilot 正常业务闭环作为已通过基线 |
+| 当前阶段 | 阶段二已进入；阶段一仓网 Copilot 正常业务闭环作为已通过基线 |
 | 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
 
 本文回答“当前构建能证明什么”。源码存在、局部测试通过、真实 Runtime 运行和从阶段一
@@ -14,7 +14,7 @@
 ## 1. 结论
 
 当前 checkout 已从 clean DB/Profile、真实 Web Task 入口、真实 Codex Runtime 和真实 Provider
-完成阶段一仓网正常业务闭环。这个结论只覆盖内置仓网 Copilot，不代表公开 Copilot SDK、
+完成阶段一仓网正常业务闭环。这个结论只覆盖仓网参考 Copilot，不代表公开 Copilot SDK、
 Studio、第二领域、多用户产品或完整 hardening 矩阵已经完成。
 
 阶段二 Copilot SDK 已提供 `copilot init` 源码脚手架和 `copilot validate` 静态组合
@@ -31,12 +31,13 @@ SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，�
 `prepared-tools.v1.json` 与 dev/test 使用的一次性 Plugin 投影；Tool 不再提供 setup、launcher
 或 source `.mcp.json`/`.codex-plugin` transport。平台本地 real 启动只调用一次同一
 `copilot prepare`，Server 泛化消费 descriptor 并按 Profile 解析 typed 绑定；Runtime launch
-和用户对话期间不安装依赖。SDK parser/provisioner、生成骨架、dev/test 和平台消费各自仍以本
+和用户对话期间不安装依赖。`dev`/`test` 默认复用稳定的 SDK Tool 环境缓存，组合提示变化不触发
+未变化依赖的重装。SDK parser/provisioner、生成骨架、dev/test 和平台消费各自仍以本
 工作树的 focused/full gate 为证据，不把它扩大为生产安装、Marketplace 或多用户能力。
 
 当前证据支持：
 
-> 用户从 Web 创建 Workspace/Task 后，内置仓网 Copilot 可以通过 Codex 原生 Root、Data Agent、
+> 用户从 Web 创建 Workspace/Task 后，仓网参考 Copilot 可以通过 Codex 原生 Root、Data Agent、
 > Network Agent、typed MCP Resource、普通 Workspace 文件和最终 Artifact，完成数据准备、规划、
 > 场景复用、地图卡片与中文 Markdown 正式简报。
 
@@ -56,7 +57,7 @@ SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，�
 | Root 用户输入与 execution projection | 阶段一 normal path 可用；pending approval 刷新恢复已通过 |
 | Tool/Skill SDK 与 Studio | Copilot 源码 `init`/`validate`、通用环境 `prepare`、隔离 `dev` 与本地 fixture `test` 存在；旧 Web Studio 已删除 |
 | Agent/Supervisor 创作 | 旧 Web authoring 已删除；阶段一仅直接编辑 Profile Skill/Role |
-| Copilot 编译、Profile 安装和通用 Runtime discovery | 未形成生产链；built-in 有独立真实 gate |
+| Copilot 编译、Profile 安装和通用 Runtime discovery | 尚无生产安装链；开发者包已有独立真实 gate |
 | 算法工程师自助扩展 | 未实现 |
 | 第二领域与多用户隔离 | 未验证 |
 
@@ -70,7 +71,7 @@ SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，�
 | E3 | 真实 Provider + 真实 Codex Runtime 的受控纵向运行 |
 | E4 | 从 clean DB/Profile 的真实业务 Task 入口完成阶段一 normal path，并通过一次关键 pending approval 刷新恢复 |
 
-当前内置仓网 Copilot 的阶段一 normal path 达到 E4；多用户、完整失败/竞态矩阵、a11y 和视觉细节
+当前仓网 Copilot 的阶段一 normal path 达到 E4；多用户、完整失败/竞态矩阵、a11y 和视觉细节
 属于后续 hardening，不反向扩大本阶段定义。
 
 ## 3. 2026-08-12 clean real Web E4
@@ -219,18 +220,18 @@ Slice 3A 只审计 Codex 原生路径并运行定向测试，没有修改 `codex
 这些证据把 Skill/MCP 热刷新与 Role 应用语义提升到 E1。Slice 3B.1 已进一步实现启动前
 Profile seed 与显式应用资产 composition：
 
-- checked-in `apps/web/builtin/warehouse-network-copilot` 提供 Root Supervisor、Data、Network
+- checked-in `copilots/warehouse-network` 提供 Root Supervisor、Data、Network
   三项 Skill 默认内容和 `data_agent`、`network_agent` 两项原生 Role 默认配置；
 - Profile Host 只接受 native Skill/Role 两种 typed startup destination，并显式区分普通
-  `Seed` 与 Server-owned `Managed`。普通 seed 仍只在缺失时 create-new 并保留已存在内容；
-  仓网三项内置 Skill 和两项内置 Role 使用 managed 保留 ID，部署升级在 Runtime 启动前只在
+  `Seed` 与 package-managed `Managed`。普通 seed 仍只在缺失时 create-new 并保留已存在内容；
+  当前显式选择的仓网包使用其三项 Skill 和两项 Role 声明 ID，部署升级在 Runtime 启动前只在
   内容漂移时原子更新。duplicate spec 在任何写入前拒绝；symlink、目录、逃逸和非法输入失败；
   `config.toml`、用户其他 Skill/Role 与 Workspace 不受影响。6 项单测通过；
 - 仓网验收 Profile 通过 Codex 官方进程级 feature override，在首次请求前关闭
   `plugins`、`remote_plugin`、`apps` 与 `tool_suggest`；CLI feature discovery 精确报告四项
-  均为 disabled，real clean-Profile Runtime gate 仍能发现三项内置 Skill、两项 Role 与
+  均为 disabled，real clean-Profile Runtime gate 仍能发现三项 package Skill、两项 Role 与
   role-local MCP。平台没有复制 Plugin/App/Tool Suggest discovery，也没有改写 `config.toml`；
-- real mode 在 Server 启动前只执行一次 generic `copilot prepare`。SDK 从 exact built-in
+- real mode 在 Server 启动前只执行一次 generic `copilot prepare`。SDK 从显式选择的开发者包
   manifest、Tool runtime、direct manifest/hash lock 生成外置依赖环境和
   `prepared-tools.v1.json`；Server typed 校验 capability root、server、stdio transport 和 env
   binding，不从 cwd、Workspace、`CARGO_MANIFEST_DIR` 或源码树扫描 fallback；
@@ -265,7 +266,7 @@ exact integration：
   `$HOME/.agents`、Runner/源码祖先 `.codex` 进入 clean Profile discovery。Thread 业务 cwd
   仍由官方授权 Workspace 参数拥有。
 
-这把当前 built-in 原生发现、Role activation、精确 inventory 和已声明热边界提升到 E2，
+这把当前开发者包的原生发现、Role activation、精确 inventory 和已声明热边界提升到 E2，
 但没有仓网业务入口或完整链，因此仍不能声称阶段一完成。3B.3-B2 已删除
 `RunStartPreflight`、Governed runtime mode、request-scoped Role SHA/inventory 校验和 Profile
 `platform-agents` 第二启动系统；真实 Indonesia/Thailand 探针继续证明 Standard Root 与原生

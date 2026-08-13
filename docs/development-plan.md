@@ -27,8 +27,9 @@ Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码�
 2. `copilot validate` 以调用者给出的显式 source root 为边界，静态验证 manifest、Skill、
    Runtime Role identity/reference 与 Tool package 引用，并输出有界摘要或 typed failure；
    它不证明完整 Role 可被 Runtime 加载，该 Runtime 门属于 Atom 2。
-3. 所有 manifest 组件路径都相对于显式 source root；内置仓网 manifest 以 repo root 为 source
-   root，静态声明三项 Skill、两项 Role identity/reference 和 `supply_chain`/`map_utils` Tool。
+3. 所有 manifest 组件路径都相对于显式 source root；仓网参考工程以
+   `copilots/warehouse-network` 为唯一 source root，静态声明三项 Skill、两项 Role 和
+   `supply_chain`/`map_utils` Tool。
 4. Atom 2a 的 `copilot dev` 在隔离 Profile 中复制完整 Skill 树和 Role TOML；Tool 保持 source
    owner，并在 `copilot.toml` 显式引用 `runtime.toml`。Tool 只声明直接项目 manifest、hash lock、
    Python module server、参数与 typed env binding；SDK generic provisioner 在 Profile、Tool source
@@ -50,16 +51,16 @@ Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码�
 当前验证 reference 是：
 
 ```bash
-copilot validate . \
-  --manifest apps/web/builtin/warehouse-network-copilot/copilot.toml
+copilot validate copilots/warehouse-network
 ```
 
-退出：新源码目录可由 `init` 生成并由 `validate` 静态通过；仓网 monorepo reference 从 repo-root
-source root 静态通过；runtime parser、hash lock、Python/Node provisioner、prepared descriptor 与
+退出：新源码目录可由 `init` 生成并由 `validate` 静态通过；仓网参考工程从其单一 source root
+静态通过；runtime parser、hash lock、Python/Node provisioner、prepared descriptor 与
 临时 Plugin projection 有 focused tests；fake transcript 覆盖 official RPC 顺序、参数、inventory
 与 cleanup，真实 app-server fresh init→dev gate 证明 SDK-managed preparation 与同一 discovery 链；fresh init→test gate
-证明本地确定性 Provider 下的原生 Role/MCP 正常链。仓网 monorepo 继续是静态 reference；其
-built-in 与 generated package 使用同一个 generic prepare owner。平台 real 启动只调用一次
+证明本地确定性 Provider 下的原生 Role/MCP 正常链。仓网参考工程与 generated package 使用
+同一个 generic prepare owner；`dev`/`test` 默认复用稳定 Tool 环境缓存，Skill/Role/提示词变化
+不会重装未变化依赖。平台 real 启动只调用一次
 `copilot prepare` 并把内部 descriptor 交给 Server，不再按 supply/maps 分叉安装。能力基线和教程明确本地 E2 gate 与未实现边界；生产
 模型质量、安装和持久 readiness 只有在各自 owner 的后续 Atom 具备真实证据后才能更新。
 

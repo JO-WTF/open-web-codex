@@ -77,7 +77,7 @@ Root 创建 Case 后，所有 assignment 只传同一个 `case_id`。完整业�
 
 ## 印尼教程数据
 
-`tools/supply-chain-network-planner/examples/indonesia-network/base/` 是明确标记的教程 fixture：
+`copilots/warehouse-network/tools/planner/examples/indonesia-network/base/` 是明确标记的教程 fixture：
 
 - 50 个需求城市，需求量 `ceil(population / 1000)`；
 - 5 个中心仓：Jakarta、Palembang、Medan、Surabaya、Makassar；

@@ -58,6 +58,9 @@ launcher 或 transport 文件。准备失败会明确返回 `EnvironmentUnavaila
 `--profile /absolute/profile-dir` 选择并保留显式目录。显式目录必须为空，或已由同一源码身份
 创建；工具不会覆盖任意既有 Profile。`--json` 返回有界机器输出，`--codex-bin PATH` 可选择
 Codex executable。app-server 的 HOME 与 cwd 位于 Profile 外的独立临时目录并始终删除。
+Tool 依赖环境默认复用 SDK 的本机持久缓存；只改 Skill、Role 或提示词不会重新安装
+未变化的依赖。需要与部署准备共用一个显式目录时，给 `dev`/`test` 传入
+`--tool-environment-root /absolute/cache-dir`。
 
 这个探针不启动 Turn、不调用模型、不 spawn Role，所以只证明 Runtime discovery，明确报告
 `roleSpawn=not_run` 与 `modelAcceptance=not_run`。它不是生产安装或完整运行 readiness。
@@ -76,19 +79,17 @@ child/Root terminal。通过判定只依赖 canonical Runtime 事件，不依赖
 结果包含组合 descriptor hash 和 fixture Provider 标识，但不包含 Thread/Turn ID、绝对路径或
 原始模型请求。它证明生成组合的单条正常执行链，不代表生产模型质量、完整失败矩阵或生产安装。
 
-内置仓网 manifest 同样采用这一通用合同。平台本地启动只调用一次 `copilot prepare`，把其内部
+仓网参考 Copilot 同样采用这一通用合同。平台本地启动只调用一次 `copilot prepare`，把其内部
 `prepared-tools.v1.json` 交给 Server；Server 为具体 Profile 解析 `profile_home`、
 `tool_state_root` 和声明的 host 环境绑定并叠加 Role policy。Browser 不读取该描述符，Runtime
 启动和用户对话期间也不安装依赖。
 
-## 验证仓网 monorepo reference
+## 验证仓网参考 Copilot
 
-内置仓网 Copilot 的 manifest 位于仓库子目录，但其显式 source root 是仓库根，因为它引用
-仓库内其他位置的真实 Tool package。仍在仓库根目录运行：
+仓网 Copilot 的所有开发者源码位于同一个目录，包括 Skill、Agent Role 和 Tool。仍在仓库根目录运行：
 
 ```bash
-copilot validate . \
-  --manifest apps/web/builtin/warehouse-network-copilot/copilot.toml
+copilot validate copilots/warehouse-network
 ```
 
 这里的 capability-root ID 是 `supply_chain` 与 `map_utils`；server ID 分别来自两项 Tool 的

@@ -1,6 +1,6 @@
-mod builtin_network_copilot;
+mod copilot_package;
 #[cfg(test)]
-mod builtin_network_copilot_runtime_tests;
+mod copilot_package_runtime_tests;
 mod event_projection;
 mod final_artifacts;
 mod inline_maps;
@@ -77,6 +77,9 @@ struct Cli {
     /// preparation integration before the Server starts.
     #[arg(long, env = "OPEN_WEB_CODEX_COPILOT_PREPARED_DESCRIPTOR")]
     copilot_prepared_descriptor: Option<PathBuf>,
+    /// Developer-authored Copilot package selected for this local Profile.
+    #[arg(long, env = "OPEN_WEB_CODEX_COPILOT_PACKAGE_ROOT")]
+    copilot_package_root: Option<PathBuf>,
     /// Private root for server-owned repository mirrors and managed Workspaces.
     #[arg(
         long,
@@ -181,19 +184,25 @@ async fn main() -> anyhow::Result<()> {
                     cli.import_codex_auth_from.as_deref(),
                     &codex_home,
                 )?;
-                let builtin_assets = builtin_network_copilot::BuiltinNetworkCopilotAssets::resolve(
+                let copilot_assets = copilot_package::CopilotPackageAssets::resolve(
+                    required_real_path(
+                        cli.copilot_package_root.as_deref(),
+                        "--copilot-package-root / OPEN_WEB_CODEX_COPILOT_PACKAGE_ROOT",
+                    )?,
                     required_real_path(
                         cli.copilot_prepared_descriptor.as_deref(),
                         "--copilot-prepared-descriptor / OPEN_WEB_CODEX_COPILOT_PREPARED_DESCRIPTOR",
                     )?,
                 )?;
-                let startup_files = builtin_assets.startup_files(&codex_home)?;
+                let root_skill_config = copilot_assets.root_skill_config();
+                let startup_files = copilot_assets.startup_files(&codex_home)?;
                 let workspace_root = git.workspace_root().to_path_buf();
                 tracing::info!(
                     profile_id = %cli.profile_id,
                     workspace_id = %cli.workspace_id,
+                    copilot_id = copilot_assets.id(),
                     workspace_root = %workspace_root.display(),
-                    "starting native Codex Profile Host"
+                    "starting native Codex Profile Host with configured Copilot package"
                 );
                 let registry = ProfileRegistry::new();
                 let providers = SecuredProviderService::new(
@@ -206,8 +215,8 @@ async fn main() -> anyhow::Result<()> {
                 let host_config =
                     ProfileHostConfig::new(cli.profile_id.clone(), codex_home, workspace_root)
                         .with_startup_files(startup_files)
-                        .with_disabled_features(builtin_network_copilot::disabled_codex_features())
-                        .with_enabled_features(builtin_network_copilot::enabled_codex_features())
+                        .with_disabled_features(copilot_package::disabled_codex_features())
+                        .with_enabled_features(copilot_package::enabled_codex_features())
                         .with_codex_bin(cli.codex_bin.clone());
                 let workspace_root = host_config.workspace_root.clone();
                 let host = registry
@@ -218,7 +227,7 @@ async fn main() -> anyhow::Result<()> {
                     host,
                     cli.workspace_id.clone(),
                     workspace_root,
-                    builtin_network_copilot::root_skill_config(),
+                    root_skill_config,
                 )?;
                 (Arc::new(real), Arc::new(providers))
             }

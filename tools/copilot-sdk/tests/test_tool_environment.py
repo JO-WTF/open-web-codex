@@ -206,6 +206,27 @@ class ToolEnvironmentTests(unittest.TestCase):
             self.assertEqual(rebuilt.descriptor_path, prepared.descriptor_path)
             self.assertEqual(rebuilt.state, "reused")
             self.assertEqual(len(commands), built_command_count)
+            prompt_only_change = prepare_tool_composition(
+                source_root=root,
+                tools=(ToolRuntimeSource("demo", tool, Path("tools/demo/runtime.toml")),),
+                output_root=process_data / "prepared",
+                composition_descriptor_sha256="def",
+                host_environment={"PATH": os.environ["PATH"]},
+                run_command=fake_run,
+                executable_identity_resolver=lambda name, env: (
+                    Path("/fake") / name,
+                    100,
+                    200,
+                ),
+            )
+            self.assertEqual(prompt_only_change.state, "reused")
+            self.assertEqual(len(commands), built_command_count)
+            self.assertEqual(
+                json.loads(prompt_only_change.descriptor_path.read_text())[
+                    "compositionDescriptorSha256"
+                ],
+                "def",
+            )
             for root_item in rebuilt.capability_roots:
                 for server_item in root_item.servers:
                     self.assertTrue(server_item.command.is_file())

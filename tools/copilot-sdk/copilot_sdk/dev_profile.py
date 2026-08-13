@@ -27,6 +27,7 @@ from .tool_runtime_manifest import load_tool_runtime_manifest
 
 
 OWNER_MARKER = ".copilot-dev-profile.json"
+TOOL_ENVIRONMENT_CACHE_DIR = "open-web-codex/copilot-sdk/tool-environments"
 
 
 class CopilotDevError(RuntimeError):
@@ -299,10 +300,12 @@ def prepare_dev_tool_composition(
     prepared: PreparedDevProfile,
     *,
     host_environment: dict[str, str] | None = None,
+    output_root: Path | None = None,
 ) -> MaterializedToolComposition:
     """Prepare generic Tool environments, then project their transport into Roles."""
 
     composition = prepared.composition
+    environment_root = output_root or default_tool_environment_root(composition)
     try:
         prepared_tools = prepare_tool_composition(
             source_root=composition.source_root,
@@ -310,7 +313,7 @@ def prepare_dev_tool_composition(
                 ToolRuntimeSource(tool.id, tool.source, tool.runtime)
                 for tool in composition.tools
             ),
-            output_root=prepared.process_data / "prepared",
+            output_root=environment_root,
             composition_descriptor_sha256=(
                 composition.summary.composition_descriptor_sha256
             ),
@@ -338,6 +341,23 @@ def prepare_dev_tool_composition(
             roots,
         )
     return tools
+
+
+def default_tool_environment_root(composition: DevComposition) -> Path:
+    """Return the stable disposable cache owned by the local Copilot SDK."""
+
+    configured_cache = os.environ.get("XDG_CACHE_HOME")
+    cache_home = Path(configured_cache) if configured_cache else Path.home() / ".cache"
+    if not cache_home.is_absolute():
+        _error(
+            "EnvironmentUnavailable",
+            "tool-environment",
+            "XDG_CACHE_HOME",
+            "must be an absolute path when set",
+        )
+    source_identity = _owner_marker(composition)["sourceIdentitySha256"]
+    assert isinstance(source_identity, str)
+    return cache_home / TOOL_ENVIRONMENT_CACHE_DIR / source_identity
 
 
 def _owner_marker(composition: DevComposition) -> dict[str, Any]:

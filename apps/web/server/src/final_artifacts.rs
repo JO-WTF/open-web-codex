@@ -13,7 +13,7 @@ const NETWORK_REPORT_MARKDOWN_SCHEMA: &str = "network_planning_report_markdown.v
 const NETWORK_REPORT_MARKDOWN_MARKER: &str = "<!-- network_planning_report_markdown.v1 -->";
 
 const NETWORK_MAP_SCHEMA: &str = include_str!(
-    "../../../../tools/supply-chain-network-planner/contracts/schemas/\
+    "../../../../copilots/warehouse-network/tools/planner/contracts/schemas/\
 network_comparison_map_bundle.v1.schema.json"
 );
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -517,11 +517,11 @@ mod tests {
     #[test]
     fn validates_materialized_bundle_schema_and_kind() {
         let report_fixture = include_bytes!(
-            "../../../../tools/supply-chain-network-planner/contracts/fixtures/\
+            "../../../../copilots/warehouse-network/tools/planner/contracts/fixtures/\
 network_planning_report_markdown.v1.md"
         );
         let map_fixture = include_bytes!(
-            "../../../../tools/supply-chain-network-planner/contracts/fixtures/\
+            "../../../../copilots/warehouse-network/tools/planner/contracts/fixtures/\
 network_comparison_map_bundle.v1.json"
         );
         validate_materialized_bundle("network_planning_report_markdown.v1", report_fixture)

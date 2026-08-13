@@ -66,6 +66,7 @@ def run_copilot_tests(
     codex_bin: Path,
     *,
     timeout_seconds: float = 45.0,
+    tool_environment_root: Path | None = None,
 ) -> dict[str, Any]:
     try:
         composition = load_dev_composition(source_root, manifest_path)
@@ -87,7 +88,9 @@ def run_copilot_tests(
         raise _test_error_from_dev(error) from error
     try:
         try:
-            prepared_tools = prepare_dev_tool_composition(prepared)
+            prepared_tools = prepare_dev_tool_composition(
+                prepared, output_root=tool_environment_root
+            )
         except CopilotDevError as error:
             raise _test_error_from_dev(error) from error
         started = time.monotonic()

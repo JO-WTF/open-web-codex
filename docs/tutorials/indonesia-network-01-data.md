@@ -28,7 +28,7 @@ flowchart LR
 
 ## 准备教程数据
 
-数据已经生成并保存在 [base fixture](../../tools/supply-chain-network-planner/examples/indonesia-network/base/)：
+数据已经生成并保存在 [base fixture](../../copilots/warehouse-network/tools/planner/examples/indonesia-network/base/)：
 
 | 文件 | 用途 |
 | --- | --- |

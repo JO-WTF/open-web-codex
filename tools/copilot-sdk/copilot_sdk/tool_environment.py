@@ -19,7 +19,7 @@ from .tool_runtime_manifest import ToolRuntimeManifest, load_tool_runtime_manife
 
 PREPARED_DESCRIPTOR = Path("copilot-sdk/prepared-tools.v1.json")
 OWNER_MARKER = ".copilot-tool-environment.json"
-ADAPTER_FINGERPRINT_VERSION = "tool-environment-v1"
+ADAPTER_FINGERPRINT_VERSION = "tool-environment-v2"
 EXCLUDED_SOURCE_ENTRY_NAMES = frozenset(
     {
         ".codex",
@@ -140,21 +140,30 @@ def prepare_tool_composition(
     identities = {
         name: identity_resolver(name, environment) for name in sorted(executable_names)
     }
-    fingerprint = _preparation_fingerprint(
-        composition_descriptor_sha256, declared, identities
-    )
+    fingerprint = _preparation_fingerprint(declared, identities)
     output_root, existing_marker = _inspect_owned_output_root(output_root, source_root)
     if (
         existing_marker is not None
-        and existing_marker.get("compositionDescriptorSha256")
-        == composition_descriptor_sha256
         and existing_marker.get("preparationFingerprint") == fingerprint
     ):
-        reused = _load_prepared_composition(
-            output_root / PREPARED_DESCRIPTOR, composition_descriptor_sha256
-        )
+        reused = _load_prepared_composition(output_root / PREPARED_DESCRIPTOR)
         if reused is not None:
-            return reused
+            _write_owner_marker(
+                output_root,
+                source_root,
+                composition_descriptor_sha256,
+                fingerprint,
+            )
+            _write_prepared_descriptor(
+                output_root / PREPARED_DESCRIPTOR,
+                composition_descriptor_sha256,
+                reused.capability_roots,
+            )
+            return PreparedToolComposition(
+                output_root / PREPARED_DESCRIPTOR,
+                reused.capability_roots,
+                "reused",
+            )
 
     _write_owner_marker(
         output_root,
@@ -181,18 +190,11 @@ def prepare_tool_composition(
                     {name: identity[0] for name, identity in identities.items()},
                 )
             )
-        descriptor_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "schemaVersion": 1,
-            "compositionDescriptorSha256": composition_descriptor_sha256,
-            "capabilityRoots": [_descriptor_root(root) for root in prepared_roots],
-        }
-        descriptor_temp = descriptor_path.with_suffix(".tmp")
-        descriptor_temp.write_text(
-            json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
+        _write_prepared_descriptor(
+            descriptor_path,
+            composition_descriptor_sha256,
+            tuple(prepared_roots),
         )
-        descriptor_temp.replace(descriptor_path)
     except Exception:
         shutil.rmtree(build_root, ignore_errors=True)
         raise
@@ -517,13 +519,11 @@ def _resolve_executable_identity(
 
 
 def _preparation_fingerprint(
-    composition_descriptor_sha256: str,
     declared: Sequence[tuple[ToolRuntimeSource, ToolRuntimeManifest]],
     identities: Mapping[str, tuple[Path, int, int]],
 ) -> str:
     digest = hashlib.sha256()
-    for value in (ADAPTER_FINGERPRINT_VERSION, composition_descriptor_sha256):
-        _digest_item(digest, value.encode())
+    _digest_item(digest, ADAPTER_FINGERPRINT_VERSION.encode())
     for source, _ in declared:
         _digest_item(digest, source.id.encode())
         for relative, contents in _source_regular_files(source.root.resolve(strict=True)):
@@ -566,16 +566,10 @@ def _digest_item(digest: Any, value: bytes) -> None:
     digest.update(value)
 
 
-def _load_prepared_composition(
-    descriptor_path: Path, composition_descriptor_sha256: str
-) -> PreparedToolComposition | None:
+def _load_prepared_composition(descriptor_path: Path) -> PreparedToolComposition | None:
     try:
         payload = json.loads(descriptor_path.read_text(encoding="utf-8"))
-        if (
-            payload.get("schemaVersion") != 1
-            or payload.get("compositionDescriptorSha256")
-            != composition_descriptor_sha256
-        ):
+        if payload.get("schemaVersion") != 1:
             return None
         roots: list[PreparedCapabilityRoot] = []
         for root in payload["capabilityRoots"]:
@@ -603,6 +597,25 @@ def _load_prepared_composition(
         return PreparedToolComposition(descriptor_path, tuple(roots), "reused")
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError):
         return None
+
+
+def _write_prepared_descriptor(
+    descriptor_path: Path,
+    composition_descriptor_sha256: str,
+    capability_roots: Sequence[PreparedCapabilityRoot],
+) -> None:
+    descriptor_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schemaVersion": 1,
+        "compositionDescriptorSha256": composition_descriptor_sha256,
+        "capabilityRoots": [_descriptor_root(root) for root in capability_roots],
+    }
+    descriptor_temp = descriptor_path.with_suffix(".tmp")
+    descriptor_temp.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    descriptor_temp.replace(descriptor_path)
 
 
 def _descriptor_root(root: PreparedCapabilityRoot) -> dict[str, Any]:

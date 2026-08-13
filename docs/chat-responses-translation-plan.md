@@ -285,7 +285,7 @@ Provider facts 给出；未知 Custom Provider 默认不开启，避免用户误
 
 ### 阶段 6：Inline Visualization Artifact 与 Assistant 编排
 
-**Owner：** `tools/maps-mcp`、Platform Artifact registry、Web presentation
+**Owner：** `copilots/warehouse-network/tools/maps`、Platform Artifact registry、Web presentation
 
 **状态：** 已完成。真实 DeepSeek/Mapbox 浏览器用例已验证同一 Agent Message 的
 “文字—地图—文字”、Thread 切换和刷新恢复；Responses Provider 的真实浏览器矩阵

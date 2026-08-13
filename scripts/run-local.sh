@@ -427,7 +427,8 @@ fi
 case "$database_url" in postgres://*|postgresql://*) ;; *) error "database URL must use postgres:// or postgresql://"; exit 2 ;; esac
 
 mkdir -p "$run_dir" "$log_dir" "$profile_home" "$runner_root"
-copilot_environment_root="$data_dir/tool-environments/warehouse-network-copilot"
+copilot_package_root="$repo_root/copilots/warehouse-network"
+copilot_environment_root="$data_dir/tool-environments/warehouse-network"
 copilot_prepared_descriptor="$copilot_environment_root/copilot-sdk/prepared-tools.v1.json"
 if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
   if [[ ! -f "$master_key_file" ]]; then
@@ -648,8 +649,7 @@ build_stale_codex_runtime_components() {
 
 prepare_copilot_environment() {
   PYTHONPATH="$repo_root/tools/copilot-sdk${PYTHONPATH:+:$PYTHONPATH}" \
-    "$python_cmd" -m copilot_sdk prepare "$repo_root" \
-      --manifest apps/web/builtin/warehouse-network-copilot/copilot.toml \
+    "$python_cmd" -m copilot_sdk prepare "$copilot_package_root" \
       --output-root "$copilot_environment_root" \
       --json
 }
@@ -710,6 +710,7 @@ if [[ "$codex_mode" == "real" ]]; then
   server_command+=(
     --codex-home "$profile_home"
     --codex-bin "$codex_bin"
+    --copilot-package-root "$copilot_package_root"
     --copilot-prepared-descriptor "$copilot_prepared_descriptor"
   )
 fi
@@ -734,9 +735,11 @@ export OPEN_WEB_CODEX_WEB_DIST="$web_dist"
 if [[ "$codex_mode" == "real" ]]; then
   export CODEX_HOME="$profile_home"
   export CODEX_BIN="$codex_bin"
+  export OPEN_WEB_CODEX_COPILOT_PACKAGE_ROOT="$copilot_package_root"
   export OPEN_WEB_CODEX_COPILOT_PREPARED_DESCRIPTOR="$copilot_prepared_descriptor"
 else
-  unset CODEX_HOME CODEX_BIN
+  unset CODEX_HOME CODEX_BIN OPEN_WEB_CODEX_COPILOT_PACKAGE_ROOT \
+    OPEN_WEB_CODEX_COPILOT_PREPARED_DESCRIPTOR
 fi
 
 start_background_server() {

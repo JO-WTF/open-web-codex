@@ -13,7 +13,7 @@ const MAX_IDENTIFIER_BYTES: usize = 96;
 
 /// One server-provided native Profile file that Codex discovers from its
 /// standard roots. Ordinary files seed missing destinations; explicitly
-/// managed built-ins keep their reserved destinations aligned at startup.
+/// managed package files keep their reserved destinations aligned at startup.
 ///
 /// Destinations are intentionally limited to native Skill and Agent Role
 /// locations. This is not a general Profile filesystem API.
@@ -50,10 +50,10 @@ impl ProfileStartupFile {
         )
     }
 
-    /// One server-owned built-in Skill. Its reserved destination is refreshed
-    /// before the Profile process starts while unrelated Profile files remain
-    /// user-owned.
-    pub fn managed_skill(
+    /// One Skill selected from an explicitly configured Copilot package. Its
+    /// reserved destination is refreshed before the Profile process starts
+    /// while unrelated Profile files remain user-owned.
+    pub fn package_skill(
         id: impl Into<String>,
         contents: impl Into<Vec<u8>>,
     ) -> Result<Self, ProfileStartupFileError> {
@@ -79,9 +79,10 @@ impl ProfileStartupFile {
         )
     }
 
-    /// One server-owned built-in Agent Role. The checked-in definition is the
-    /// startup source of truth for this reserved Role name.
-    pub fn managed_agent_role(
+    /// One Agent Role selected from an explicitly configured Copilot package.
+    /// The package definition is the startup source of truth for this reserved
+    /// Role name.
+    pub fn package_agent_role(
         name: impl Into<String>,
         contents: impl Into<Vec<u8>>,
     ) -> Result<Self, ProfileStartupFileError> {
@@ -201,9 +202,9 @@ fn materialize_profile_startup_file(
                 message: "target must be a regular file".to_string(),
             });
         }
-        // Ordinary startup files only seed a clean Profile. Managed built-ins
-        // reserve their exact destination and converge it before Runtime
-        // discovery so a deployed Tool/Role contract cannot remain stale.
+        // Ordinary startup files only seed a clean Profile. Managed package
+        // files reserve their exact destination and converge it before Runtime
+        // discovery so a selected Tool/Role contract cannot remain stale.
         Ok(_) if ownership == ProfileStartupFileOwnership::Seed => return Ok(()),
         Ok(_) => {
             let current = fs::read(&target).map_err(|source| ProfileStartupFileError::Io {
@@ -478,11 +479,11 @@ mod tests {
     }
 
     #[test]
-    fn refreshes_only_managed_builtin_destinations() {
+    fn refreshes_only_managed_package_destinations() {
         let root = temp_root("startup-managed");
         let home = root.join("profile");
         fs::create_dir_all(home.join("agents")).expect("create agents");
-        fs::create_dir_all(home.join("skills/warehouse-network")).expect("create builtin skill");
+        fs::create_dir_all(home.join("skills/warehouse-network")).expect("create package skill");
         fs::create_dir_all(home.join("skills/user-skill")).expect("create user skill");
         fs::write(home.join("agents/network_agent.toml"), "old-role").expect("write old role");
         fs::write(home.join("skills/warehouse-network/SKILL.md"), "old-skill")
@@ -491,9 +492,9 @@ mod tests {
         fs::write(home.join("config.toml"), "model = \"keep-me\"\n").expect("write config");
 
         let files = [
-            ProfileStartupFile::managed_skill("warehouse-network", b"current-skill".to_vec())
+            ProfileStartupFile::package_skill("warehouse-network", b"current-skill".to_vec())
                 .expect("managed skill"),
-            ProfileStartupFile::managed_agent_role("network_agent", b"current-role".to_vec())
+            ProfileStartupFile::package_agent_role("network_agent", b"current-role".to_vec())
                 .expect("managed role"),
         ];
         materialize_profile_startup_files(&home, &files).expect("refresh managed files");

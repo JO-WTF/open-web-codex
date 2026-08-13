@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import io
+import os
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from copilot_sdk.app_server_client import AppServerClient
 from copilot_sdk.dev_profile import (
     CopilotDevError,
     OWNER_MARKER,
+    default_tool_environment_root,
     load_dev_composition,
     prepare_dev_profile,
     validate_workspace,
@@ -140,6 +142,20 @@ class CopilotDevProfileTests(unittest.TestCase):
 
             self.assertEqual(composition.summary.tool_ids, ("native",))
             self.assertEqual(composition.mcp_server_ids, ("runtime_native",))
+
+    def test_default_tool_cache_survives_skill_only_composition_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self.make_source(root)
+            cache_home = root / "cache"
+            with patch.dict(os.environ, {"XDG_CACHE_HOME": str(cache_home)}):
+                before = default_tool_environment_root(load_dev_composition(source))
+                skill = source / "skills/supervisor/SKILL.md"
+                skill.write_text(skill.read_text(encoding="utf-8") + "Prompt update.\n")
+                after = default_tool_environment_root(load_dev_composition(source))
+
+            self.assertEqual(before, after)
+            self.assertTrue(before.is_relative_to(cache_home))
 
     def test_source_mcp_transport_is_not_role_projection_truth(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -290,7 +306,8 @@ class CopilotDevCliTests(unittest.TestCase):
     def invoke(self, *arguments: str) -> tuple[int, str, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
-        def fake_prepare(prepared):
+        def fake_prepare(prepared, *, output_root=None):
+            self.assertIsNone(output_root)
             projection = prepared.process_data / "capability-roots/native"
             projection.mkdir(parents=True, exist_ok=True)
             return MaterializedToolComposition(

@@ -50,7 +50,9 @@ Role，因此 `roleSpawn` 和 `modelAcceptance` 明确保持 `not_run`。
 默认 Profile 是临时目录，成功或失败后删除。`--keep-profile` 保留这个临时 Profile；
 `--profile DIR` 使用并保留显式目录，但只接受空目录或由同一 source identity 创建的目录。
 app-server 的 HOME 和进程 cwd 使用 Profile 外的另一临时目录，并始终删除。可用
-`--manifest REL`、`--codex-bin PATH` 和 `--json` 覆盖默认值或取得有界机器输出。
+`--manifest REL`、`--codex-bin PATH` 和 `--json` 覆盖默认值或取得有界机器输出。Tool
+依赖环境默认位于 SDK 的本机持久缓存；`--tool-environment-root DIR` 可让 `dev`、`test`
+和显式 `prepare` 复用同一个缓存。Profile 与 Runtime 状态仍保持临时隔离。
 
 ## 原生正常链验收
 
@@ -70,13 +72,13 @@ ID、绝对路径或原始请求。
 `runtime.toml`。Python 依赖由 SDK 用 `pip --require-hashes` 安装，Tool source 经 staged wheel
 构建后以 `--no-deps` 非 editable 安装；声明的 Node 项目由 SDK 在外置环境执行
 `npm ci --ignore-scripts`。`dev` 和 `test` 复用同一套通用 provisioner；Runtime 启动和 MCP
-握手阶段不安装依赖。
+握手阶段不安装依赖。组合中只修改 Skill、Agent 或提示词时，缓存会更新组合描述，但不会
+重新安装未变化的 Tool 依赖。
 
 平台本地启动使用同一编译入口：
 
 ```bash
-copilot prepare . \
-  --manifest apps/web/builtin/warehouse-network-copilot/copilot.toml \
+copilot prepare copilots/warehouse-network \
   --output-root /absolute/platform-data/copilot-environment
 ```
 
@@ -93,11 +95,10 @@ root 写入内部 `copilot-sdk/prepared-tools.v1.json`。该描述符包含已�
 是 source root 下的 `copilot.toml`；monorepo 可以通过 `--manifest` 指定 source root 内的
 其他位置。
 
-仓库内置仓网 Copilot 是 monorepo reference。请从仓库根目录运行：
+仓网 Copilot 是完整的开发者参考工程。请从仓库根目录运行：
 
 ```bash
-copilot validate . \
-  --manifest apps/web/builtin/warehouse-network-copilot/copilot.toml
+copilot validate copilots/warehouse-network
 ```
 
 该 reference 声明真实的三项 Skill、两项 Runtime Role，以及 Role TOML 使用的

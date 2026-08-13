@@ -8,8 +8,10 @@ launcher="$repo_root/scripts/run-local.sh"
 bash -n "$launcher"
 
 [[ "$(grep -c -- '-m copilot_sdk prepare' "$launcher")" == "1" ]]
-grep -F -- '--manifest apps/web/builtin/warehouse-network-copilot/copilot.toml' "$launcher" >/dev/null
+grep -F -- 'copilot_package_root="$repo_root/copilots/warehouse-network"' "$launcher" >/dev/null
+grep -F -- '-m copilot_sdk prepare "$copilot_package_root"' "$launcher" >/dev/null
 grep -F -- '--output-root "$copilot_environment_root"' "$launcher" >/dev/null
+grep -F -- '--copilot-package-root "$copilot_package_root"' "$launcher" >/dev/null
 grep -F -- '--copilot-prepared-descriptor "$copilot_prepared_descriptor"' "$launcher" >/dev/null
 
 for obsolete in \
@@ -21,6 +23,7 @@ for obsolete in \
   OPEN_WEB_CODEX_SKIP_SUPPLY_CHAIN_MCP_SETUP \
   setup-maps-mcp-env.sh \
   setup-supply-chain-mcp-env.sh \
+  apps/web/builtin/warehouse-network-copilot \
   tools/maps-mcp \
   tools/supply-chain-network-planner
 do

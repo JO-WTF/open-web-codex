@@ -529,7 +529,7 @@ Ledger 能够减少重复整理和依赖排查，同时没有变成第二套 Run
 - Task Artifact 数据结构：
   [`20260726000022_task_artifacts.sql`](../apps/web/migrations/20260726000022_task_artifacts.sql)；
 - 仓网数据和规划 MCP：
-  [`tools/supply-chain-network-planner`](../tools/supply-chain-network-planner)；
+  [`copilots/warehouse-network/tools/planner`](../copilots/warehouse-network/tools/planner)；
 - 已退役旧交接验证：旧 `enterprise-supervisor-e2e.mjs` 已随 Platform 数据面和冻结能力包
   删除，只保留在版本历史中作为迁移证据。
 
