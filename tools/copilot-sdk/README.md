@@ -1,7 +1,8 @@
 # Copilot SDK
 
-Copilot SDK 提供一个面向开发者的最小源码入口：创建和静态验证 Copilot 源码组合，并在
-隔离的 Codex Profile 中执行一次无模型调用的 Runtime discovery probe。
+Copilot SDK 提供一个面向开发者的最小源码入口：创建和静态验证 Copilot 源码组合，在
+隔离的 Codex Profile 中执行 Runtime discovery probe，并用本地确定性 Responses fixture
+验证一条原生 Supervisor、child Role 与 MCP Tool 正常链。
 
 ## 开始使用
 
@@ -48,6 +49,20 @@ Role，因此 `roleSpawn` 和 `modelAcceptance` 明确保持 `not_run`。
 app-server 的 HOME 和进程 cwd 使用 Profile 外的另一临时目录，并始终删除。可用
 `--manifest REL`、`--codex-bin PATH` 和 `--json` 覆盖默认值或取得有界机器输出。
 
+## 原生正常链验收
+
+`init` 生成的 `[[tests]]` 声明一个有界正常用例。运行：
+
+```bash
+copilot test ./scratch/example-copilot --workspace "$PWD"
+```
+
+`test` 使用隔离 Profile 和本地确定性 Responses fixture，但执行真实 Codex app-server 协议：
+官方 Skill discovery、Thread/Turn、原生 Agent spawn/wait、Role-local MCP 调用和终态事件都必须
+完成。通过条件来自 canonical Runtime 事件和精确 Tool 参数/结构化结果，不读取最终回答文本。
+有界成功结果只公开组合摘要、fixture Provider、声明组件和终态证据，不公开 Runtime Thread/Turn
+ID、绝对路径或原始请求。
+
 `init` 生成的 Python Tool 自带有版本边界的 `requirements.txt`、`bin/setup-env` 与仅消费已准备环境的
 launcher，因此 fresh `init → dev` 不依赖宿主预装 `mcp`。自定义或非 Python Tool 也必须用自己
 的 `bin/setup-env` 实现准备合同；生成的 setup 只从 `requirements.txt` 安装依赖，不安装 Tool
@@ -72,9 +87,9 @@ copilot validate . \
 
 ## 当前边界
 
-当前交付没有 `copilot test`、生产 Profile 安装、Role spawn、模型验收、readiness 持久化/聚合或
-Web 创作体验。`dev` 是本地、一次性、无模型的 discovery gate，不是安装链。已有的
-`copilot tool ...` 命令仍是高级 Tool 组件入口。
+当前交付没有生产 Profile 安装、真实生产模型质量验收、readiness 持久化/聚合或 Web 创作体验。
+`dev` 是无模型 discovery gate；`test` 是使用本地确定性 Provider 的原生正常链 gate。两者都
+不是安装链。已有的 `copilot tool ...` 命令仍是高级 Tool 组件入口。
 
 Settings 中的 Agents 管理 Codex Runtime Role；它不是 Copilot 创建、安装或 readiness 页面。
 

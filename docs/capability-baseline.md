@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档性质 | 当前事实与证据 |
 | 观察日期 | 2026-08-13 |
-| 代码快照 | 阶段二 Atom 1 工作树（基于 HEAD `aaa4054e2`） |
+| 代码快照 | 阶段二 SDK 原生正常链工作树（基于 `6f6b9cb05`） |
 | 当前阶段 | 阶段二已进入；阶段一内置仓网 Copilot 正常业务闭环作为已通过基线 |
 | 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
 
@@ -17,11 +17,14 @@
 完成阶段一仓网正常业务闭环。这个结论只覆盖内置仓网 Copilot，不代表公开 Copilot SDK、
 Studio、第二领域、多用户产品或完整 hardening 矩阵已经完成。
 
-阶段二 Copilot SDK Atom 1 已提供 `copilot init` 源码脚手架和 `copilot validate` 静态组合
-验证；Atom 2a 又提供 `copilot dev` 隔离 discovery probe：通过官方 app-server 握手、
+阶段二 Copilot SDK 已提供 `copilot init` 源码脚手架和 `copilot validate` 静态组合
+验证；`copilot dev` 提供隔离 discovery probe：通过官方 app-server 握手、
 `skills/list`、带 `selectedCapabilityRoots` 的临时 `thread/start` 和线程范围
-`mcpServerStatus/list` 验证声明能力可被 Runtime 发现。它不执行 Role spawn 或模型验收，也没有
-测试编排、生产 Profile 安装、readiness 持久化/聚合或 Web 创作链，因此不改变产品能力边界。
+`mcpServerStatus/list` 验证声明能力可被 Runtime 发现。`copilot test` 另以本地确定性 Responses
+fixture 驱动真实 app-server，已从 fresh init 通过 Supervisor Skill、声明 Role、精确 MCP Tool
+参数/结构化结果、child terminal 和 Root terminal 的单条 normal case；PASS 不读取最终文本。
+它没有生产模型质量验收、生产 Profile 安装、readiness 持久化/聚合或 Web 创作链，因此不改变
+产品能力边界。
 Atom 2a 要求 Tool source 自有可执行 `bin/setup-env`；SDK 在 Profile 外的临时 data root 显式
 调用，缺失/失败返回 `EnvironmentUnavailable`。generated Python Tool 自有依赖描述和 setup，
 launcher 不隐式安装；仓网 reference 的 built-in 专属资产适配不冒充通用 dev setup。
@@ -292,7 +295,7 @@ malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除�
 | Package Compiler | 无当前生产 owner；阶段二目标文档保留设计输入 | 不再是阶段一能力 |
 | Profile Installation | 无生产安装路径；built-in 直接使用 Profile 原生 seed/Runtime discovery | 不再是阶段一能力 |
 | Runtime discovery/readiness | built-in clean Profile 已通过官方 Skill/MCP status 与 native Role spawn gate；产品 Run admission 只走 Standard，旧 DB installation/readiness 对象已删除 | built-in gate E2；无独立产品 readiness owner |
-| Copilot / Tool SDK | Copilot `init` 可生成带 source-owned Tool setup 的最小组合源码，`validate` 执行静态组合校验；`dev` 在隔离临时 Profile 中复制完整 Skill 树和 Role，先调用各 Tool 的 exact `bin/setup-env`，再通过 official selected capability roots 选择原始源码 Tool，并用官方 Skill/MCP inventory 输出 `discovery_ready`。既有 Tool 组件 CLI 仍是高级入口 | E2 本地 discovery gate；fresh generated init→dev 与缺失/失败 setup 已验证；Role spawn 与 model acceptance 明确 `not_run`，没有 `copilot test`、Web、生产安装或持久 readiness |
+| Copilot / Tool SDK | Copilot `init` 生成带 source-owned Tool setup 与 `[[tests]]` 的最小组合源码，`validate` 执行静态组合校验；`dev` 通过 official selected roots 与 Skill/MCP inventory 输出 `discovery_ready`；`test` 用本地确定性 Responses fixture 和真实 app-server canonical events 验证 Supervisor→Role→MCP→Root 单条正常链。既有 Tool 组件 CLI 仍是高级入口 | E2 本地 discovery/normal-case gate；fresh generated init→dev/test 已验证；没有生产模型质量验收、Web、生产安装或持久 readiness |
 | Skill 创作 | 阶段一仅支持直接编辑 Profile Skill；公开 SDK/Web 创作后移 | 无阶段一产品流 |
 | Agent/Supervisor Studio | 旧 Settings/Sidebar Studio 已删除；原生 Profile Agent 配置保留 | 无阶段一 authoring 产品流 |
 | Copilot Builder | 没有 Web 产品入口和安装总览；SDK Atom 1 不是 Builder 或安装链 | E0 |

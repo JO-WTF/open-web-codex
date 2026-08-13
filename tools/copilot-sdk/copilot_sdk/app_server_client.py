@@ -33,6 +33,7 @@ class AppServerClient:
         self.timeout_seconds = timeout_seconds
         self._next_id = 1
         self._messages: queue.Queue[dict[str, Any] | BaseException | None] = queue.Queue()
+        self._notifications: queue.Queue[dict[str, Any] | BaseException | None] = queue.Queue()
         self._stderr: list[str] = []
         self._stdout_thread = threading.Thread(
             target=self._read_stdout,
@@ -98,6 +99,8 @@ class AppServerClient:
             if isinstance(message, BaseException):
                 raise AppServerClientError("RpcFailed", f"invalid app-server output during {method}", str(message))
             if message.get("id") != request_id:
+                if "method" in message and "id" not in message:
+                    self._notifications.put(message)
                 continue
             if "error" in message:
                 raise AppServerClientError("RpcFailed", f"{method} was rejected", json.dumps(message["error"], ensure_ascii=False))
@@ -105,6 +108,24 @@ class AppServerClient:
             if not isinstance(result, dict):
                 raise AppServerClientError("RpcFailed", f"{method} returned a non-object result")
             return result
+
+    def next_notification(self, *, timeout_seconds: float | None = None) -> dict[str, Any]:
+        """Return the next server notification without consuming RPC responses."""
+
+        timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
+        try:
+            message = self._notifications.get(timeout=timeout)
+        except queue.Empty as exc:
+            raise AppServerClientError(
+                "RpcFailed", "timed out waiting for app-server notification", self.stderr
+            ) from exc
+        if message is None:
+            raise AppServerClientError(
+                "RpcFailed", "app-server closed while waiting for a notification", self.stderr
+            )
+        if isinstance(message, BaseException):
+            raise AppServerClientError("RpcFailed", "invalid app-server output", str(message))
+        return message
 
     def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         payload: dict[str, Any] = {"method": method}
@@ -165,11 +186,16 @@ class AppServerClient:
                 value = json.loads(line)
                 if not isinstance(value, dict):
                     raise ValueError("JSONL message must be an object")
-                self._messages.put(value)
+                if "method" in value and "id" not in value:
+                    self._notifications.put(value)
+                else:
+                    self._messages.put(value)
         except BaseException as exc:
             self._messages.put(exc)
+            self._notifications.put(exc)
         finally:
             self._messages.put(None)
+            self._notifications.put(None)
 
     def _read_stderr(self) -> None:
         assert self.process.stderr is not None

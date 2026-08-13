@@ -5,7 +5,7 @@
 | 文档性质 | 当前与下一里程碑的执行计划 |
 | 更新日期 | 2026-08-13 |
 | 当前阶段 | 阶段二：公开 SDK 与 Web 创作体验 |
-| 当前状态 | 阶段一正常业务主链完成；Copilot SDK Atom 1 已形成源码脚手架与静态验证入口 |
+| 当前状态 | 阶段一正常业务主链完成；Copilot SDK 已形成源码、discovery 与单条原生正常链入口 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018 已接受并作为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
 | 阶段二后续 | 公开 SDK、Studio、Marketplace 与第二领域；多用户产品流程属于阶段三 |
@@ -19,7 +19,7 @@ Workspace 下的 Task 可按用户意图复用普通文件，也可通过同一�
 Resource ref 复用中间数据。保存什么、读取什么、怎样复用、裁剪、合并或覆盖，由用户
 要求、Skill 和 Tool 决定，Platform 不理解仓网数据语义。
 
-## 0. 阶段二当前切片：Copilot SDK Atom 1 与 Atom 2a
+## 0. 阶段二当前切片：Copilot SDK 源码、discovery 与原生正常链
 
 Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码入口：
 
@@ -38,7 +38,11 @@ Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码�
 5. `dev` 的 app-server HOME/cwd 使用 Profile 外的独立临时目录并始终清理；默认临时 Profile
    清理，`--keep-profile` 或显式 `--profile` 才保留。成功只报告 `discovery_ready`，Role spawn
    和 model acceptance 固定为 `not_run`。
-6. 当前仍不建立 `copilot test`、生产 Profile 安装、readiness 持久化/聚合、Web Builder、
+6. `copilot test` 从 manifest 的 `[[tests]]` 读取单个有界正常用例，以本地确定性 Responses
+   fixture 驱动真实 app-server，按 canonical 事件验证 Supervisor Skill→声明 Role→精确 MCP
+   Tool→child terminal→Root final/turn complete；最终文本不能作为 PASS 依据。公开结果不含
+   Runtime ID、绝对路径或原始请求。
+7. 当前仍不建立生产 Profile 安装、真实生产模型质量验收、readiness 持久化/聚合、Web Builder、
    Catalog 或 Marketplace，也不把 Settings Agents 误写成 Copilot 创作入口。
 
 当前验证 reference 是：
@@ -50,9 +54,10 @@ copilot validate . \
 
 退出：新源码目录可由 `init` 生成并由 `validate` 静态通过；仓网 monorepo reference 从 repo-root
 source root 静态通过；fake transcript 覆盖 official RPC 顺序、参数、inventory 与 cleanup，真实
-app-server fresh init→dev gate 证明 source-owned setup 与同一 discovery 链。仓网 monorepo 继续是
-静态 reference；其 built-in 专属资产适配不冒充通用 setup。能力基线和教程明确 E2 discovery 与未实现边界；Role
-执行、模型验收、安装和持久 readiness 只有在各自 owner 的后续 Atom 具备真实证据后才能更新。
+app-server fresh init→dev gate 证明 source-owned setup 与同一 discovery 链；fresh init→test gate
+证明本地确定性 Provider 下的原生 Role/MCP 正常链。仓网 monorepo 继续是静态 reference；其
+built-in 专属资产适配不冒充通用 setup。能力基线和教程明确本地 E2 gate 与未实现边界；生产
+模型质量、安装和持久 readiness 只有在各自 owner 的后续 Atom 具备真实证据后才能更新。
 
 ### 已验证的运行体验与低延迟领域操作基线
 

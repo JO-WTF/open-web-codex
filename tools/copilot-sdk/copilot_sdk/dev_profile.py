@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import copy
 import shutil
 import stat
 import tempfile
@@ -200,7 +201,7 @@ def prepare_dev_profile(
         for agent in composition.agents:
             destination = agents_root / f"{agent.id}.toml"
             _claim_target(copied_targets, destination)
-            _copy_regular_file(agent.source, destination, composition.source_root)
+            _materialize_role(agent, destination, composition)
 
         process_home = process_root / "home"
         process_cwd = process_root / "cwd"
@@ -311,6 +312,282 @@ def _copy_regular_file(source: Path, destination: Path, source_root: Path) -> No
         _error("UnsafePath", "materialize", str(source), "source must be a regular file")
     shutil.copyfile(source, destination, follow_symlinks=False)
     destination.chmod(source.stat().st_mode & 0o777)
+
+
+def _materialize_role(
+    agent: DeclaredAgent, destination: Path, composition: DevComposition
+) -> None:
+    try:
+        with agent.source.open("rb") as handle:
+            role = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        _error(
+            "MaterializationFailed",
+            "role-projection",
+            str(agent.source),
+            "declared Role could not be read",
+            str(error),
+        )
+    plugins = role.get("plugins")
+    if plugins is None:
+        _copy_regular_file(agent.source, destination, composition.source_root)
+        return
+    if not isinstance(plugins, dict):
+        _error(
+            "MaterializationFailed",
+            "role-projection",
+            str(agent.source),
+            "Role plugins policy must be a table",
+        )
+    declared_tools = {tool.id: tool for tool in composition.tools}
+    projected: dict[str, dict[str, Any]] = {}
+    for tool_id, plugin_policy in plugins.items():
+        tool = declared_tools.get(tool_id)
+        if tool is None:
+            _error(
+                "MaterializationFailed",
+                "role-projection",
+                str(agent.source),
+                f"Role references undeclared Tool {tool_id!r}",
+            )
+        if not isinstance(plugin_policy, dict):
+            _error(
+                "MaterializationFailed",
+                "role-projection",
+                str(agent.source),
+                f"Plugin policy for {tool_id!r} must be a table",
+            )
+        policies = plugin_policy.get("mcp_servers")
+        if not isinstance(policies, dict):
+            continue
+        descriptor = _load_tool_mcp_descriptor(tool, composition)
+        servers = descriptor.get("mcpServers")
+        assert isinstance(servers, dict)  # static package validation already proved this
+        for server_id, policy in policies.items():
+            if server_id in projected:
+                _error(
+                    "MaterializationFailed",
+                    "role-projection",
+                    str(agent.source),
+                    f"MCP server {server_id!r} would have multiple transports",
+                )
+            transport = servers.get(server_id)
+            if not isinstance(transport, dict):
+                _error(
+                    "MaterializationFailed",
+                    "role-projection",
+                    str(agent.source),
+                    f"Tool {tool_id!r} does not declare MCP server {server_id!r}",
+                )
+            if not isinstance(policy, dict):
+                _error(
+                    "MaterializationFailed",
+                    "role-projection",
+                    str(agent.source),
+                    f"MCP policy for {server_id!r} must be a table",
+                )
+            runtime_server = copy.deepcopy(transport)
+            runtime_server["command"] = str(
+                _resolve_transport_path(
+                    tool,
+                    runtime_server.get("command"),
+                    composition,
+                    field="command",
+                    kind="file",
+                )
+            )
+            runtime_server["cwd"] = str(
+                _resolve_transport_path(
+                    tool,
+                    runtime_server.get("cwd", "."),
+                    composition,
+                    field="cwd",
+                    kind="directory",
+                )
+            )
+            allowed_policy = {
+                "enabled",
+                "default_tools_approval_mode",
+                "enabled_tools",
+                "disabled_tools",
+                "tools",
+            }
+            for key, value in policy.items():
+                if key in allowed_policy:
+                    runtime_server[key] = copy.deepcopy(value)
+            projected[server_id] = runtime_server
+    runtime_role = copy.deepcopy(role)
+    runtime_role.pop("plugins", None)
+    if projected:
+        runtime_role["mcp_servers"] = projected
+    rendered = _dump_toml_document(runtime_role)
+    destination.write_text(rendered, encoding="utf-8")
+    destination.chmod(agent.source.stat().st_mode & 0o777)
+
+
+def _load_tool_mcp_descriptor(
+    tool: DeclaredTool, composition: DevComposition
+) -> dict[str, Any]:
+    descriptor_path = _validated_source(
+        composition.source_root,
+        (tool.source / ".mcp.json").relative_to(composition.source_root).as_posix(),
+    )
+    try:
+        descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        _error(
+            "MaterializationFailed",
+            "role-projection",
+            str(descriptor_path),
+            "Tool MCP descriptor could not be read",
+            str(error),
+        )
+    if not isinstance(descriptor, dict) or not isinstance(
+        descriptor.get("mcpServers"), dict
+    ):
+        _error(
+            "MaterializationFailed",
+            "role-projection",
+            str(descriptor_path),
+            "Tool MCP descriptor must contain mcpServers",
+        )
+    return descriptor
+
+
+def _resolve_transport_path(
+    tool: DeclaredTool,
+    value: Any,
+    composition: DevComposition,
+    *,
+    field: str,
+    kind: str,
+) -> Path:
+    if not isinstance(value, str) or not value:
+        _error(
+            "MaterializationFailed",
+            "role-projection",
+            str(tool.source / ".mcp.json"),
+            f"MCP transport {field} must be a non-empty relative path",
+        )
+    authored = Path(value)
+    if authored.is_absolute() or any(part == ".." for part in authored.parts):
+        _error(
+            "UnsafePath",
+            "role-projection",
+            value,
+            f"MCP transport {field} must remain inside its Tool root",
+        )
+    candidate = tool.source / authored
+    resolved = _validated_source(
+        composition.source_root,
+        candidate.relative_to(composition.source_root).as_posix(),
+    )
+    if kind == "file" and not resolved.is_file():
+        _error("UnsafePath", "role-projection", value, "transport command must be a file")
+    if kind == "directory" and not resolved.is_dir():
+        _error("UnsafePath", "role-projection", value, "transport cwd must be a directory")
+    return resolved.resolve(strict=True)
+
+
+def _dump_toml_tables(prefix: tuple[str, ...], table: dict[str, Any]) -> str:
+    lines: list[str] = []
+    scalars = {
+        key: value
+        for key, value in table.items()
+        if not isinstance(value, dict) and not _is_array_of_tables(value)
+    }
+    nested = {key: value for key, value in table.items() if isinstance(value, dict)}
+    arrays = {key: value for key, value in table.items() if _is_array_of_tables(value)}
+    if scalars:
+        lines.append("[" + ".".join(_toml_key(part) for part in prefix) + "]")
+        for key, value in scalars.items():
+            lines.append(f"{_toml_key(key)} = {_toml_value(value)}")
+        lines.append("")
+    for key, value in nested.items():
+        lines.append(_dump_toml_tables((*prefix, key), value).rstrip())
+        lines.append("")
+    for key, value in arrays.items():
+        lines.append(_dump_toml_array((*prefix, key), value).rstrip())
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _dump_toml_document(table: dict[str, Any]) -> str:
+    lines: list[str] = []
+    scalars = {
+        key: value
+        for key, value in table.items()
+        if not isinstance(value, dict) and not _is_array_of_tables(value)
+    }
+    nested = {key: value for key, value in table.items() if isinstance(value, dict)}
+    arrays = {key: value for key, value in table.items() if _is_array_of_tables(value)}
+    for key, value in scalars.items():
+        lines.append(f"{_toml_key(key)} = {_toml_value(value)}")
+    if scalars and (nested or arrays):
+        lines.append("")
+    for key, value in nested.items():
+        lines.append(_dump_toml_tables((key,), value).rstrip())
+        lines.append("")
+    for key, value in arrays.items():
+        lines.append(_dump_toml_array((key,), value).rstrip())
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _dump_toml_array(prefix: tuple[str, ...], values: list[Any]) -> str:
+    lines: list[str] = []
+    for value in values:
+        if not isinstance(value, dict):
+            _error(
+                "MaterializationFailed",
+                "role-projection",
+                ".",
+                "TOML array-of-tables entries must be tables",
+            )
+        lines.append("[[" + ".".join(_toml_key(part) for part in prefix) + "]]")
+        scalars = {key: item for key, item in value.items() if not isinstance(item, dict)}
+        nested = {key: item for key, item in value.items() if isinstance(item, dict)}
+        for key, item in scalars.items():
+            lines.append(f"{_toml_key(key)} = {_toml_value(item)}")
+        for key, item in nested.items():
+            lines.append("")
+            lines.append(_dump_toml_tables((*prefix, key), item).rstrip())
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _is_array_of_tables(value: Any) -> bool:
+    return isinstance(value, list) and bool(value) and all(
+        isinstance(item, dict) for item in value
+    )
+
+
+def _toml_key(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if type(value) in (int, float):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    if value is None:
+        _error(
+            "MaterializationFailed",
+            "role-projection",
+            ".",
+            "TOML projection does not support null values",
+        )
+    _error(
+        "MaterializationFailed",
+        "role-projection",
+        ".",
+        f"unsupported TOML projection value {type(value).__name__}",
+    )
 
 
 def _claim_target(targets: set[Path], target: Path) -> None:

@@ -26,7 +26,9 @@ class CopilotManifestTests(unittest.TestCase):
         (self.root / "agents" / "planner.toml").write_text(
             "name = \"planner\"\n\n"
             "[skills]\nconfig = [{ name = \"worker\", enabled = true }]\n\n"
-            "[mcp_servers.routes]\ncommand = \"ignored\"\n",
+            "[plugins.routes]\nenabled = true\n"
+            "[plugins.routes.mcp_servers.routes]\n"
+            "enabled_tools = [\"health\"]\n",
             encoding="utf-8",
         )
         (self.root / "tools" / "routes" / ".codex-plugin" / "plugin.json").write_text(
@@ -161,6 +163,14 @@ root = "tools/routes"
         role = self.root / "agents" / "planner.toml"
         role.write_text(role.read_text(encoding="utf-8").replace("routes", "ghost"), encoding="utf-8")
         self.assert_code("missing_reference")
+
+    def test_rejects_authored_role_transport(self) -> None:
+        role = self.root / "agents" / "planner.toml"
+        role.write_text(
+            'name = "planner"\n[mcp_servers.routes]\ncommand = "./launcher"\n',
+            encoding="utf-8",
+        )
+        self.assert_code("invalid_field")
 
     def test_rejects_missing_plugin_descriptor(self) -> None:
         (self.root / "tools" / "routes" / ".codex-plugin" / "plugin.json").unlink()

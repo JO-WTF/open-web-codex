@@ -23,6 +23,7 @@ from .dev_profile import (
     validate_workspace,
 )
 from .manifest import PackageError, pack_tool_package, validate_tool_package
+from .test_runner import CopilotTestError, run_copilot_tests
 
 
 PLUGIN_TEMPLATE = """{{
@@ -439,6 +440,27 @@ def _dev_error_payload(error: CopilotDevError) -> dict[str, object]:
     return {"ok": False, "error": detail}
 
 
+def _print_test_result(payload: dict[str, object], *, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    tests = payload["tests"]
+    assert isinstance(tests, list)
+    print(f"Copilot '{payload['copilot']['id']}' passed {len(tests)} native acceptance test(s).")
+    print(f"  duration: {payload['durationMs']} ms")
+
+
+def _test_error_payload(error: CopilotTestError) -> dict[str, object]:
+    return {
+        "ok": False,
+        "error": {
+            "code": error.code,
+            "stage": error.stage,
+            "message": error.public_message,
+        },
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="copilot")
     subparsers = parser.add_subparsers(dest="resource", required=True)
@@ -461,6 +483,14 @@ def main(argv: list[str] | None = None) -> int:
     dev_copilot.add_argument("--keep-profile", action="store_true")
     dev_copilot.add_argument("--codex-bin", type=Path)
     dev_copilot.add_argument("--json", action="store_true")
+
+    test_copilot = subparsers.add_parser("test")
+    test_copilot.add_argument("source_root", type=Path)
+    test_copilot.add_argument("--workspace", type=Path, required=True)
+    test_copilot.add_argument("--manifest", type=Path, default=Path("copilot.toml"))
+    test_copilot.add_argument("--codex-bin", type=Path)
+    test_copilot.add_argument("--timeout-seconds", type=float, default=45.0)
+    test_copilot.add_argument("--json", action="store_true")
 
     tool = subparsers.add_parser("tool")
     commands = tool.add_subparsers(dest="command", required=True)
@@ -492,6 +522,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.resource == "dev":
             _print_dev_result(_run_dev_probe(args), as_json=args.json)
             return 0
+        if args.resource == "test":
+            payload = run_copilot_tests(
+                args.source_root,
+                args.manifest,
+                args.workspace,
+                _resolve_codex_bin(args.codex_bin),
+                timeout_seconds=args.timeout_seconds,
+            )
+            _print_test_result(payload, as_json=args.json)
+            return 0
         if args.command == "init":
             _init_tool(args.path, args.name, args.description)
             print(json.dumps(validate_tool_package(args.path), ensure_ascii=False, indent=2))
@@ -517,11 +557,35 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 2
     except CopilotDevError as error:
+        if getattr(args, "resource", None) == "test":
+            test_error = CopilotTestError(
+                error.code,
+                error.stage,
+                "native acceptance environment preparation failed",
+            )
+            if getattr(args, "json", False):
+                print(json.dumps(_test_error_payload(test_error), ensure_ascii=False, indent=2))
+            else:
+                print(
+                    f"copilot: {test_error.code}: {test_error.stage}: "
+                    f"{test_error.public_message}",
+                    file=sys.stderr,
+                )
+            return 2
         if getattr(args, "json", False):
             print(json.dumps(_dev_error_payload(error), ensure_ascii=False, indent=2))
         else:
             print(
                 f"copilot: {error.code}: {error.stage}: {error.path}: {error.message}",
+                file=sys.stderr,
+            )
+        return 2
+    except CopilotTestError as error:
+        if getattr(args, "json", False):
+            print(json.dumps(_test_error_payload(error), ensure_ascii=False, indent=2))
+        else:
+            print(
+                f"copilot: {error.code}: {error.stage}: {error.public_message}",
                 file=sys.stderr,
             )
         return 2

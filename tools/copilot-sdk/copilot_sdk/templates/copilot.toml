@@ -20,3 +20,14 @@ role = "agents/__AGENT_ID__.toml"
 [[tools]]
 id = "__TOOL_ID__"
 root = "tools/__TOOL_DIR__"
+
+[[tests]]
+id = "native-worker-health"
+prompt = "Run the declared worker health check and return its verified result."
+agent = "__AGENT_ID__"
+tool = "__TOOL_ID__"
+tool_name = "health"
+arguments = {}
+
+[tests.expect]
+structured_content = { status = "ok", tool = "__TOOL_ID__.health" }

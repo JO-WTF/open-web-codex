@@ -31,7 +31,21 @@ class CopilotPackageSummary:
     skill_ids: tuple[str, ...]
     agent_ids: tuple[str, ...]
     tool_ids: tuple[str, ...]
+    test_ids: tuple[str, ...]
     composition_descriptor_sha256: str
+
+
+@dataclass(frozen=True)
+class CopilotTestCase:
+    """One bounded native Runtime acceptance case declared by the author."""
+
+    id: str
+    prompt: str
+    agent: str
+    tool: str
+    tool_name: str
+    arguments: dict[str, Any]
+    expected_structured_content: dict[str, Any]
 
 
 def validate_copilot_package(
@@ -67,6 +81,7 @@ def validate_copilot_package(
     skill_ids = tuple(entry["id"] for entry in skills)
     agent_ids = tuple(entry["id"] for entry in agents)
     tool_ids = tuple(entry["id"] for entry in tools)
+    tests = _test_entries(manifest, agent_ids=agent_ids, tool_ids=tool_ids)
 
     supervisor = _required(manifest, "supervisor", "copilot.toml")
     if not isinstance(supervisor, dict):
@@ -102,6 +117,7 @@ def validate_copilot_package(
         del skill_root
         author_files[skill_file_relative.as_posix()] = skill_file
 
+    agent_tool_policies: dict[str, dict[str, set[str] | None]] = {}
     for index, entry in enumerate(agents):
         relative = _authored_relative_path(entry["role"], f"agents[{index}].role")
         role_file = _safe_package_path(root, relative, kind="file")
@@ -114,7 +130,25 @@ def validate_copilot_package(
                 f"agent id {entry['id']!r} does not match role name {role_name!r}",
             )
         _validate_role_references(role, relative.as_posix(), skill_ids, tool_ids)
+        agent_tool_policies[entry["id"]] = _role_tool_policies(
+            role, relative.as_posix(), tool_ids
+        )
         author_files[relative.as_posix()] = role_file
+
+    for index, test in enumerate(tests):
+        policy = agent_tool_policies[test.agent].get(test.tool)
+        if policy is None and test.tool not in agent_tool_policies[test.agent]:
+            _fail(
+                "missing_reference",
+                f"tests[{index}].tool",
+                f"agent {test.agent!r} does not enable declared tool {test.tool!r}",
+            )
+        if policy is not None and test.tool_name not in policy:
+            _fail(
+                "missing_reference",
+                f"tests[{index}].tool_name",
+                f"agent {test.agent!r} does not enable tool method {test.tool_name!r}",
+            )
 
     for index, entry in enumerate(tools):
         relative = _authored_relative_path(entry["root"], f"tools[{index}].root")
@@ -165,8 +199,24 @@ def validate_copilot_package(
         skill_ids=skill_ids,
         agent_ids=agent_ids,
         tool_ids=tool_ids,
+        test_ids=tuple(test.id for test in tests),
         composition_descriptor_sha256=digest.hexdigest(),
     )
+
+
+def load_copilot_test_cases(
+    source_root: Path, manifest_path: Path = Path("copilot.toml")
+) -> tuple[CopilotTestCase, ...]:
+    """Load tests only after the complete package passes static validation."""
+
+    summary = validate_copilot_package(source_root, manifest_path)
+    root = Path(source_root).resolve(strict=True)
+    manifest_relative = _manifest_relative_path(root, manifest_path)
+    manifest = _load_toml(root / manifest_relative, manifest_relative.as_posix())
+    tests = _test_entries(
+        manifest, agent_ids=summary.agent_ids, tool_ids=summary.tool_ids
+    )
+    return tuple(tests)
 
 
 def _fail(code: str, relative_path: str, message: str) -> None:
@@ -272,6 +322,95 @@ def _component_entries(
     return entries
 
 
+def _test_entries(
+    manifest: dict[str, Any], *, agent_ids: tuple[str, ...], tool_ids: tuple[str, ...]
+) -> list[CopilotTestCase]:
+    raw_tests = manifest.get("tests", [])
+    if not isinstance(raw_tests, list):
+        _fail("invalid_type", "tests", "must be an array of tables")
+    tests: list[CopilotTestCase] = []
+    seen: set[str] = set()
+    for index, raw_test in enumerate(raw_tests):
+        location = f"tests[{index}]"
+        if not isinstance(raw_test, dict):
+            _fail("invalid_type", location, "must be a table")
+        test_id = _required_string(raw_test, "id", location)
+        if test_id in seen:
+            _fail("duplicate_id", f"{location}.id", f"duplicate id {test_id!r}")
+        seen.add(test_id)
+        prompt = _required_string(raw_test, "prompt", location)
+        agent = _required_string(raw_test, "agent", location)
+        tool = _required_string(raw_test, "tool", location)
+        tool_name = _required_string(raw_test, "tool_name", location)
+        if agent not in agent_ids:
+            _fail(
+                "missing_reference",
+                f"{location}.agent",
+                f"references undeclared agent {agent!r}",
+            )
+        if tool not in tool_ids:
+            _fail(
+                "missing_reference",
+                f"{location}.tool",
+                f"references undeclared tool {tool!r}",
+            )
+        arguments = raw_test.get("arguments", {})
+        if not isinstance(arguments, dict):
+            _fail("invalid_type", f"{location}.arguments", "must be a table")
+        expect = _required(raw_test, "expect", location)
+        if not isinstance(expect, dict):
+            _fail("invalid_type", f"{location}.expect", "must be a table")
+        structured = _required(expect, "structured_content", f"{location}.expect")
+        if not isinstance(structured, dict):
+            _fail(
+                "invalid_type",
+                f"{location}.expect.structured_content",
+                "must be a table",
+            )
+        _validate_bounded_json(arguments, f"{location}.arguments")
+        _validate_bounded_json(
+            structured, f"{location}.expect.structured_content"
+        )
+        tests.append(
+            CopilotTestCase(
+                id=test_id,
+                prompt=prompt,
+                agent=agent,
+                tool=tool,
+                tool_name=tool_name,
+                arguments=arguments,
+                expected_structured_content=structured,
+            )
+        )
+    return tests
+
+
+def _validate_bounded_json(value: Any, location: str, *, depth: int = 0) -> None:
+    if depth > 4:
+        _fail("invalid_type", location, "must not exceed four nested levels")
+    if value is None or type(value) in (bool, int, float):
+        return
+    if isinstance(value, str):
+        if len(value) > 2_000:
+            _fail("invalid_type", location, "string must not exceed 2000 characters")
+        return
+    if isinstance(value, list):
+        if len(value) > 32:
+            _fail("invalid_type", location, "array must not exceed 32 entries")
+        for index, item in enumerate(value):
+            _validate_bounded_json(item, f"{location}[{index}]", depth=depth + 1)
+        return
+    if isinstance(value, dict):
+        if len(value) > 32:
+            _fail("invalid_type", location, "table must not exceed 32 entries")
+        for key, item in value.items():
+            if not isinstance(key, str) or not key:
+                _fail("invalid_type", location, "table keys must be non-empty strings")
+            _validate_bounded_json(item, f"{location}.{key}", depth=depth + 1)
+        return
+    _fail("invalid_type", location, "must contain only JSON-compatible values")
+
+
 def _skill_frontmatter_name(path: Path, relative_path: str) -> str:
     try:
         text = path.read_text(encoding="utf-8")
@@ -363,20 +502,57 @@ def _validate_role_references(
 
     mcp_servers = role.get("mcp_servers")
     if mcp_servers is not None:
-        if not isinstance(mcp_servers, dict):
-            _fail("invalid_type", f"{relative_path}.mcp_servers", "must be a table")
-        for name, configuration in mcp_servers.items():
-            if not isinstance(name, str) or not name:
-                _fail("invalid_type", f"{relative_path}.mcp_servers", "keys must be strings")
-            if not isinstance(configuration, dict):
+        _fail(
+            "invalid_field",
+            f"{relative_path}.mcp_servers",
+            "authored Roles must declare Tool policy through plugins; Runtime transport is derived",
+        )
+
+    _role_tool_policies(role, relative_path, tool_ids)
+
+
+def _role_tool_policies(
+    role: dict[str, Any], relative_path: str, tool_ids: tuple[str, ...]
+) -> dict[str, set[str] | None]:
+    """Return native selected-Plugin MCP policy by declared capability-root ID."""
+
+    policies: dict[str, set[str] | None] = {}
+    plugins = role.get("plugins")
+    if plugins is None:
+        return policies
+    if not isinstance(plugins, dict):
+        _fail("invalid_type", f"{relative_path}.plugins", "must be a table")
+    for plugin_id, plugin in plugins.items():
+        location = f"{relative_path}.plugins.{plugin_id}"
+        if plugin_id not in tool_ids:
+            _fail(
+                "missing_reference",
+                location,
+                f"references undeclared tool capability root {plugin_id!r}",
+            )
+        if not isinstance(plugin, dict):
+            _fail("invalid_type", location, "must be a table")
+        servers = plugin.get("mcp_servers")
+        if not isinstance(servers, dict):
+            _fail("required_field", f"{location}.mcp_servers", "required table is missing")
+        server = servers.get(plugin_id)
+        if not isinstance(server, dict):
+            _fail(
+                "missing_reference",
+                f"{location}.mcp_servers",
+                f"must contain the declared MCP server {plugin_id!r}",
+            )
+        enabled = server.get("enabled_tools")
+        if enabled is not None:
+            if not isinstance(enabled, list) or not enabled or any(
+                not isinstance(item, str) or not item for item in enabled
+            ):
                 _fail(
                     "invalid_type",
-                    f"{relative_path}.mcp_servers.{name}",
-                    "must be a table",
+                    f"{location}.mcp_servers.{plugin_id}.enabled_tools",
+                    "must be a non-empty string array",
                 )
-            if name not in tool_ids:
-                _fail(
-                    "missing_reference",
-                    f"{relative_path}.mcp_servers.{name}",
-                    f"references undeclared tool {name!r}",
-                )
+            policies[plugin_id] = set(enabled)
+        else:
+            policies[plugin_id] = None
+    return policies

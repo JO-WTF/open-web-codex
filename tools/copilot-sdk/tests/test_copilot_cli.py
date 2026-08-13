@@ -1,5 +1,6 @@
 import io
 import json
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -31,6 +32,11 @@ class CopilotCliTests(unittest.TestCase):
                 (root / "skills/order-review-supervisor/SKILL.md").is_file()
             )
             self.assertTrue((root / "agents/order-review-worker.toml").is_file())
+            manifest = (root / "copilot.toml").read_text(encoding="utf-8")
+            self.assertIn("[[tests]]", manifest)
+            role = (root / "agents/order-review-worker.toml").read_text(encoding="utf-8")
+            self.assertIn("[plugins.order_review_tools]", role)
+            self.assertNotIn("[mcp_servers", role)
             self.assertTrue(
                 (root / "tools/order-review-tools/.codex-plugin/plugin.json").is_file()
             )
@@ -126,6 +132,52 @@ class CopilotCliTests(unittest.TestCase):
                     },
                 },
             )
+
+    def test_test_json_does_not_expose_workspace_path_from_dev_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "source"
+            result, _, _ = self.invoke("init", str(root), "--name", "order-review")
+            self.assertEqual(result, 0)
+
+            result, stdout, stderr = self.invoke(
+                "test",
+                str(root),
+                "--workspace",
+                "relative-private-workspace",
+                "--codex-bin",
+                sys.executable,
+                "--json",
+            )
+
+            self.assertEqual(result, 2)
+            self.assertEqual(stderr, "")
+            payload = json.loads(stdout)
+            self.assertEqual(payload["error"]["code"], "WorkspaceInvalid")
+            self.assertEqual(payload["error"]["stage"], "workspace")
+            self.assertNotIn("relative-private-workspace", stdout)
+            self.assertNotIn("path", payload["error"])
+
+    def test_test_json_does_not_expose_missing_codex_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "source"
+            result, _, _ = self.invoke("init", str(root), "--name", "order-review")
+            self.assertEqual(result, 0)
+            missing = Path(directory) / "private-runtime" / "codex"
+
+            result, stdout, stderr = self.invoke(
+                "test",
+                str(root),
+                "--workspace",
+                str(Path(directory).resolve()),
+                "--codex-bin",
+                str(missing),
+                "--json",
+            )
+
+            self.assertEqual(result, 2)
+            self.assertEqual(stderr, "")
+            self.assertNotIn(str(missing), stdout)
+            self.assertNotIn("path", json.loads(stdout)["error"])
 
     def test_init_rejects_id_that_could_escape_destination(self):
         with tempfile.TemporaryDirectory() as directory:

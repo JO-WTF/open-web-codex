@@ -35,16 +35,24 @@ class CopilotDevProfileTests(unittest.TestCase):
         )
         (root / "agents" / "worker.toml").write_text(
             'name = "worker"\n[[skills.config]]\nname = "supervisor"\nenabled = true\n'
-            '[mcp_servers.native]\ncommand = "./relative-launcher"\n',
+            '[plugins.native]\nenabled = true\n'
+            '[plugins.native.mcp_servers.native]\n'
+            'enabled = true\ndefault_tools_approval_mode = "approve"\n'
+            'enabled_tools = ["health"]\n',
             encoding="utf-8",
         )
         (root / "tools" / "native" / ".codex-plugin" / "plugin.json").write_text(
             '{"mcpServers":"./.mcp.json"}', encoding="utf-8"
         )
         (root / "tools" / "native" / ".mcp.json").write_text(
-            '{"mcpServers":{"native":{"command":"./relative-launcher"}}}',
+            '{"mcpServers":{"native":{"command":"./bin/native-launcher","cwd":".",'
+            '"args":[],"env_vars":["OPEN_WEB_CODEX_DATA_DIR"],'
+            '"enabled_tools":["transport-default"]}}}',
             encoding="utf-8",
         )
+        launcher = root / "tools" / "native" / "bin/native-launcher"
+        launcher.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        launcher.chmod(0o755)
         setup = root / "tools" / "native" / "bin/setup-env"
         setup.write_text(
             "#!/usr/bin/env bash\n"
@@ -64,7 +72,7 @@ class CopilotDevProfileTests(unittest.TestCase):
         )
         return root
 
-    def test_materializes_complete_native_sources_without_tools_or_config(self) -> None:
+    def test_materializes_role_transport_projection_without_tools_or_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             temporary_root = Path(directory)
             source = self.make_source(temporary_root)
@@ -76,13 +84,37 @@ class CopilotDevProfileTests(unittest.TestCase):
                 (profile / "skills/supervisor/references/guide.md").read_text(),
                 "complete tree\n",
             )
+            with (profile / "agents/worker.toml").open("rb") as handle:
+                runtime_role = __import__("tomllib").load(handle)
+            runtime_server = runtime_role["mcp_servers"]["native"]
             self.assertEqual(
-                (profile / "agents/worker.toml").read_text(),
-                (source / "agents/worker.toml").read_text(),
+                runtime_server["command"],
+                str((source / "tools/native/bin/native-launcher").resolve()),
             )
+            self.assertEqual(runtime_server["cwd"], str((source / "tools/native").resolve()))
+            self.assertEqual(runtime_server["enabled_tools"], ["health"])
+            self.assertEqual(runtime_server["default_tools_approval_mode"], "approve")
+            self.assertEqual(runtime_server["env_vars"], ["OPEN_WEB_CODEX_DATA_DIR"])
+            self.assertNotIn("plugins", runtime_role)
             self.assertFalse((profile / "tools").exists())
             self.assertFalse((profile / "config.toml").exists())
             self.assertFalse(prepared.cleanup_on_exit)
+
+    def test_role_projection_rejects_absolute_transport_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self.make_source(root)
+            descriptor = source / "tools/native/.mcp.json"
+            descriptor.write_text(
+                '{"mcpServers":{"native":{"command":"/bin/echo","cwd":"."}}}',
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(CopilotDevError) as caught:
+                prepare_dev_profile(load_dev_composition(source), root / "profile")
+
+            self.assertEqual(caught.exception.code, "UnsafePath")
+            self.assertEqual(caught.exception.stage, "role-projection")
 
     def test_explicit_profile_rejects_foreign_non_empty_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

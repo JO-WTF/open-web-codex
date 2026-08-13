@@ -12,10 +12,9 @@ enabled = false
 name = "__CHILD_SKILL__"
 enabled = true
 
-[mcp_servers.__TOOL_ID__]
-command = "./tools/__TOOL_DIR__/bin/__TOOL_ID__-launcher"
-args = []
+[plugins.__TOOL_ID__]
 enabled = true
-required = true
+
+[plugins.__TOOL_ID__.mcp_servers.__TOOL_ID__]
 default_tools_approval_mode = "approve"
 enabled_tools = ["health"]

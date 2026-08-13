@@ -59,6 +59,20 @@ Codex executable。app-server 的 HOME 与 cwd 位于 Profile 外的独立临时
 这个探针不启动 Turn、不调用模型、不 spawn Role，所以只证明 Runtime discovery，明确报告
 `roleSpawn=not_run` 与 `modelAcceptance=not_run`。它不是生产安装或完整运行 readiness。
 
+## 验证原生 Supervisor 正常链
+
+生成的 `copilot.toml` 已声明一个 `[[tests]]` 正常用例。运行：
+
+```bash
+copilot test ./scratch/my-copilot --workspace "$PWD"
+```
+
+该命令使用隔离 Profile 和本地确定性 Responses fixture，通过真实 Codex app-server 执行
+Supervisor Skill 注入、声明 child Role、Role-local MCP Tool 的精确参数与结构化结果，以及
+child/Root terminal。通过判定只依赖 canonical Runtime 事件，不依赖最终回答文字。JSON 成功
+结果包含组合 descriptor hash 和 fixture Provider 标识，但不包含 Thread/Turn ID、绝对路径或
+原始模型请求。它证明生成组合的单条正常执行链，不代表生产模型质量、完整失败矩阵或生产安装。
+
 内置仓网 manifest 仍是 Atom 1 静态 monorepo reference；它使用 built-in 专属资产准备与 Role
 适配，不提供通用 `bin/setup-env`，因此不是 `copilot dev` 的通用示例。
 
@@ -77,9 +91,9 @@ copilot validate . \
 
 ## 当前边界
 
-`copilot init`、`copilot validate` 与无模型的 `copilot dev` 是当前 Copilot 开发者入口。尚无
-`copilot test`、生产 Profile 安装、Role spawn 或模型验收。已有的 `copilot tool ...` 命令服务于
-高级 Tool 组件开发，也不构成组合后的完整运行就绪证据。
+`copilot init`、`copilot validate`、无模型的 `copilot dev` 和本地确定性正常链 `copilot test`
+是当前 Copilot 开发者入口。尚无生产 Profile 安装、真实生产模型质量验收或 Web 创作链。已有的
+`copilot tool ...` 命令服务于高级 Tool 组件开发，也不构成生产运行就绪证据。
 
 Web Settings 中的 Agents 是 Codex Runtime Role 配置，不是 Copilot Builder。当前没有从这里
 创建、安装或运行上述源码目录的产品流程。
