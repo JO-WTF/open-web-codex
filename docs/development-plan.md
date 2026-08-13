@@ -3,9 +3,9 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前与下一里程碑的执行计划 |
-| 更新日期 | 2026-08-12 |
-| 当前阶段 | 阶段二：公开 SDK 与 Web 创作体验；先收敛真实运行体验与执行效率 |
-| 当前状态 | 阶段一正常业务主链完成；阶段二首个运行体验切片实施中 |
+| 更新日期 | 2026-08-13 |
+| 当前阶段 | 阶段二：公开 SDK 与 Web 创作体验 |
+| 当前状态 | 阶段一正常业务主链完成；Copilot SDK Atom 1 已形成源码脚手架与静态验证入口 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018 已接受并作为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
 | 阶段二后续 | 公开 SDK、Studio、Marketplace 与第二领域；多用户产品流程属于阶段三 |
@@ -19,7 +19,31 @@ Workspace 下的 Task 可按用户意图复用普通文件，也可通过同一�
 Resource ref 复用中间数据。保存什么、读取什么、怎样复用、裁剪、合并或覆盖，由用户
 要求、Skill 和 Tool 决定，Platform 不理解仓网数据语义。
 
-## 0. 阶段二当前切片：运行体验与低延迟领域操作
+## 0. 阶段二当前切片：Copilot SDK Atom 1
+
+Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码入口：
+
+1. `copilot init` 在空目录生成一个最小 Copilot 组合源码骨架。
+2. `copilot validate` 以调用者给出的显式 source root 为边界，静态验证 manifest、Skill、
+   Runtime Role identity/reference 与 Tool package 引用，并输出有界摘要或 typed failure；
+   它不证明完整 Role 可被 Runtime 加载，该 Runtime 门属于 Atom 2。
+3. 所有 manifest 组件路径都相对于显式 source root；内置仓网 manifest 以 repo root 为 source
+   root，静态声明三项 Skill、两项 Role identity/reference 和 `supply_chain`/`map_utils` Tool。
+4. 这一 Atom 不建立开发/测试编排、Profile 安装、Runtime discovery/readiness、Web Builder、
+   Catalog 或 Marketplace，也不把 Settings Agents 误写成 Copilot 创作入口。
+
+当前验证 reference 是：
+
+```bash
+copilot validate . \
+  --manifest apps/web/builtin/warehouse-network-copilot/copilot.toml
+```
+
+退出：新源码目录可由 `init` 生成并由 `validate` 静态通过；仓网 monorepo reference 从 repo-root
+source root 静态通过；能力基线和教程明确 E1 与未实现边界。运行、安装和 readiness 只有在各自
+owner 的后续 Atom 具备真实证据后才能更新。
+
+### 已验证的运行体验与低延迟领域操作基线
 
 阶段二已经开始，但不从旧 Catalog/Work State 方案恢复实现。当前先处理真实用户运行中已经
 测量到的两个普通问题：Agent activity/等待状态需要可理解，简单仓网 follow-up 的领域计算只有

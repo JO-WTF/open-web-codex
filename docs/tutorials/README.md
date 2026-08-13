@@ -1,12 +1,17 @@
-# Web 新手教程标准与四条学习路径
+# Copilot 教程入口与冻结案例
 
-状态：冻结迁移输入（2026-08-08）。
+状态：Atom 1 开发者入口可用；旧 Web 案例仍为冻结迁移输入（2026-08-13）。
+
+当前唯一可执行的新手创作入口是
+[Copilot 开发者快速开始](copilot-developer-quickstart.md)，它只覆盖 `copilot init` 和
+`copilot validate` 的源码脚手架与静态组合验证。开发循环、测试编排、Profile 安装、Runtime
+discovery/readiness 和 Web 创作入口尚未实现。
 
 以下页面记录旧仓网原型，不是当前可执行的新手入口；其中的 Settings 页面、Workspace
 发布/扫描、capability template 和手工 Release 合同均不得作为新实现依据。Clean Spine
-产品 E2E 完成后，本目录必须从正式 SDK/Copilot Studio 用户入口整体重写。当前证据以
-[能力基线](../capability-baseline.md) 为准，接受边界以
-[ADR-017](../adr/017-clean-copilot-platform-spine.md) 为准。
+产品 E2E 完成后，这些旧页面必须从正式 SDK/Copilot Studio 用户入口整体重写。当前证据以
+[能力基线](../capability-baseline.md) 为准，阶段一运行边界以
+[ADR-018](../adr/018-built-in-network-copilot-runtime-closure.md) 为准。
 
 以下保留原教程设计，供迁移时核对业务示例与学习梯度。
 
@@ -14,6 +19,7 @@
 
 | 路径 | 适合谁 | 从哪里开始 |
 | --- | --- | --- |
+| 开发者创作 | 想创建并静态验证 Copilot 源码 | [Copilot 开发者快速开始](copilot-developer-quickstart.md) |
 | 快速体验 | 只想确认链路能不能跑通 | [印尼仓网快速开始](indonesia-network-quickstart.md) |
 | 理解执行 | 想知道 Agent、Tool、Skill 和 Resource 如何协作 | [单 Agent 配送审计](web-single-agent-delivery-audit.md) |
 | 仓网入门 | 想从最小网络问题逐步增加数据 | 印尼仓网 1 → 2 → 3 |

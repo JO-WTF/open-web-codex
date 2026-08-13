@@ -1,0 +1,22 @@
+schema_version = 1
+id = "__ID__"
+display_name = "__DISPLAY_NAME__"
+
+[supervisor]
+skill = "__SUPERVISOR_SKILL__"
+
+[[skills]]
+id = "__SUPERVISOR_SKILL__"
+path = "skills/__SUPERVISOR_SKILL__"
+
+[[skills]]
+id = "__CHILD_SKILL__"
+path = "skills/__CHILD_SKILL__"
+
+[[agents]]
+id = "__AGENT_ID__"
+role = "agents/__AGENT_ID__.toml"
+
+[[tools]]
+id = "__TOOL_ID__"
+root = "tools/__TOOL_DIR__"

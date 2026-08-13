@@ -3,8 +3,8 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前事实与证据 |
-| 观察日期 | 2026-08-12 |
-| 代码快照 | HEAD `ca2d29f12` |
+| 观察日期 | 2026-08-13 |
+| 代码快照 | 阶段二 Atom 1 工作树（基于 HEAD `aaa4054e2`） |
 | 当前阶段 | 阶段二已进入；阶段一内置仓网 Copilot 正常业务闭环作为已通过基线 |
 | 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
 
@@ -16,6 +16,10 @@
 当前 checkout 已从 clean DB/Profile、真实 Web Task 入口、真实 Codex Runtime 和真实 Provider
 完成阶段一仓网正常业务闭环。这个结论只覆盖内置仓网 Copilot，不代表公开 Copilot SDK、
 Studio、第二领域、多用户产品或完整 hardening 矩阵已经完成。
+
+阶段二 Copilot SDK Atom 1 现已提供 `copilot init` 源码脚手架和 `copilot validate` 静态组合
+验证，并用内置仓网 manifest 作为 monorepo reference。它尚未提供开发/测试流程、Profile
+安装、Runtime discovery/readiness 或 Web 创作链，因此不改变上述产品能力边界。
 
 当前证据支持：
 
@@ -37,7 +41,7 @@ Studio、第二领域、多用户产品或完整 hardening 矩阵已经完成。
 | --- | --- |
 | 真实多 Agent 运行 | 阶段一 normal path 已通过真实 Web E2E |
 | Root 用户输入与 execution projection | 阶段一 normal path 可用；pending approval 刷新恢复已通过 |
-| Tool/Skill SDK 与 Studio | CLI 脚手架仍在；旧 Web Studio 已删除 |
+| Tool/Skill SDK 与 Studio | Copilot 源码 `init`/`validate` Atom 1 与高级 Tool 组件 CLI 存在；旧 Web Studio 已删除 |
 | Agent/Supervisor 创作 | 旧 Web authoring 已删除；阶段一仅直接编辑 Profile Skill/Role |
 | Copilot 编译、Profile 安装和通用 Runtime discovery | 未形成生产链；built-in 有独立真实 gate |
 | 算法工程师自助扩展 | 未实现 |
@@ -283,10 +287,10 @@ malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除�
 | Package Compiler | 无当前生产 owner；阶段二目标文档保留设计输入 | 不再是阶段一能力 |
 | Profile Installation | 无生产安装路径；built-in 直接使用 Profile 原生 seed/Runtime discovery | 不再是阶段一能力 |
 | Runtime discovery/readiness | built-in clean Profile 已通过官方 Skill/MCP status 与 native Role spawn gate；产品 Run admission 只走 Standard，旧 DB installation/readiness 对象已删除 | built-in gate E2；无独立产品 readiness owner |
-| Tool SDK | `init/validate/test/pack` 与少量 manifest tests 存在 | E1，未连接 Web/安装 |
+| Copilot / Tool SDK | Copilot `init` 可生成最小组合源码，`validate` 可从显式 source root 静态校验 manifest、Skill、Role identity/reference 与 Tool 引用并生成确定性组合描述摘要；内置仓网 manifest 是 repo-root monorepo reference。既有 Tool 组件 CLI 仍是高级入口 | E1，仅源码脚手架与静态引用/描述合同；不证明完整 Role 可被 Runtime 加载，Runtime 门属于 Atom 2；没有 dev/test、Web、安装或 Runtime readiness |
 | Skill 创作 | 阶段一仅支持直接编辑 Profile Skill；公开 SDK/Web 创作后移 | 无阶段一产品流 |
 | Agent/Supervisor Studio | 旧 Settings/Sidebar Studio 已删除；原生 Profile Agent 配置保留 | 无阶段一 authoring 产品流 |
-| Copilot Builder | 没有完整产品入口和安装总览 | E0 |
+| Copilot Builder | 没有 Web 产品入口和安装总览；SDK Atom 1 不是 Builder 或安装链 | E0 |
 | Browser 产品入口 | 生产 `index.html` 只经 `browser-entry.ts` 渲染 `WebApp`；展开 Vite alias 后 production graph 为 75 个本地 non-test 文件，另 466 个不在图内却仍由 `tsconfig` 编译；完整 `PlatformClient` 又把 dead endpoint methods 带入 bundle | E2 单一生产入口；legacy import graph/client 收缩进入后续 backlog，不阻断当前仓网链 |
 | Web UI parity | 历史 `check-main-ui-parity`、Git/UI overlay 和手工 SHA 清单已删除 | 已删除第二 UI truth；当前以类型检查、组件/合同测试、生产构建和真实浏览器验收为准 |
 | Browser Terminal | 生产 `/web` WebApp 不调用 Terminal API；旧 App 路径仍保留 Workspace Terminal UI。Server 打开 Terminal 时按 `run.updated_at DESC` 猜一个最新 Run，并把输出投影到该 Run | E1 legacy 残余；多 Task/fork 时会错配会话，待确认旧 App 退出后原子删除，当前不建设新 selector |

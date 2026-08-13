@@ -1,0 +1,34 @@
+schema_version = 1
+id = "warehouse-network-copilot"
+display_name = "Warehouse Network Copilot"
+
+[supervisor]
+skill = "warehouse-supervisor"
+
+[[skills]]
+id = "warehouse-supervisor"
+path = "apps/web/builtin/warehouse-network-copilot/skills/warehouse-supervisor"
+
+[[skills]]
+id = "warehouse-data"
+path = "apps/web/builtin/warehouse-network-copilot/skills/warehouse-data"
+
+[[skills]]
+id = "warehouse-network"
+path = "apps/web/builtin/warehouse-network-copilot/skills/warehouse-network"
+
+[[agents]]
+id = "data_agent"
+role = "apps/web/builtin/warehouse-network-copilot/agents/data_agent.toml"
+
+[[agents]]
+id = "network_agent"
+role = "apps/web/builtin/warehouse-network-copilot/agents/network_agent.toml"
+
+[[tools]]
+id = "supply_chain"
+root = "tools/supply-chain-network-planner"
+
+[[tools]]
+id = "map_utils"
+root = "tools/maps-mcp"

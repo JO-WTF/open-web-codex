@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "__TOOL_ID__": {
+      "command": "./bin/__TOOL_ID__-launcher",
+      "args": [],
+      "cwd": ".",
+      "default_tools_approval_mode": "approve"
+    }
+  }
+}

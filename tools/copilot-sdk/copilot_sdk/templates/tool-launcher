@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+python_bin="${OPEN_WEB_CODEX_TOOL_PYTHON:-$(command -v python3 || true)}"
+if [[ -z "$python_bin" || ! -x "$python_bin" ]]; then
+  printf 'tool package requires Python 3.11+\n' >&2
+  exit 127
+fi
+exec "$python_bin" "$root_dir/server.py" "$@"

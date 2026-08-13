@@ -1,0 +1,7 @@
+{
+  "name": "__TOOL_DIR__",
+  "version": "0.1.0",
+  "description": "Typed tools for __DISPLAY_NAME__.",
+  "author": {"name": "Workspace author"},
+  "mcpServers": "./.mcp.json"
+}

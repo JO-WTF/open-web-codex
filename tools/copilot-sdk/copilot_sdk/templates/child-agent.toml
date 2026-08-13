@@ -1,0 +1,21 @@
+name = "__AGENT_ID__"
+description = "Execute focused __DISPLAY_NAME__ work with the declared typed tool."
+developer_instructions = """
+Act only as the __DISPLAY_NAME__ worker. Follow the __CHILD_SKILL__ Skill. Use the declared MCP tools for the assigned task, return concise typed results, and preserve explicit failure states.
+"""
+
+[[skills.config]]
+name = "__SUPERVISOR_SKILL__"
+enabled = false
+
+[[skills.config]]
+name = "__CHILD_SKILL__"
+enabled = true
+
+[mcp_servers.__TOOL_ID__]
+command = "./tools/__TOOL_DIR__/bin/__TOOL_ID__-launcher"
+args = []
+enabled = true
+required = true
+default_tools_approval_mode = "approve"
+enabled_tools = ["health"]

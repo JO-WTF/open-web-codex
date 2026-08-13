@@ -47,6 +47,9 @@
 
 - [领域 Agent 扩展架构](domain-agent-extension-architecture.md)
 - [Skills、MCP 与自定义 UI 扩展](custom-skills-mcp-ui-guide.md)
+- [Copilot 开发者快速开始](tutorials/copilot-developer-quickstart.md)：当前 Atom 1 的
+  `copilot init` / `copilot validate` 源码入口；只证明脚手架和静态组合验证，不证明安装或
+  Runtime readiness。
 - [零基础多 Agent 开发教程（冻结迁移输入）](multi-agent-development-tutorial.md)
   - [教程标准与四条学习路径](tutorials/README.md)
   - [10 分钟运行印尼仓网示例](tutorials/indonesia-network-quickstart.md)

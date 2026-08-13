@@ -226,7 +226,9 @@ Settings 只保留 Codex 原生 Runtime Agents、Skills/MCP 等当前运行配�
 Catalog、Tool & Skill Studio、Supervisor Studio 与 Sidebar Agent Studio 已删除。当前阶段没有
 公开 Capability authoring/publish/install 产品入口。
 
-SDK 当前只有 `tool init/validate/test/pack`，Web 也没有消费 SDK 包的正式导入链路。
+SDK 当前有两层入口：`copilot init/validate` 提供 Atom 1 源码脚手架与静态组合验证，
+`copilot tool init/validate/test/pack` 提供高级 Tool 组件操作；尚无 Copilot dev/test、安装、
+Runtime readiness 或 Web 创作链路。
 公开 SDK、Studio 和 Copilot Builder 已后移到阶段二；它们不是阶段一缺口或退出门。
 
 ## 8. 当前最重要的边界偏离
