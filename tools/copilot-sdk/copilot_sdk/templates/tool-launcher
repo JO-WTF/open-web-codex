@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-python_bin="${OPEN_WEB_CODEX_TOOL_PYTHON:-$(command -v python3 || true)}"
+data_dir="${OPEN_WEB_CODEX_DATA_DIR:-}"
+if [[ -z "$data_dir" ]]; then
+  printf 'tool package requires OPEN_WEB_CODEX_DATA_DIR; run bin/setup-env first\n' >&2
+  exit 78
+fi
+python_bin="$data_dir/tool-envs/__TOOL_DIR__/bin/python"
 if [[ -z "$python_bin" || ! -x "$python_bin" ]]; then
-  printf 'tool package requires Python 3.11+\n' >&2
-  exit 127
+  printf 'tool environment is unavailable; run bin/setup-env first\n' >&2
+  exit 78
 fi
 exec "$python_bin" "$root_dir/server.py" "$@"

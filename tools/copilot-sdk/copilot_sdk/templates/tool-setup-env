@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+data_dir="${OPEN_WEB_CODEX_DATA_DIR:-}"
+if [[ -z "$data_dir" ]]; then
+  printf 'tool setup requires OPEN_WEB_CODEX_DATA_DIR\n' >&2
+  exit 78
+fi
+venv_dir="$data_dir/tool-envs/__TOOL_DIR__"
+python_cmd="${PYTHON:-python3}"
+command -v "$python_cmd" >/dev/null 2>&1 || {
+  printf 'tool setup requires Python 3.11+\n' >&2
+  exit 127
+}
+mkdir -p "$(dirname "$venv_dir")"
+"$python_cmd" -m venv "$venv_dir"
+"$venv_dir/bin/python" -m pip install --disable-pip-version-check \
+  -r "$root_dir/requirements.txt"

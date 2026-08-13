@@ -36,6 +36,27 @@ class CopilotCliTests(unittest.TestCase):
             )
             launcher = root / "tools/order-review-tools/bin/order_review_tools-launcher"
             self.assertTrue(launcher.stat().st_mode & 0o111)
+            setup = root / "tools/order-review-tools/bin/setup-env"
+            self.assertTrue(setup.stat().st_mode & 0o111)
+            tool_root = root / "tools/order-review-tools"
+            self.assertEqual(
+                (tool_root / "requirements.txt").read_text(encoding="utf-8"),
+                "mcp>=1.27,<2\n",
+            )
+            self.assertFalse((tool_root / "pyproject.toml").exists())
+            mcp = json.loads((tool_root / ".mcp.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                mcp["mcpServers"]["order_review_tools"]["env_vars"],
+                ["OPEN_WEB_CODEX_DATA_DIR"],
+            )
+            self.assertIn(
+                '-r "$root_dir/requirements.txt"',
+                setup.read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "tool-envs/order-review-tools/bin/python",
+                launcher.read_text(encoding="utf-8"),
+            )
 
     def test_init_refuses_to_overwrite_non_empty_destination(self):
         with tempfile.TemporaryDirectory() as directory:

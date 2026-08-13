@@ -17,9 +17,14 @@
 完成阶段一仓网正常业务闭环。这个结论只覆盖内置仓网 Copilot，不代表公开 Copilot SDK、
 Studio、第二领域、多用户产品或完整 hardening 矩阵已经完成。
 
-阶段二 Copilot SDK Atom 1 现已提供 `copilot init` 源码脚手架和 `copilot validate` 静态组合
-验证，并用内置仓网 manifest 作为 monorepo reference。它尚未提供开发/测试流程、Profile
-安装、Runtime discovery/readiness 或 Web 创作链，因此不改变上述产品能力边界。
+阶段二 Copilot SDK Atom 1 已提供 `copilot init` 源码脚手架和 `copilot validate` 静态组合
+验证；Atom 2a 又提供 `copilot dev` 隔离 discovery probe：通过官方 app-server 握手、
+`skills/list`、带 `selectedCapabilityRoots` 的临时 `thread/start` 和线程范围
+`mcpServerStatus/list` 验证声明能力可被 Runtime 发现。它不执行 Role spawn 或模型验收，也没有
+测试编排、生产 Profile 安装、readiness 持久化/聚合或 Web 创作链，因此不改变产品能力边界。
+Atom 2a 要求 Tool source 自有可执行 `bin/setup-env`；SDK 在 Profile 外的临时 data root 显式
+调用，缺失/失败返回 `EnvironmentUnavailable`。generated Python Tool 自有依赖描述和 setup，
+launcher 不隐式安装；仓网 reference 的 built-in 专属资产适配不冒充通用 dev setup。
 
 当前证据支持：
 
@@ -287,7 +292,7 @@ malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除�
 | Package Compiler | 无当前生产 owner；阶段二目标文档保留设计输入 | 不再是阶段一能力 |
 | Profile Installation | 无生产安装路径；built-in 直接使用 Profile 原生 seed/Runtime discovery | 不再是阶段一能力 |
 | Runtime discovery/readiness | built-in clean Profile 已通过官方 Skill/MCP status 与 native Role spawn gate；产品 Run admission 只走 Standard，旧 DB installation/readiness 对象已删除 | built-in gate E2；无独立产品 readiness owner |
-| Copilot / Tool SDK | Copilot `init` 可生成最小组合源码，`validate` 可从显式 source root 静态校验 manifest、Skill、Role identity/reference 与 Tool 引用并生成确定性组合描述摘要；内置仓网 manifest 是 repo-root monorepo reference。既有 Tool 组件 CLI 仍是高级入口 | E1，仅源码脚手架与静态引用/描述合同；不证明完整 Role 可被 Runtime 加载，Runtime 门属于 Atom 2；没有 dev/test、Web、安装或 Runtime readiness |
+| Copilot / Tool SDK | Copilot `init` 可生成带 source-owned Tool setup 的最小组合源码，`validate` 执行静态组合校验；`dev` 在隔离临时 Profile 中复制完整 Skill 树和 Role，先调用各 Tool 的 exact `bin/setup-env`，再通过 official selected capability roots 选择原始源码 Tool，并用官方 Skill/MCP inventory 输出 `discovery_ready`。既有 Tool 组件 CLI 仍是高级入口 | E2 本地 discovery gate；fresh generated init→dev 与缺失/失败 setup 已验证；Role spawn 与 model acceptance 明确 `not_run`，没有 `copilot test`、Web、生产安装或持久 readiness |
 | Skill 创作 | 阶段一仅支持直接编辑 Profile Skill；公开 SDK/Web 创作后移 | 无阶段一产品流 |
 | Agent/Supervisor Studio | 旧 Settings/Sidebar Studio 已删除；原生 Profile Agent 配置保留 | 无阶段一 authoring 产品流 |
 | Copilot Builder | 没有 Web 产品入口和安装总览；SDK Atom 1 不是 Builder 或安装链 | E0 |

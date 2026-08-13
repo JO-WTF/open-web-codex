@@ -1,10 +1,8 @@
 # Copilot 开发者快速开始
 
-这个快速开始使用 Copilot SDK Atom 1 创建并静态验证一个最小 Copilot 源码目录。完成后，
-你会得到一个声明 Supervisor Skill、child Skill、Runtime Role 和 Tool 组件的 `copilot.toml`。
-
-当前流程不会安装或运行 Copilot。开发循环、测试编排、Profile 安装、Runtime discovery 和
-readiness 尚未实现。
+这个快速开始使用 Copilot SDK 创建、静态验证并在隔离 Profile 中发现一个最小 Copilot 源码
+目录。完成后，你会得到一个声明 Supervisor Skill、child Skill、Runtime Role 和 Tool 组件的
+`copilot.toml`，以及一份来自真实 Codex app-server 的 `discovery_ready` 结果。
 
 ## 准备 SDK
 
@@ -37,6 +35,33 @@ source root，而不是相对于 `copilot.toml` 所在目录。默认读取 sour
 Tool ID 的引用，并返回组合摘要与确定性组合描述 hash；失败会保留具体错误码和相对路径。
 这是静态引用/描述合同，不证明完整 Role 配置可被 Runtime 加载；该 Runtime 门属于 Atom 2。
 
+## 运行隔离 discovery probe
+
+准备一个已存在的绝对 Workspace 路径，然后运行：
+
+```bash
+copilot dev ./scratch/my-copilot --workspace "$PWD"
+```
+
+`dev` 会重新验证当前 `copilot.toml`，将完整 Skill 目录树和 Role TOML 放入一次性隔离
+Profile；Tool 源码不复制进 Profile，而由官方 `thread/start.selectedCapabilityRoots` 选择。
+每个 Tool 必须自行提供可执行 `bin/setup-env`；`dev` 在 Runtime 前调用它，并提供隔离的
+`OPEN_WEB_CODEX_DATA_DIR`。`init` 生成的示例 Tool 已通过自己的 `requirements.txt` 与 setup 入口
+准备 Python/MCP 环境，launcher 不会隐式安装。入口缺失或失败会明确返回
+`EnvironmentUnavailable`。随后 `dev` 完成 app-server 握手，核对 `skills/list` 与线程范围的 `mcpServerStatus/list`。全部声明项
+都被发现才返回 `discovery_ready`；额外系统或用户能力被安全忽略。
+
+默认 Profile 会在成功或失败后删除。调试时可用 `--keep-profile` 保留临时 Profile，或用
+`--profile /absolute/profile-dir` 选择并保留显式目录。显式目录必须为空，或已由同一源码身份
+创建；工具不会覆盖任意既有 Profile。`--json` 返回有界机器输出，`--codex-bin PATH` 可选择
+Codex executable。app-server 的 HOME 与 cwd 位于 Profile 外的独立临时目录并始终删除。
+
+这个探针不启动 Turn、不调用模型、不 spawn Role，所以只证明 Runtime discovery，明确报告
+`roleSpawn=not_run` 与 `modelAcceptance=not_run`。它不是生产安装或完整运行 readiness。
+
+内置仓网 manifest 仍是 Atom 1 静态 monorepo reference；它使用 built-in 专属资产准备与 Role
+适配，不提供通用 `bin/setup-env`，因此不是 `copilot dev` 的通用示例。
+
 ## 验证仓网 monorepo reference
 
 内置仓网 Copilot 的 manifest 位于仓库子目录，但其显式 source root 是仓库根，因为它引用
@@ -52,9 +77,9 @@ copilot validate . \
 
 ## 当前边界
 
-`copilot init` 与 `copilot validate` 是当前 Copilot 开发者入口。已有的
-`copilot tool ...` 命令服务于高级 Tool 组件开发，不是这一新手流程的一部分，也不构成
-Copilot 运行就绪证据。
+`copilot init`、`copilot validate` 与无模型的 `copilot dev` 是当前 Copilot 开发者入口。尚无
+`copilot test`、生产 Profile 安装、Role spawn 或模型验收。已有的 `copilot tool ...` 命令服务于
+高级 Tool 组件开发，也不构成组合后的完整运行就绪证据。
 
 Web Settings 中的 Agents 是 Codex Runtime Role 配置，不是 Copilot Builder。当前没有从这里
 创建、安装或运行上述源码目录的产品流程。

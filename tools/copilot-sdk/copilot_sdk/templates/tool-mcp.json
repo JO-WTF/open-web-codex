@@ -4,6 +4,7 @@
       "command": "./bin/__TOOL_ID__-launcher",
       "args": [],
       "cwd": ".",
+      "env_vars": ["OPEN_WEB_CODEX_DATA_DIR"],
       "default_tools_approval_mode": "approve"
     }
   }

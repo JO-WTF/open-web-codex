@@ -6,12 +6,22 @@ import argparse
 from dataclasses import asdict
 from importlib.resources import files
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from .copilot_manifest import CopilotPackageError, validate_copilot_package
+from .app_server_client import AppServerClient, AppServerClientError
+from .dev_profile import (
+    CopilotDevError,
+    load_dev_composition,
+    prepare_dev_profile,
+    resolve_tool_setup,
+    validate_workspace,
+)
 from .manifest import PackageError, pack_tool_package, validate_tool_package
 
 
@@ -93,6 +103,8 @@ COPILOT_TEMPLATE_FILES = {
     "tools/__TOOL_DIR__/.codex-plugin/plugin.json": "tool-plugin.json",
     "tools/__TOOL_DIR__/.mcp.json": "tool-mcp.json",
     "tools/__TOOL_DIR__/bin/__TOOL_ID__-launcher": "tool-launcher",
+    "tools/__TOOL_DIR__/bin/setup-env": "tool-setup-env",
+    "tools/__TOOL_DIR__/requirements.txt": "tool-requirements.txt",
     "tools/__TOOL_DIR__/server.py": "tool-server.py",
 }
 
@@ -140,7 +152,7 @@ def _init_copilot(path: Path, name: str) -> None:
         destination.write_text(
             _render_template(source_template, replacements), encoding="utf-8"
         )
-        if source_template == "tool-launcher":
+        if source_template in ("tool-launcher", "tool-setup-env"):
             destination.chmod(0o755)
 
 
@@ -205,6 +217,228 @@ def _run_tests(path: Path) -> int:
     ).returncode
 
 
+def _resolve_codex_bin(value: Path | None) -> Path:
+    raw = "codex" if value is None else str(value)
+    located = shutil.which(raw)
+    if located is None:
+        raise CopilotDevError(
+            "AppServerUnavailable", "launch", raw, "Codex executable was not found"
+        )
+    path = Path(located).resolve(strict=True)
+    if not path.is_file() or not path.stat().st_mode & 0o111:
+        raise CopilotDevError(
+            "AppServerUnavailable", "launch", str(path), "Codex executable is not executable"
+        )
+    return path
+
+
+def _string_list(value: object, *, field: str) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise CopilotDevError(
+            "DiscoveryFailed", "discovery", field, "Runtime returned an invalid inventory"
+        )
+    entries: list[dict[str, object]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise CopilotDevError(
+                "DiscoveryFailed", "discovery", field, "Runtime returned an invalid inventory entry"
+            )
+        entries.append(entry)
+    return entries
+
+
+def _run_dev_probe(args: argparse.Namespace) -> dict[str, object]:
+    composition = load_dev_composition(args.source_root, args.manifest)
+    workspace = validate_workspace(args.workspace)
+    codex_bin = _resolve_codex_bin(args.codex_bin)
+    prepared = prepare_dev_profile(
+        composition, args.profile, keep_profile=args.keep_profile
+    )
+    client: AppServerClient | None = None
+    try:
+        environment = {"OPEN_WEB_CODEX_DATA_DIR": str(prepared.process_data)}
+        for tool in composition.tools:
+            setup = resolve_tool_setup(composition, tool)
+            try:
+                completed = subprocess.run(
+                    [str(setup)],
+                    cwd=tool.source,
+                    env={**os.environ, **environment},
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    timeout=120,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise CopilotDevError(
+                    "EnvironmentUnavailable",
+                    "tool-setup",
+                    str(setup),
+                    "Tool environment setup could not complete",
+                    str(error),
+                ) from error
+            if completed.returncode != 0:
+                cause = (completed.stderr or completed.stdout)[-2000:]
+                raise CopilotDevError(
+                    "EnvironmentUnavailable",
+                    "tool-setup",
+                    str(setup),
+                    f"Tool environment setup exited with status {completed.returncode}",
+                    cause,
+                )
+        client = AppServerClient.launch(
+            codex_bin,
+            profile_root=prepared.profile_root,
+            process_home=prepared.process_home,
+            process_cwd=prepared.process_cwd,
+            environment=environment,
+        )
+        client.initialize()
+        skills_result = client.request(
+            "skills/list", {"cwds": [str(workspace)], "forceReload": True}
+        )
+        skill_entries = _string_list(skills_result.get("data"), field="skills/list.data")
+        discovered_skill_names: set[str] = set()
+        for entry in skill_entries:
+            errors = _string_list(entry.get("errors"), field="skills/list.data.errors")
+            if errors:
+                raise CopilotDevError(
+                    "DiscoveryIncomplete",
+                    "discovery",
+                    composition.manifest_path.as_posix(),
+                    "Runtime reported Skill discovery errors",
+                )
+            for skill in _string_list(entry.get("skills"), field="skills/list.data.skills"):
+                name = skill.get("name")
+                if isinstance(name, str):
+                    discovered_skill_names.add(name)
+
+        selected_roots = [
+            {
+                "id": tool.id,
+                "location": {
+                    "type": "environment",
+                    "environmentId": "local",
+                    "path": str(tool.source),
+                },
+            }
+            for tool in composition.tools
+        ]
+        thread_result = client.request(
+            "thread/start",
+            {
+                "cwd": str(workspace),
+                "ephemeral": True,
+                "approvalPolicy": "never",
+                "sandbox": "read-only",
+                "environments": [
+                    {
+                        "environmentId": "local",
+                        "cwd": str(workspace),
+                        "runtimeWorkspaceRoots": [str(workspace)],
+                    }
+                ],
+                "selectedCapabilityRoots": selected_roots,
+            },
+        )
+        thread = thread_result.get("thread")
+        thread_id = thread.get("id") if isinstance(thread, dict) else None
+        if not isinstance(thread_id, str) or not thread_id:
+            raise CopilotDevError(
+                "DiscoveryFailed",
+                "thread/start",
+                "thread.id",
+                "Runtime did not return a thread identity",
+            )
+        mcp_result = client.request(
+            "mcpServerStatus/list",
+            {"threadId": thread_id, "detail": "toolsAndAuthOnly", "limit": 100},
+        )
+        mcp_entries = _string_list(
+            mcp_result.get("data"), field="mcpServerStatus/list.data"
+        )
+        discovered_mcp_names = {
+            entry["name"]
+            for entry in mcp_entries
+            if isinstance(entry.get("name"), str)
+            and isinstance(entry.get("tools"), dict)
+            and bool(entry["tools"])
+        }
+        expected_skills = list(composition.summary.skill_ids)
+        expected_tools = list(composition.summary.tool_ids)
+        observed_skills = [
+            name for name in expected_skills if name in discovered_skill_names
+        ]
+        observed_tools = [
+            name for name in expected_tools if name in discovered_mcp_names
+        ]
+        missing_skills = [name for name in expected_skills if name not in discovered_skill_names]
+        missing_tools = [name for name in expected_tools if name not in discovered_mcp_names]
+        if missing_skills or missing_tools:
+            missing = ", ".join(missing_skills + missing_tools)
+            raise CopilotDevError(
+                "DiscoveryIncomplete",
+                "discovery",
+                composition.manifest_path.as_posix(),
+                f"Runtime did not discover declared capabilities: {missing}",
+            )
+        return {
+            "ok": True,
+            "state": "discovery_ready",
+            "copilot": {
+                "id": composition.summary.id,
+                "compositionDescriptorSha256": composition.summary.composition_descriptor_sha256,
+            },
+            "profile": {
+                "path": str(prepared.profile_root),
+                "temporary": prepared.temporary,
+                "preserved": not prepared.cleanup_on_exit,
+            },
+            "workspace": str(workspace),
+            "runtime": {"codexBin": str(codex_bin), "threadId": thread_id},
+            "discovery": {
+                "skills": {"expected": expected_skills, "observed": observed_skills},
+                "mcpServers": {"expected": expected_tools, "observed": observed_tools},
+            },
+            "roleSpawn": "not_run",
+            "modelAcceptance": "not_run",
+        }
+    except AppServerClientError as error:
+        raise CopilotDevError(
+            error.code, "app-server", str(codex_bin), error.message, error.cause
+        ) from error
+    finally:
+        if client is not None:
+            client.close()
+        prepared.cleanup()
+
+
+def _print_dev_result(payload: dict[str, object], *, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    copilot = payload["copilot"]
+    discovery = payload["discovery"]
+    assert isinstance(copilot, dict) and isinstance(discovery, dict)
+    print(f"Copilot '{copilot['id']}' is discovery_ready.")
+    print(f"  workspace: {payload['workspace']}")
+    print(f"  skills: {len(discovery['skills']['observed'])}/{len(discovery['skills']['expected'])}")
+    print(f"  MCP servers: {len(discovery['mcpServers']['observed'])}/{len(discovery['mcpServers']['expected'])}")
+    print("  role spawn: not_run")
+    print("  model acceptance: not_run")
+
+
+def _dev_error_payload(error: CopilotDevError) -> dict[str, object]:
+    detail: dict[str, object] = {
+        "code": error.code,
+        "stage": error.stage,
+        "path": error.path,
+        "message": error.message,
+    }
+    return {"ok": False, "error": detail}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="copilot")
     subparsers = parser.add_subparsers(dest="resource", required=True)
@@ -218,6 +452,15 @@ def main(argv: list[str] | None = None) -> int:
     validate_copilot.add_argument("source_root", type=Path)
     validate_copilot.add_argument("--manifest", type=Path, default=Path("copilot.toml"))
     validate_copilot.add_argument("--json", action="store_true")
+
+    dev_copilot = subparsers.add_parser("dev")
+    dev_copilot.add_argument("source_root", type=Path)
+    dev_copilot.add_argument("--workspace", type=Path, required=True)
+    dev_copilot.add_argument("--manifest", type=Path, default=Path("copilot.toml"))
+    dev_copilot.add_argument("--profile", type=Path)
+    dev_copilot.add_argument("--keep-profile", action="store_true")
+    dev_copilot.add_argument("--codex-bin", type=Path)
+    dev_copilot.add_argument("--json", action="store_true")
 
     tool = subparsers.add_parser("tool")
     commands = tool.add_subparsers(dest="command", required=True)
@@ -246,6 +489,9 @@ def main(argv: list[str] | None = None) -> int:
             summary = validate_copilot_package(args.source_root, args.manifest)
             _print_copilot_summary(summary, manifest=args.manifest, as_json=args.json)
             return 0
+        if args.resource == "dev":
+            _print_dev_result(_run_dev_probe(args), as_json=args.json)
+            return 0
         if args.command == "init":
             _init_tool(args.path, args.name, args.description)
             print(json.dumps(validate_tool_package(args.path), ensure_ascii=False, indent=2))
@@ -267,6 +513,15 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(
                 f"copilot: {error.code}: {error.relative_path}: {error.message}",
+                file=sys.stderr,
+            )
+        return 2
+    except CopilotDevError as error:
+        if getattr(args, "json", False):
+            print(json.dumps(_dev_error_payload(error), ensure_ascii=False, indent=2))
+        else:
+            print(
+                f"copilot: {error.code}: {error.stage}: {error.path}: {error.message}",
                 file=sys.stderr,
             )
         return 2

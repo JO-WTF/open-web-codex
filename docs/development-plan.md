@@ -19,7 +19,7 @@ Workspace 下的 Task 可按用户意图复用普通文件，也可通过同一�
 Resource ref 复用中间数据。保存什么、读取什么、怎样复用、裁剪、合并或覆盖，由用户
 要求、Skill 和 Tool 决定，Platform 不理解仓网数据语义。
 
-## 0. 阶段二当前切片：Copilot SDK Atom 1
+## 0. 阶段二当前切片：Copilot SDK Atom 1 与 Atom 2a
 
 Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码入口：
 
@@ -29,7 +29,16 @@ Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码�
    它不证明完整 Role 可被 Runtime 加载，该 Runtime 门属于 Atom 2。
 3. 所有 manifest 组件路径都相对于显式 source root；内置仓网 manifest 以 repo root 为 source
    root，静态声明三项 Skill、两项 Role identity/reference 和 `supply_chain`/`map_utils` Tool。
-4. 这一 Atom 不建立开发/测试编排、Profile 安装、Runtime discovery/readiness、Web Builder、
+4. Atom 2a 的 `copilot dev` 在隔离 Profile 中复制完整 Skill 树和 Role TOML；Tool 保持 source
+   owner；Runtime 启动前必须显式调用每个 Tool 自有的可执行 `bin/setup-env`，只注入 Profile 外
+   的临时 data root。缺入口或 setup 失败返回 typed `EnvironmentUnavailable`。generated Python
+   Tool 自有依赖描述与 setup，launcher 只消费已准备环境，不静默安装；SDK 不扫描依赖文件。
+   Tool 随后通过官方 `thread/start.selectedCapabilityRoots` 从 exact source root 选择。它用 app-server 官方握手、
+   `skills/list` 和线程范围 `mcpServerStatus/list` 验证声明能力的 discovery。
+5. `dev` 的 app-server HOME/cwd 使用 Profile 外的独立临时目录并始终清理；默认临时 Profile
+   清理，`--keep-profile` 或显式 `--profile` 才保留。成功只报告 `discovery_ready`，Role spawn
+   和 model acceptance 固定为 `not_run`。
+6. 当前仍不建立 `copilot test`、生产 Profile 安装、readiness 持久化/聚合、Web Builder、
    Catalog 或 Marketplace，也不把 Settings Agents 误写成 Copilot 创作入口。
 
 当前验证 reference 是：
@@ -40,8 +49,10 @@ copilot validate . \
 ```
 
 退出：新源码目录可由 `init` 生成并由 `validate` 静态通过；仓网 monorepo reference 从 repo-root
-source root 静态通过；能力基线和教程明确 E1 与未实现边界。运行、安装和 readiness 只有在各自
-owner 的后续 Atom 具备真实证据后才能更新。
+source root 静态通过；fake transcript 覆盖 official RPC 顺序、参数、inventory 与 cleanup，真实
+app-server fresh init→dev gate 证明 source-owned setup 与同一 discovery 链。仓网 monorepo 继续是
+静态 reference；其 built-in 专属资产适配不冒充通用 setup。能力基线和教程明确 E2 discovery 与未实现边界；Role
+执行、模型验收、安装和持久 readiness 只有在各自 owner 的后续 Atom 具备真实证据后才能更新。
 
 ### 已验证的运行体验与低延迟领域操作基线
 
