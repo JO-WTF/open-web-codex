@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,10 +16,11 @@ from .dev_profile import (
     PreparedDevProfile,
     load_dev_composition,
     prepare_dev_profile,
-    resolve_tool_setup,
+    prepare_dev_tool_composition,
     validate_workspace,
 )
 from .mock_responses import MockResponsesFixture
+from .tool_environment import MaterializedToolComposition
 
 
 class CopilotTestError(RuntimeError):
@@ -49,7 +48,8 @@ class CopilotTestError(RuntimeError):
 class TestEvidence:
     supervisor_skill: str
     agent: str
-    tool: str
+    capability_root: str
+    server: str
     tool_name: str
     mcp_completed: bool
     arguments_matched: bool
@@ -85,14 +85,19 @@ def run_copilot_tests(
         prepared = prepare_dev_profile(composition)
     except CopilotDevError as error:
         raise _test_error_from_dev(error) from error
-    started = time.monotonic()
     try:
+        try:
+            prepared_tools = prepare_dev_tool_composition(prepared)
+        except CopilotDevError as error:
+            raise _test_error_from_dev(error) from error
+        started = time.monotonic()
         return _run_case(
             composition,
             tests[0],
             prepared,
             canonical_workspace,
             codex_bin,
+            prepared_tools,
             timeout_seconds=timeout_seconds,
             started=started,
         )
@@ -106,46 +111,22 @@ def _run_case(
     prepared: PreparedDevProfile,
     workspace: Path,
     codex_bin: Path,
+    prepared_tools: MaterializedToolComposition,
     *,
     timeout_seconds: float,
     started: float,
 ) -> dict[str, Any]:
-    environment = {"OPEN_WEB_CODEX_DATA_DIR": str(prepared.process_data)}
-    for tool in composition.tools:
-        try:
-            setup = resolve_tool_setup(composition, tool)
-        except CopilotDevError as error:
-            raise _test_error_from_dev(error) from error
-        try:
-            completed = subprocess.run(
-                [str(setup)],
-                cwd=tool.source,
-                env={**os.environ, **environment},
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                check=False,
-                timeout=120,
-            )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise CopilotTestError(
-                "EnvironmentUnavailable", "tool-setup", "Tool environment setup could not complete"
-            ) from error
-        if completed.returncode != 0:
-            raise CopilotTestError(
-                "EnvironmentUnavailable",
-                "tool-setup",
-                f"Tool environment setup exited with status {completed.returncode}",
-            )
+    environment: dict[str, str] = {}
 
     supervisor_path = (
         prepared.profile_root / "skills" / composition.supervisor_skill / "SKILL.md"
     ).resolve(strict=True)
     supervisor_marker = supervisor_path.read_text(encoding="utf-8")
     child_prompt = "Run the declared MCP tool once and return its exact structured result."
+    runtime_deadline = _runtime_deadline(timeout_seconds)
     with MockResponsesFixture(
         agent=case.agent,
-        tool=case.tool,
+        server=case.server,
         tool_name=case.tool_name,
         arguments=case.arguments,
         supervisor_marker=supervisor_marker,
@@ -173,10 +154,10 @@ def _run_case(
                     "location": {
                         "type": "environment",
                         "environmentId": "local",
-                        "path": str(tool.source),
+                        "path": str(tool.projection_root),
                     },
                 }
-                for tool in composition.tools
+                for tool in prepared_tools.capability_roots
             ]
             thread = client.request(
                 "thread/start",
@@ -201,8 +182,9 @@ def _run_case(
             inventory = client.request(
                 "mcpServerStatus/list",
                 {"threadId": root_thread_id, "detail": "toolsAndAuthOnly", "limit": 100},
+                timeout_seconds=max(0.1, runtime_deadline - time.monotonic()),
             )
-            _require_tool(inventory, case.tool, case.tool_name)
+            _require_tool(inventory, case.server, case.tool_name)
             turn = client.request(
                 "turn/start",
                 {
@@ -229,7 +211,7 @@ def _run_case(
                     root_thread_id=root_thread_id,
                     root_turn_id=root_turn_id,
                     supervisor_skill=composition.supervisor_skill,
-                    deadline=started + timeout_seconds,
+                    deadline=runtime_deadline,
                 )
             except CopilotTestError as error:
                 role_warnings = [
@@ -291,8 +273,9 @@ def _public_evidence(evidence: TestEvidence) -> dict[str, Any]:
         "supervisorSkill": evidence.supervisor_skill,
         "agent": evidence.agent,
         "mcp": {
-            "server": evidence.tool,
-            "tool": evidence.tool_name,
+            "capabilityRoot": evidence.capability_root,
+            "server": evidence.server,
+            "toolName": evidence.tool_name,
             "completed": evidence.mcp_completed,
             "argumentsMatched": evidence.arguments_matched,
             "structuredContentMatched": evidence.structured_content_matched,
@@ -303,12 +286,17 @@ def _public_evidence(evidence: TestEvidence) -> dict[str, Any]:
     }
 
 
+def _runtime_deadline(timeout_seconds: float) -> float:
+    """Start the Runtime deadline after bounded Tool setup has completed."""
+
+    return time.monotonic() + timeout_seconds
+
+
 def _test_error_from_dev(error: CopilotDevError) -> CopilotTestError:
     return CopilotTestError(
         error.code,
         error.stage,
         "native acceptance environment preparation failed",
-        {"path": error.path, "cause": error.cause},
     )
 
 
@@ -364,9 +352,9 @@ def _collect_evidence(
         except AppServerClientError as error:
             classifications = mock.request_classifications[:8]
             raise CopilotTestError(
-                "TestTimedOut",
+                "TestTimedOut" if error.code == "NotificationTimedOut" else "RuntimeTestFailed",
                 "app-server",
-                f"native acceptance timed out; requests={classifications}; notifications={observed[:24]}",
+                "native acceptance notification stream ended before terminal evidence",
                 {"requests": classifications, "notifications": observed[:24]},
             ) from error
         method = notification.get("method")
@@ -452,7 +440,7 @@ def _collect_evidence(
     matching = [
         item
         for item in mcp_items
-        if item.get("server") == case.tool and item.get("tool") == case.tool_name
+        if item.get("server") == case.server and item.get("tool") == case.tool_name
     ]
     if len(matching) != 1:
         raise CopilotTestError(
@@ -476,7 +464,8 @@ def _collect_evidence(
     return TestEvidence(
         supervisor_skill=supervisor_skill,
         agent=case.agent,
-        tool=case.tool,
+        capability_root=case.tool,
+        server=case.server,
         tool_name=case.tool_name,
         mcp_completed=True,
         arguments_matched=True,

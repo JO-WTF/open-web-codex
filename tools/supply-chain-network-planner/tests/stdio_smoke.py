@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -18,21 +19,16 @@ from mcp.client.stdio import stdio_client
 from pydantic import AnyUrl
 
 ROOT = Path(__file__).resolve().parents[1]
-LAUNCHER = ROOT / "bin" / "supply-chain-planner-launcher"
 SANDBOX_META = "codex/sandbox-state-meta"
 
 
 def server_environment(state_root: Path) -> dict[str, str]:
     environment = dict(os.environ)
-    repository_data_dir = ROOT.parent.parent / ".local" / "open-web-codex"
+    repository_data_dir = state_root / "runtime"
     environment.update(
         {
             "CODEX_HOME": str(state_root / "codex-home"),
             "OPEN_WEB_CODEX_DATA_DIR": str(repository_data_dir),
-            "OPEN_WEB_CODEX_LOG_DIR": str(repository_data_dir / "logs"),
-            "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV": str(
-                repository_data_dir / "tool-envs" / "supply-chain-network-planner"
-            ),
             # Force analysis MCP calls to fail closed in this isolated smoke.
             "OPEN_WEB_CODEX_ANALYSIS_GATE_URL": "",
             "OPEN_WEB_CODEX_ANALYSIS_GATE_KEY": "",
@@ -62,8 +58,8 @@ async def smoke() -> None:
             encoding="utf-8",
         )
         data_parameters = StdioServerParameters(
-            command=str(LAUNCHER),
-            args=["--data-server"],
+            command=sys.executable,
+            args=["-m", "supply_chain_planner.data_server"],
             cwd=str(workspace),
             env=environment,
         )
@@ -101,8 +97,8 @@ async def smoke() -> None:
                 assert profile["sources"][0]["relative_path"] == "network.csv"
                 assert profile["sources"][0]["mapping_suggestions"]
         planning_parameters = StdioServerParameters(
-            command=str(LAUNCHER),
-            args=[],
+            command=sys.executable,
+            args=["-m", "supply_chain_planner.server"],
             cwd=str(workspace),
             env=environment,
         )

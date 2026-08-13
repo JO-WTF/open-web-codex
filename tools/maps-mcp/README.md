@@ -43,72 +43,43 @@ keys in `MEMORY.md`, instructions, prompts, model-visible tool arguments, result
 
 ## Install
 
-The platform startup path prepares one shared maps MCP Python environment and installs the pinned
-official Mapbox Style Specification validator before user Threads run. Python 3, Node.js, and npm
-are required.
-By default `scripts/run-local.sh` creates or refreshes it under
-`$OPEN_WEB_CODEX_DATA_DIR/tool-envs/maps-mcp` by calling `scripts/setup-maps-mcp-env.sh`, and then
-exports `OPEN_WEB_CODEX_MAPS_MCP_VENV`/`MAPS_MCP_VENV` so every user conversation, workspace, and
-Thread started by that local platform process reuses the same environment. The launcher uses the
-same repo-level shared path as its fallback even when the MCP child receives a sanitized
-environment. This keeps virtualenv creation and dependency downloads out of the user-visible MCP
-handshake and avoids accidentally falling back to a stale plugin-local `.venv`.
+This Tool source declares its Python project, Node project, hash lock, `map_utils` module entry and
+typed environment bindings in `runtime.toml`. The SDK generic provisioner owns virtualenv creation,
+pip/npm caches, staged non-editable installation, `npm ci --ignore-scripts`, timeouts and reuse.
+Prepared environments live under the caller-provided output root, never inside this Tool, a Profile
+or a Workspace. Python 3, Node.js and npm are explicit host adapters.
 
-The selected Plugin root is validated as a strictly contained tree. Do not create a `.venv`
-inside `tools/maps-mcp`: virtual environments normally contain interpreter symlinks outside the
-Plugin root, so the root would correctly be unavailable to new Threads. For manual development,
-prepare and reuse the same external environment from the repository root:
+For manual repository development, invoke the same platform preparation contract from the
+repository root:
 
 ```bash
-./scripts/setup-maps-mcp-env.sh
-.local/open-web-codex/tool-envs/maps-mcp/bin/python -c 'import maps_mcp.server, mcp'
+PYTHONPATH=tools/copilot-sdk python3 -m copilot_sdk prepare . \
+  --manifest apps/web/builtin/warehouse-network-copilot/copilot.toml \
+  --output-root "$PWD/.local/open-web-codex/copilot-environment"
 ```
+
+`scripts/run-local.sh` performs this generic preparation once before a real Platform Server starts.
+It does not contain maps-specific installation logic. Runtime launch and user conversations never
+download or install Tool dependencies.
 
 Google projects must enable Geocoding API v4 and Routes API. Mapbox requires an access token with
 Geocoding, Directions, and Matrix access.
 
 ## Codex discovery
 
-This directory is also a Codex plugin root. The checked-in `.codex-plugin/plugin.json` points to
-`./.mcp.json` and `./skills/`, so Codex can discover the `map_utils` MCP server and route/map
-Skill guidance from the selected workspace's capability roots instead of relying on `run-local.sh`
-or hand-edited Profile `config.toml` entries. In the Web platform, the native Profile Host adapter
-selects local plugin roots discovered under the source tree or workspace `tools/` directories when it starts
-a new Thread; deployments may add extra absolute roots with `OPEN_WEB_CODEX_CAPABILITY_ROOTS`.
+This directory is a Tool source, not an authored Plugin transport root. The built-in Copilot
+manifest identifies it as capability root `map_utils` and explicitly references `runtime.toml`.
+The provisioner compiles an internal prepared descriptor; SDK `dev`/`test` create disposable
+`.codex-plugin`/`.mcp.json` projections from it, while the Platform Server consumes the same
+descriptor and projects the exact transport into the Profile Role. Neither path scans source or
+writes hidden Profile configuration.
 
-The plugin MCP config starts `./bin/maps-mcp-launcher` with `cwd="."` and requests the shared maps
-environment/logging variables and standard uppercase/lowercase proxy variables via `env_vars`. The
-launcher resolves the plugin root and repository root, verifies that the shared environment can
-import `maps_mcp` and `mcp`, keeps startup logs on stderr so MCP stdio stdout remains JSON-RPC-only,
-and then execs `python -m maps_mcp.server`. Remote Google and Mapbox calls use the inherited
-`HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` settings; `ALL_PROXY` is the fallback for HTTP and HTTPS
-when protocol-specific settings are absent. TLS certificate and hostname validation use the system
-defaults. If the shared environment is missing or incomplete,
-the launcher fails fast with instructions to run `scripts/setup-maps-mcp-env.sh` instead of doing
-dependency downloads during a user conversation. Set `MAPS_MCP_AUTO_INSTALL=1` only for ad-hoc manual
-development. The MCP client must advertise URL elicitation support. If the current browser surface
-cannot render the key request, the tool fails safely instead of requesting the key in a model-visible
-form.
-
-The plugin keeps `default_tools_approval_mode` at `prompt` because geocoding, routing, and distance
-matrix calls reach a credentialed external provider and may be billable. Only the local
-`create_map_card` presentation Tool is explicitly preapproved. This policy does not replace the
-separate maps-provider credential elicitation: missing credentials still require the user to select
-a provider and save a key through the typed in-app flow.
-
-`scripts/setup-maps-mcp-env.sh` writes detailed setup logs to
-`$OPEN_WEB_CODEX_LOG_DIR/maps-mcp-env.log` by default. The log records timestamps, Python/pip
-versions, OS information, venv path, command exit context, and whether proxy variables are set
-without printing proxy values or credentials. Use that file first when debugging server proxy,
-dependency, Python version, or platform startup failures.
-
-`bin/maps-mcp-launcher` writes per-start handshake diagnostics to
-`$OPEN_WEB_CODEX_LOG_DIR/maps-mcp-launcher.log` by default. It records cwd, launcher args, selected
-repo root, selected venv, Python version, proxy-variable presence, import-check status including the
-first import error summary, and the MCP server stderr stream. When Codex reports
-`connection closed: initialize response`, inspect this launcher log together with `maps-mcp-env.log`
-to distinguish missing shared env, import errors, Python runtime errors, and FastMCP startup
-exceptions.
+The Network Role keeps `default_tools_approval_mode` at `prompt` because geocoding, routing and
+distance matrix calls reach a credentialed external provider and may be billable. Only
+`create_map_card` is explicitly preapproved. This Role policy remains separate from environment
+preparation and from provider credential elicitation. The MCP client must advertise URL elicitation
+support; if the browser cannot render the request, the Tool fails safely instead of exposing a key
+to the model.
 
 ## Tests
 

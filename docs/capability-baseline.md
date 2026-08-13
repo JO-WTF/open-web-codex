@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档性质 | 当前事实与证据 |
 | 观察日期 | 2026-08-13 |
-| 代码快照 | 阶段二 SDK 原生正常链工作树（基于 `6f6b9cb05`） |
+| 代码快照 | 阶段二通用 Tool 环境工作树（基于 `e492b7248d`） |
 | 当前阶段 | 阶段二已进入；阶段一内置仓网 Copilot 正常业务闭环作为已通过基线 |
 | 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
 
@@ -25,9 +25,14 @@ fixture 驱动真实 app-server，已从 fresh init 通过 Supervisor Skill、�
 参数/结构化结果、child terminal 和 Root terminal 的单条 normal case；PASS 不读取最终文本。
 它没有生产模型质量验收、生产 Profile 安装、readiness 持久化/聚合或 Web 创作链，因此不改变
 产品能力边界。
-Atom 2a 要求 Tool source 自有可执行 `bin/setup-env`；SDK 在 Profile 外的临时 data root 显式
-调用，缺失/失败返回 `EnvironmentUnavailable`。generated Python Tool 自有依赖描述和 setup，
-launcher 不隐式安装；仓网 reference 的 built-in 专属资产适配不冒充通用 dev setup。
+当前 Tool 环境合同已收敛到通用 SDK owner：每个 `[[tools]]` 显式引用 `runtime.toml`，Tool
+source 只保留 Python/Node 项目 manifest、hash lock、server entry/env binding 声明与领域代码。
+SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，生成内部
+`prepared-tools.v1.json` 与 dev/test 使用的一次性 Plugin 投影；Tool 不再提供 setup、launcher
+或 source `.mcp.json`/`.codex-plugin` transport。平台本地 real 启动只调用一次同一
+`copilot prepare`，Server 泛化消费 descriptor 并按 Profile 解析 typed 绑定；Runtime launch
+和用户对话期间不安装依赖。SDK parser/provisioner、生成骨架、dev/test 和平台消费各自仍以本
+工作树的 focused/full gate 为证据，不把它扩大为生产安装、Marketplace 或多用户能力。
 
 当前证据支持：
 
@@ -49,7 +54,7 @@ launcher 不隐式安装；仓网 reference 的 built-in 专属资产适配不�
 | --- | --- |
 | 真实多 Agent 运行 | 阶段一 normal path 已通过真实 Web E2E |
 | Root 用户输入与 execution projection | 阶段一 normal path 可用；pending approval 刷新恢复已通过 |
-| Tool/Skill SDK 与 Studio | Copilot 源码 `init`/`validate` Atom 1 与高级 Tool 组件 CLI 存在；旧 Web Studio 已删除 |
+| Tool/Skill SDK 与 Studio | Copilot 源码 `init`/`validate`、通用环境 `prepare`、隔离 `dev` 与本地 fixture `test` 存在；旧 Web Studio 已删除 |
 | Agent/Supervisor 创作 | 旧 Web authoring 已删除；阶段一仅直接编辑 Profile Skill/Role |
 | Copilot 编译、Profile 安装和通用 Runtime discovery | 未形成生产链；built-in 有独立真实 gate |
 | 算法工程师自助扩展 | 未实现 |
@@ -225,20 +230,19 @@ Profile seed 与显式应用资产 composition：
   `plugins`、`remote_plugin`、`apps` 与 `tool_suggest`；CLI feature discovery 精确报告四项
   均为 disabled，real clean-Profile Runtime gate 仍能发现三项内置 Skill、两项 Role 与
   role-local MCP。平台没有复制 Plugin/App/Tool Suggest discovery，也没有改写 `config.toml`；
-- real mode 必须显式提供 supply-chain/maps application asset root 与 prepared venv。Server
-  canonicalize 并验证固定 launcher/runtime、八项只读印尼 Mock 源和 Mapbox Style Spec，
-  不从 cwd、Workspace、`CARGO_MANIFEST_DIR` 或源码树扫描 fallback；部署 root symlink 可用，
-  child escape 拒绝。3 项 composition 单测覆盖含引号、空格和非 ASCII 的 TOML 路径；
-- Profile 不复制 Tool、venv、Node dependency、Mock、cache 或 test。Data/Network Role 持有
-  role-local MCP transport、精确 tool allowlist 与 Tool 级 approval policy，Root 没有全局仓网
+- real mode 在 Server 启动前只执行一次 generic `copilot prepare`。SDK 从 exact built-in
+  manifest、Tool runtime、direct manifest/hash lock 生成外置依赖环境和
+  `prepared-tools.v1.json`；Server typed 校验 capability root、server、stdio transport 和 env
+  binding，不从 cwd、Workspace、`CARGO_MANIFEST_DIR` 或源码树扫描 fallback；
+- Profile 不复制 Tool、venv、Node dependency、Mock、cache 或 test。Data/Network Role source
+  持有精确 tool allowlist 与 Tool 级 approval policy，Server 从 prepared descriptor 投影
+  role-local MCP transport，Root 没有全局仓网
   MCP；Data4 全部是有界本地预批准，Network 只预批准本地计算/验证，maps 只预批准
-  `create_map_card`，外部地图调用和 final Workspace 文件保持 `prompt`。maps cwd 是共享只读
-  asset root，状态写入 Profile 私有 `mcp-state/maps-mcp`；
-- `probe-builtin-network-copilot-mcp-assets.sh` 真实启动 Data、Demo、Network、maps 四个 stdio
-  MCP 并读取 inventory，退出码 0；启动前后两个共享 asset tree 的文件集合、size 和 mtime
-  快照完全一致。
+  `create_map_card`，外部地图调用和 final Workspace 文件保持 `prompt`。prepared transport
+  不携带 cwd，Runtime 使用 Thread 已授权的 Workspace 作为 maps stdio MCP cwd；
+  状态写入 Profile 私有 `mcp-state/maps-mcp`。
 
-这些证据把启动 seed、显式应用资产和低层 MCP inventory 提升到 E2。Slice 3B.2 又完成
+这些证据把启动 seed、prepared environment/descriptor 和低层 MCP inventory 提升到 E2。Slice 3B.2 又完成
 两个使用生产 composition、真实 Codex app-server 与本地 mock Responses provider 的 ignored
 exact integration：
 
@@ -265,7 +269,8 @@ exact integration：
 但没有仓网业务入口或完整链，因此仍不能声称阶段一完成。3B.3-B2 已删除
 `RunStartPreflight`、Governed runtime mode、request-scoped Role SHA/inventory 校验和 Profile
 `platform-agents` 第二启动系统；真实 Indonesia/Thailand 探针继续证明 Standard Root 与原生
-child 的 `sandboxCwd` 都等于各自授权 Workspace，MCP process cwd 不承担业务 Workspace。
+child 的 `sandboxCwd` 都等于各自授权 Workspace；prepared transport 不携带 cwd，
+Runtime 同样使用该 Thread 已授权的 Workspace 作为 stdio MCP process cwd。
 Catalog/Studio/Python publish 生产表面已由 3B.3-B3 删除；3B.3-B4 又删除 DB-only readiness、
 旧 Draft/Release/Installation、Agent definition/release/run binding、Workspace package release 与
 Supervisor instruction policy release 等 14 张无 owner 表。Slice 4B.2-A 的 fresh
@@ -295,7 +300,7 @@ malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除�
 | Package Compiler | 无当前生产 owner；阶段二目标文档保留设计输入 | 不再是阶段一能力 |
 | Profile Installation | 无生产安装路径；built-in 直接使用 Profile 原生 seed/Runtime discovery | 不再是阶段一能力 |
 | Runtime discovery/readiness | built-in clean Profile 已通过官方 Skill/MCP status 与 native Role spawn gate；产品 Run admission 只走 Standard，旧 DB installation/readiness 对象已删除 | built-in gate E2；无独立产品 readiness owner |
-| Copilot / Tool SDK | Copilot `init` 生成带 source-owned Tool setup 与 `[[tests]]` 的最小组合源码，`validate` 执行静态组合校验；`dev` 通过 official selected roots 与 Skill/MCP inventory 输出 `discovery_ready`；`test` 用本地确定性 Responses fixture 和真实 app-server canonical events 验证 Supervisor→Role→MCP→Root 单条正常链。既有 Tool 组件 CLI 仍是高级入口 | E2 本地 discovery/normal-case gate；fresh generated init→dev/test 已验证；没有生产模型质量验收、Web、生产安装或持久 readiness |
+| Copilot / Tool SDK | Copilot `init` 生成以 `runtime.toml`、直接项目 manifest/hash lock 声明 Tool 运行需求的最小组合源码；`validate` 执行静态组合校验，`prepare` 在 Tool/Profile/Workspace 外准备依赖并生成 typed descriptor，`dev` 通过 official selected roots 与 Skill/MCP inventory 输出 `discovery_ready`，`test` 用本地确定性 Responses fixture 和真实 app-server canonical events 验证 Supervisor→Role→MCP→Root 单条正常链 | E2 本地 discovery/normal-case gate；fresh generated init→dev/test 已验证；没有生产模型质量验收、Web、生产安装或持久 readiness |
 | Skill 创作 | 阶段一仅支持直接编辑 Profile Skill；公开 SDK/Web 创作后移 | 无阶段一产品流 |
 | Agent/Supervisor Studio | 旧 Settings/Sidebar Studio 已删除；原生 Profile Agent 配置保留 | 无阶段一 authoring 产品流 |
 | Copilot Builder | 没有 Web 产品入口和安装总览；SDK Atom 1 不是 Builder 或安装链 | E0 |

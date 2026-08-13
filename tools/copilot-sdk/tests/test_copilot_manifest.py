@@ -4,7 +4,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from copilot_sdk.copilot_manifest import CopilotPackageError, validate_copilot_package
+from copilot_sdk.copilot_manifest import (
+    CopilotPackageError,
+    load_copilot_test_cases,
+    validate_copilot_package,
+)
 
 
 class CopilotManifestTests(unittest.TestCase):
@@ -14,7 +18,7 @@ class CopilotManifestTests(unittest.TestCase):
         (self.root / "skills" / "supervisor").mkdir(parents=True)
         (self.root / "skills" / "worker").mkdir(parents=True)
         (self.root / "agents").mkdir()
-        (self.root / "tools" / "routes" / ".codex-plugin").mkdir(parents=True)
+        (self.root / "tools" / "routes").mkdir(parents=True)
         (self.root / "skills" / "supervisor" / "SKILL.md").write_text(
             "---\nname: supervisor\ndescription: Coordinate work.\n---\n# Supervisor\n",
             encoding="utf-8",
@@ -27,16 +31,27 @@ class CopilotManifestTests(unittest.TestCase):
             "name = \"planner\"\n\n"
             "[skills]\nconfig = [{ name = \"worker\", enabled = true }]\n\n"
             "[plugins.routes]\nenabled = true\n"
-            "[plugins.routes.mcp_servers.routes]\n"
+            "[plugins.routes.mcp_servers.routing_api]\n"
             "enabled_tools = [\"health\"]\n",
             encoding="utf-8",
         )
-        (self.root / "tools" / "routes" / ".codex-plugin" / "plugin.json").write_text(
-            '{"name":"routes","version":"1.0.0","mcpServers":"./.mcp.json"}\n',
+        (self.root / "tools/routes/pyproject.toml").write_text(
+            '[build-system]\nrequires=["setuptools>=77"]\n'
+            'build-backend="setuptools.build_meta"\n'
+            '[project]\nname="routes"\nversion="0.1.0"\n',
             encoding="utf-8",
         )
-        (self.root / "tools" / "routes" / ".mcp.json").write_text(
-            '{"mcpServers":{"routes":{"command":"ignored"}}}\n',
+        (self.root / "tools/routes/requirements.lock").write_text(
+            "mcp==1.0.0 \\\n    --hash=sha256:" + "a" * 64 + "\n"
+            "setuptools==80.9.0 \\\n    --hash=sha256:" + "b" * 64 + "\n",
+            encoding="utf-8",
+        )
+        (self.root / "tools/routes/runtime.toml").write_text(
+            "schema_version=1\n"
+            "[[dependencies]]\nid='python'\nkind='python-project'\n"
+            "manifest='pyproject.toml'\nlock='requirements.lock'\n"
+            "[[servers]]\nid='routing_api'\n"
+            "entry={kind='python-module',dependency='python',module='routes.server'}\n",
             encoding="utf-8",
         )
         self.write_manifest()
@@ -67,6 +82,7 @@ role = "agents/planner.toml"
 [[tools]]
 id = "routes"
 root = "tools/routes"
+runtime = "tools/routes/runtime.toml"
 """
         (self.root / "copilot.toml").write_text(content, encoding="utf-8")
 
@@ -74,6 +90,21 @@ root = "tools/routes"
         with self.assertRaises(CopilotPackageError) as caught:
             validate_copilot_package(self.root)
         self.assertEqual(caught.exception.code, expected)
+
+    def add_test(self, *, server: str = "routing_api", tool_name: str = "health") -> None:
+        manifest = (self.root / "copilot.toml").read_text(encoding="utf-8")
+        manifest += f'''\n[[tests]]
+id = "health"
+prompt = "Check health."
+agent = "planner"
+tool = "routes"
+server = "{server}"
+tool_name = "{tool_name}"
+arguments = {{}}
+[tests.expect]
+structured_content = {{ status = "ok" }}
+'''
+        self.write_manifest(manifest)
 
     def test_valid_package_returns_stable_summary(self) -> None:
         first = validate_copilot_package(self.root)
@@ -84,6 +115,39 @@ root = "tools/routes"
         self.assertEqual(first.agent_ids, ("planner",))
         self.assertEqual(first.tool_ids, ("routes",))
         self.assertRegex(first.composition_descriptor_sha256, r"^[0-9a-f]{64}$")
+
+    def test_test_server_is_distinct_from_capability_root(self) -> None:
+        self.add_test()
+
+        summary = validate_copilot_package(self.root)
+        case = load_copilot_test_cases(self.root)[0]
+
+        self.assertEqual(summary.test_ids, ("health",))
+        self.assertEqual(case.tool, "routes")
+        self.assertEqual(case.server, "routing_api")
+
+    def test_test_requires_server(self) -> None:
+        self.add_test()
+        manifest = (self.root / "copilot.toml").read_text(encoding="utf-8")
+        self.write_manifest(manifest.replace('server = "routing_api"\n', ""))
+        self.assert_code("required_field")
+
+    def test_test_server_must_be_enabled_by_role(self) -> None:
+        self.add_test(server="other_api")
+        self.assert_code("missing_reference")
+
+    def test_test_tool_name_must_be_in_server_allowlist(self) -> None:
+        self.add_test(tool_name="delete_all")
+        self.assert_code("missing_reference")
+
+    def test_test_server_must_exist_in_capability_root_descriptor(self) -> None:
+        self.add_test()
+        runtime = self.root / "tools/routes/runtime.toml"
+        runtime.write_text(
+            runtime.read_text(encoding="utf-8").replace("id='routing_api'", "id='other_api'"),
+            encoding="utf-8",
+        )
+        self.assert_code("missing_reference")
 
     def test_rejects_absolute_authored_path(self) -> None:
         manifest = (self.root / "copilot.toml").read_text(encoding="utf-8")
@@ -172,23 +236,41 @@ root = "tools/routes"
         )
         self.assert_code("invalid_field")
 
-    def test_rejects_missing_plugin_descriptor(self) -> None:
-        (self.root / "tools" / "routes" / ".codex-plugin" / "plugin.json").unlink()
+    def test_rejects_transport_cwd_in_role_mcp_server_policy(self) -> None:
+        role = self.root / "agents" / "planner.toml"
+        role.write_text(
+            role.read_text(encoding="utf-8") + 'cwd = "/private/tool-source"\n',
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(CopilotPackageError) as caught:
+            validate_copilot_package(self.root)
+
+        self.assertEqual(caught.exception.code, "invalid_field")
+        self.assertEqual(
+            caught.exception.relative_path,
+            "agents/planner.toml.plugins.routes.mcp_servers.routing_api.cwd",
+        )
+
+    def test_rejects_missing_runtime_descriptor(self) -> None:
+        (self.root / "tools/routes/runtime.toml").unlink()
         self.assert_code("missing_file")
 
-    def test_rejects_missing_mcp_descriptor(self) -> None:
-        (self.root / "tools" / "routes" / ".mcp.json").unlink()
+    def test_rejects_missing_runtime_dependency_manifest(self) -> None:
+        (self.root / "tools/routes/pyproject.toml").unlink()
         self.assert_code("missing_file")
 
-    def test_rejects_plugin_mcp_reference_mismatch(self) -> None:
-        plugin = self.root / "tools" / "routes" / ".codex-plugin" / "plugin.json"
-        plugin.write_text('{"mcpServers":"../.mcp.json"}', encoding="utf-8")
-        self.assert_code("invalid_type")
+    def test_rejects_runtime_outside_tool_root(self) -> None:
+        manifest = (self.root / "copilot.toml").read_text(encoding="utf-8")
+        self.write_manifest(manifest.replace(
+            'runtime = "tools/routes/runtime.toml"', 'runtime = "copilot.toml"'
+        ))
+        self.assert_code("invalid_path")
 
-    def test_rejects_missing_declared_mcp_server(self) -> None:
-        mcp = self.root / "tools" / "routes" / ".mcp.json"
-        mcp.write_text('{"mcpServers":{"other":{}}}', encoding="utf-8")
-        self.assert_code("missing_reference")
+    def test_rejects_empty_runtime_server_registry(self) -> None:
+        runtime = self.root / "tools/routes/runtime.toml"
+        runtime.write_text(runtime.read_text(encoding="utf-8").split("[[servers]]", 1)[0])
+        self.assert_code("required_field")
 
 
 if __name__ == "__main__":

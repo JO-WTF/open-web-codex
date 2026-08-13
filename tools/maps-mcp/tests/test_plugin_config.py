@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -9,16 +9,11 @@ import maps_mcp.server as maps_server
 
 
 class PluginConfigTests(unittest.TestCase):
-    def test_maps_mcp_preapproves_only_local_map_card(self) -> None:
-        config_path = Path(__file__).parents[1] / ".mcp.json"
-        config = json.loads(config_path.read_text())
-        server = config["mcpServers"]["map_utils"]
-
-        self.assertEqual(server["default_tools_approval_mode"], "prompt")
-        self.assertEqual(
-            server["tools"],
-            {"create_map_card": {"approval_mode": "approve"}},
-        )
+    def test_tool_author_source_has_no_runtime_transport_or_lifecycle_scripts(self) -> None:
+        root = Path(__file__).parents[1]
+        self.assertFalse((root / ".codex-plugin").exists())
+        self.assertFalse((root / ".mcp.json").exists())
+        self.assertFalse((root / "bin").exists())
 
     def test_maps_mcp_annotations_separate_local_and_external_tools(self) -> None:
         tools = {tool.name: tool for tool in asyncio.run(maps_server.mcp.list_tools())}
@@ -48,23 +43,57 @@ class PluginConfigTests(unittest.TestCase):
                 },
             )
 
-    def test_maps_mcp_forwards_standard_proxy_environment_variables(self) -> None:
-        config_path = Path(__file__).parents[1] / ".mcp.json"
-        config = json.loads(config_path.read_text())
-        env_vars = config["mcpServers"]["map_utils"]["env_vars"]
+    def test_generic_runtime_declaration_owns_dependencies_and_server_entry(self) -> None:
+        root = Path(__file__).parents[1]
+        runtime = tomllib.loads((root / "runtime.toml").read_text())
 
-        self.assertTrue(
-            {
-                "HTTP_PROXY",
-                "HTTPS_PROXY",
-                "ALL_PROXY",
-                "NO_PROXY",
-                "http_proxy",
-                "https_proxy",
-                "all_proxy",
-                "no_proxy",
-            }.issubset(env_vars)
+        self.assertEqual(runtime["schema_version"], 1)
+        self.assertEqual(
+            runtime["dependencies"],
+            [
+                {
+                    "id": "python",
+                    "kind": "python-project",
+                    "manifest": "pyproject.toml",
+                    "lock": "requirements.lock",
+                },
+                {
+                    "id": "style-spec",
+                    "kind": "node-project",
+                    "manifest": "package.json",
+                    "lock": "package-lock.json",
+                },
+            ],
         )
+        self.assertEqual(len(runtime["servers"]), 1)
+        server = runtime["servers"][0]
+        self.assertEqual(server["id"], "map_utils")
+        self.assertEqual(
+            server["entry"],
+            {
+                "kind": "python-module",
+                "dependency": "python",
+                "module": "maps_mcp.server",
+            },
+        )
+        bindings = {entry["name"]: entry for entry in server["env"]}
+        self.assertEqual(bindings["OPEN_WEB_CODEX_DATA_DIR"]["source"], "tool_state_root")
+        self.assertEqual(
+            bindings["OPEN_WEB_CODEX_MAPS_NODE_ENV"],
+            {
+                "name": "OPEN_WEB_CODEX_MAPS_NODE_ENV",
+                "source": "dependency_root",
+                "dependency": "style-spec",
+            },
+        )
+        self.assertEqual(bindings["HTTP_PROXY"]["source"], "host")
+        self.assertEqual(server["startup_timeout_sec"], 60)
+        self.assertEqual(server["tool_timeout_sec"], 90)
+        lock = (root / "requirements.lock").read_text()
+        self.assertIn("--hash=sha256:", lock)
+        self.assertIn("setuptools==", lock)
+        self.assertNotIn(" -e ", lock)
+        self.assertNotIn("file:", lock)
 
 
 if __name__ == "__main__":

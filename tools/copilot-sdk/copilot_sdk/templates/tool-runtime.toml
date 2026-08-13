@@ -1,0 +1,12 @@
+schema_version = 1
+
+[[dependencies]]
+id = "python"
+kind = "python-project"
+manifest = "pyproject.toml"
+lock = "requirements.lock"
+
+[[servers]]
+id = "__TOOL_ID__"
+entry = { kind = "python-module", dependency = "python", module = "server" }
+args = []

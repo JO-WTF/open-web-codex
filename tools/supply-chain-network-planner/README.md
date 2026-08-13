@@ -1,10 +1,13 @@
 # Supply Chain Network Planner
 
-这个 Codex Plugin 提供通用仓网规划能力。Codex Runtime 负责 Thread、Turn、Agent、Skill、MCP 和模型执行；本包只负责经过审查的 Data/Network 工具和持久化 Resource。
+这个 Tool source 提供通用仓网规划能力。Codex Runtime 负责 Thread、Turn、Agent、Skill、MCP
+和模型执行；SDK generic provisioner 负责依赖环境、构建、缓存、超时和 transport projection；
+本包只负责直接依赖声明、Data/Network 领域工具和持久化 Resource。
 
 ## MCP 入口
 
-本包只注册两个入口，均由同一个 launcher 启动，并使用隔离 Python 环境：
+`runtime.toml` 声明同一 Python project 中的两个 module entry；它不包含安装命令，Tool source
+也不提供 launcher 或 source `.mcp.json`：
 
 | Server | 责任 |
 | --- | --- |
@@ -101,13 +104,15 @@ python3 tools/supply-chain-network-planner/scripts/generate_indonesia_tutorial_d
 ## 开发和验证
 
 ```bash
-./tools/supply-chain-network-planner/bin/setup-env
+PYTHONPATH=tools/copilot-sdk python3 -m copilot_sdk prepare . \
+  --manifest apps/web/builtin/warehouse-network-copilot/copilot.toml \
+  --output-root "$PWD/.local/open-web-codex/copilot-environment"
 PYTHONPATH=tools/supply-chain-network-planner \
-  .local/open-web-codex/tool-envs/supply-chain-network-planner/bin/python \
-  -m pytest tools/supply-chain-network-planner/tests -q
-PYTHONPATH=tools/supply-chain-network-planner \
-  .local/open-web-codex/tool-envs/supply-chain-network-planner/bin/python \
-  -m ruff check tools/supply-chain-network-planner
+  python3 -m pytest tools/supply-chain-network-planner/tests -q
 ```
+
+第一条命令验证平台实际使用的通用环境编译合同；领域单元测试仍可在开发者已准备的 Python
+环境运行。Platform local startup 同样只调用一次 `copilot prepare`，不会按 supply-chain 名称
+分支，也不会在 Runtime launch 或用户对话期间安装依赖。
 
 真实 stdio smoke 只在明确设置 `RUN_REAL_STDIO_SMOKE=1` 时启动 Data、Network 和 maps 三个 stdio server 实例。任何 MCP Tool 都通过 Runtime 的 MCP 调用路径执行，禁止通过 shell `source`、目录遍历或手工拼接 Resource URI 调用。

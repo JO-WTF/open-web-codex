@@ -1,10 +1,12 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use open_web_codex_adapter::real::ThreadSkillConfig;
 use open_web_codex_profile_host::{CodexFeature, ProfileStartupFile};
+use serde::Deserialize;
 use thiserror::Error;
-use toml_edit::{value, Array, DocumentMut, Item};
+use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 const SUPERVISOR_SKILL: &str =
     include_str!("../../builtin/warehouse-network-copilot/skills/warehouse-supervisor/SKILL.md");
@@ -16,13 +18,23 @@ const DATA_ROLE: &str =
     include_str!("../../builtin/warehouse-network-copilot/agents/data_agent.toml");
 const NETWORK_ROLE: &str =
     include_str!("../../builtin/warehouse-network-copilot/agents/network_agent.toml");
-
-const SUPPLY_CHAIN_LAUNCHER: &str = "bin/supply-chain-planner-launcher";
-const MAPS_LAUNCHER: &str = "bin/maps-mcp-launcher";
-const SUPPLY_CHAIN_RUNTIME_FILE: &str = "supply_chain_planner/server.py";
-const SUPPLY_CHAIN_DATA_RUNTIME_FILE: &str = "supply_chain_planner/data_server.py";
-const MAPS_RUNTIME_FILE: &str = "maps_mcp/server.py";
-const MAPS_STYLE_SPEC_PACKAGE: &str = "node_modules/@mapbox/mapbox-gl-style-spec/package.json";
+const ROLE_MCP_SERVER_POLICY_KEYS: [&str; 5] = [
+    "enabled",
+    "default_tools_approval_mode",
+    "enabled_tools",
+    "disabled_tools",
+    "tools",
+];
+const ALLOWED_HOST_ENVIRONMENT_NAMES: [&str; 8] = [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+];
 
 /// Keep the phase-one warehouse acceptance Profile focused on its native
 /// Skills, Roles, and role-local MCP tools. Codex still owns discovery and
@@ -64,56 +76,71 @@ pub(crate) fn root_skill_config() -> Vec<ThreadSkillConfig> {
 
 #[derive(Debug)]
 pub(crate) struct BuiltinNetworkCopilotAssets {
-    supply_chain_launcher: PathBuf,
-    supply_chain_venv: PathBuf,
-    maps_root: PathBuf,
-    maps_launcher: PathBuf,
-    maps_venv: PathBuf,
+    capability_roots: BTreeMap<String, PreparedCapabilityRoot>,
+}
+
+#[derive(Debug, Clone)]
+struct McpTransport {
+    command: PathBuf,
+    args: Vec<String>,
+    startup_timeout_sec: Option<i64>,
+    tool_timeout_sec: Option<i64>,
+    env_bindings: Vec<PreparedEnvironmentBinding>,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedCapabilityRoot {
+    servers: BTreeMap<String, McpTransport>,
+}
+
+#[derive(Debug, Clone)]
+enum PreparedEnvironmentBinding {
+    ProfileHome { name: String },
+    ToolStateRoot { name: String },
+    DependencyRoot { name: String, root: PathBuf },
+    Host { name: String },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PreparedDescriptorDocument {
+    schema_version: u32,
+    composition_descriptor_sha256: String,
+    capability_roots: Vec<PreparedDescriptorCapabilityRoot>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PreparedDescriptorCapabilityRoot {
+    id: String,
+    servers: Vec<PreparedDescriptorServer>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PreparedDescriptorServer {
+    id: String,
+    transport: String,
+    command: PathBuf,
+    args: Vec<String>,
+    env_bindings: Vec<PreparedDescriptorEnvironmentBinding>,
+    startup_timeout_sec: Option<i64>,
+    tool_timeout_sec: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PreparedDescriptorEnvironmentBinding {
+    name: String,
+    source: String,
+    dependency: Option<String>,
+    resolved_root: Option<PathBuf>,
 }
 
 impl BuiltinNetworkCopilotAssets {
-    pub(crate) fn resolve(
-        supply_chain_root: &Path,
-        supply_chain_venv: &Path,
-        maps_root: &Path,
-        maps_venv: &Path,
-    ) -> Result<Self, BuiltinNetworkCopilotError> {
-        let supply_chain_root =
-            required_absolute_directory("supply-chain application asset root", supply_chain_root)?;
-        let supply_chain_launcher = required_regular_file(
-            "supply-chain launcher",
-            &supply_chain_root,
-            SUPPLY_CHAIN_LAUNCHER,
-            true,
-        )?;
-        for (component, relative) in [
-            ("supply-chain runtime", SUPPLY_CHAIN_RUNTIME_FILE),
-            ("supply-chain data runtime", SUPPLY_CHAIN_DATA_RUNTIME_FILE),
-        ] {
-            required_regular_file(component, &supply_chain_root, relative, false)?;
-        }
-        let supply_chain_venv =
-            required_python_environment("supply-chain Python environment", supply_chain_venv)?;
-
-        let maps_root = required_absolute_directory("maps application asset root", maps_root)?;
-        let maps_launcher =
-            required_regular_file("maps launcher", &maps_root, MAPS_LAUNCHER, true)?;
-        required_regular_file("maps runtime", &maps_root, MAPS_RUNTIME_FILE, false)?;
-        required_regular_file(
-            "Mapbox Style Spec runtime",
-            &maps_root,
-            MAPS_STYLE_SPEC_PACKAGE,
-            false,
-        )?;
-        let maps_venv = required_python_environment("maps Python environment", maps_venv)?;
-
-        Ok(Self {
-            supply_chain_launcher,
-            supply_chain_venv,
-            maps_root,
-            maps_launcher,
-            maps_venv,
-        })
+    pub(crate) fn resolve(descriptor_path: &Path) -> Result<Self, BuiltinNetworkCopilotError> {
+        let capability_roots = load_prepared_descriptor(descriptor_path)?;
+        Ok(Self { capability_roots })
     }
 
     pub(crate) fn startup_files(
@@ -121,11 +148,8 @@ impl BuiltinNetworkCopilotAssets {
         profile_home: &Path,
     ) -> Result<Vec<ProfileStartupFile>, BuiltinNetworkCopilotError> {
         let profile_home = require_absolute_path("Profile CODEX_HOME", profile_home)?;
-        let profile_runtime = profile_home.join(".open-web-codex");
-        let profile_logs = profile_runtime.join("logs");
-        let data_role = self.render_data_role(&profile_home, &profile_runtime, &profile_logs)?;
-        let network_role =
-            self.render_network_role(&profile_home, &profile_runtime, &profile_logs)?;
+        let data_role = self.render_data_role(&profile_home)?;
+        let network_role = self.render_network_role(&profile_home)?;
 
         Ok(vec![
             ProfileStartupFile::managed_skill("warehouse-supervisor", SUPERVISOR_SKILL.as_bytes())?,
@@ -136,27 +160,13 @@ impl BuiltinNetworkCopilotAssets {
         ])
     }
 
-    fn render_data_role(
-        &self,
-        profile_home: &Path,
-        profile_runtime: &Path,
-        profile_logs: &Path,
-    ) -> Result<String, BuiltinNetworkCopilotError> {
+    fn render_data_role(&self, profile_home: &Path) -> Result<String, BuiltinNetworkCopilotError> {
         let mut role = parse_role_template("data_agent", DATA_ROLE)?;
-        configure_native_workspace_mcp_server(
+        project_role_mcp_servers(
             &mut role,
-            "supply_chain",
-            &self.supply_chain_launcher,
-            &["--data-server"],
-            &[
-                ("CODEX_HOME", profile_home),
-                ("OPEN_WEB_CODEX_DATA_DIR", profile_runtime),
-                ("OPEN_WEB_CODEX_LOG_DIR", profile_logs),
-                (
-                    "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV",
-                    &self.supply_chain_venv,
-                ),
-            ],
+            "data_agent",
+            &self.capability_roots,
+            profile_home,
         )?;
         finish_role_template("data_agent", role)
     }
@@ -164,39 +174,13 @@ impl BuiltinNetworkCopilotAssets {
     fn render_network_role(
         &self,
         profile_home: &Path,
-        profile_runtime: &Path,
-        profile_logs: &Path,
     ) -> Result<String, BuiltinNetworkCopilotError> {
         let mut role = parse_role_template("network_agent", NETWORK_ROLE)?;
-        configure_native_workspace_mcp_server(
+        project_role_mcp_servers(
             &mut role,
-            "supply_chain",
-            &self.supply_chain_launcher,
-            &[],
-            &[
-                ("CODEX_HOME", profile_home),
-                ("OPEN_WEB_CODEX_DATA_DIR", profile_runtime),
-                ("OPEN_WEB_CODEX_LOG_DIR", profile_logs),
-                (
-                    "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV",
-                    &self.supply_chain_venv,
-                ),
-            ],
-        )?;
-        configure_mcp_server(
-            &mut role,
-            "map_utils",
-            &self.maps_launcher,
-            &["--workspace-root"],
-            &profile_runtime.join("mcp-state/maps-mcp"),
-            &self.maps_root,
-            &[
-                ("CODEX_HOME", profile_home),
-                ("OPEN_WEB_CODEX_DATA_DIR", profile_runtime),
-                ("OPEN_WEB_CODEX_LOG_DIR", profile_logs),
-                ("OPEN_WEB_CODEX_MAPS_MCP_VENV", &self.maps_venv),
-                ("MAPS_MCP_VENV", &self.maps_venv),
-            ],
+            "network_agent",
+            &self.capability_roots,
+            profile_home,
         )?;
         finish_role_template("network_agent", role)
     }
@@ -213,70 +197,6 @@ pub(crate) enum BuiltinNetworkCopilotError {
     InvalidRoleTemplate { role: &'static str, message: String },
     #[error(transparent)]
     StartupFile(#[from] open_web_codex_profile_host::ProfileStartupFileError),
-}
-
-fn required_absolute_directory(
-    component: &'static str,
-    path: &Path,
-) -> Result<PathBuf, BuiltinNetworkCopilotError> {
-    let path = require_absolute_path(component, path)?;
-    let metadata = fs::metadata(&path).map_err(|error| unavailable(component, error))?;
-    if !metadata.is_dir() {
-        return Err(unavailable_message(
-            component,
-            format!("expected a directory at {}", path.display()),
-        ));
-    }
-    path.canonicalize()
-        .map_err(|error| unavailable(component, error))
-}
-
-fn required_regular_file(
-    component: &'static str,
-    root: &Path,
-    relative: &str,
-    executable: bool,
-) -> Result<PathBuf, BuiltinNetworkCopilotError> {
-    let path = root.join(relative);
-    let metadata = fs::metadata(&path).map_err(|error| unavailable(component, error))?;
-    if !metadata.is_file() {
-        return Err(unavailable_message(
-            component,
-            format!("expected a regular file at {}", path.display()),
-        ));
-    }
-    if executable && !is_executable(&metadata) {
-        return Err(unavailable_message(
-            component,
-            format!("expected an executable file at {}", path.display()),
-        ));
-    }
-    let path = path
-        .canonicalize()
-        .map_err(|error| unavailable(component, error))?;
-    if !path.starts_with(root) {
-        return Err(unavailable_message(
-            component,
-            "configured file escapes its application asset root".to_string(),
-        ));
-    }
-    Ok(path)
-}
-
-fn required_python_environment(
-    component: &'static str,
-    path: &Path,
-) -> Result<PathBuf, BuiltinNetworkCopilotError> {
-    let root = required_absolute_directory(component, path)?;
-    let python = root.join("bin/python");
-    let metadata = fs::metadata(&python).map_err(|error| unavailable(component, error))?;
-    if !metadata.is_file() || !is_executable(&metadata) {
-        return Err(unavailable_message(
-            component,
-            format!("expected an executable bin/python under {}", root.display()),
-        ));
-    }
-    Ok(root)
 }
 
 fn require_absolute_path(
@@ -315,110 +235,418 @@ fn parse_role_template(
     })
 }
 
-fn configure_mcp_server(
-    role: &mut DocumentMut,
-    server_name: &'static str,
-    command: &Path,
-    leading_args: &[&str],
-    workspace_argument: &Path,
-    process_cwd: &Path,
-    environment: &[(&'static str, &Path)],
-) -> Result<(), BuiltinNetworkCopilotError> {
-    let role_name = role
-        .get("name")
-        .and_then(Item::as_str)
-        .unwrap_or("unknown")
-        .to_string();
-    let server = role
-        .get_mut("mcp_servers")
-        .and_then(Item::as_table_mut)
-        .and_then(|servers| servers.get_mut(server_name))
-        .and_then(Item::as_table_mut)
-        .ok_or_else(|| BuiltinNetworkCopilotError::InvalidRoleTemplate {
-            role: server_name,
-            message: format!("Role {role_name} omits mcp_servers.{server_name}"),
-        })?;
-    server["command"] = value(path_text("MCP launcher", command)?);
-    server["cwd"] = value(path_text("MCP process cwd", process_cwd)?);
-    let mut args = Array::new();
-    for argument in leading_args {
-        args.push(*argument);
+fn load_prepared_descriptor(
+    descriptor_path: &Path,
+) -> Result<BTreeMap<String, PreparedCapabilityRoot>, BuiltinNetworkCopilotError> {
+    const COMPONENT: &str = "prepared Copilot descriptor";
+    let descriptor_path = canonical_regular_file(COMPONENT, descriptor_path, false)?;
+    let raw =
+        fs::read_to_string(&descriptor_path).map_err(|error| unavailable(COMPONENT, error))?;
+    let document: PreparedDescriptorDocument =
+        serde_json::from_str(&raw).map_err(|error| unavailable(COMPONENT, error))?;
+    if document.schema_version != 1 {
+        return Err(unavailable_message(
+            COMPONENT,
+            format!("unsupported schemaVersion {}", document.schema_version),
+        ));
     }
-    args.push(path_text("MCP workspace argument", workspace_argument)?);
-    server["args"] = value(args);
+    if document.composition_descriptor_sha256.len() != 64
+        || !document
+            .composition_descriptor_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(unavailable_message(
+            COMPONENT,
+            "compositionDescriptorSha256 must be a lowercase SHA-256 digest".to_string(),
+        ));
+    }
+    if document.capability_roots.is_empty() {
+        return Err(unavailable_message(
+            COMPONENT,
+            "capabilityRoots must not be empty".to_string(),
+        ));
+    }
 
-    let env = server
-        .get_mut("env")
-        .and_then(Item::as_table_mut)
-        .ok_or_else(|| BuiltinNetworkCopilotError::InvalidRoleTemplate {
-            role: server_name,
-            message: format!("Role {role_name} omits mcp_servers.{server_name}.env"),
-        })?;
-    for (name, path) in environment {
-        env[name] = value(path_text("MCP environment path", path)?);
+    let mut capability_roots = BTreeMap::new();
+    for root in document.capability_roots {
+        require_stable_identifier(COMPONENT, "capability root", &root.id)?;
+        if root.servers.is_empty() {
+            return Err(unavailable_message(
+                COMPONENT,
+                format!("capability root {} declares no servers", root.id),
+            ));
+        }
+        let mut servers = BTreeMap::new();
+        for server in root.servers {
+            require_stable_identifier(COMPONENT, "MCP server", &server.id)?;
+            if server.transport != "stdio" {
+                return Err(unavailable_message(
+                    COMPONENT,
+                    format!(
+                        "capability root {} server {} transport must be stdio",
+                        root.id, server.id
+                    ),
+                ));
+            }
+            let command = canonical_regular_file(COMPONENT, &server.command, true)?;
+            let startup_timeout_sec = positive_timeout(
+                COMPONENT,
+                &root.id,
+                &server.id,
+                "startupTimeoutSec",
+                server.startup_timeout_sec,
+            )?;
+            let tool_timeout_sec = positive_timeout(
+                COMPONENT,
+                &root.id,
+                &server.id,
+                "toolTimeoutSec",
+                server.tool_timeout_sec,
+            )?;
+            let mut environment_names = BTreeMap::new();
+            let mut env_bindings = Vec::new();
+            for binding in server.env_bindings {
+                require_environment_name(COMPONENT, &binding.name)?;
+                if environment_names.insert(binding.name.clone(), ()).is_some() {
+                    return Err(unavailable_message(
+                        COMPONENT,
+                        format!(
+                            "capability root {} server {} duplicates environment binding {}",
+                            root.id, server.id, binding.name
+                        ),
+                    ));
+                }
+                let binding = match binding.source.as_str() {
+                    "profile_home" => {
+                        reject_binding_metadata(COMPONENT, &root.id, &server.id, &binding)?;
+                        PreparedEnvironmentBinding::ProfileHome { name: binding.name }
+                    }
+                    "tool_state_root" => {
+                        reject_binding_metadata(COMPONENT, &root.id, &server.id, &binding)?;
+                        PreparedEnvironmentBinding::ToolStateRoot { name: binding.name }
+                    }
+                    "dependency_root" => {
+                        let dependency = binding.dependency.as_deref().ok_or_else(|| {
+                            unavailable_message(
+                                COMPONENT,
+                                format!(
+                                    "capability root {} server {} dependency_root binding {} omits dependency",
+                                    root.id, server.id, binding.name
+                                ),
+                            )
+                        })?;
+                        require_stable_identifier(COMPONENT, "dependency", dependency)?;
+                        let resolved_root = binding.resolved_root.as_deref().ok_or_else(|| {
+                            unavailable_message(
+                                COMPONENT,
+                                format!(
+                                    "capability root {} server {} dependency_root binding {} omits resolvedRoot",
+                                    root.id, server.id, binding.name
+                                ),
+                            )
+                        })?;
+                        PreparedEnvironmentBinding::DependencyRoot {
+                            name: binding.name,
+                            root: canonical_directory(COMPONENT, resolved_root)?,
+                        }
+                    }
+                    "host" => {
+                        reject_binding_metadata(COMPONENT, &root.id, &server.id, &binding)?;
+                        if !ALLOWED_HOST_ENVIRONMENT_NAMES.contains(&binding.name.as_str()) {
+                            return Err(unavailable_message(
+                                COMPONENT,
+                                format!(
+                                    "capability root {} server {} host binding {} is not an allowed proxy environment variable",
+                                    root.id, server.id, binding.name
+                                ),
+                            ));
+                        }
+                        PreparedEnvironmentBinding::Host { name: binding.name }
+                    }
+                    source => {
+                        return Err(unavailable_message(
+                            COMPONENT,
+                            format!(
+                                "capability root {} server {} binding {} has unsupported source {source}",
+                                root.id, server.id, binding.name
+                            ),
+                        ));
+                    }
+                };
+                env_bindings.push(binding);
+            }
+            let server_id = server.id;
+            if servers
+                .insert(
+                    server_id.clone(),
+                    McpTransport {
+                        command,
+                        args: server.args,
+                        startup_timeout_sec,
+                        tool_timeout_sec,
+                        env_bindings,
+                    },
+                )
+                .is_some()
+            {
+                return Err(unavailable_message(
+                    COMPONENT,
+                    format!(
+                        "capability root {} duplicates MCP server {server_id}",
+                        root.id
+                    ),
+                ));
+            }
+        }
+        let root_id = root.id;
+        if capability_roots
+            .insert(root_id.clone(), PreparedCapabilityRoot { servers })
+            .is_some()
+        {
+            return Err(unavailable_message(
+                COMPONENT,
+                format!("duplicate capability root {root_id}"),
+            ));
+        }
+    }
+    Ok(capability_roots)
+}
+
+fn canonical_regular_file(
+    component: &'static str,
+    path: &Path,
+    executable: bool,
+) -> Result<PathBuf, BuiltinNetworkCopilotError> {
+    let path = require_absolute_path(component, path)?;
+    let path = path
+        .canonicalize()
+        .map_err(|error| unavailable(component, error))?;
+    let metadata = fs::metadata(&path).map_err(|error| unavailable(component, error))?;
+    if !metadata.is_file() || (executable && !is_executable(&metadata)) {
+        let expected = if executable {
+            "an executable regular file"
+        } else {
+            "a regular file"
+        };
+        return Err(unavailable_message(
+            component,
+            format!("expected {expected} at {}", path.display()),
+        ));
+    }
+    Ok(path)
+}
+
+fn canonical_directory(
+    component: &'static str,
+    path: &Path,
+) -> Result<PathBuf, BuiltinNetworkCopilotError> {
+    let path = require_absolute_path(component, path)?;
+    let path = path
+        .canonicalize()
+        .map_err(|error| unavailable(component, error))?;
+    if !path.is_dir() {
+        return Err(unavailable_message(
+            component,
+            format!("expected a directory at {}", path.display()),
+        ));
+    }
+    Ok(path)
+}
+
+fn require_stable_identifier(
+    component: &'static str,
+    field: &str,
+    value: &str,
+) -> Result<(), BuiltinNetworkCopilotError> {
+    let mut characters = value.chars();
+    let valid = matches!(characters.next(), Some(first) if first.is_ascii_alphanumeric())
+        && value.len() <= 128
+        && characters.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
+        });
+    if !valid {
+        return Err(unavailable_message(
+            component,
+            format!("{field} {value:?} is not a stable identifier"),
+        ));
     }
     Ok(())
 }
 
-/// Configure a supply-chain MCP server to inherit Codex's native Thread cwd.
-///
-/// The launcher is absolute and the application assets are resolved by the
-/// launcher itself.  Supplying a static MCP `cwd` here would make the asset
-/// directory masquerade as the authorized business Workspace.
-fn configure_native_workspace_mcp_server(
-    role: &mut DocumentMut,
-    server_name: &'static str,
-    command: &Path,
-    args: &[&str],
-    environment: &[(&'static str, &Path)],
+fn require_environment_name(
+    component: &'static str,
+    value: &str,
 ) -> Result<(), BuiltinNetworkCopilotError> {
-    let role_name = role
-        .get("name")
-        .and_then(Item::as_str)
-        .unwrap_or("unknown")
-        .to_string();
-    let server = role
-        .get_mut("mcp_servers")
-        .and_then(Item::as_table_mut)
-        .and_then(|servers| servers.get_mut(server_name))
-        .and_then(Item::as_table_mut)
-        .ok_or_else(|| BuiltinNetworkCopilotError::InvalidRoleTemplate {
-            role: server_name,
-            message: format!("Role {role_name} omits mcp_servers.{server_name}"),
-        })?;
-    server["command"] = value(path_text("MCP launcher", command)?);
-    server.remove("cwd");
-    let mut rendered_args = Array::new();
-    for argument in args {
-        rendered_args.push(*argument);
-    }
-    server["args"] = value(rendered_args);
-
-    let env = server
-        .get_mut("env")
-        .and_then(Item::as_table_mut)
-        .ok_or_else(|| BuiltinNetworkCopilotError::InvalidRoleTemplate {
-            role: server_name,
-            message: format!("Role {role_name} omits mcp_servers.{server_name}.env"),
-        })?;
-    for (name, path) in environment {
-        env[name] = value(path_text("MCP environment path", path)?);
+    let mut characters = value.chars();
+    let valid = matches!(characters.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
+        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric());
+    if !valid {
+        return Err(unavailable_message(
+            component,
+            format!("invalid environment variable name {value:?}"),
+        ));
     }
     Ok(())
+}
+
+fn reject_binding_metadata(
+    component: &'static str,
+    root_id: &str,
+    server_id: &str,
+    binding: &PreparedDescriptorEnvironmentBinding,
+) -> Result<(), BuiltinNetworkCopilotError> {
+    if binding.dependency.is_some() || binding.resolved_root.is_some() {
+        return Err(unavailable_message(
+            component,
+            format!(
+                "capability root {root_id} server {server_id} binding {} permits dependency and resolvedRoot only for dependency_root",
+                binding.name
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn positive_timeout(
+    component: &'static str,
+    root_id: &str,
+    server_id: &str,
+    field: &str,
+    value: Option<i64>,
+) -> Result<Option<i64>, BuiltinNetworkCopilotError> {
+    if matches!(value, Some(value) if value <= 0) {
+        return Err(unavailable_message(
+            component,
+            format!("capability root {root_id} server {server_id} {field} must be positive"),
+        ));
+    }
+    Ok(value)
+}
+
+fn project_role_mcp_servers(
+    role: &mut DocumentMut,
+    role_name: &'static str,
+    capability_roots: &BTreeMap<String, PreparedCapabilityRoot>,
+    profile_home: &Path,
+) -> Result<(), BuiltinNetworkCopilotError> {
+    let plugins = role
+        .get("plugins")
+        .and_then(Item::as_table)
+        .ok_or_else(|| invalid_role(role_name, "Role omits plugins policy"))?;
+    let mut runtime_servers = Table::new();
+    for (capability_root_id, plugin) in plugins {
+        let plugin = plugin.as_table().ok_or_else(|| {
+            invalid_role(
+                role_name,
+                format!("plugins.{capability_root_id} is not a table"),
+            )
+        })?;
+        let policies = plugin
+            .get("mcp_servers")
+            .and_then(Item::as_table)
+            .ok_or_else(|| {
+                invalid_role(
+                    role_name,
+                    format!("plugins.{capability_root_id} omits mcp_servers"),
+                )
+            })?;
+        let declared = capability_roots.get(capability_root_id).ok_or_else(|| {
+            invalid_role(
+                role_name,
+                format!("plugins.{capability_root_id} has no prepared capability root"),
+            )
+        })?;
+        for (server_name, policy) in policies {
+            if runtime_servers.contains_key(server_name) {
+                return Err(invalid_role(
+                    role_name,
+                    format!("MCP server {server_name} has multiple transports"),
+                ));
+            }
+            let transport = declared.servers.get(server_name).ok_or_else(|| {
+                invalid_role(
+                    role_name,
+                    format!(
+                        "plugins.{capability_root_id} references unprepared server {server_name}"
+                    ),
+                )
+            })?;
+            let policy = policy.as_table().ok_or_else(|| {
+                invalid_role(role_name, format!("server {server_name} policy is invalid"))
+            })?;
+            for (key, _) in policy {
+                if !ROLE_MCP_SERVER_POLICY_KEYS.contains(&key) {
+                    return Err(invalid_role(
+                        role_name,
+                        format!(
+                            "plugins.{capability_root_id}.mcp_servers.{server_name}.{key} is not part of Role MCP server policy"
+                        ),
+                    ));
+                }
+            }
+            let mut runtime = Table::new();
+            for key in ROLE_MCP_SERVER_POLICY_KEYS {
+                if let Some(item) = policy.get(key) {
+                    runtime[key] = item.clone();
+                }
+            }
+            runtime["command"] = value(path_text("prepared MCP command", &transport.command)?);
+            let mut args = Array::new();
+            for argument in &transport.args {
+                args.push(argument.as_str());
+            }
+            runtime["args"] = value(args);
+            if let Some(timeout) = transport.startup_timeout_sec {
+                runtime["startup_timeout_sec"] = value(timeout);
+            }
+            if let Some(timeout) = transport.tool_timeout_sec {
+                runtime["tool_timeout_sec"] = value(timeout);
+            }
+            let mut env = Table::new();
+            let mut inherited_env_vars = Array::new();
+            let tool_state_root = profile_home
+                .join(".open-web-codex")
+                .join("mcp-state")
+                .join(capability_root_id);
+            for binding in &transport.env_bindings {
+                match binding {
+                    PreparedEnvironmentBinding::ProfileHome { name } => {
+                        env[name] = value(path_text("Profile home binding", profile_home)?);
+                    }
+                    PreparedEnvironmentBinding::ToolStateRoot { name } => {
+                        env[name] = value(path_text("Tool state binding", &tool_state_root)?);
+                    }
+                    PreparedEnvironmentBinding::DependencyRoot { name, root } => {
+                        env[name] = value(path_text("dependency root binding", root)?);
+                    }
+                    PreparedEnvironmentBinding::Host { name } => {
+                        inherited_env_vars.push(name.as_str());
+                    }
+                }
+            }
+            runtime["env"] = Item::Table(env);
+            runtime["env_vars"] = value(inherited_env_vars);
+            runtime_servers[server_name] = Item::Table(runtime);
+        }
+    }
+    role.remove("plugins");
+    role["mcp_servers"] = Item::Table(runtime_servers);
+    Ok(())
+}
+
+fn invalid_role(role: &'static str, message: impl Into<String>) -> BuiltinNetworkCopilotError {
+    BuiltinNetworkCopilotError::InvalidRoleTemplate {
+        role,
+        message: message.into(),
+    }
 }
 
 fn finish_role_template(
-    role_name: &'static str,
+    _role_name: &'static str,
     role: DocumentMut,
 ) -> Result<String, BuiltinNetworkCopilotError> {
-    let rendered = role.to_string();
-    if rendered.contains("__OPEN_WEB_CODEX_") {
-        return Err(BuiltinNetworkCopilotError::InvalidRoleTemplate {
-            role: role_name,
-            message: "unresolved deployment path placeholder".to_string(),
-        });
-    }
-    Ok(rendered)
+    Ok(role.to_string())
 }
 
 fn path_text<'a>(
@@ -459,41 +687,91 @@ mod tests {
         let _ = executable;
     }
 
-    fn fixture() -> (tempfile::TempDir, BuiltinNetworkCopilotAssets, PathBuf) {
+    fn fixture() -> (
+        tempfile::TempDir,
+        BuiltinNetworkCopilotAssets,
+        PathBuf,
+        PathBuf,
+    ) {
         let temp = tempfile::tempdir().expect("temp dir");
-        let supply = temp.path().join("supply chain \"资产");
-        let maps = temp.path().join("maps 资产");
-        let supply_venv = temp.path().join("supply venv 环境");
-        let maps_venv = temp.path().join("maps venv 环境");
+        let prepared = temp.path().join("prepared 运行态");
+        let supply_python = prepared.join("dependencies/supply python/bin/python");
+        let maps_python = prepared.join("dependencies/maps python/bin/python");
+        let style_spec = prepared.join("dependencies/map style spec");
         let profile = temp.path().join("profile 用户");
-        fs::create_dir_all(&profile).expect("profile");
-
-        write_file(&supply.join(SUPPLY_CHAIN_LAUNCHER), "#!/bin/sh\n", true);
-        for relative in [SUPPLY_CHAIN_RUNTIME_FILE, SUPPLY_CHAIN_DATA_RUNTIME_FILE] {
-            write_file(&supply.join(relative), "# runtime\n", false);
+        for directory in [&profile, &style_spec] {
+            fs::create_dir_all(directory).expect("fixture directory");
         }
-        write_file(&maps.join(MAPS_LAUNCHER), "#!/bin/sh\n", true);
-        write_file(&maps.join(MAPS_RUNTIME_FILE), "# runtime\n", false);
-        write_file(&maps.join(MAPS_STYLE_SPEC_PACKAGE), "{}\n", false);
-        write_file(&supply_venv.join("bin/python"), "#!/bin/sh\n", true);
-        write_file(&maps_venv.join("bin/python"), "#!/bin/sh\n", true);
+        write_file(&supply_python, "#!/bin/sh\n", true);
+        write_file(&maps_python, "#!/bin/sh\n", true);
+        let descriptor = prepared.join("prepared-tools.v1.json");
+        write_file(
+            &descriptor,
+            &serde_json::to_string_pretty(&serde_json::json!({
+                "schemaVersion": 1,
+                "compositionDescriptorSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "capabilityRoots": [
+                    {
+                        "id": "supply_chain",
+                        "servers": [
+                            {
+                                "id": "supply_chain_data",
+                                "transport": "stdio",
+                                "command": supply_python,
+                                "args": ["-m", "prepared.data"],
+                                "envBindings": [
+                                    {"name": "CODEX_HOME", "source": "profile_home"},
+                                    {"name": "HTTP_PROXY", "source": "host"}
+                                ]
+                            },
+                            {
+                                "id": "supply_chain",
+                                "transport": "stdio",
+                                "command": supply_python,
+                                "args": ["-m", "prepared.network"],
+                                "envBindings": [
+                                    {"name": "CODEX_HOME", "source": "profile_home"},
+                                    {"name": "HTTP_PROXY", "source": "host"}
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "id": "map_utils",
+                        "servers": [{
+                            "id": "map_utils",
+                            "transport": "stdio",
+                            "command": maps_python,
+                            "args": ["-m", "prepared.maps"],
+                            "envBindings": [
+                                {"name": "TOOL_STATE", "source": "tool_state_root"},
+                                {
+                                    "name": "DEPENDENCY_ASSETS",
+                                    "source": "dependency_root",
+                                    "dependency": "style-spec",
+                                    "resolvedRoot": style_spec
+                                },
+                                {"name": "HTTP_PROXY", "source": "host"}
+                            ],
+                            "startupTimeoutSec": 60,
+                            "toolTimeoutSec": 90
+                        }]
+                    }
+                ]
+            }))
+            .expect("serialize descriptor"),
+            false,
+        );
 
-        let assets = BuiltinNetworkCopilotAssets::resolve(&supply, &supply_venv, &maps, &maps_venv)
-            .expect("resolve assets");
-        (temp, assets, profile)
+        let assets = BuiltinNetworkCopilotAssets::resolve(&descriptor).expect("resolve assets");
+        (temp, assets, profile, descriptor)
     }
 
     #[test]
     fn renders_native_profile_seeds_with_role_local_mcp_only() {
-        let (_temp, assets, profile) = fixture();
-        let runtime = profile.join(".open-web-codex");
-        let logs = runtime.join("logs");
-        let data = assets
-            .render_data_role(&profile, &runtime, &logs)
-            .expect("data role");
-        let network = assets
-            .render_network_role(&profile, &runtime, &logs)
-            .expect("network role");
+        let (_temp, assets, profile, _descriptor) = fixture();
+        let data = assets.render_data_role(&profile).expect("data role");
+        let network = assets.render_network_role(&profile).expect("network role");
 
         let data = data.parse::<DocumentMut>().expect("parse data role");
         let network = network.parse::<DocumentMut>().expect("parse network role");
@@ -506,29 +784,61 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["Wanwan"]
         );
-        assert!(data["mcp_servers"]["supply_chain"].get("cwd").is_none());
+        assert!(data["mcp_servers"]["supply_chain_data"]
+            .get("cwd")
+            .is_none());
         assert_eq!(
-            data["mcp_servers"]["supply_chain"]["args"]
+            data["mcp_servers"]["supply_chain_data"]["args"]
                 .as_array()
                 .expect("data args")
                 .iter()
                 .filter_map(|item| item.as_str())
                 .collect::<Vec<_>>(),
-            vec!["--data-server"]
+            vec!["-m", "prepared.data"]
         );
         assert_eq!(
-            data["mcp_servers"]["supply_chain"]["default_tools_approval_mode"].as_str(),
+            data["mcp_servers"]["supply_chain_data"]["default_tools_approval_mode"].as_str(),
             Some("approve")
+        );
+        assert_eq!(
+            data["mcp_servers"]["supply_chain_data"]["enabled_tools"]
+                .as_array()
+                .expect("data tools")
+                .iter()
+                .filter_map(|item| item.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "discover_workspace_sources",
+                "inspect_workspace_sources",
+                "normalize_network_input",
+                "prepare_network_geography",
+            ]
+        );
+        assert_eq!(
+            data["mcp_servers"]["supply_chain_data"]["env"]["CODEX_HOME"].as_str(),
+            profile.to_str()
+        );
+        assert_eq!(
+            data["mcp_servers"]["supply_chain_data"]["env_vars"]
+                .as_array()
+                .and_then(|values| values.get(0))
+                .and_then(|value| value.as_str()),
+            Some("HTTP_PROXY")
         );
         assert!(data["developer_instructions"]
             .as_str()
             .expect("data instructions")
             .contains("Do not use shell, Workspace command, Git, jq, or ad-hoc Python"));
         assert!(network["mcp_servers"]["supply_chain"].get("cwd").is_none());
-        assert!(network["mcp_servers"]["supply_chain"]["args"]
-            .as_array()
-            .expect("network args")
-            .is_empty());
+        assert_eq!(
+            network["mcp_servers"]["supply_chain"]["args"]
+                .as_array()
+                .expect("network args")
+                .iter()
+                .filter_map(|item| item.as_str())
+                .collect::<Vec<_>>(),
+            vec!["-m", "prepared.network"]
+        );
         let supply_chain_tools = network["mcp_servers"]["supply_chain"]["enabled_tools"]
             .as_array()
             .expect("supply chain tools")
@@ -576,24 +886,40 @@ mod tests {
         }
         assert_eq!(
             network["mcp_servers"]["map_utils"]["command"].as_str(),
-            Some(path_text("maps launcher", &assets.maps_launcher).expect("path"))
-        );
-        assert_eq!(
-            network["mcp_servers"]["map_utils"]["cwd"].as_str(),
-            Some(path_text("maps root", &assets.maps_root).expect("path"))
-        );
-        assert_eq!(
-            network["mcp_servers"]["map_utils"]["args"]
-                .as_array()
-                .and_then(|args| args.get(1))
-                .and_then(|item| item.as_str()),
             Some(
                 path_text(
-                    "maps state",
-                    &profile.join(".open-web-codex/mcp-state/maps-mcp")
+                    "maps command",
+                    &assets.capability_roots["map_utils"].servers["map_utils"].command
                 )
                 .expect("path")
             )
+        );
+        assert!(network["mcp_servers"]["map_utils"].get("cwd").is_none());
+        assert_eq!(
+            network["mcp_servers"]["map_utils"]["args"]
+                .as_array()
+                .expect("map args")
+                .iter()
+                .filter_map(|item| item.as_str())
+                .collect::<Vec<_>>(),
+            vec!["-m", "prepared.maps"]
+        );
+        assert_eq!(
+            network["mcp_servers"]["map_utils"]["env"]["TOOL_STATE"].as_str(),
+            profile.join(".open-web-codex/mcp-state/map_utils").to_str()
+        );
+        assert!(
+            network["mcp_servers"]["map_utils"]["env"]["DEPENDENCY_ASSETS"]
+                .as_str()
+                .is_some()
+        );
+        assert_eq!(
+            network["mcp_servers"]["map_utils"]["startup_timeout_sec"].as_integer(),
+            Some(60)
+        );
+        assert_eq!(
+            network["mcp_servers"]["map_utils"]["tool_timeout_sec"].as_integer(),
+            Some(90)
         );
         let map_tools = network["mcp_servers"]["map_utils"]["enabled_tools"]
             .as_array()
@@ -654,11 +980,30 @@ mod tests {
             }));
         assert!(!data.to_string().contains("__OPEN_WEB_CODEX_"));
         assert!(!network.to_string().contains("__OPEN_WEB_CODEX_"));
+        assert!(data.get("plugins").is_none());
+        assert!(network.get("plugins").is_none());
         assert_eq!(
             assets.startup_files(&profile).expect("startup files").len(),
             5
         );
         assert!(!profile.join("config.toml").exists());
+    }
+
+    #[test]
+    fn rejects_transport_cwd_in_author_role_mcp_server_policy() {
+        let (_temp, assets, profile, _descriptor) = fixture();
+        let mut role = parse_role_template("data", DATA_ROLE).expect("parse data Role");
+        role["plugins"]["supply_chain"]["mcp_servers"]["supply_chain_data"]["cwd"] =
+            value("/private/tool-source");
+
+        let error = project_role_mcp_servers(&mut role, "data", &assets.capability_roots, &profile)
+            .expect_err("author Role transport cwd must be rejected");
+
+        assert!(matches!(
+            error,
+            BuiltinNetworkCopilotError::InvalidRoleTemplate { message, .. }
+                if message.contains("plugins.supply_chain.mcp_servers.supply_chain_data.cwd")
+        ));
     }
 
     #[test]
@@ -787,31 +1132,94 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_or_relative_deployment_assets_as_unavailable() {
+    fn rejects_missing_or_relative_prepared_descriptor_as_unavailable() {
         let temp = tempfile::tempdir().expect("temp dir");
         assert!(matches!(
-            BuiltinNetworkCopilotAssets::resolve(
-                Path::new("relative"),
-                temp.path(),
-                temp.path(),
-                temp.path(),
-            ),
+            BuiltinNetworkCopilotAssets::resolve(Path::new("relative")),
             Err(BuiltinNetworkCopilotError::Unavailable { .. })
         ));
         assert!(matches!(
-            BuiltinNetworkCopilotAssets::resolve(
-                &temp.path().join("missing"),
-                temp.path(),
-                temp.path(),
-                temp.path(),
-            ),
+            BuiltinNetworkCopilotAssets::resolve(&temp.path().join("missing")),
+            Err(BuiltinNetworkCopilotError::Unavailable { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_unknown_fields_and_duplicate_prepared_capability_roots() {
+        let (_temp, _assets, _profile, descriptor) = fixture();
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&fs::read(&descriptor).expect("read descriptor"))
+                .expect("parse descriptor fixture");
+        document["unexpected"] = serde_json::json!(true);
+        fs::write(
+            &descriptor,
+            serde_json::to_vec(&document).expect("serialize descriptor"),
+        )
+        .expect("write unknown field fixture");
+        assert!(matches!(
+            BuiltinNetworkCopilotAssets::resolve(&descriptor),
+            Err(BuiltinNetworkCopilotError::Unavailable { .. })
+        ));
+
+        document
+            .as_object_mut()
+            .expect("descriptor object")
+            .remove("unexpected");
+        document["capabilityRoots"][0]["servers"][0]["cwd"] =
+            serde_json::json!("/obsolete/runtime-cwd");
+        fs::write(
+            &descriptor,
+            serde_json::to_vec(&document).expect("serialize descriptor"),
+        )
+        .expect("write obsolete cwd fixture");
+        assert!(matches!(
+            BuiltinNetworkCopilotAssets::resolve(&descriptor),
+            Err(BuiltinNetworkCopilotError::Unavailable { .. })
+        ));
+
+        document["capabilityRoots"][0]["servers"][0]
+            .as_object_mut()
+            .expect("prepared server object")
+            .remove("cwd");
+        let duplicate = document["capabilityRoots"][0].clone();
+        document["capabilityRoots"]
+            .as_array_mut()
+            .expect("capability roots")
+            .push(duplicate);
+        fs::write(
+            &descriptor,
+            serde_json::to_vec(&document).expect("serialize descriptor"),
+        )
+        .expect("write duplicate root fixture");
+        assert!(matches!(
+            BuiltinNetworkCopilotAssets::resolve(&descriptor),
+            Err(BuiltinNetworkCopilotError::Unavailable { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_prepared_host_binding_outside_proxy_capability() {
+        let (_temp, _assets, _profile, descriptor) = fixture();
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&fs::read(&descriptor).expect("read descriptor"))
+                .expect("parse descriptor fixture");
+        document["capabilityRoots"][0]["servers"][0]["envBindings"][1]["name"] =
+            serde_json::json!("OPEN_WEB_CODEX_MASTER_KEY");
+        fs::write(
+            &descriptor,
+            serde_json::to_vec(&document).expect("serialize descriptor"),
+        )
+        .expect("write host binding fixture");
+
+        assert!(matches!(
+            BuiltinNetworkCopilotAssets::resolve(&descriptor),
             Err(BuiltinNetworkCopilotError::Unavailable { .. })
         ));
     }
 
     #[cfg(unix)]
     #[test]
-    fn accepts_canonical_deployment_symlink_and_rejects_child_escape() {
+    fn prepared_descriptor_accepts_canonical_paths_and_rejects_non_executable_command() {
         use std::os::unix::fs::symlink;
 
         let temp = tempfile::tempdir().expect("temp dir");
@@ -820,20 +1228,14 @@ mod tests {
         let linked = temp.path().join("linked");
         symlink(&real, &linked).expect("symlink root");
         assert_eq!(
-            required_absolute_directory("linked root", &linked).expect("canonical root"),
+            canonical_directory("linked root", &linked).expect("canonical root"),
             real.canonicalize().expect("canonical real root")
         );
 
-        let outside = temp.path().join("outside");
-        write_file(&outside.join("launcher"), "#!/bin/sh\n", true);
-        symlink(outside.join("launcher"), real.join("launcher")).expect("escaped child");
+        let command = temp.path().join("command");
+        write_file(&command, "not executable\n", false);
         assert!(matches!(
-            required_regular_file(
-                "escaped launcher",
-                &real.canonicalize().expect("canonical root"),
-                "launcher",
-                true,
-            ),
+            canonical_regular_file("prepared command", &command, true),
             Err(BuiltinNetworkCopilotError::Unavailable { .. })
         ));
     }

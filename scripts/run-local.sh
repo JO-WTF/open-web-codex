@@ -68,18 +68,6 @@ Environment:
                                      generated under the data directory if absent
   OPEN_WEB_CODEX_RUNNER_ROOT         Private mirror/workspace root
   OPEN_WEB_CODEX_DATA_DIR            Runtime data and logs directory
-  OPEN_WEB_CODEX_MAPS_ASSET_ROOT     Read-only maps MCP application assets
-                                     (default: repository tools/maps-mcp)
-  OPEN_WEB_CODEX_MAPS_MCP_VENV       Shared maps MCP Python environment
-                                     (default: $OPEN_WEB_CODEX_DATA_DIR/tool-envs/maps-mcp)
-  OPEN_WEB_CODEX_SKIP_MAPS_MCP_SETUP 1 to skip startup preparation of maps MCP
-  OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV
-                                     Shared supply-chain MCP Python environment
-  OPEN_WEB_CODEX_SUPPLY_CHAIN_ASSET_ROOT
-                                     Read-only supply-chain MCP application assets
-                                     (default: repository tools/supply-chain-network-planner)
-  OPEN_WEB_CODEX_SKIP_SUPPLY_CHAIN_MCP_SETUP
-                                     1 to skip supply-chain MCP preparation
   OPEN_WEB_CODEX_BIND_HOST           Bind host
   OPEN_WEB_CODEX_SERVER_PORT         HTTP/WebSocket port
   OPEN_WEB_CODEX_SKIP_BUILD          1 to reuse build outputs
@@ -439,10 +427,8 @@ fi
 case "$database_url" in postgres://*|postgresql://*) ;; *) error "database URL must use postgres:// or postgresql://"; exit 2 ;; esac
 
 mkdir -p "$run_dir" "$log_dir" "$profile_home" "$runner_root"
-maps_mcp_venv="${OPEN_WEB_CODEX_MAPS_MCP_VENV:-$data_dir/tool-envs/maps-mcp}"
-supply_chain_mcp_venv="${OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV:-$data_dir/tool-envs/supply-chain-network-planner}"
-maps_asset_root="${OPEN_WEB_CODEX_MAPS_ASSET_ROOT:-$repo_root/tools/maps-mcp}"
-supply_chain_asset_root="${OPEN_WEB_CODEX_SUPPLY_CHAIN_ASSET_ROOT:-$repo_root/tools/supply-chain-network-planner}"
+copilot_environment_root="$data_dir/tool-environments/warehouse-network-copilot"
+copilot_prepared_descriptor="$copilot_environment_root/copilot-sdk/prepared-tools.v1.json"
 if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
   if [[ ! -f "$master_key_file" ]]; then
     command -v openssl >/dev/null 2>&1 || { error "openssl is required to create the local Secret Store key"; exit 1; }
@@ -595,8 +581,6 @@ assert_reusable_outputs_current() {
     "$repo_root/capabilities/supervisors" \
     "$repo_root/capabilities/supervisor-instruction-policies" \
     "$repo_root/capabilities/plugins" \
-    "$repo_root/tools/supply-chain-network-planner" \
-    "$repo_root/tools/maps-mcp" \
     -type f -newer "$server_bin" -print -quit 2>/dev/null || true)"
   stale_browser="$(find \
     "$web_root/src" \
@@ -662,23 +646,18 @@ build_stale_codex_runtime_components() {
   fi
 }
 
-prepare_maps_mcp() {
-  OPEN_WEB_CODEX_MAPS_ASSET_ROOT="$maps_asset_root" \
-    OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv" \
-    OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
-    "$script_dir/setup-maps-mcp-env.sh"
-}
-
-prepare_supply_chain_mcp() {
-  OPEN_WEB_CODEX_SUPPLY_CHAIN_ASSET_ROOT="$supply_chain_asset_root" \
-    OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV="$supply_chain_mcp_venv" \
-    OPEN_WEB_CODEX_LOG_DIR="$log_dir" \
-    "$script_dir/setup-supply-chain-mcp-env.sh"
+prepare_copilot_environment() {
+  PYTHONPATH="$repo_root/tools/copilot-sdk${PYTHONPATH:+:$PYTHONPATH}" \
+    "$python_cmd" -m copilot_sdk prepare "$repo_root" \
+      --manifest apps/web/builtin/warehouse-network-copilot/copilot.toml \
+      --output-root "$copilot_environment_root" \
+      --json
 }
 
 prepare_build_tools() {
   command -v npm >/dev/null 2>&1 || { error "npm is required"; exit 1; }
   command -v cargo >/dev/null 2>&1 || { error "cargo is required"; exit 1; }
+  command -v "$python_cmd" >/dev/null 2>&1 || { error "$python_cmd is required"; exit 1; }
 }
 
 show_launch_header
@@ -712,16 +691,11 @@ if [[ "$codex_mode" == "real" ]]; then
     [[ -x "$code_mode_host_bin" ]] || { error "Codex code-mode host is missing: $code_mode_host_bin"; exit 1; }
     export CODEX_CODE_MODE_HOST_PATH="$code_mode_host_bin"
   fi
-  if [[ "${OPEN_WEB_CODEX_SKIP_MAPS_MCP_SETUP:-0}" != "1" ]]; then
-    run_step "Maps MCP environment" prepare_maps_mcp
-  else
-    show_step_skipped "Maps MCP environment" "skipped"
-  fi
-  if [[ "${OPEN_WEB_CODEX_SKIP_SUPPLY_CHAIN_MCP_SETUP:-0}" != "1" ]]; then
-    run_step "Supply-chain MCP" prepare_supply_chain_mcp
-  else
-    show_step_skipped "Supply-chain MCP" "skipped"
-  fi
+  run_step "Copilot environment" prepare_copilot_environment
+  [[ -f "$copilot_prepared_descriptor" ]] || {
+    error "Copilot prepared descriptor is missing: $copilot_prepared_descriptor"
+    exit 1
+  }
 fi
 
 server_command=(
@@ -733,7 +707,11 @@ server_command=(
   --web-dist "$web_dist"
 )
 if [[ "$codex_mode" == "real" ]]; then
-  server_command+=(--codex-home "$profile_home" --codex-bin "$codex_bin")
+  server_command+=(
+    --codex-home "$profile_home"
+    --codex-bin "$codex_bin"
+    --copilot-prepared-descriptor "$copilot_prepared_descriptor"
+  )
 fi
 
 if [[ "$action" == "restart" ]]; then
@@ -756,12 +734,7 @@ export OPEN_WEB_CODEX_WEB_DIST="$web_dist"
 if [[ "$codex_mode" == "real" ]]; then
   export CODEX_HOME="$profile_home"
   export CODEX_BIN="$codex_bin"
-  export OPEN_WEB_CODEX_MAPS_MCP_VENV="$maps_mcp_venv"
-  export MAPS_MCP_VENV="$maps_mcp_venv"
-  export OPEN_WEB_CODEX_MAPS_ASSET_ROOT="$maps_asset_root"
-  export OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV="$supply_chain_mcp_venv"
-  export OPEN_WEB_CODEX_SUPPLY_CHAIN_ASSET_ROOT="$supply_chain_asset_root"
-  export OPEN_WEB_CODEX_LOG_DIR="$log_dir"
+  export OPEN_WEB_CODEX_COPILOT_PREPARED_DESCRIPTOR="$copilot_prepared_descriptor"
 else
   unset CODEX_HOME CODEX_BIN
 fi

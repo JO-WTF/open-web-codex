@@ -29,11 +29,14 @@ copilot validate ./scratch/example-copilot
 
 ## 隔离开发探针
 
-`dev` 先执行同一份 manifest 静态验证，再把完整 Skill 目录树和 Role TOML 复制到隔离
-Profile。Tool 不复制进 Profile，而是通过官方 `thread/start.selectedCapabilityRoots` 从源码根
-选择。每个 Tool 自己拥有可执行的 `bin/setup-env` 和依赖描述；`dev` 在启动 Runtime 前调用
-该入口，并只提供 Profile 外的临时 `OPEN_WEB_CODEX_DATA_DIR`。入口缺失或失败会返回 typed
-`EnvironmentUnavailable`，不会继续并伪装 ready。Workspace 必须是已存在的绝对目录：
+`dev` 先执行同一份 manifest 静态验证，再由 SDK 读取每个 `[[tools]].runtime` 指向的
+`runtime.toml`。Tool 只声明 Python/Node 项目、直接依赖清单、hash lock、server entry、参数与
+typed 环境绑定；SDK 在 Profile、Tool source 和 Workspace 之外准备依赖、构建非 editable
+Python wheel 或执行 `npm ci --ignore-scripts`，并生成一次性的 selected capability Plugin
+投影。Tool source 不复制进 Profile/Runtime projection，也不被写入；Python source 只在
+SDK-owned 临时 build root 做 staged wheel build。Tool 不提供安装脚本、launcher、`.mcp.json` 或
+`.codex-plugin` transport。环境准备失败会返回 typed `EnvironmentUnavailable`，不会启动
+Runtime 并伪装 ready。Workspace 必须是已存在的绝对目录：
 
 ```bash
 copilot dev ./scratch/example-copilot --workspace "$PWD"
@@ -63,15 +66,30 @@ copilot test ./scratch/example-copilot --workspace "$PWD"
 有界成功结果只公开组合摘要、fixture Provider、声明组件和终态证据，不公开 Runtime Thread/Turn
 ID、绝对路径或原始请求。
 
-`init` 生成的 Python Tool 自带有版本边界的 `requirements.txt`、`bin/setup-env` 与仅消费已准备环境的
-launcher，因此 fresh `init → dev` 不依赖宿主预装 `mcp`。自定义或非 Python Tool 也必须用自己
-的 `bin/setup-env` 实现准备合同；生成的 setup 只从 `requirements.txt` 安装依赖，不安装 Tool
-源码包，SDK 也不在 launcher 内隐式安装。
+`init` 生成的 Python Tool 自带 `pyproject.toml`、带 SHA-256 的 `requirements.lock` 和
+`runtime.toml`。Python 依赖由 SDK 用 `pip --require-hashes` 安装，Tool source 经 staged wheel
+构建后以 `--no-deps` 非 editable 安装；声明的 Node 项目由 SDK 在外置环境执行
+`npm ci --ignore-scripts`。`dev` 和 `test` 复用同一套通用 provisioner；Runtime 启动和 MCP
+握手阶段不安装依赖。
+
+平台本地启动使用同一编译入口：
+
+```bash
+copilot prepare . \
+  --manifest apps/web/builtin/warehouse-network-copilot/copilot.toml \
+  --output-root /absolute/platform-data/copilot-environment
+```
+
+`prepare` 只返回有界的 Copilot、capability-root 与 server 标识，并在给定的 SDK-owned output
+root 写入内部 `copilot-sdk/prepared-tools.v1.json`。该描述符包含已准备的 stdio transport、参数
+和 typed 环境绑定，供 Platform Server 在具体 Profile 下解析；它不固定 MCP server cwd，Runtime
+会使用 Thread 已授权的 Workspace cwd。该描述符不是 Browser DTO，也不包含
+安装命令、安装日志或 Secret。
 
 ## 显式 source root
 
-`validate` 的第一个参数始终是显式 source root。`copilot.toml` 中的 `path`、`role` 和
-`root` 都相对于这个 source root 解析，而不是相对于 manifest 所在目录解析。默认 manifest
+`validate` 的第一个参数始终是显式 source root。`copilot.toml` 中的 `path`、`role`、
+`root` 和 `runtime` 都相对于这个 source root 解析，而不是相对于 manifest 所在目录解析。默认 manifest
 是 source root 下的 `copilot.toml`；monorepo 可以通过 `--manifest` 指定 source root 内的
 其他位置。
 
@@ -89,7 +107,8 @@ copilot validate . \
 
 当前交付没有生产 Profile 安装、真实生产模型质量验收、readiness 持久化/聚合或 Web 创作体验。
 `dev` 是无模型 discovery gate；`test` 是使用本地确定性 Provider 的原生正常链 gate。两者都
-不是安装链。已有的 `copilot tool ...` 命令仍是高级 Tool 组件入口。
+不是安装链。CLI 只提供 `init`、`validate`、`prepare`、`dev` 和 `test`；Tool source 的唯一
+运行声明是 `runtime.toml`，不提供独立 Tool package、source Plugin/MCP transport 或 launcher 入口。
 
 Settings 中的 Agents 管理 Codex Runtime Role；它不是 Copilot 创建、安装或 readiness 页面。
 

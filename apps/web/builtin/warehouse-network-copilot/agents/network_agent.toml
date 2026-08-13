@@ -26,11 +26,11 @@ enabled = false
 name = "warehouse-network"
 enabled = true
 
-[mcp_servers.supply_chain]
-command = "__OPEN_WEB_CODEX_SUPPLY_CHAIN_LAUNCHER__"
-args = []
+[plugins.supply_chain]
 enabled = true
-required = true
+
+[plugins.supply_chain.mcp_servers.supply_chain]
+enabled = true
 default_tools_approval_mode = "prompt"
 enabled_tools = [
   "plan_route_matrix",
@@ -50,61 +50,50 @@ enabled_tools = [
   "publish_network_planning_report",
 ]
 
-[mcp_servers.supply_chain.tools.plan_route_matrix]
+[plugins.supply_chain.mcp_servers.supply_chain.tools.plan_route_matrix]
 approval_mode = "approve"
 
-[mcp_servers.supply_chain.tools.build_haversine_route_matrix]
+[plugins.supply_chain.mcp_servers.supply_chain.tools.build_haversine_route_matrix]
 approval_mode = "approve"
 
-[mcp_servers.supply_chain.tools.build_provided_route_matrix]
+[plugins.supply_chain.mcp_servers.supply_chain.tools.build_provided_route_matrix]
 approval_mode = "approve"
 
-[mcp_servers.supply_chain.tools.validate_route_matrix]
+[plugins.supply_chain.mcp_servers.supply_chain.tools.validate_route_matrix]
 approval_mode = "approve"
 
-[mcp_servers.supply_chain.tools.register_navigation_route_matrix]
+[plugins.supply_chain.mcp_servers.supply_chain.tools.register_navigation_route_matrix]
 approval_mode = "approve"
 
-[mcp_servers.supply_chain.tools.plan_cost_matrix]
+[plugins.supply_chain.mcp_servers.supply_chain.tools.plan_cost_matrix]
 approval_mode = "approve"
 
-[mcp_servers.supply_chain.tools.prepare_network_distribution_map]
+[plugins.supply_chain.mcp_servers.supply_chain.tools.prepare_network_distribution_map]
 approval_mode = "approve"
 
-[mcp_servers.supply_chain.tools.prepare_network_comparison_map]
+[plugins.supply_chain.mcp_servers.supply_chain.tools.prepare_network_comparison_map]
 approval_mode = "approve"
 
-[mcp_servers.supply_chain.tools.evaluate_network_baseline]
+[plugins.supply_chain.mcp_servers.supply_chain.tools.evaluate_network_baseline]
 approval_mode = "approve"
 
-[mcp_servers.supply_chain.tools.assess_facility_change]
+[plugins.supply_chain.mcp_servers.supply_chain.tools.assess_facility_change]
 approval_mode = "approve"
 
-[mcp_servers.supply_chain.tools.evaluate_facility_scenario]
+[plugins.supply_chain.mcp_servers.supply_chain.tools.evaluate_facility_scenario]
 approval_mode = "approve"
 
-[mcp_servers.supply_chain.tools.solve_p_median]
+[plugins.supply_chain.mcp_servers.supply_chain.tools.solve_p_median]
 approval_mode = "approve"
 
-[mcp_servers.supply_chain.tools.compare_network_scenarios]
+[plugins.supply_chain.mcp_servers.supply_chain.tools.compare_network_scenarios]
 approval_mode = "approve"
 
-[mcp_servers.supply_chain.env]
-CODEX_HOME = "__OPEN_WEB_CODEX_PROFILE_HOME__"
-OPEN_WEB_CODEX_DATA_DIR = "__OPEN_WEB_CODEX_PROFILE_RUNTIME__"
-OPEN_WEB_CODEX_LOG_DIR = "__OPEN_WEB_CODEX_PROFILE_LOGS__"
-OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV = "__OPEN_WEB_CODEX_SUPPLY_CHAIN_VENV__"
-SUPPLY_CHAIN_MCP_AUTO_INSTALL = "0"
-PYTHONDONTWRITEBYTECODE = "1"
-
-[mcp_servers.map_utils]
-command = "__OPEN_WEB_CODEX_MAPS_LAUNCHER__"
-args = ["--workspace-root", "__OPEN_WEB_CODEX_MAPS_STATE_ROOT__"]
-cwd = "__OPEN_WEB_CODEX_MAPS_ASSET_ROOT__"
+[plugins.map_utils]
 enabled = true
-required = true
-startup_timeout_sec = 60
-tool_timeout_sec = 90
+
+[plugins.map_utils.mcp_servers.map_utils]
+enabled = true
 default_tools_approval_mode = "prompt"
 enabled_tools = [
   "get_route",
@@ -112,14 +101,5 @@ enabled_tools = [
   "create_map_card",
 ]
 
-[mcp_servers.map_utils.tools.create_map_card]
+[plugins.map_utils.mcp_servers.map_utils.tools.create_map_card]
 approval_mode = "approve"
-
-[mcp_servers.map_utils.env]
-CODEX_HOME = "__OPEN_WEB_CODEX_PROFILE_HOME__"
-OPEN_WEB_CODEX_DATA_DIR = "__OPEN_WEB_CODEX_PROFILE_RUNTIME__"
-OPEN_WEB_CODEX_LOG_DIR = "__OPEN_WEB_CODEX_PROFILE_LOGS__"
-OPEN_WEB_CODEX_MAPS_MCP_VENV = "__OPEN_WEB_CODEX_MAPS_VENV__"
-MAPS_MCP_VENV = "__OPEN_WEB_CODEX_MAPS_VENV__"
-MAPS_MCP_AUTO_INSTALL = "0"
-PYTHONDONTWRITEBYTECODE = "1"

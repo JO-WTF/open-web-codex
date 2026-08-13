@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -6,6 +7,7 @@ use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter, TurnOptions};
 use open_web_codex_profile_host::{
     ProfileHost, ProfileHostConfig, ProfileHostEvent, ProfileStartupFile,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -53,39 +55,99 @@ fn toml_string(path: &std::path::Path) -> String {
     .expect("serialize TOML-compatible string")
 }
 
-fn probe_mcp_config(
-    launcher: &std::path::Path,
-    asset_root: &std::path::Path,
-    profile_home: &std::path::Path,
-    profile_runtime: &std::path::Path,
-    logs_root: &std::path::Path,
-    venv: &std::path::Path,
-) -> String {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparedDescriptor {
+    capability_roots: Vec<PreparedCapabilityRoot>,
+}
+
+#[derive(Deserialize)]
+struct PreparedCapabilityRoot {
+    id: String,
+    servers: Vec<PreparedServer>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparedServer {
+    id: String,
+    command: PathBuf,
+    args: Vec<String>,
+    env_bindings: Vec<PreparedEnvironmentBinding>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparedEnvironmentBinding {
+    name: String,
+    source: String,
+    resolved_root: Option<PathBuf>,
+}
+
+fn prepared_descriptor_path() -> PathBuf {
+    repository_root().join(
+        ".local/open-web-codex/tool-environments/warehouse-network-copilot/copilot-sdk/prepared-tools.v1.json",
+    )
+}
+
+fn probe_mcp_config(profile_home: &std::path::Path) -> String {
+    let document: PreparedDescriptor = serde_json::from_slice(
+        &std::fs::read(prepared_descriptor_path()).expect("read prepared Copilot descriptor"),
+    )
+    .expect("parse prepared Copilot descriptor");
+    let capability = document
+        .capability_roots
+        .into_iter()
+        .find(|capability| capability.id == "supply_chain")
+        .expect("prepared supply_chain capability root");
+    let server = capability
+        .servers
+        .into_iter()
+        .find(|server| server.id == DATA_SERVER)
+        .expect("prepared supply_chain_data server");
+    let mut environment = Vec::new();
+    let mut inherited = Vec::new();
+    for binding in server.env_bindings {
+        match binding.source.as_str() {
+            "profile_home" => environment.push((binding.name, profile_home.to_path_buf())),
+            "tool_state_root" => environment.push((
+                binding.name,
+                profile_home
+                    .join(".open-web-codex/mcp-state")
+                    .join(&capability.id),
+            )),
+            "dependency_root" => environment.push((
+                binding.name,
+                binding
+                    .resolved_root
+                    .expect("prepared dependency_root binding has resolvedRoot"),
+            )),
+            "host" => inherited.push(binding.name),
+            source => panic!("unsupported prepared environment source {source}"),
+        }
+    }
+    let environment = environment
+        .into_iter()
+        .map(|(name, value)| format!("{name} = {}", toml_string(&value)))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
         r#"[mcp_servers.supply_chain_data]
 command = {}
-args = ["--data-server", "--workspace-root", {}]
-cwd = {}
+args = {}
 enabled = true
 required = true
 enabled_tools = ["discover_workspace_sources"]
 default_tools_approval_mode = "approve"
+env_vars = {}
 
 [mcp_servers.supply_chain_data.env]
-CODEX_HOME = {}
-OPEN_WEB_CODEX_DATA_DIR = {}
-OPEN_WEB_CODEX_LOG_DIR = {}
-OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV = {}
-SUPPLY_CHAIN_MCP_AUTO_INSTALL = "0"
-PYTHONDONTWRITEBYTECODE = "1"
+{}
 "#,
-        toml_string(launcher),
-        toml_string(asset_root),
-        toml_string(asset_root),
-        toml_string(profile_home),
-        toml_string(profile_runtime),
-        toml_string(logs_root),
-        toml_string(venv),
+        toml_string(&server.command),
+        serde_json::to_string(&server.args).expect("serialize prepared args"),
+        serde_json::to_string(&inherited).expect("serialize inherited environment"),
+        environment,
     )
 }
 
@@ -298,6 +360,37 @@ fn thread_id(event: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+fn started_child_thread_id<'a>(event: &'a Value, root_thread_id: &str) -> Option<&'a str> {
+    if event["method"] == "thread/started"
+        && event
+            .pointer("/params/thread/parentThreadId")
+            .and_then(Value::as_str)
+            == Some(root_thread_id)
+    {
+        return thread_id(event);
+    }
+    let item = event.pointer("/params/item")?;
+    (matches!(
+        event["method"].as_str(),
+        Some("item/started" | "item/completed")
+    ) && thread_id(event) == Some(root_thread_id)
+        && item["type"] == "subAgentActivity"
+        && item["kind"] == "started")
+        .then(|| item["agentThreadId"].as_str())
+        .flatten()
+}
+
+fn bind_child_thread(evidence: &mut ProbeEvidence, child_thread_id: &str) {
+    if let Some(existing) = evidence.child_thread_id.as_deref() {
+        assert_eq!(
+            existing, child_thread_id,
+            "official child identity sources must converge"
+        );
+    } else {
+        evidence.child_thread_id = Some(child_thread_id.to_string());
+    }
+}
+
 async fn collect_calls(
     events: &mut broadcast::Receiver<ProfileHostEvent>,
     root_thread_id: &str,
@@ -305,6 +398,7 @@ async fn collect_calls(
     let mut observed = Vec::new();
     let result = timeout(Duration::from_secs(45), async {
         let mut evidence = ProbeEvidence::default();
+        let mut child_mcp_results = BTreeMap::<String, (String, Value)>::new();
         loop {
             let event = events.recv().await.expect("Profile Host event").message;
             if observed.len() < 80 {
@@ -326,13 +420,12 @@ async fn collect_calls(
                         .unwrap_or("<none>"),
                 ));
             }
-            if event["method"] == "thread/started"
-                && event
-                    .pointer("/params/thread/parentThreadId")
-                    .and_then(Value::as_str)
-                    == Some(root_thread_id)
-            {
-                evidence.child_thread_id = thread_id(&event).map(str::to_string);
+            if let Some(child_thread_id) = started_child_thread_id(&event, root_thread_id) {
+                bind_child_thread(&mut evidence, child_thread_id);
+                if let Some((turn_id, result)) = child_mcp_results.remove(child_thread_id) {
+                    evidence.child_turn_id = Some(turn_id);
+                    evidence.child_result = Some(result);
+                }
             }
             if event["method"] != "item/completed" {
                 continue;
@@ -346,9 +439,18 @@ async fn collect_calls(
             }
             if thread_id(&event) == Some(root_thread_id) {
                 evidence.root_result = Some(item["result"].clone());
-            } else if thread_id(&event) == evidence.child_thread_id.as_deref() {
-                evidence.child_turn_id = event["params"]["turnId"].as_str().map(str::to_string);
-                evidence.child_result = Some(item["result"].clone());
+            } else if let (Some(item_thread_id), Some(turn_id)) =
+                (thread_id(&event), event["params"]["turnId"].as_str())
+            {
+                if Some(item_thread_id) == evidence.child_thread_id.as_deref() {
+                    evidence.child_turn_id = Some(turn_id.to_string());
+                    evidence.child_result = Some(item["result"].clone());
+                } else {
+                    child_mcp_results.insert(
+                        item_thread_id.to_string(),
+                        (turn_id.to_string(), item["result"].clone()),
+                    );
+                }
             }
             if evidence.root_result.is_some()
                 && evidence.child_result.is_some()
@@ -365,6 +467,61 @@ async fn collect_calls(
             observed.join("\n")
         )
     })
+}
+
+#[test]
+fn child_identity_uses_only_official_thread_or_subagent_activity_fields() {
+    let root = "root-thread";
+    let child = "child-thread";
+    for event in [
+        json!({
+            "method": "thread/started",
+            "params": {"thread": {"id": child, "parentThreadId": root}}
+        }),
+        json!({
+            "method": "item/started",
+            "params": {
+                "threadId": root,
+                "item": {
+                    "type": "subAgentActivity",
+                    "kind": "started",
+                    "agentThreadId": child
+                }
+            }
+        }),
+        json!({
+            "method": "item/completed",
+            "params": {
+                "threadId": root,
+                "item": {
+                    "type": "subAgentActivity",
+                    "kind": "started",
+                    "agentThreadId": child
+                }
+            }
+        }),
+    ] {
+        assert_eq!(started_child_thread_id(&event, root), Some(child));
+    }
+    assert_eq!(
+        started_child_thread_id(
+            &json!({
+                "method": "item/completed",
+                "params": {
+                    "threadId": root,
+                    "item": {
+                        "type": "subAgentActivity",
+                        "kind": "interacted",
+                        "agentThreadId": child,
+                        "description": "started child-thread"
+                    }
+                }
+            }),
+            root,
+        ),
+        None,
+        "display text and non-started activity must not bind child identity"
+    );
 }
 
 fn assert_sources(result: &Value, expected: &str, other: &str) {
@@ -462,10 +619,8 @@ async fn native_root_and_child_fastmcp_use_authorized_workspace() {
     let runner_root = test_root.path().join("runner");
     let indonesia_root = runner_root.join("indonesia");
     let thailand_root = runner_root.join("thailand");
-    let logs_root = test_root.path().join("logs");
     std::fs::create_dir_all(&indonesia_root).unwrap();
     std::fs::create_dir_all(&thailand_root).unwrap();
-    std::fs::create_dir_all(&logs_root).unwrap();
     std::fs::write(
         indonesia_root.join("indonesia-root-child.csv"),
         "city_id,demand_quantity\nJKT,10\n",
@@ -480,27 +635,7 @@ async fn native_root_and_child_fastmcp_use_authorized_workspace() {
     let (model_uri, control, model_server) = start_mock_responses_server().await;
     let profile_home = test_root.path().join("profile");
     std::fs::create_dir_all(&profile_home).unwrap();
-    let profile_runtime = profile_home.join(".open-web-codex");
-    let supply_chain_root = repository_root()
-        .join("tools/supply-chain-network-planner")
-        .canonicalize()
-        .expect("canonical supply-chain application asset root");
-    let supply_chain_launcher = supply_chain_root
-        .join("bin/supply-chain-planner-launcher")
-        .canonicalize()
-        .expect("canonical supply-chain launcher");
-    let supply_chain_venv = repository_root()
-        .join(".local/open-web-codex/tool-envs/supply-chain-network-planner")
-        .canonicalize()
-        .expect("prepared supply-chain Python environment");
-    let mcp_config = probe_mcp_config(
-        &supply_chain_launcher,
-        &supply_chain_root,
-        &profile_home,
-        &profile_runtime,
-        &logs_root,
-        &supply_chain_venv,
-    );
+    let mcp_config = probe_mcp_config(&profile_home);
     std::fs::write(
         profile_home.join("config.toml"),
         format!(
@@ -543,8 +678,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     let host = ProfileHost::spawn(
         ProfileHostConfig::new("native-workspace-probe", &profile_home, &runner_root)
             .with_codex_bin(&codex_bin)
-            .with_startup_files(startup_files)
-            .with_environment("OPEN_WEB_CODEX_LOG_DIR", &logs_root),
+            .with_startup_files(startup_files),
     )
     .await
     .expect("spawn real Profile Host");
@@ -588,15 +722,6 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
             workspace.root.display(),
         );
     }
-
-    let launcher_log =
-        std::fs::read_to_string(logs_root.join("supply-chain-network-planner-launcher.log"))
-            .expect("Python FastMCP launcher log");
-    assert!(launcher_log.contains(&format!("cwd={}", supply_chain_root.display())));
-    assert!(
-        !launcher_log.contains(&format!("cwd={}", indonesia.root.display()))
-            && !launcher_log.contains(&format!("cwd={}", thailand.root.display()))
-    );
 
     host.shutdown().await.expect("shutdown Profile Host");
     model_server.abort();

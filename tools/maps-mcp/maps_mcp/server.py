@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -519,11 +520,12 @@ async def distance_matrix(
 
 
 def main() -> None:
+    managed_state_root = os.environ.get("OPEN_WEB_CODEX_DATA_DIR")
     parser = argparse.ArgumentParser(description="Google Maps and Mapbox MCP server")
     parser.add_argument(
         "--workspace-root",
         type=Path,
-        default=Path.cwd(),
+        default=Path(managed_state_root) if managed_state_root else Path.cwd(),
         help="Workspace whose .codex directory stores credentials and GeoJSON Resources",
     )
     parser.add_argument(

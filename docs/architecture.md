@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档性质 | 当前事实 |
 | 快照日期 | 2026-08-12 |
-| 代码快照 | HEAD `ca2d29f12` |
+| 代码快照 | 阶段二通用 Tool 环境工作树（基于 `e492b7248d`） |
 | 当前阶段边界 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 与 [开发计划](development-plan.md) |
 | 接受决策 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
 
@@ -33,7 +33,7 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | 事实 | 当前 owner | 当前实现状态 |
 | --- | --- | --- |
 | Thread、Turn、Item、上下文、Agent 调度 | Codex Runtime | Runtime 是权威 owner；已物化 Thread 的实际 Provider/model 属于 official Thread settings，不由 Profile 默认值或 Task 字段覆盖。当前 Adapter/Server/Browser 仍叠加本地 history mode、approval overlay 和 live/history merge，其中 Browser 会按相同用户文本去重，尚未收敛为 official Item/client identity 的纯投影 |
-| Skill、Plugin、MCP、Tool 执行 | Codex Runtime | Runtime 执行；阶段一 built-in 使用原生 Profile Skill/Role 与 Role-local MCP；Standard/fork 产品路径不再注入 selected capability roots，也不扫描 cwd、Workspace 或源码树寻找 built-in |
+| Skill、Plugin、MCP、Tool 执行 | Codex Runtime | Runtime 执行；阶段一 built-in 使用原生 Profile Skill/Role 与 Role-local MCP。Tool source 用 `runtime.toml`、直接项目 manifest/hash lock 与领域代码声明运行需要；SDK generic provisioner 在 Runtime 启动前于 Profile/Tool/Workspace 外准备环境，并产出内部 prepared descriptor；Runtime 启动与用户对话期间不安装依赖。Standard/fork 产品路径不扫描 cwd、Workspace 或源码树寻找 built-in |
 | Profile 进程与 `CODEX_HOME` | Profile Host | 单 Profile 进程已存在；普通 startup file 仍只对 clean Profile 做 create-new seed，并保留已存在的用户文件。仓网三项内置 Skill 与两项内置 Role 使用显式 managed destination，部署升级会在 Runtime 启动前把这五个保留 ID 收敛到当前 checked-in 内容；其他 Skill、Role 和 `config.toml` 不覆盖。进程 `HOME`/`USERPROFILE` 与 neutral cwd 均按 Profile Host 隔离；Server 仍有显式宿主认证导入路径 |
 | Provider 定义、模型目录与 Profile 的未来 Thread 默认选择 | Codex Profile config + Runtime；Platform 保存 Browser catalog 投影 | `config/batchWrite` 持久化 Runtime 配置；Platform 的 Profile catalog 保存 Web 配置入口所需的 provider/model 投影和非敏感 credential env-key 名称。真实 fresh Profile 已通过 provider-scoped Fetch、选择、重启恢复和新 Thread 创建，不再把空 model pair 发给 Server |
 | Provider Secret | Platform encrypted Secret store 或显式环境凭据 | Direct credential 只进入 Profile/provider scoped Secret store；环境凭据只持久化变量名称并由 owned Profile process 注入。Codex config、Browser DTO、日志和文档不保存明文 |
@@ -69,8 +69,12 @@ snapshot/binding、definition/revision/release 和 continuation 六表；它们�
 typed 校验官方 `initialize` 的四字段，并只对 `codexHome` 执行 Profile owner 安全校验。
 
 阶段一 built-in 不再经过上述路径。Server 从 checked-in 三项 Skill、两项 Role 模板组合
-启动 seed，并要求显式配置 supply-chain/maps 的共享应用资产根和 prepared Python 环境；
-缺少固定 launcher、runtime、Mock 源或依赖文件时 real mode 明确 unavailable。Profile Host
+启动 seed。`scripts/run-local.sh` 在 real Server 启动前只调用一次 SDK `copilot prepare`；SDK
+严格读取 manifest 中每个 Tool 的 `runtime.toml`、直接项目 manifest 与 hash lock，在平台 data
+root 下准备 Python/Node 环境，并写入内部 `prepared-tools.v1.json`。Server 只消费该 typed
+descriptor，按当前 Profile 解析 `profile_home`、`tool_state_root`、`dependency_root` 与声明的
+host 绑定，再把 transport 与 Role policy 合成原生 Role-local MCP。描述符、运行时文件或依赖
+缺失时 real mode 明确 unavailable；平台不扫描目录猜语言或 server。Profile Host
 只允许 `$CODEX_HOME/skills/<id>/SKILL.md` 和 `$CODEX_HOME/agents/<role>.toml` 两种
 typed destination，不写 `config.toml`，不复制工具代码、venv、Node 依赖、Mock 或缓存。
 普通 startup file 在 clean Profile 缺失时使用 create-new 原子落盘，已存在文件继续保留。
@@ -82,18 +86,18 @@ Role 和 `config.toml` 不受影响。运行中的 Skill watcher 与下一次 Ro
 `plugins`、`remote_plugin`、`apps` 与 `tool_suggest`；不改写持久 Profile 配置，也不在
 Platform 侧过滤 Runtime discovery 或 Tool。
 
-Data/Network Role TOML 各自持有完整 MCP transport、精确 `enabled_tools` 和 Tool 级审批策略；
+Data/Network Role TOML 只持有 `plugins.<tool>.mcp_servers.<server>` 下的精确 allowlist 与 Tool 级审批策略；
 Root 没有全局仓网 MCP。Data 的四个有界本地 Tool 统一预批准；Network 以 `prompt` 为默认，
 仅预批准路线/成本/验证/分析/选址/比较等本地 Tool；`map_utils` 仅预批准 `create_map_card`。
 外部导航、距离矩阵和 final Workspace map/Markdown report 写入始终保留 official approval。MCP provider
 同时在 Tool annotations 中声明 read-only、destructive、idempotent 和 open-world 事实，Role
-policy 只裁决该 child 的精确允许面，不修改全局 `approvalPolicy`。当前 composition 仍把 MCP
-process cwd 设为 canonical 共享应用资产根，这只是
-下一切片迁移输入而非目标合同：目标是 launcher、代码和 fixture 来自显式只读 application
-assets，stdio MCP config 不设置 cwd，provider Resource scope 复用官方 Thread Workspace
-cwd。maps 状态根单独指向 Profile 私有 `.open-web-codex/mcp-state/maps-mcp`。真实 stdio
-启动探针已证明四个 MCP server 能列出 Role 所需 inventory，且启动前后共享应用资产树没有
-新增文件或 mtime 变化。
+policy 只裁决该 child 的精确允许面，不修改全局 `approvalPolicy`。prepared transport 不固定 MCP
+process cwd；Runtime 使用该 Thread 已授权的 Workspace 作为 stdio MCP cwd。依赖环境与
+Tool state 均在源码树之外，Tool source 不复制进 Profile/Runtime projection且不被写入，SDK 仅在 owned build root
+生成 staged copy/wheel。provider Resource scope 仍复用官方 Thread Workspace cwd；
+maps 状态根由 `tool_state_root` 绑定解析到当前 Profile 的 owned MCP state root。旧专用 launcher
+probe 的结果不作为新合同证据；通用 prepare、descriptor 消费与 real startup 只由当前工作树的
+SDK/Server/run-local gate 证明。
 
 3B.2 的真实 Runtime gate 已使用当前 checkout 构建的 Codex、生产 Profile seed composition
 和本地 mock Responses provider 证明：clean Profile 的官方 `skills/list(forceReload=true)`
@@ -107,8 +111,9 @@ no-op，status 仍返回同一 inventory，不伪造 startup transition。单独
 SHA/inventory 校验、Profile `platform-agents` writer/verifier 和相应 Server preflight。唯一启动链
 现在是 authorized Task Workspace → Standard start/fork → Codex 原生 Profile Skill/Role/MCP。
 Indonesia/Thailand 真实探针证明 Standard Root 与原生 child 都从各自 Turn `sandboxCwd` 读取
-同一授权 Workspace，Workspace 中没有 capability 文件。MCP process cwd 仍是共享应用资产根
-的现状只作为后续按 ADR-018 迁移到 native Thread Workspace cwd 的输入。
+同一授权 Workspace，Workspace 中没有 capability 文件。prepared transport 不携带 cwd；
+Runtime 使用该 Thread 已授权的 Workspace 作为 stdio MCP cwd。依赖环境、缓存和
+Tool state 仍由 Profile/SDK 的 owned root 持有，不写入 Workspace。
 3B.3-B4 已从当前 schema 删除 DB-only readiness 与 Catalog/Installation 等无 owner 对象；
 Slice 4B.2-A 又由 fresh PostgreSQL 全迁移链断言 Work State 十表、Supervisor 六表和
 provider speculative hash 四列不存在，同时保留 provider_call_metrics 与 Runtime agent
@@ -226,9 +231,10 @@ Settings 只保留 Codex 原生 Runtime Agents、Skills/MCP 等当前运行配�
 Catalog、Tool & Skill Studio、Supervisor Studio 与 Sidebar Agent Studio 已删除。当前阶段没有
 公开 Capability authoring/publish/install 产品入口。
 
-SDK 当前有两层入口：`copilot init/validate` 提供 Atom 1 源码脚手架与静态组合验证，
-`copilot tool init/validate/test/pack` 提供高级 Tool 组件操作；尚无 Copilot dev/test、安装、
-Runtime readiness 或 Web 创作链路。
+SDK 当前的 `copilot init/validate/prepare/dev/test` 提供源码脚手架、静态组合验证、
+通用 Tool 环境准备、official selected roots Skill/MCP discovery 与单条确定性
+normal-case gate。当前仍没有公开安装/发布、持久 Runtime readiness、Web 创作链路或
+Role/任意模型质量矩阵。
 公开 SDK、Studio 和 Copilot Builder 已后移到阶段二；它们不是阶段一缺口或退出门。
 
 ## 8. 当前最重要的边界偏离

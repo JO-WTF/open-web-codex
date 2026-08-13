@@ -15,6 +15,15 @@ from pathlib import Path
 from typing import Any
 
 from .copilot_manifest import CopilotPackageSummary, validate_copilot_package
+from .tool_environment import (
+    MaterializedCapabilityRoot,
+    MaterializedToolComposition,
+    ToolEnvironmentError,
+    ToolRuntimeSource,
+    materialize_capability_roots,
+    prepare_tool_composition,
+)
+from .tool_runtime_manifest import load_tool_runtime_manifest
 
 
 OWNER_MARKER = ".copilot-dev-profile.json"
@@ -24,13 +33,20 @@ class CopilotDevError(RuntimeError):
     """A typed failure from an isolated Copilot development probe."""
 
     def __init__(
-        self, code: str, stage: str, path: str, message: str, cause: str | None = None
+        self,
+        code: str,
+        stage: str,
+        path: str,
+        message: str,
+        cause: str | None = None,
+        diagnostics: dict[str, Any] | None = None,
     ) -> None:
         self.code = code
         self.stage = stage
         self.path = path
         self.message = message
         self.cause = cause
+        self.diagnostics = diagnostics or {}
         super().__init__(f"{code}: {stage}: {path}: {message}")
 
 
@@ -50,6 +66,7 @@ class DeclaredAgent:
 class DeclaredTool:
     id: str
     source: Path
+    runtime: Path
 
 
 @dataclass(frozen=True)
@@ -61,6 +78,7 @@ class DevComposition:
     skills: tuple[DeclaredSkill, ...]
     agents: tuple[DeclaredAgent, ...]
     tools: tuple[DeclaredTool, ...]
+    mcp_server_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -90,6 +108,18 @@ def load_dev_composition(
     manifest = root / manifest_path
     with manifest.open("rb") as handle:
         data = tomllib.load(handle)
+    agents = tuple(
+        DeclaredAgent(entry["id"], _validated_source(root, entry["role"]))
+        for entry in data["agents"]
+    )
+    tools = tuple(
+        DeclaredTool(
+            entry["id"],
+            _validated_source(root, entry["root"]),
+            Path(entry["runtime"]),
+        )
+        for entry in data["tools"]
+    )
     return DevComposition(
         source_root=root,
         manifest_path=manifest_path,
@@ -99,15 +129,42 @@ def load_dev_composition(
             DeclaredSkill(entry["id"], _validated_source(root, entry["path"]))
             for entry in data["skills"]
         ),
-        agents=tuple(
-            DeclaredAgent(entry["id"], _validated_source(root, entry["role"]))
-            for entry in data["agents"]
-        ),
-        tools=tuple(
-            DeclaredTool(entry["id"], _validated_source(root, entry["root"]))
-            for entry in data["tools"]
-        ),
+        agents=agents,
+        tools=tools,
+        mcp_server_ids=_declared_mcp_server_ids(root, agents, tools),
     )
+
+
+def _declared_mcp_server_ids(
+    root: Path,
+    agents: tuple[DeclaredAgent, ...],
+    tools: tuple[DeclaredTool, ...],
+) -> tuple[str, ...]:
+    tools_by_id = {tool.id: tool for tool in tools}
+    server_ids: list[str] = []
+    for agent in agents:
+        with agent.source.open("rb") as handle:
+            role = tomllib.load(handle)
+        plugins = role.get("plugins", {})
+        assert isinstance(plugins, dict)  # complete manifest validation proved this
+        for tool_id, plugin_policy in plugins.items():
+            assert isinstance(plugin_policy, dict)
+            policies = plugin_policy.get("mcp_servers", {})
+            assert isinstance(policies, dict)
+            tool = tools_by_id[tool_id]
+            runtime = load_tool_runtime_manifest(root, tool.source, tool.runtime)
+            transports = {server.id for server in runtime.servers}
+            for server_id in policies:
+                if server_id not in transports:
+                    _error(
+                        "MaterializationFailed",
+                        "role-projection",
+                        str(agent.source),
+                        f"Tool {tool_id!r} does not declare MCP server {server_id!r}",
+                    )
+                if server_id not in server_ids:
+                    server_ids.append(server_id)
+    return tuple(server_ids)
 
 
 def prepare_dev_profile(
@@ -201,7 +258,7 @@ def prepare_dev_profile(
         for agent in composition.agents:
             destination = agents_root / f"{agent.id}.toml"
             _claim_target(copied_targets, destination)
-            _materialize_role(agent, destination, composition)
+            _copy_regular_file(agent.source, destination, composition.source_root)
 
         process_home = process_root / "home"
         process_cwd = process_root / "cwd"
@@ -238,25 +295,49 @@ def validate_workspace(workspace: Path) -> Path:
     return canonical
 
 
-def resolve_tool_setup(composition: DevComposition, tool: DeclaredTool) -> Path:
-    candidate = tool.source / "bin/setup-env"
-    if not os.path.lexists(candidate):
-        _error(
-            "EnvironmentUnavailable",
-            "tool-setup",
-            str(candidate),
-            "declared Tool must provide an executable bin/setup-env",
+def prepare_dev_tool_composition(
+    prepared: PreparedDevProfile,
+    *,
+    host_environment: dict[str, str] | None = None,
+) -> MaterializedToolComposition:
+    """Prepare generic Tool environments, then project their transport into Roles."""
+
+    composition = prepared.composition
+    try:
+        prepared_tools = prepare_tool_composition(
+            source_root=composition.source_root,
+            tools=tuple(
+                ToolRuntimeSource(tool.id, tool.source, tool.runtime)
+                for tool in composition.tools
+            ),
+            output_root=prepared.process_data / "prepared",
+            composition_descriptor_sha256=(
+                composition.summary.composition_descriptor_sha256
+            ),
+            host_environment=host_environment,
         )
-    relative = candidate.relative_to(composition.source_root)
-    setup = _validated_source(composition.source_root, relative.as_posix())
-    if not setup.is_file() or not setup.stat().st_mode & 0o111:
+    except ToolEnvironmentError as error:
         _error(
-            "EnvironmentUnavailable",
-            "tool-setup",
-            str(setup),
-            "declared Tool must provide an executable bin/setup-env",
+            error.code,
+            "tool-environment",
+            error.path,
+            "declared Tool environment could not be prepared",
+            error.cause,
         )
-    return setup
+    tools = materialize_capability_roots(
+        prepared_tools,
+        profile_home=prepared.profile_root,
+        state_root=prepared.process_data / "runtime",
+    )
+    roots = {root.id: root for root in tools.capability_roots}
+    for agent in composition.agents:
+        _materialize_role(
+            agent,
+            prepared.profile_root / "agents" / f"{agent.id}.toml",
+            composition,
+            roots,
+        )
+    return tools
 
 
 def _owner_marker(composition: DevComposition) -> dict[str, Any]:
@@ -315,7 +396,10 @@ def _copy_regular_file(source: Path, destination: Path, source_root: Path) -> No
 
 
 def _materialize_role(
-    agent: DeclaredAgent, destination: Path, composition: DevComposition
+    agent: DeclaredAgent,
+    destination: Path,
+    composition: DevComposition,
+    prepared_roots: dict[str, MaterializedCapabilityRoot],
 ) -> None:
     try:
         with agent.source.open("rb") as handle:
@@ -339,11 +423,10 @@ def _materialize_role(
             str(agent.source),
             "Role plugins policy must be a table",
         )
-    declared_tools = {tool.id: tool for tool in composition.tools}
     projected: dict[str, dict[str, Any]] = {}
     for tool_id, plugin_policy in plugins.items():
-        tool = declared_tools.get(tool_id)
-        if tool is None:
+        prepared_root = prepared_roots.get(tool_id)
+        if prepared_root is None:
             _error(
                 "MaterializationFailed",
                 "role-projection",
@@ -360,9 +443,7 @@ def _materialize_role(
         policies = plugin_policy.get("mcp_servers")
         if not isinstance(policies, dict):
             continue
-        descriptor = _load_tool_mcp_descriptor(tool, composition)
-        servers = descriptor.get("mcpServers")
-        assert isinstance(servers, dict)  # static package validation already proved this
+        servers = {server.id: server for server in prepared_root.servers}
         for server_id, policy in policies.items():
             if server_id in projected:
                 _error(
@@ -372,7 +453,7 @@ def _materialize_role(
                     f"MCP server {server_id!r} would have multiple transports",
                 )
             transport = servers.get(server_id)
-            if not isinstance(transport, dict):
+            if transport is None:
                 _error(
                     "MaterializationFailed",
                     "role-projection",
@@ -386,25 +467,16 @@ def _materialize_role(
                     str(agent.source),
                     f"MCP policy for {server_id!r} must be a table",
                 )
-            runtime_server = copy.deepcopy(transport)
-            runtime_server["command"] = str(
-                _resolve_transport_path(
-                    tool,
-                    runtime_server.get("command"),
-                    composition,
-                    field="command",
-                    kind="file",
-                )
-            )
-            runtime_server["cwd"] = str(
-                _resolve_transport_path(
-                    tool,
-                    runtime_server.get("cwd", "."),
-                    composition,
-                    field="cwd",
-                    kind="directory",
-                )
-            )
+            runtime_server: dict[str, Any] = {
+                "command": str(transport.command),
+                "args": list(transport.args),
+                "env": dict(transport.env),
+                "env_vars": list(transport.env_vars),
+            }
+            if transport.startup_timeout_sec is not None:
+                runtime_server["startup_timeout_sec"] = transport.startup_timeout_sec
+            if transport.tool_timeout_sec is not None:
+                runtime_server["tool_timeout_sec"] = transport.tool_timeout_sec
             allowed_policy = {
                 "enabled",
                 "default_tools_approval_mode",
@@ -423,70 +495,6 @@ def _materialize_role(
     rendered = _dump_toml_document(runtime_role)
     destination.write_text(rendered, encoding="utf-8")
     destination.chmod(agent.source.stat().st_mode & 0o777)
-
-
-def _load_tool_mcp_descriptor(
-    tool: DeclaredTool, composition: DevComposition
-) -> dict[str, Any]:
-    descriptor_path = _validated_source(
-        composition.source_root,
-        (tool.source / ".mcp.json").relative_to(composition.source_root).as_posix(),
-    )
-    try:
-        descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        _error(
-            "MaterializationFailed",
-            "role-projection",
-            str(descriptor_path),
-            "Tool MCP descriptor could not be read",
-            str(error),
-        )
-    if not isinstance(descriptor, dict) or not isinstance(
-        descriptor.get("mcpServers"), dict
-    ):
-        _error(
-            "MaterializationFailed",
-            "role-projection",
-            str(descriptor_path),
-            "Tool MCP descriptor must contain mcpServers",
-        )
-    return descriptor
-
-
-def _resolve_transport_path(
-    tool: DeclaredTool,
-    value: Any,
-    composition: DevComposition,
-    *,
-    field: str,
-    kind: str,
-) -> Path:
-    if not isinstance(value, str) or not value:
-        _error(
-            "MaterializationFailed",
-            "role-projection",
-            str(tool.source / ".mcp.json"),
-            f"MCP transport {field} must be a non-empty relative path",
-        )
-    authored = Path(value)
-    if authored.is_absolute() or any(part == ".." for part in authored.parts):
-        _error(
-            "UnsafePath",
-            "role-projection",
-            value,
-            f"MCP transport {field} must remain inside its Tool root",
-        )
-    candidate = tool.source / authored
-    resolved = _validated_source(
-        composition.source_root,
-        candidate.relative_to(composition.source_root).as_posix(),
-    )
-    if kind == "file" and not resolved.is_file():
-        _error("UnsafePath", "role-projection", value, "transport command must be a file")
-    if kind == "directory" and not resolved.is_dir():
-        _error("UnsafePath", "role-projection", value, "transport cwd must be a directory")
-    return resolved.resolve(strict=True)
 
 
 def _dump_toml_tables(prefix: tuple[str, ...], table: dict[str, Any]) -> str:
@@ -609,3 +617,4 @@ def _error(
     code: str, stage: str, path: str, message: str, cause: str | None = None
 ) -> None:
     raise CopilotDevError(code, stage, path, message, cause)
+    materialize_capability_roots,

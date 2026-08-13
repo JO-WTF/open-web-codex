@@ -48,9 +48,10 @@
 - [领域 Agent 扩展架构](domain-agent-extension-architecture.md)
 - [Skills、MCP 与自定义 UI 扩展](custom-skills-mcp-ui-guide.md)
 - [Copilot 开发者快速开始](tutorials/copilot-developer-quickstart.md)：当前
-  `copilot init` / `copilot validate` / `copilot dev` 源码入口；除脚手架与静态组合验证外，
-  `dev` 还在隔离 Profile 中通过官方 Runtime 合同验证 Skill 与 MCP Server discovery，
-  但不证明 Role spawn、模型验收、Tool 测试或生产安装 readiness。
+  `copilot init` / `validate` / `prepare` / `dev` / `test` 源码入口；SDK 从显式 runtime manifest
+  和 hash lock 准备外置 Tool 环境，`dev` 在隔离 Profile 中验证 Skill 与 MCP Server discovery，
+  `test` 用本地确定性 Provider 验证单条原生 Supervisor/Role/MCP 正常链。它们不证明真实生产
+  模型质量、生产 Profile 安装、Marketplace 或多用户 readiness。
 - [零基础多 Agent 开发教程（冻结迁移输入）](multi-agent-development-tutorial.md)
   - [教程标准与四条学习路径](tutorials/README.md)
   - [10 分钟运行印尼仓网示例](tutorials/indonesia-network-quickstart.md)

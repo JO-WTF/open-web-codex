@@ -73,19 +73,10 @@ struct Cli {
     /// Codex executable used by the native Profile Host.
     #[arg(long, env = "CODEX_BIN", default_value = "codex")]
     codex_bin: PathBuf,
-    /// Explicit read-only application asset root for the built-in
-    /// warehouse-network tools and Demo source.
-    #[arg(long, env = "OPEN_WEB_CODEX_SUPPLY_CHAIN_ASSET_ROOT")]
-    supply_chain_asset_root: Option<PathBuf>,
-    /// Shared prepared Python environment for the supply-chain MCP servers.
-    #[arg(long, env = "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV")]
-    supply_chain_mcp_venv: Option<PathBuf>,
-    /// Explicit read-only application asset root for the maps MCP server.
-    #[arg(long, env = "OPEN_WEB_CODEX_MAPS_ASSET_ROOT")]
-    maps_asset_root: Option<PathBuf>,
-    /// Shared prepared Python environment for the maps MCP server.
-    #[arg(long, env = "OPEN_WEB_CODEX_MAPS_MCP_VENV")]
-    maps_mcp_venv: Option<PathBuf>,
+    /// Trusted local descriptor produced by the generic Copilot environment
+    /// preparation integration before the Server starts.
+    #[arg(long, env = "OPEN_WEB_CODEX_COPILOT_PREPARED_DESCRIPTOR")]
+    copilot_prepared_descriptor: Option<PathBuf>,
     /// Private root for server-owned repository mirrors and managed Workspaces.
     #[arg(
         long,
@@ -192,20 +183,8 @@ async fn main() -> anyhow::Result<()> {
                 )?;
                 let builtin_assets = builtin_network_copilot::BuiltinNetworkCopilotAssets::resolve(
                     required_real_path(
-                        cli.supply_chain_asset_root.as_deref(),
-                        "--supply-chain-asset-root / OPEN_WEB_CODEX_SUPPLY_CHAIN_ASSET_ROOT",
-                    )?,
-                    required_real_path(
-                        cli.supply_chain_mcp_venv.as_deref(),
-                        "--supply-chain-mcp-venv / OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV",
-                    )?,
-                    required_real_path(
-                        cli.maps_asset_root.as_deref(),
-                        "--maps-asset-root / OPEN_WEB_CODEX_MAPS_ASSET_ROOT",
-                    )?,
-                    required_real_path(
-                        cli.maps_mcp_venv.as_deref(),
-                        "--maps-mcp-venv / OPEN_WEB_CODEX_MAPS_MCP_VENV",
+                        cli.copilot_prepared_descriptor.as_deref(),
+                        "--copilot-prepared-descriptor / OPEN_WEB_CODEX_COPILOT_PREPARED_DESCRIPTOR",
                     )?,
                 )?;
                 let startup_files = builtin_assets.startup_files(&codex_home)?;

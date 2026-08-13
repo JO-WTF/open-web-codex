@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-import json
 import tomllib
 from pathlib import Path
 
@@ -87,37 +86,52 @@ NETWORK_TOOLS = {
 }
 
 
-def test_plugin_manifest_and_mcp_config_are_wired() -> None:
+def test_tool_author_source_has_no_runtime_transport_or_lifecycle_scripts() -> None:
     root = Path(__file__).resolve().parents[1]
-    manifest = json.loads((root / ".codex-plugin" / "plugin.json").read_text())
-    mcp_config = json.loads((root / ".mcp.json").read_text())
     project = tomllib.loads((root / "pyproject.toml").read_text())
 
-    assert manifest["name"] == "supply-chain-network-planner"
-    assert manifest["version"] == project["project"]["version"] == __version__ == "0.4.0"
-    assert "skills" not in manifest
-    assert "network Resources" in manifest["interface"]["longDescription"]
-    assert manifest["mcpServers"] == "./.mcp.json"
-    assert set(mcp_config["mcpServers"]) == {"supply_chain"}
-    server = mcp_config["mcpServers"]["supply_chain"]
-    assert server["command"] == "./bin/supply-chain-planner-launcher"
-    assert "cwd" not in server
-    assert server["default_tools_approval_mode"] == "prompt"
-    assert server["tools"] == {
-        "plan_route_matrix": {"approval_mode": "approve"},
-        "build_haversine_route_matrix": {"approval_mode": "approve"},
-        "build_provided_route_matrix": {"approval_mode": "approve"},
-        "validate_route_matrix": {"approval_mode": "approve"},
-        "register_navigation_route_matrix": {"approval_mode": "approve"},
-        "plan_cost_matrix": {"approval_mode": "approve"},
-        "prepare_network_distribution_map": {"approval_mode": "approve"},
-        "prepare_network_comparison_map": {"approval_mode": "approve"},
-        "evaluate_network_baseline": {"approval_mode": "approve"},
-        "assess_facility_change": {"approval_mode": "approve"},
-        "evaluate_facility_scenario": {"approval_mode": "approve"},
-        "solve_p_median": {"approval_mode": "approve"},
-        "compare_network_scenarios": {"approval_mode": "approve"},
+    assert project["project"]["version"] == __version__ == "0.4.0"
+    assert not (root / ".codex-plugin").exists()
+    assert not (root / ".mcp.json").exists()
+    assert not (root / "bin").exists()
+
+
+def test_generic_runtime_declaration_owns_dependencies_and_server_entries() -> None:
+    root = Path(__file__).resolve().parents[1]
+    runtime = tomllib.loads((root / "runtime.toml").read_text())
+
+    assert runtime["schema_version"] == 1
+    assert runtime["dependencies"] == [
+        {
+            "id": "python",
+            "kind": "python-project",
+            "manifest": "pyproject.toml",
+            "lock": "requirements.lock",
+        }
+    ]
+    servers = {server["id"]: server for server in runtime["servers"]}
+    assert set(servers) == {"supply_chain_data", "supply_chain"}
+    assert servers["supply_chain_data"]["entry"] == {
+        "kind": "python-module",
+        "dependency": "python",
+        "module": "supply_chain_planner.data_server",
     }
+    assert servers["supply_chain"]["entry"] == {
+        "kind": "python-module",
+        "dependency": "python",
+        "module": "supply_chain_planner.server",
+    }
+    for server in servers.values():
+        assert server["args"] == []
+        bindings = {(entry["name"], entry["source"]) for entry in server["env"]}
+        assert ("CODEX_HOME", "profile_home") in bindings
+        assert ("HTTP_PROXY", "host") in bindings
+        assert all("dependency" not in entry for entry in server["env"])
+
+    lock = (root / "requirements.lock").read_text()
+    assert "--hash=sha256:" in lock
+    assert "setuptools==" in lock
+    assert " -e " not in lock and "file:" not in lock
 
 
 def test_network_server_exposes_only_network_tools() -> None:

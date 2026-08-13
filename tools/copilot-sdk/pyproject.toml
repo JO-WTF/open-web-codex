@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "open-web-codex-copilot-sdk"
 version = "0.1.0"
-description = "SDK and CLI for authoring validated Codex Copilot and Tool packages"
+description = "SDK and CLI for authoring validated Codex Copilot source compositions"
 requires-python = ">=3.11"
 
 [project.scripts]

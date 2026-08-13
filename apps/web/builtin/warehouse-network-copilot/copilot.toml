@@ -28,7 +28,21 @@ role = "apps/web/builtin/warehouse-network-copilot/agents/network_agent.toml"
 [[tools]]
 id = "supply_chain"
 root = "tools/supply-chain-network-planner"
+runtime = "tools/supply-chain-network-planner/runtime.toml"
 
 [[tools]]
 id = "map_utils"
 root = "tools/maps-mcp"
+runtime = "tools/maps-mcp/runtime.toml"
+
+[[tests]]
+id = "empty-workspace-source-discovery"
+prompt = "Discover supported source files in the authorized empty Workspace and return the verified catalog."
+agent = "data_agent"
+tool = "supply_chain"
+server = "supply_chain_data"
+tool_name = "discover_workspace_sources"
+arguments = {}
+
+[tests.expect]
+structured_content = { schema = "workspace_source_catalog.v1", workspace_scope = "authorized_workspace", sources = [], truncated = false, dataClassification = "workspace_data" }

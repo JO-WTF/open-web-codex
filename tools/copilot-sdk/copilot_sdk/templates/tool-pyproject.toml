@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "__TOOL_DIR__"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["mcp==1.27.1"]
+
+[tool.setuptools]
+py-modules = ["server"]

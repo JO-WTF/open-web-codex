@@ -17,11 +17,11 @@ enabled = true
 name = "warehouse-network"
 enabled = false
 
-[mcp_servers.supply_chain]
-command = "__OPEN_WEB_CODEX_SUPPLY_CHAIN_LAUNCHER__"
-args = ["--data-server"]
+[plugins.supply_chain]
 enabled = true
-required = true
+
+[plugins.supply_chain.mcp_servers.supply_chain_data]
+enabled = true
 default_tools_approval_mode = "approve"
 enabled_tools = [
   "discover_workspace_sources",
@@ -29,11 +29,3 @@ enabled_tools = [
   "normalize_network_input",
   "prepare_network_geography",
 ]
-
-[mcp_servers.supply_chain.env]
-CODEX_HOME = "__OPEN_WEB_CODEX_PROFILE_HOME__"
-OPEN_WEB_CODEX_DATA_DIR = "__OPEN_WEB_CODEX_PROFILE_RUNTIME__"
-OPEN_WEB_CODEX_LOG_DIR = "__OPEN_WEB_CODEX_PROFILE_LOGS__"
-OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV = "__OPEN_WEB_CODEX_SUPPLY_CHAIN_VENV__"
-SUPPLY_CHAIN_MCP_AUTO_INSTALL = "0"
-PYTHONDONTWRITEBYTECODE = "1"

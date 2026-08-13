@@ -8,9 +8,9 @@ MCP Server、Secret 配置、审批适配或专用 Web 面板。`tools/maps-mcp`
 `docs/capability-baseline.md` 为准，阶段顺序以 `docs/roadmap.md` 为准，当前
 任务以 `docs/development-plan.md` 为准。
 
-阶段一的仓网包由 Profile 托管并通过 Codex 原生 discovery/reload 生效；公开 Tool SDK
-和 Copilot Studio 属于阶段二，合同尚未重新裁决。当前直接编辑目录的命令只用于仓库内
-参考包开发，不是未来 Web 用户的安装协议。新建或重写的 `SKILL.md` 主体必须使用中文；
+阶段二已建立 Copilot SDK 源码、通用 Tool runtime、隔离 discovery 与本地正常链入口；尚无
+Web Studio、生产安装或 Marketplace。当前直接编辑目录的命令用于 SDK 源码与仓库内 reference
+开发，不是 Web 用户安装协议。新建或重写的 `SKILL.md` 主体必须使用中文；
 代码标识、Schema 字段和正式产品名可以保留英文。
 
 如需先理解 Agent Definition、Runtime Role、领域知识、Skill 与 MCP 的职责拆分和组合方式，参见
@@ -20,7 +20,7 @@ MCP Server、Secret 配置、审批适配或专用 Web 面板。`tools/maps-mcp`
 
 1. [先确定扩展属于哪一层](#1-先确定扩展属于哪一层)
 2. [创建一个 Skill](#2-创建一个-skill)
-3. [把 Skill 与 MCP 组成 Plugin](#3-把-skill-与-mcp-组成-plugin)
+3. [把 Skill 与 MCP 组成 Copilot 源码](#3-把-skill-与-mcp-组成-copilot-源码)
 4. [新建或扩展 MCP Server](#4-新建或扩展-mcp-server)
 5. [Secret 或 Key 输入界面的完整适配](#5-secret-或-key-输入界面的完整适配)
 6. [自定义卡片和其他面板](#6-自定义卡片和其他面板)
@@ -35,7 +35,7 @@ Skill、MCP 和界面不是同一种能力：
 | 层 | 负责什么 | 不应负责什么 |
 | --- | --- | --- |
 | Skill | 告诉 Codex 何时执行某个工作流、按什么顺序调用工具、如何处理失败和输出 | 保存 Secret、直接实现远端 API、伪造工具结果 |
-| Plugin | 把一个或多个 Skill、MCP、App 或 Hook 组织成可发现的能力包 | 执行业务请求、代替权限控制 |
+| Copilot source | 用 manifest 组合 Skill、Role、Tool runtime 与正常用例 | 执行业务请求、代替权限控制或在源码中安装依赖 |
 | MCP Server | 暴露有类型的工具，校验输入，调用本地或远端能力，返回结构化结果 | 把 API Key 作为模型可见参数、渲染浏览器界面 |
 | Codex Runtime | 发现 Plugin/Skill/MCP，执行工具，管理 Thread/Turn 和 elicitation | 保存平台用户、组织权限或浏览器状态 |
 | Web Platform | 鉴权、授权、持久化、Secret、审批投影、审计和 Runtime 生命周期 | 重新实现 Skill 选择或 MCP 调度 |
@@ -46,7 +46,7 @@ Skill、MCP 和界面不是同一种能力：
 - 只有领域知识或操作流程：创建 Skill。
 - 需要重复执行的确定性本地逻辑：优先给 Skill 增加 `scripts/`。
 - 需要稳定的工具 Schema、远端 API、长任务、Secret 或独立超时：增加 MCP。
-- 需要把 Skill 和 MCP 一起分发：创建 Plugin 能力包。
+- 需要组合 Skill、Role 和 MCP：创建 Copilot source，并由 SDK 生成临时 Runtime projection。
 - 需要 Key 输入、审批、图表、地图或其他专用呈现：继续完成 Platform 和 Web
   适配，不能只修改 Skill。
 
@@ -54,20 +54,18 @@ Skill、MCP 和界面不是同一种能力：
 
 ```text
 tools/maps-mcp/
-├── .codex-plugin/plugin.json       Plugin 清单
-├── .mcp.json                       map_utils MCP 启动声明
-├── bin/maps-mcp-launcher           启动、依赖检查和诊断
+├── runtime.toml                    typed dependency/server/env 合同
+├── pyproject.toml                  Python 项目与直接依赖
+├── requirements.lock               带 SHA-256 的 Python lock
+├── package.json                    Node 项目与直接依赖
+├── package-lock.json               Node lockfile v3
 ├── maps_mcp/                       MCP Server 实现
-├── skills/
-│   └── map-utils/
-│       ├── SKILL.md                模型工作流
-│       └── agents/openai.yaml      Skill 的 UI 元数据
 └── tests/                          不访问付费 API 的测试
 ```
 
 命名建议：
 
-- Skill 和 Plugin 使用 kebab-case，例如 `map-utils`。
+- Skill 使用 kebab-case，例如 `map-utils`；capability-root ID 与 server ID 使用稳定标识。
 - MCP Server 使用 snake_case，例如 `map_utils`。
 - 名称应稳定；重命名 MCP Server 会同时影响工具名、审批识别、测试和已有配置。
 
@@ -192,65 +190,30 @@ python3 codex/codex-rs/skills/src/assets/samples/skill-creator/scripts/quick_val
 - MCP 缺失或失败时不会编造结果。
 - 输出不会泄露 Secret、路径或原始协议内容。
 
-## 3. 把 Skill 与 MCP 组成 Plugin
+## 3. 把 Skill 与 MCP 组成 Copilot 源码
 
-仓库和工作区的能力包以 `.codex-plugin/plugin.json` 为入口。
+`copilot.toml` 是当前 SDK 源码组合入口。每个 Tool 必须同时声明源码根和显式 runtime：
 
-### 3.1 Plugin 清单
-
-```json
-{
-  "name": "geo-tools",
-  "version": "0.1.0",
-  "description": "Typed geographic tools and workflows.",
-  "author": {
-    "name": "Open Web Codex"
-  },
-  "license": "MIT",
-  "keywords": ["geography", "mcp"],
-  "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
-  "interface": {
-    "displayName": "Geo Tools",
-    "shortDescription": "Resolve and analyze geographic data.",
-    "longDescription": "Adds geographic Skills and typed MCP tools.",
-    "developerName": "Open Web Codex",
-    "category": "Productivity",
-    "capabilities": ["MCP", "Geography"],
-    "defaultPrompt": [
-      "Resolve these locations and summarize the results."
-    ]
-  }
-}
+```toml
+[[tools]]
+id = "geo_tools"
+root = "tools/geo-tools"
+runtime = "tools/geo-tools/runtime.toml"
 ```
 
-规则：
+Role 源码只在 `[plugins.geo_tools.mcp_servers.geo_tools]` 下声明 server allowlist 与审批
+policy，不写 transport。Tool source 也不写 `.codex-plugin/plugin.json`、`.mcp.json`、安装脚本
+或 launcher；这些都是 SDK 编译出的临时 Runtime projection，不是作者事实。
 
-- 清单位于 `<plugin-root>/.codex-plugin/plugin.json`。
-- 相对路径以 `./` 开头，并且必须留在 Plugin 根目录内。
-- 没有对应文件时不要声明 `mcpServers`、`skills`、`apps` 或资源图片。
-- `version` 使用严格语义版本。
-- Plugin 清单描述整个能力包；Skill 的触发描述仍由各自 `SKILL.md` 决定。
+`copilot validate` 校验 Skill、Role、Tool runtime 与测试引用；`copilot prepare` 在调用者给定的
+外置 output root 准备依赖并写入内部 `prepared-tools.v1.json`。SDK `dev`/`test` 从 descriptor
+生成一次性 selected capability roots；Platform local startup 只调用一次相同 prepare，然后由
+Server 在当前 Profile 下解析 typed env binding 并投影 Role-local MCP。不要通过以下方式绕过：
 
-### 3.2 当前仓库如何发现能力包
-
-新建 Thread 时，`apps/web/crates/codex-adapter` 会把以下 Plugin 根加入
-`selectedCapabilityRoots`：
-
-- 服务进程源码树下的 `tools/*`。
-- 当前授权 workspace 下的 `tools/*`。
-- `OPEN_WEB_CODEX_CAPABILITY_ROOTS` 中显式配置的绝对路径。
-
-只有包含 `.codex-plugin/plugin.json` 的目录才会被选中。浏览器不能提交或修改这些
-本地路径。
-
-能力根在 `thread/start` 时传给 Runtime，因此新增或修改能力包后应新建 Thread
-验证。不要通过以下方式绕过发现链路：
-
-- 从 WebApp 扫描 `.mcp.json`。
-- 让 WebApp 或启动脚本直接写用户 Profile 的 `config.toml`。
-- 在 Platform 中伪造 Skill 或 MCP 工具列表。
-- 把工作区路径或 Plugin 路径暴露给浏览器。
+- 扫描 Tool 目录猜测语言、依赖或 server。
+- 让 WebApp、Tool 或 Runtime launch 写 Profile 配置或安装依赖。
+- 在 Tool source 维护第二份 transport 或 installer。
+- 把 prepared descriptor、环境路径或 Plugin projection 暴露给浏览器。
 
 ## 4. 新建或扩展 MCP Server
 
@@ -267,38 +230,41 @@ python3 codex/codex-rs/skills/src/assets/samples/skill-creator/scripts/quick_val
 
 ### 4.2 MCP 启动声明
 
-`.mcp.json` 示例：
+Tool `runtime.toml` 示例：
 
-```json
-{
-  "mcpServers": {
-    "geo_tools": {
-      "command": "./bin/geo-tools-launcher",
-      "args": ["--workspace-root", "."],
-      "cwd": ".",
-      "startup_timeout_sec": 60,
-      "tool_timeout_sec": 90,
-      "tools": {
-        "create_geo_card": {
-          "approval_mode": "approve"
-        }
-      },
-      "env_vars": [
-        "OPEN_WEB_CODEX_DATA_DIR",
-        "OPEN_WEB_CODEX_LOG_DIR"
-      ]
-    }
-  }
-}
+```toml
+schema_version = 1
+
+[[dependencies]]
+id = "python"
+kind = "python-project"
+manifest = "pyproject.toml"
+lock = "requirements.lock"
+
+[[servers]]
+id = "geo_tools"
+entry = { kind = "python-module", dependency = "python", module = "geo_tools.server" }
+args = []
+startup_timeout_sec = 60
+tool_timeout_sec = 90
+
+[[servers.env]]
+name = "GEO_STATE_ROOT"
+source = "tool_state_root"
+
+[[servers.env]]
+name = "HTTPS_PROXY"
+source = "host"
 ```
 
 建议：
 
-- 使用相对于 Plugin 根目录的 launcher。
-- 设置有界的启动和工具超时。
-- 只传递明确允许的环境变量。
-- 为高成本、写操作或特殊展示工具选择明确的审批策略。
-- 不在 `.mcp.json` 中写 API Key。
+- 只声明 `python-project` / `node-project` 及其直接 manifest 与 lock，不扫描目录猜语言。
+- Python lock 使用 exact pin 与 SHA-256；Node 使用 `package-lock.json` v3。
+- server entry 显式引用一个 Python dependency 和 dotted module。
+- 环境绑定只使用 `profile_home`、`tool_state_root`、`dependency_root` 或 `host`；`host` 只转发
+  声明的同名变量，任何 Secret 值都不进入 manifest。
+- 有界启动/工具超时属于 server 声明；工具审批属于 Role policy，不混进 transport。
 
 ### 4.3 MCP 工具实现
 
@@ -337,22 +303,13 @@ def main() -> None:
 - 用户拒绝配置、Key 无效或超时后终止工具调用，不要自动切换 Provider。
 - 不把 `provider` 或 `api_key` 暴露成模型可填写的工具参数；这类状态由配置层管理。
 
-### 4.4 Launcher 要求
+### 4.4 环境准备与启动边界
 
-stdio MCP 的 stdout 只能输出 JSON-RPC。安装日志、诊断和 Python 异常必须写入
-stderr 或独立日志。
-
-生产形态的 launcher 应：
-
-1. 解析 Plugin 根和受控运行环境。
-2. 检查解释器、依赖和 import。
-3. 缺少依赖时快速失败，并给出平台启动期修复方式。
-4. 不在用户对话期间下载依赖。
-5. 记录版本、cwd、依赖检查和错误摘要，但不记录 Secret 或代理值。
-6. 最后使用 `exec` 启动 MCP Server，避免多余父进程。
-
-`tools/maps-mcp/bin/maps-mcp-launcher` 和
-`scripts/setup-maps-mcp-env.sh` 分别是启动期诊断与共享依赖环境的参考。
+Tool 作者不实现 installer 或 launcher。SDK provisioner 负责外置 venv/Node root、cache、staged
+build、hash-locked install、`pip check`、declared module 验证、有界子进程组和 typed failure；
+prepared descriptor 只包含运行 transport 与 typed binding，不包含安装命令、日志或 Secret。
+Platform 在 Runtime 启动前完成一次 prepare；Server 消费 descriptor 并解析 Profile-scoped
+binding；Runtime 仅启动已准备的 `python -m <module>`，用户对话期间不下载依赖。
 
 ## 5. Secret 或 Key 输入界面的完整适配
 
@@ -685,10 +642,11 @@ python3 codex/codex-rs/skills/src/assets/samples/skill-creator/scripts/quick_val
 
 检查：
 
-- Plugin 清单路径都存在且不越出 Plugin 根。
+- `copilot.toml` 的 Skill、Role、Tool root/runtime 与 tests 引用一致且不越出 source root。
+- `runtime.toml` 的 dependency manifest/hash lock、server entry 与 env binding 通过 typed 校验。
 - Skill 名称、目录和 frontmatter 一致。
 - `agents/openai.yaml` 的默认 Prompt 包含 `$skill-name`。
-- 新建 Thread 的 `selectedCapabilityRoots` 包含预期 Plugin。
+- SDK 投影的新 Thread `selectedCapabilityRoots` 包含预期临时 capability root。
 - Runtime 能看到 Skill 和 MCP 工具。
 
 ### 7.2 MCP 单元与启动 Smoke
@@ -700,8 +658,9 @@ cd tools/maps-mcp
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 
 cd ../..
-./scripts/setup-maps-mcp-env.sh
-./scripts/smoke-maps-mcp-launcher.sh
+PYTHONPATH=tools/copilot-sdk python3 -m copilot_sdk prepare . \
+  --manifest apps/web/builtin/warehouse-network-copilot/copilot.toml \
+  --output-root "$PWD/.local/open-web-codex/copilot-environment"
 ```
 
 单元测试使用 fake HTTP，不应访问付费 Provider。至少覆盖：
@@ -760,8 +719,8 @@ cargo test --workspace --locked
 npm --prefix apps/web run smoke:codex-app-server
 ```
 
-不要为只增加 Skill/MCP 能力包而修改 Codex 协议；优先使用现有 Plugin、MCP 和
-elicitation 边界。
+不要为只增加 Skill/MCP 能力而修改 Codex 协议；优先使用现有 Copilot source/runtime、
+SDK projection、MCP 和 elicitation 边界。
 
 ### 7.4 真实端到端流程
 
@@ -777,23 +736,18 @@ elicitation 边界。
 8. 在明暗主题、窄屏和超大屏下检查弹窗/面板。
 9. 让 Provider API 返回错误或断网，确认不会永久 in-progress。
 
-第三方 Provider 到 map-card 的真实 Runtime Smoke 可使用：
-
-```bash
-DEEPSEEK_API_KEY="<test-only-key>" \
-  ./scripts/smoke-third-party-map-card-mcp.sh
-```
-
-测试 Key 只放在进程环境或 Secret Store，不提交到仓库、日志、Prompt 或测试快照。
+先以 `copilot dev` 验证 discovery，再以 `copilot test` 验证本地确定性正常链；真实 Provider、
+Credential elicitation 和 Web map-card 仍需从真实 Task 入口单独验收。测试 Key 只放在进程环境
+或 Secret Store，不提交到仓库、日志、Prompt 或测试快照。
 
 ## 8. 常见错误
 
 - 只写 Skill，却没有实现它要求调用的工具。
-- 把 API Key 放进 Skill、MCP 参数、`.mcp.json` 或模型 Prompt。
+- 把 API Key 放进 Skill、MCP 参数、`runtime.toml`、Role policy 或模型 Prompt。
 - MCP 启动时向 stdout 打印安装日志，破坏 JSON-RPC 握手。
 - 在用户对话期间创建虚拟环境或下载依赖。
 - 没有超时，导致工具和 Thread 永久显示进行中。
-- 在 WebApp 里扫描 Plugin 或直接调用第三方 API，绕过 Runtime 和 Platform。
+- 在 WebApp 里扫描 Tool/runtime 或直接调用第三方 API，绕过 Runtime 和 Platform。
 - 把 raw app-server request ID、路径或未知 payload 暴露给浏览器。
 - 对 URL elicitation 发送普通 Accept，没有先完成安全投递。
 - 依靠英文提示文案决定使用哪个业务弹窗。

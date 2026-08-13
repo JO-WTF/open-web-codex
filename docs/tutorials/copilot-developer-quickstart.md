@@ -27,7 +27,7 @@ copilot init ./scratch/my-copilot --name my-copilot
 copilot validate ./scratch/my-copilot
 ```
 
-第一个参数是显式 source root。manifest 中所有 `path`、`role` 和 `root` 都相对于这个
+第一个参数是显式 source root。manifest 中所有 `path`、`role`、`root` 和 `runtime` 都相对于这个
 source root，而不是相对于 `copilot.toml` 所在目录。默认读取 source root 下的
 `copilot.toml`。
 
@@ -44,11 +44,14 @@ copilot dev ./scratch/my-copilot --workspace "$PWD"
 ```
 
 `dev` 会重新验证当前 `copilot.toml`，将完整 Skill 目录树和 Role TOML 放入一次性隔离
-Profile；Tool 源码不复制进 Profile，而由官方 `thread/start.selectedCapabilityRoots` 选择。
-每个 Tool 必须自行提供可执行 `bin/setup-env`；`dev` 在 Runtime 前调用它，并提供隔离的
-`OPEN_WEB_CODEX_DATA_DIR`。`init` 生成的示例 Tool 已通过自己的 `requirements.txt` 与 setup 入口
-准备 Python/MCP 环境，launcher 不会隐式安装。入口缺失或失败会明确返回
-`EnvironmentUnavailable`。随后 `dev` 完成 app-server 握手，核对 `skills/list` 与线程范围的 `mcpServerStatus/list`。全部声明项
+Profile。每个 `[[tools]]` 显式声明 `runtime`；对应 `runtime.toml` 只描述 Python/Node 项目、
+直接 manifest、hash lock、server entry、参数和 typed 环境绑定。SDK 在 Profile、Tool source 与
+Workspace 之外准备依赖：Python 使用 `pip --require-hashes` 和 staged 非 editable wheel，Node
+使用 `npm ci --ignore-scripts`。然后 SDK 生成临时 Plugin 投影，由官方
+`thread/start.selectedCapabilityRoots` 选择。Tool source 不复制进 Profile/Runtime projection，也
+不被写入；Python source 只在 SDK-owned 临时 build root 做 staged wheel build。Tool 不再自带 setup、
+launcher 或 transport 文件。准备失败会明确返回 `EnvironmentUnavailable`；Runtime 启动时不再
+安装。随后 `dev` 完成 app-server 握手，核对 `skills/list` 与线程范围的 `mcpServerStatus/list`。全部声明项
 都被发现才返回 `discovery_ready`；额外系统或用户能力被安全忽略。
 
 默认 Profile 会在成功或失败后删除。调试时可用 `--keep-profile` 保留临时 Profile，或用
@@ -73,8 +76,10 @@ child/Root terminal。通过判定只依赖 canonical Runtime 事件，不依赖
 结果包含组合 descriptor hash 和 fixture Provider 标识，但不包含 Thread/Turn ID、绝对路径或
 原始模型请求。它证明生成组合的单条正常执行链，不代表生产模型质量、完整失败矩阵或生产安装。
 
-内置仓网 manifest 仍是 Atom 1 静态 monorepo reference；它使用 built-in 专属资产准备与 Role
-适配，不提供通用 `bin/setup-env`，因此不是 `copilot dev` 的通用示例。
+内置仓网 manifest 同样采用这一通用合同。平台本地启动只调用一次 `copilot prepare`，把其内部
+`prepared-tools.v1.json` 交给 Server；Server 为具体 Profile 解析 `profile_home`、
+`tool_state_root` 和声明的 host 环境绑定并叠加 Role policy。Browser 不读取该描述符，Runtime
+启动和用户对话期间也不安装依赖。
 
 ## 验证仓网 monorepo reference
 
@@ -86,14 +91,14 @@ copilot validate . \
   --manifest apps/web/builtin/warehouse-network-copilot/copilot.toml
 ```
 
-这里的 Tool ID 是 `supply_chain` 与 `map_utils`，与两项 Runtime Role TOML 中的
-`mcp_servers` key 一致。
+这里的 capability-root ID 是 `supply_chain` 与 `map_utils`；server ID 分别来自两项 Tool 的
+`runtime.toml`，并由 Runtime Role TOML 的 `plugins.<tool>.mcp_servers.<server>` policy 精确引用。
 
 ## 当前边界
 
-`copilot init`、`copilot validate`、无模型的 `copilot dev` 和本地确定性正常链 `copilot test`
-是当前 Copilot 开发者入口。尚无生产 Profile 安装、真实生产模型质量验收或 Web 创作链。已有的
-`copilot tool ...` 命令服务于高级 Tool 组件开发，也不构成生产运行就绪证据。
+`copilot init`、`copilot validate`、通用环境 `copilot prepare`、无模型的 `copilot dev` 和
+本地确定性正常链 `copilot test` 是当前 Copilot 开发者入口。尚无生产
+Profile 安装、真实生产模型质量验收或 Web 创作链。
 
 Web Settings 中的 Agents 是 Codex Runtime Role 配置，不是 Copilot Builder。当前没有从这里
 创建、安装或运行上述源码目录的产品流程。

@@ -30,10 +30,12 @@ Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码�
 3. 所有 manifest 组件路径都相对于显式 source root；内置仓网 manifest 以 repo root 为 source
    root，静态声明三项 Skill、两项 Role identity/reference 和 `supply_chain`/`map_utils` Tool。
 4. Atom 2a 的 `copilot dev` 在隔离 Profile 中复制完整 Skill 树和 Role TOML；Tool 保持 source
-   owner；Runtime 启动前必须显式调用每个 Tool 自有的可执行 `bin/setup-env`，只注入 Profile 外
-   的临时 data root。缺入口或 setup 失败返回 typed `EnvironmentUnavailable`。generated Python
-   Tool 自有依赖描述与 setup，launcher 只消费已准备环境，不静默安装；SDK 不扫描依赖文件。
-   Tool 随后通过官方 `thread/start.selectedCapabilityRoots` 从 exact source root 选择。它用 app-server 官方握手、
+   owner，并在 `copilot.toml` 显式引用 `runtime.toml`。Tool 只声明直接项目 manifest、hash lock、
+   Python module server、参数与 typed env binding；SDK generic provisioner 在 Profile、Tool source
+   和 Workspace 外执行 bounded Python/Node build/install，缺声明、锁、宿主 adapter 或准备失败
+   返回 typed `EnvironmentUnavailable`。SDK 不扫描文件猜语言或 server，不调用 Tool setup，也不
+   在 Runtime launch 内安装。准备完成后，SDK 生成一次性 Plugin 投影，Tool 通过官方
+   `thread/start.selectedCapabilityRoots` 从 exact projection root 选择。它用 app-server 官方握手、
    `skills/list` 和线程范围 `mcpServerStatus/list` 验证声明能力的 discovery。
 5. `dev` 的 app-server HOME/cwd 使用 Profile 外的独立临时目录并始终清理；默认临时 Profile
    清理，`--keep-profile` 或显式 `--profile` 才保留。成功只报告 `discovery_ready`，Role spawn
@@ -53,10 +55,12 @@ copilot validate . \
 ```
 
 退出：新源码目录可由 `init` 生成并由 `validate` 静态通过；仓网 monorepo reference 从 repo-root
-source root 静态通过；fake transcript 覆盖 official RPC 顺序、参数、inventory 与 cleanup，真实
-app-server fresh init→dev gate 证明 source-owned setup 与同一 discovery 链；fresh init→test gate
+source root 静态通过；runtime parser、hash lock、Python/Node provisioner、prepared descriptor 与
+临时 Plugin projection 有 focused tests；fake transcript 覆盖 official RPC 顺序、参数、inventory
+与 cleanup，真实 app-server fresh init→dev gate 证明 SDK-managed preparation 与同一 discovery 链；fresh init→test gate
 证明本地确定性 Provider 下的原生 Role/MCP 正常链。仓网 monorepo 继续是静态 reference；其
-built-in 专属资产适配不冒充通用 setup。能力基线和教程明确本地 E2 gate 与未实现边界；生产
+built-in 与 generated package 使用同一个 generic prepare owner。平台 real 启动只调用一次
+`copilot prepare` 并把内部 descriptor 交给 Server，不再按 supply/maps 分叉安装。能力基线和教程明确本地 E2 gate 与未实现边界；生产
 模型质量、安装和持久 readiness 只有在各自 owner 的后续 Atom 具备真实证据后才能更新。
 
 ### 已验证的运行体验与低延迟领域操作基线
@@ -246,29 +250,32 @@ Standard，删除 Governed runtime、RunStartPreflight、`platform-agents` 第�
 Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。阶段一整体仍未完成，
 下一步只进入 Slice 4 的原生协同与第二调度器清理。
 
-1. 把内置 Supervisor、Data/Network Role、Skills 和 MCP activation 作为固定的 Profile-owned
-   仓网能力托管；仓网 Tool 代码与只读 Mock 源由显式配置的共享应用资产持有。不建立
+1. 把内置 Supervisor、Data/Network Role 与 Skills 作为固定的 Profile-owned 仓网能力托管；
+   Tool source 只持有 runtime/dependency 声明、领域代码与只读 fixture。不建立
    Release/Installation、registry、版本状态机或哈希信任链。Supervisor 是 Root Skill，不新增
    独立发布对象。
-2. 使用 Codex 原生 `$CODEX_HOME/skills` 与 `$CODEX_HOME/agents/*.toml`。Role TOML 自身
-   持有完整 MCP transport 和 `enabled_tools`，不改 Profile `config.toml`、全局 role allowlist
+2. 使用 Codex 原生 `$CODEX_HOME/skills` 与 `$CODEX_HOME/agents/*.toml`。Role TOML 源码只
+   持有 Plugin/server policy 与 `enabled_tools`；SDK prepared descriptor 提供 transport，Server
+   在当前 Profile 下解析 typed binding 后合成 Role-local MCP。不改 Profile `config.toml`、全局 role allowlist
    或 Codex built-in roles。Profile Host 的普通 startup file 只为 clean Profile seed 默认文件
    并保留已存在内容；仓网三项内置 Skill 与两项内置 Role 是显式 managed 保留 ID，部署升级
    在 Runtime 启动前更新到当前 checked-in 内容，不覆盖其他用户 Skill/Role。Server 绑定经过
-   校验的显式应用资产根；Runtime 不
-   扫描 process cwd、Workspace 或源码树。缺少配置或预期 launcher 时明确 unavailable。
+   校验的 prepared descriptor；Runtime 不扫描 process cwd、Workspace 或源码树。缺少 runtime
+   声明、lock、prepared transport 或 host adapter 时明确 unavailable。
 3. Root 只暴露原生多 Agent 面，不配置全局仓网 MCP；Data/Network Role 通过原生 Role
    config 启用各自 Skill、MCP server、`enabled_tools` 和精确 Tool approval policy。Data4 全部
    有界本地预批准；Network 只预批准本地路线/成本/验证/分析/选址/比较，`map_utils` 只预批准
    `create_map_card`；外部地图请求和 final Workspace 文件保持 `prompt`，不把全局
-   `approvalPolicy` 降为 `never`。MCP 进程 cwd 是 canonical 只读应用 Tool root；maps
+   `approvalPolicy` 降为 `never`。prepared transport 不固定 MCP cwd；Runtime 使用 Thread
+   已授权的 Workspace 作为 stdio MCP cwd。maps
    credential/resource state 位于 Profile 私有 runtime，业务 Workspace 只能来自 native
    `sandboxCwd`。工具代码、共享 venv、Node 依赖、Mock、测试和缓存均不复制进 Profile。
 4. Skill watcher/`forceReload` 对下一 Turn 生效；Role 文件修改对下一次 spawn 生效；MCP
    reload 在安全 step 边界切换。Role 集合、allowlist、增删改名只对新 Root Thread 保证，
    不修改 Codex 弥补这一边界。
-5. Runtime 观察只使用 `skills/list(forceReload=true)`、`config/read`/config warning、
-   MCP startup status 和 `mcpServerStatus/list`。Role 状态只称 `configured/unavailable`，真实
+5. Runtime 观察只使用 `skills/list(forceReload=true)`、`config/read`/config warning 和线程范围
+   `mcpServerStatus/list`。`thread/start` 后不等待 MCP startup notification；selected capability
+   roots 在 status/list 的 step 配置中解析，inventory RPC 自身使用剩余 Runtime deadline。Role 状态只称 `configured/unavailable`，真实
    执行能力由 Root 对 Data/Network 的 native spawn gate 证明；不保存 DB readiness。
 6. built-in/product Standard/fork 路径已经删除 capability path scan 与 selected-root 主动
    注入。3B.3-B2 进一步删除 `RunStartPreflight`、Governed Agent/Supervisor mode、旧
@@ -278,7 +285,7 @@ Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。
    已登记的 selected Plugin policy seam，但 built-in 不调用它。
 
 3B.1 已有证据：Profile startup seed/managed 单测 6 项、Server composition 单测 5 项均通过；真实
-stdio probe 启动 Data/Demo/Network/maps 并断言 Role 所需 inventory，两个共享应用资产树
+stdio probe 启动 Data/Demo/Network/maps 并断言 Role 所需 inventory，两个 Tool source
 启动前后无新增文件或 mtime 变化。该 probe 不是 Runtime discovery/native spawn gate。
 
 3B.2 已有证据：使用当前 checkout 构建的 Codex、真实 Profile Host、生产 built-in
@@ -295,7 +302,8 @@ Workspace。该 gate 证明 built-in Runtime composition，不替代仓网业务
 3B.3-B2 已有证据：Adapter、Profile Host、Run Orchestrator 和 Server
 定向测试通过；唯一启动调用是 Standard start/fork。真实 Indonesia/Thailand 探针通过 Profile
 原生 Skill/Role/MCP seed 启动 Root 与 child，二者只读取各自授权 Workspace，MCP process
-cwd 保持共享应用资产根，Workspace 中没有 capability 文件。clean Profile activation/hot
+cwd 与 Root/child 各自的 Thread authorized Workspace 一致，Workspace 中没有 capability
+文件。clean Profile activation/hot
 boundary、malformed Role 和 B1 fork/idempotency PostgreSQL 门均继续通过。
 
 3B.3-B3 已删除 `capability-catalog`/`supervisor-catalog` crate、所有 Agent/Supervisor/

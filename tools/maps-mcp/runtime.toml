@@ -1,0 +1,61 @@
+schema_version = 1
+
+[[dependencies]]
+id = "python"
+kind = "python-project"
+manifest = "pyproject.toml"
+lock = "requirements.lock"
+
+[[dependencies]]
+id = "style-spec"
+kind = "node-project"
+manifest = "package.json"
+lock = "package-lock.json"
+
+[[servers]]
+id = "map_utils"
+entry = { kind = "python-module", dependency = "python", module = "maps_mcp.server" }
+args = []
+startup_timeout_sec = 60
+tool_timeout_sec = 90
+
+[[servers.env]]
+name = "OPEN_WEB_CODEX_DATA_DIR"
+source = "tool_state_root"
+
+[[servers.env]]
+name = "OPEN_WEB_CODEX_MAPS_NODE_ENV"
+source = "dependency_root"
+dependency = "style-spec"
+
+[[servers.env]]
+name = "HTTP_PROXY"
+source = "host"
+
+[[servers.env]]
+name = "HTTPS_PROXY"
+source = "host"
+
+[[servers.env]]
+name = "ALL_PROXY"
+source = "host"
+
+[[servers.env]]
+name = "NO_PROXY"
+source = "host"
+
+[[servers.env]]
+name = "http_proxy"
+source = "host"
+
+[[servers.env]]
+name = "https_proxy"
+source = "host"
+
+[[servers.env]]
+name = "all_proxy"
+source = "host"
+
+[[servers.env]]
+name = "no_proxy"
+source = "host"

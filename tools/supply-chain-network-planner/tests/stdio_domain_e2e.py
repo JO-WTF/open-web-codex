@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -24,7 +25,6 @@ from mcp.client.stdio import stdio_client
 from pydantic import AnyUrl
 
 ROOT = Path(__file__).resolve().parents[1]
-LAUNCHER = ROOT / "bin" / "supply-chain-planner-launcher"
 SANDBOX_META = "codex/sandbox-state-meta"
 BEKASI_ID = "WH-CROSS_DOCKING-BEKASI"
 EXPECTED_OPENED = ["WH-CANDIDATE-KENDARI", "WH-CANDIDATE-MANADO"]
@@ -36,9 +36,6 @@ def _environment(state_root: Path) -> dict[str, str]:
         {
             "CODEX_HOME": str(state_root / "codex-home"),
             "OPEN_WEB_CODEX_DATA_DIR": str(state_root / "runtime"),
-            "OPEN_WEB_CODEX_LOG_DIR": str(state_root / "runtime" / "logs"),
-            "OPEN_WEB_CODEX_SUPPLY_CHAIN_MCP_VENV": str(ROOT / ".venv"),
-            "SUPPLY_CHAIN_MCP_AUTO_INSTALL": "0",
             "PYTHONDONTWRITEBYTECODE": "1",
         }
     )
@@ -201,8 +198,8 @@ async def _prepare_normalized_resource(
     relative_paths = _write_sources(workspace)
     trace: list[str] = []
     parameters = StdioServerParameters(
-        command=str(LAUNCHER),
-        args=["--data-server"],
+        command=sys.executable,
+        args=["-m", "supply_chain_planner.data_server"],
         cwd=str(workspace),
         env=environment,
     )
@@ -265,8 +262,8 @@ async def _run_network_s3_then_s2(
     normalized_ref: dict[str, object],
 ) -> tuple[list[str], list[str]]:
     parameters = StdioServerParameters(
-        command=str(LAUNCHER),
-        args=[],
+        command=sys.executable,
+        args=["-m", "supply_chain_planner.server"],
         cwd=str(workspace),
         env=environment,
     )

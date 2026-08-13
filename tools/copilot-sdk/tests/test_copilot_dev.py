@@ -10,12 +10,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 from copilot_sdk.cli import main
+from copilot_sdk.cli import _safe_expected_mcp_statuses
+from copilot_sdk.app_server_client import AppServerClient
 from copilot_sdk.dev_profile import (
     CopilotDevError,
     OWNER_MARKER,
     load_dev_composition,
     prepare_dev_profile,
     validate_workspace,
+)
+from copilot_sdk.tool_environment import (
+    MaterializedCapabilityRoot,
+    MaterializedToolComposition,
 )
 
 
@@ -62,17 +68,36 @@ class CopilotDevProfileTests(unittest.TestCase):
             encoding="utf-8",
         )
         setup.chmod(0o755)
+        (root / "tools/native/pyproject.toml").write_text(
+            '[build-system]\nrequires=["setuptools>=77"]\n'
+            'build-backend="setuptools.build_meta"\n'
+            '[project]\nname="native-tool"\nversion="0.1.0"\n', encoding="utf-8"
+        )
+        (root / "tools/native/requirements.lock").write_text(
+            "mcp==1.0.0 \\\n    --hash=sha256:" + "a" * 64 + "\n"
+            "setuptools==80.9.0 \\\n    --hash=sha256:" + "b" * 64 + "\n",
+            encoding="utf-8",
+        )
+        (root / "tools/native/runtime.toml").write_text(
+            "schema_version=1\n"
+            "[[dependencies]]\nid='python'\nkind='python-project'\n"
+            "manifest='pyproject.toml'\nlock='requirements.lock'\n"
+            "[[servers]]\nid='native'\n"
+            "entry={kind='python-module',dependency='python',module='server'}\n",
+            encoding="utf-8",
+        )
         (root / "copilot.toml").write_text(
             'schema_version = 1\nid = "sample"\ndisplay_name = "Sample"\n'
             '[supervisor]\nskill = "supervisor"\n'
             '[[skills]]\nid = "supervisor"\npath = "skills/supervisor"\n'
             '[[agents]]\nid = "worker"\nrole = "agents/worker.toml"\n'
-            '[[tools]]\nid = "native"\nroot = "tools/native"\n',
+            '[[tools]]\nid = "native"\nroot = "tools/native"\n'
+            'runtime = "tools/native/runtime.toml"\n',
             encoding="utf-8",
         )
         return root
 
-    def test_materializes_role_transport_projection_without_tools_or_config(self) -> None:
+    def test_materializes_author_role_policy_without_tools_or_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             temporary_root = Path(directory)
             source = self.make_source(temporary_root)
@@ -86,21 +111,37 @@ class CopilotDevProfileTests(unittest.TestCase):
             )
             with (profile / "agents/worker.toml").open("rb") as handle:
                 runtime_role = __import__("tomllib").load(handle)
-            runtime_server = runtime_role["mcp_servers"]["native"]
-            self.assertEqual(
-                runtime_server["command"],
-                str((source / "tools/native/bin/native-launcher").resolve()),
-            )
-            self.assertEqual(runtime_server["cwd"], str((source / "tools/native").resolve()))
-            self.assertEqual(runtime_server["enabled_tools"], ["health"])
-            self.assertEqual(runtime_server["default_tools_approval_mode"], "approve")
-            self.assertEqual(runtime_server["env_vars"], ["OPEN_WEB_CODEX_DATA_DIR"])
-            self.assertNotIn("plugins", runtime_role)
+            policy = runtime_role["plugins"]["native"]["mcp_servers"]["native"]
+            self.assertEqual(policy["enabled_tools"], ["health"])
+            self.assertEqual(policy["default_tools_approval_mode"], "approve")
+            self.assertNotIn("mcp_servers", runtime_role)
             self.assertFalse((profile / "tools").exists())
             self.assertFalse((profile / "config.toml").exists())
             self.assertFalse(prepared.cleanup_on_exit)
 
-    def test_role_projection_rejects_absolute_transport_command(self) -> None:
+    def test_composition_distinguishes_capability_root_from_mcp_server(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self.make_source(root)
+            role = source / "agents/worker.toml"
+            role.write_text(
+                role.read_text(encoding="utf-8").replace(
+                    "mcp_servers.native", "mcp_servers.runtime_native"
+                ),
+                encoding="utf-8",
+            )
+            runtime = source / "tools/native/runtime.toml"
+            runtime.write_text(
+                runtime.read_text(encoding="utf-8").replace("id='native'", "id='runtime_native'"),
+                encoding="utf-8",
+            )
+
+            composition = load_dev_composition(source)
+
+            self.assertEqual(composition.summary.tool_ids, ("native",))
+            self.assertEqual(composition.mcp_server_ids, ("runtime_native",))
+
+    def test_source_mcp_transport_is_not_role_projection_truth(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = self.make_source(root)
@@ -110,11 +151,11 @@ class CopilotDevProfileTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaises(CopilotDevError) as caught:
-                prepare_dev_profile(load_dev_composition(source), root / "profile")
-
-            self.assertEqual(caught.exception.code, "UnsafePath")
-            self.assertEqual(caught.exception.stage, "role-projection")
+            prepared = prepare_dev_profile(load_dev_composition(source), root / "profile")
+            with (prepared.profile_root / "agents/worker.toml").open("rb") as handle:
+                role = __import__("tomllib").load(handle)
+            self.assertIn("plugins", role)
+            self.assertNotIn("mcp_servers", role)
 
     def test_explicit_profile_rejects_foreign_non_empty_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -214,6 +255,7 @@ class CopilotDevCliTests(unittest.TestCase):
         *,
         skill_errors: list[dict[str, str]] | None = None,
         mcp_tools: dict[str, object] | None = None,
+        status_delay_seconds: float = 0.0,
     ) -> tuple[Path, Path]:
         executable = parent / "fake-codex"
         transcript = parent / "transcript.json"
@@ -221,7 +263,7 @@ class CopilotDevCliTests(unittest.TestCase):
         mcp_tools = {"health": {"name": "health"}} if mcp_tools is None else mcp_tools
         executable.write_text(
             f"#!{sys.executable}\n"
-            "import json, os, sys\n"
+            "import json, os, sys, time\n"
             f"transcript = {str(transcript)!r}\n"
             "messages = []\n"
             "for line in sys.stdin:\n"
@@ -230,15 +272,15 @@ class CopilotDevCliTests(unittest.TestCase):
             "    method = message.get('method')\n"
             "    if method == 'initialize': result = {'codexHome': os.environ['CODEX_HOME']}\n"
             f"    elif method == 'skills/list': result = {{'data': [{{'cwd': message['params']['cwds'][0], 'skills': [{{'name': 'supervisor'}}], 'errors': {skill_errors!r}}}]}}\n"
-            "    elif method == 'thread/start': result = {'thread': {'id': 'thread-dev'}}\n"
-            f"    elif method == 'mcpServerStatus/list': result = {{'data': [{{'name': 'native', 'tools': {mcp_tools!r}}}], 'nextCursor': None}}\n"
+            "    elif method == 'thread/start':\n"
+            "        result = {'thread': {'id': 'thread-dev'}}\n"
+            f"    elif method == 'mcpServerStatus/list':\n        time.sleep({status_delay_seconds!r})\n        result = {{'data': [{{'name': 'native', 'tools': {mcp_tools!r}, 'authStatus': 'unknown'}}], 'nextCursor': None}}\n"
             "    else:\n"
             "        if 'id' not in message: continue\n"
             "        result = {}\n"
             "    if method == 'mcpServerStatus/list':\n"
             "        with open(transcript, 'w', encoding='utf-8') as handle:\n"
-            "            data = os.environ['OPEN_WEB_CODEX_DATA_DIR']\n"
-            "            json.dump({'messages': messages, 'mcpTools': result['data'][0]['tools'], 'cwd': os.getcwd(), 'profile': os.environ['CODEX_HOME'], 'home': os.environ['HOME'], 'data': data, 'setup': os.path.isfile(os.path.join(data, 'tool-envs/native/setup-invoked'))}, handle)\n"
+            "            json.dump({'messages': messages, 'mcpTools': result['data'][0]['tools'], 'cwd': os.getcwd(), 'profile': os.environ['CODEX_HOME'], 'home': os.environ['HOME']}, handle)\n"
             "    print(json.dumps({'id': message['id'], 'result': result}), flush=True)\n",
             encoding="utf-8",
         )
@@ -248,11 +290,22 @@ class CopilotDevCliTests(unittest.TestCase):
     def invoke(self, *arguments: str) -> tuple[int, str, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with redirect_stdout(stdout), redirect_stderr(stderr):
+        def fake_prepare(prepared):
+            projection = prepared.process_data / "capability-roots/native"
+            projection.mkdir(parents=True, exist_ok=True)
+            return MaterializedToolComposition(
+                (MaterializedCapabilityRoot("native", projection, ()),),
+            )
+
+        with (
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+            patch("copilot_sdk.cli.prepare_dev_tool_composition", side_effect=fake_prepare),
+        ):
             result = main(list(arguments))
         return result, stdout.getvalue(), stderr.getvalue()
 
-    def test_dev_runs_official_discovery_transcript_and_cleans_process_dirs(self) -> None:
+    def test_dev_requests_status_immediately_after_thread_start_without_startup_notification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = self.make_source(root)
@@ -278,7 +331,7 @@ class CopilotDevCliTests(unittest.TestCase):
             self.assertEqual(payload["modelAcceptance"], "not_run")
             self.assertEqual(payload["discovery"]["skills"]["observed"], ["supervisor"])
             self.assertEqual(payload["discovery"]["mcpServers"]["observed"], ["native"])
-            self.assertFalse(Path(payload["profile"]["path"]).exists())
+            self.assertNotIn("path", payload["profile"])
 
             transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
             messages = transcript["messages"]
@@ -302,11 +355,14 @@ class CopilotDevCliTests(unittest.TestCase):
                         "location": {
                             "type": "environment",
                             "environmentId": "local",
-                            "path": str((source / "tools/native").resolve()),
+                            "path": messages[3]["params"]["selectedCapabilityRoots"][0]["location"]["path"],
                         },
                     }
                 ],
             )
+            projection_path = messages[3]["params"]["selectedCapabilityRoots"][0]["location"]["path"]
+            self.assertIn("/capability-roots/native", projection_path)
+            self.assertNotEqual(projection_path, str((source / "tools/native").resolve()))
             self.assertTrue(messages[3]["params"]["ephemeral"])
             self.assertEqual(messages[3]["params"]["approvalPolicy"], "never")
             self.assertEqual(messages[3]["params"]["sandbox"], "read-only")
@@ -323,10 +379,8 @@ class CopilotDevCliTests(unittest.TestCase):
             self.assertEqual(transcript["mcpTools"], {"health": {"name": "health"}})
             self.assertNotEqual(transcript["cwd"], transcript["profile"])
             self.assertNotEqual(transcript["home"], transcript["profile"])
-            self.assertTrue(transcript["setup"])
             self.assertFalse(Path(transcript["cwd"]).exists())
             self.assertFalse(Path(transcript["home"]).exists())
-            self.assertFalse(Path(transcript["data"]).exists())
 
     def test_dev_explicit_profile_is_preserved_without_tool_copy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -352,7 +406,7 @@ class CopilotDevCliTests(unittest.TestCase):
             )
             self.assertFalse((profile / "tools").exists())
 
-    def test_dev_rejects_missing_tool_setup_before_runtime(self) -> None:
+    def test_dev_does_not_require_tool_owned_setup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = self.make_source(root)
@@ -366,14 +420,12 @@ class CopilotDevCliTests(unittest.TestCase):
                 "--codex-bin", str(codex), "--json"
             )
 
-            self.assertEqual(result, 2)
+            self.assertEqual(result, 0, stderr)
             self.assertEqual(stderr, "")
-            error = json.loads(stdout)["error"]
-            self.assertEqual(error["code"], "EnvironmentUnavailable")
-            self.assertEqual(error["stage"], "tool-setup")
-            self.assertFalse(transcript.exists())
+            self.assertEqual(json.loads(stdout)["state"], "discovery_ready")
+            self.assertTrue(transcript.exists())
 
-    def test_dev_reports_tool_setup_failure_without_runtime(self) -> None:
+    def test_dev_does_not_execute_tool_owned_setup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = self.make_source(root)
@@ -392,15 +444,11 @@ class CopilotDevCliTests(unittest.TestCase):
                 "--codex-bin", str(codex), "--json"
             )
 
-            self.assertEqual(result, 2)
+            self.assertEqual(result, 0, stderr)
             self.assertEqual(stderr, "")
-            error = json.loads(stdout)["error"]
-            self.assertEqual(error["code"], "EnvironmentUnavailable")
-            self.assertIn("status 9", error["message"])
-            self.assertNotIn("cause", error)
             self.assertNotIn(secret, stdout)
             self.assertNotIn(secret, stderr)
-            self.assertFalse(transcript.exists())
+            self.assertTrue(transcript.exists())
 
     def test_dev_rejects_skill_discovery_errors_before_name_matching(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -441,7 +489,57 @@ class CopilotDevCliTests(unittest.TestCase):
             self.assertEqual(stderr, "")
             error = json.loads(stdout)["error"]
             self.assertEqual(error["code"], "DiscoveryIncomplete")
-            self.assertIn("native", error["message"])
+            self.assertIn("observed MCP status: native(unknown)", error["message"])
+
+    def test_dev_status_list_timeout_is_typed_without_notification_wait(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self.make_source(root)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            codex, transcript = self.make_fake_codex(root, status_delay_seconds=0.8)
+
+            launch = AppServerClient.launch
+
+            def launch_with_stable_initialization_timeout(*args, **kwargs):
+                kwargs["timeout_seconds"] = 5.0
+                return launch(*args, **kwargs)
+
+            with patch(
+                "copilot_sdk.cli.AppServerClient.launch",
+                side_effect=launch_with_stable_initialization_timeout,
+            ):
+                result, stdout, stderr = self.invoke(
+                    "dev", str(source), "--workspace", str(workspace),
+                    "--codex-bin", str(codex), "--timeout-seconds", "0.5", "--json"
+                )
+
+            self.assertEqual(result, 2)
+            self.assertEqual(stderr, "")
+            error = json.loads(stdout)["error"]
+            self.assertEqual(error["code"], "RpcFailed")
+            self.assertEqual(error["stage"], "app-server")
+            self.assertIn("timed out waiting for mcpServerStatus/list", error["message"])
+            self.assertFalse(transcript.exists())
+
+    def test_safe_mcp_status_projection_uses_only_official_bounded_fields(self) -> None:
+        projection = _safe_expected_mcp_statuses(
+            [
+                {
+                    "name": "native",
+                    "authStatus": "unknown",
+                    "tools": {},
+                    "serverInfo": {"description": "do not expose"},
+                    "error": {"code": "secret", "message": "do not expose"},
+                    "status": "failed",
+                    "health": "bad",
+                },
+                {"name": "unrelated", "authStatus": "unsupported"},
+            ],
+            ["native"],
+        )
+
+        self.assertEqual(projection, [{"name": "native", "authStatus": "unknown"}])
 
     def test_dev_json_reports_absolute_workspace_failure_without_launch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -455,6 +553,27 @@ class CopilotDevCliTests(unittest.TestCase):
             error = json.loads(stdout)["error"]
             self.assertEqual(error["code"], "WorkspaceInvalid")
             self.assertEqual(error["stage"], "workspace")
+
+    def test_dev_rejects_timeout_outside_bounded_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self.make_source(root)
+            workspace = root / "workspace"
+            workspace.mkdir()
+
+            for value in ("0", "301"):
+                result, stdout, stderr = self.invoke(
+                    "dev",
+                    str(source),
+                    "--workspace",
+                    str(workspace),
+                    "--timeout-seconds",
+                    value,
+                    "--json",
+                )
+                self.assertEqual(result, 2)
+                self.assertEqual(stderr, "")
+                self.assertEqual(json.loads(stdout)["error"]["code"], "InvalidArgument")
 
 
 if __name__ == "__main__":

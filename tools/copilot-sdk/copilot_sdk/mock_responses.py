@@ -146,7 +146,7 @@ def _has_supervisor_marker(body: dict[str, Any], marker: str) -> bool:
 @dataclass
 class MockResponsesFixture:
     agent: str
-    tool: str
+    server: str
     tool_name: str
     arguments: dict[str, Any]
     supervisor_marker: str
@@ -204,7 +204,7 @@ class MockResponsesFixture:
                             "copilot-child-mcp",
                             fixture.tool_name,
                             fixture.arguments,
-                            namespace=f"mcp__{fixture.tool}",
+                            namespace=f"mcp__{fixture.server}",
                         ),
                     )
                 elif _has_tool_output(body, "copilot-root-wait"):

@@ -11,6 +11,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .tool_runtime_manifest import (
+    ToolRuntimeManifestError,
+    load_tool_runtime_manifest,
+)
+
+ROLE_MCP_SERVER_POLICY_FIELDS = frozenset(
+    {
+        "enabled",
+        "default_tools_approval_mode",
+        "enabled_tools",
+        "disabled_tools",
+        "tools",
+    }
+)
+
 
 class CopilotPackageError(ValueError):
     """A typed validation failure for a Copilot package."""
@@ -43,6 +58,7 @@ class CopilotTestCase:
     prompt: str
     agent: str
     tool: str
+    server: str
     tool_name: str
     arguments: dict[str, Any]
     expected_structured_content: dict[str, Any]
@@ -76,7 +92,7 @@ def validate_copilot_package(
     display_name = _required_string(manifest, "display_name", "copilot.toml")
     skills = _component_entries(manifest, "skills", "path")
     agents = _component_entries(manifest, "agents", "role")
-    tools = _component_entries(manifest, "tools", "root")
+    tools = _tool_entries(manifest)
 
     skill_ids = tuple(entry["id"] for entry in skills)
     agent_ids = tuple(entry["id"] for entry in agents)
@@ -117,7 +133,7 @@ def validate_copilot_package(
         del skill_root
         author_files[skill_file_relative.as_posix()] = skill_file
 
-    agent_tool_policies: dict[str, dict[str, set[str] | None]] = {}
+    agent_tool_policies: dict[str, dict[str, dict[str, set[str] | None]]] = {}
     for index, entry in enumerate(agents):
         relative = _authored_relative_path(entry["role"], f"agents[{index}].role")
         role_file = _safe_package_path(root, relative, kind="file")
@@ -136,12 +152,20 @@ def validate_copilot_package(
         author_files[relative.as_posix()] = role_file
 
     for index, test in enumerate(tests):
-        policy = agent_tool_policies[test.agent].get(test.tool)
-        if policy is None and test.tool not in agent_tool_policies[test.agent]:
+        tool_policy = agent_tool_policies[test.agent].get(test.tool)
+        if tool_policy is None:
             _fail(
                 "missing_reference",
                 f"tests[{index}].tool",
                 f"agent {test.agent!r} does not enable declared tool {test.tool!r}",
+            )
+        policy = tool_policy.get(test.server)
+        if policy is None and test.server not in tool_policy:
+            _fail(
+                "missing_reference",
+                f"tests[{index}].server",
+                f"agent {test.agent!r} does not enable MCP server {test.server!r} "
+                f"from capability root {test.tool!r}",
             )
         if policy is not None and test.tool_name not in policy:
             _fail(
@@ -150,39 +174,31 @@ def validate_copilot_package(
                 f"agent {test.agent!r} does not enable tool method {test.tool_name!r}",
             )
 
+    tool_server_ids: dict[str, set[str]] = {}
     for index, entry in enumerate(tools):
         relative = _authored_relative_path(entry["root"], f"tools[{index}].root")
         tool_root = _safe_package_path(root, relative, kind="directory")
-        plugin_relative = relative / ".codex-plugin/plugin.json"
-        plugin_file = _safe_package_path(root, plugin_relative, kind="file")
-        plugin = _load_json(plugin_file, plugin_relative.as_posix())
-        if plugin.get("mcpServers") != "./.mcp.json":
-            _fail(
-                "invalid_type",
-                f"{plugin_relative.as_posix()}.mcpServers",
-                "must equal './.mcp.json'",
-            )
-        mcp_relative = relative / ".mcp.json"
-        mcp_file = _safe_package_path(root, mcp_relative, kind="file")
-        mcp = _load_json(mcp_file, mcp_relative.as_posix())
-        servers = mcp.get("mcpServers")
-        if not isinstance(servers, dict):
-            _fail(
-                "invalid_type",
-                f"{mcp_relative.as_posix()}.mcpServers",
-                "must be an object",
-            )
-        if entry["id"] not in servers:
+        runtime_relative = _authored_relative_path(
+            entry["runtime"], f"tools[{index}].runtime"
+        )
+        try:
+            runtime = load_tool_runtime_manifest(root, tool_root, runtime_relative)
+        except ToolRuntimeManifestError as error:
+            _fail(error.code, error.relative_path, error.message)
+        tool_server_ids[entry["id"]] = {server.id for server in runtime.servers}
+        author_files[runtime_relative.as_posix()] = runtime.path
+        for dependency in runtime.dependencies:
+            for dependency_file in (dependency.manifest, dependency.lock):
+                dependency_relative = dependency_file.relative_to(root).as_posix()
+                author_files[dependency_relative] = dependency_file
+
+    for index, test in enumerate(tests):
+        if test.server not in tool_server_ids[test.tool]:
             _fail(
                 "missing_reference",
-                f"{mcp_relative.as_posix()}.mcpServers",
-                f"must contain declared tool {entry['id']!r}",
+                f"tests[{index}].server",
+                f"capability root {test.tool!r} does not declare MCP server {test.server!r}",
             )
-        descriptor_paths = [
-            (plugin_relative.as_posix(), plugin_file),
-            (mcp_relative.as_posix(), mcp_file),
-        ]
-        author_files.update(descriptor_paths)
 
     digest = hashlib.sha256()
     for relative_path in sorted(author_files):
@@ -322,6 +338,33 @@ def _component_entries(
     return entries
 
 
+def _tool_entries(manifest: dict[str, Any]) -> list[dict[str, str]]:
+    raw_entries = _required(manifest, "tools", "copilot.toml")
+    if not isinstance(raw_entries, list):
+        _fail("invalid_type", "tools", "must be an array of tables")
+    entries: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for index, raw_entry in enumerate(raw_entries):
+        location = f"tools[{index}]"
+        if not isinstance(raw_entry, dict):
+            _fail("invalid_type", location, "must be a table")
+        unknown = sorted(set(raw_entry) - {"id", "root", "runtime"})
+        if unknown:
+            _fail("invalid_field", f"{location}.{unknown[0]}", "field is not part of schema v1")
+        entry_id = _required_string(raw_entry, "id", location)
+        if entry_id in seen:
+            _fail("duplicate_id", f"{location}.id", f"duplicate id {entry_id!r}")
+        seen.add(entry_id)
+        entries.append(
+            {
+                "id": entry_id,
+                "root": _required_string(raw_entry, "root", location),
+                "runtime": _required_string(raw_entry, "runtime", location),
+            }
+        )
+    return entries
+
+
 def _test_entries(
     manifest: dict[str, Any], *, agent_ids: tuple[str, ...], tool_ids: tuple[str, ...]
 ) -> list[CopilotTestCase]:
@@ -341,6 +384,7 @@ def _test_entries(
         prompt = _required_string(raw_test, "prompt", location)
         agent = _required_string(raw_test, "agent", location)
         tool = _required_string(raw_test, "tool", location)
+        server = _required_string(raw_test, "server", location)
         tool_name = _required_string(raw_test, "tool_name", location)
         if agent not in agent_ids:
             _fail(
@@ -377,6 +421,7 @@ def _test_entries(
                 prompt=prompt,
                 agent=agent,
                 tool=tool,
+                server=server,
                 tool_name=tool_name,
                 arguments=arguments,
                 expected_structured_content=structured,
@@ -513,10 +558,10 @@ def _validate_role_references(
 
 def _role_tool_policies(
     role: dict[str, Any], relative_path: str, tool_ids: tuple[str, ...]
-) -> dict[str, set[str] | None]:
+) -> dict[str, dict[str, set[str] | None]]:
     """Return native selected-Plugin MCP policy by declared capability-root ID."""
 
-    policies: dict[str, set[str] | None] = {}
+    policies: dict[str, dict[str, set[str] | None]] = {}
     plugins = role.get("plugins")
     if plugins is None:
         return policies
@@ -535,24 +580,31 @@ def _role_tool_policies(
         servers = plugin.get("mcp_servers")
         if not isinstance(servers, dict):
             _fail("required_field", f"{location}.mcp_servers", "required table is missing")
-        server = servers.get(plugin_id)
-        if not isinstance(server, dict):
-            _fail(
-                "missing_reference",
-                f"{location}.mcp_servers",
-                f"must contain the declared MCP server {plugin_id!r}",
-            )
-        enabled = server.get("enabled_tools")
-        if enabled is not None:
-            if not isinstance(enabled, list) or not enabled or any(
-                not isinstance(item, str) or not item for item in enabled
+        server_policies: dict[str, set[str] | None] = {}
+        for server_id, server in servers.items():
+            server_location = f"{location}.mcp_servers.{server_id}"
+            if not isinstance(server_id, str) or not server_id:
+                _fail("invalid_type", f"{location}.mcp_servers", "keys must be strings")
+            if not isinstance(server, dict):
+                _fail("invalid_type", server_location, "must be a table")
+            unknown = sorted(set(server) - ROLE_MCP_SERVER_POLICY_FIELDS)
+            if unknown:
+                _fail(
+                    "invalid_field",
+                    f"{server_location}.{unknown[0]}",
+                    "field is not part of Role MCP server policy schema v1",
+                )
+            enabled = server.get("enabled_tools")
+            if enabled is not None and (
+                not isinstance(enabled, list)
+                or not enabled
+                or any(not isinstance(item, str) or not item for item in enabled)
             ):
                 _fail(
                     "invalid_type",
-                    f"{location}.mcp_servers.{plugin_id}.enabled_tools",
+                    f"{server_location}.enabled_tools",
                     "must be a non-empty string array",
                 )
-            policies[plugin_id] = set(enabled)
-        else:
-            policies[plugin_id] = None
+            server_policies[server_id] = set(enabled) if enabled is not None else None
+        policies[plugin_id] = server_policies
     return policies

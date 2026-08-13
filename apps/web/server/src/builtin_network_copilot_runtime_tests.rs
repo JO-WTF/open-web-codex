@@ -262,6 +262,12 @@ fn repository_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn prepared_network_copilot_descriptor(repository: &Path) -> PathBuf {
+    repository.join(
+        ".local/open-web-codex/tool-environments/warehouse-network-copilot/copilot-sdk/prepared-tools.v1.json",
+    )
+}
+
 fn runtime_probe_tempdir() -> tempfile::TempDir {
     let root = repository_root().join("apps/web/target/builtin-network-runtime-tests");
     std::fs::create_dir_all(&root).expect("create Runtime probe root");
@@ -1242,13 +1248,8 @@ async fn builtin_network_copilot_clean_profile_runtime_gate() {
         "Codex binary",
     );
     let repository = required_path(&repository_root(), "repository root");
-    let supply_root = repository.join("tools/supply-chain-network-planner");
-    let maps_root = repository.join("tools/maps-mcp");
-    let environment_root = repository.join(".local/open-web-codex/tool-envs");
-    let supply_venv = environment_root.join("supply-chain-network-planner");
-    let maps_venv = environment_root.join("maps-mcp");
     let assets =
-        BuiltinNetworkCopilotAssets::resolve(&supply_root, &supply_venv, &maps_root, &maps_venv)
+        BuiltinNetworkCopilotAssets::resolve(&prepared_network_copilot_descriptor(&repository))
             .expect("resolve production built-in assets");
 
     let test_root = runtime_probe_tempdir();
@@ -1661,7 +1662,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
 /// -p open-web-codex-server builtin_network_copilot_child_mcp_form_bridge_gate \
 /// -- --ignored --exact`
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "requires a real Codex CLI, prepared supply-chain Python environment, and disposable PostgreSQL database"]
+#[ignore = "requires a real Codex CLI, prepared Copilot descriptor, and disposable PostgreSQL database"]
 async fn builtin_network_copilot_child_mcp_form_bridge_gate() {
     let codex_bin = required_path(
         Path::new(&std::env::var_os("CODEX_BIN").expect("CODEX_BIN is set")),
@@ -1670,18 +1671,9 @@ async fn builtin_network_copilot_child_mcp_form_bridge_gate() {
     let database_url =
         std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL is set for a disposable DB");
     let repository = required_path(&repository_root(), "repository root");
-    let environment_root = repository.join(".local/open-web-codex/tool-envs");
-    let supply_venv = required_path(
-        &environment_root.join("supply-chain-network-planner"),
-        "supply-chain Python environment",
-    );
-    let assets = BuiltinNetworkCopilotAssets::resolve(
-        &repository.join("tools/supply-chain-network-planner"),
-        &supply_venv,
-        &repository.join("tools/maps-mcp"),
-        &environment_root.join("maps-mcp"),
-    )
-    .expect("resolve production built-in assets");
+    let assets =
+        BuiltinNetworkCopilotAssets::resolve(&prepared_network_copilot_descriptor(&repository))
+            .expect("resolve production built-in assets");
 
     let test_root = runtime_probe_tempdir();
     let profile_home = test_root.path().join("profile");
@@ -2013,14 +2005,9 @@ async fn builtin_network_copilot_malformed_role_is_unavailable() {
         "Codex binary",
     );
     let repository = required_path(&repository_root(), "repository root");
-    let environment_root = repository.join(".local/open-web-codex/tool-envs");
-    let assets = BuiltinNetworkCopilotAssets::resolve(
-        &repository.join("tools/supply-chain-network-planner"),
-        &environment_root.join("supply-chain-network-planner"),
-        &repository.join("tools/maps-mcp"),
-        &environment_root.join("maps-mcp"),
-    )
-    .expect("resolve production built-in assets");
+    let assets =
+        BuiltinNetworkCopilotAssets::resolve(&prepared_network_copilot_descriptor(&repository))
+            .expect("resolve production built-in assets");
 
     let test_root = runtime_probe_tempdir();
     let profile_home = test_root.path().join("profile");

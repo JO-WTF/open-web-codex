@@ -1,4 +1,13 @@
-import { validate } from "@mapbox/mapbox-gl-style-spec";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+
+const nodeRoot = process.env.OPEN_WEB_CODEX_MAPS_NODE_ENV;
+if (!nodeRoot) throw new Error("OPEN_WEB_CODEX_MAPS_NODE_ENV is required");
+const require = createRequire(import.meta.url);
+const validatorPath = require.resolve("@mapbox/mapbox-gl-style-spec", {
+  paths: [nodeRoot],
+});
+const { validate } = await import(pathToFileURL(validatorPath));
 
 let input = "";
 for await (const chunk of process.stdin) input += chunk;

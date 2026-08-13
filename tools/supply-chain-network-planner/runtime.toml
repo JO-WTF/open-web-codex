@@ -1,0 +1,89 @@
+schema_version = 1
+
+[[dependencies]]
+id = "python"
+kind = "python-project"
+manifest = "pyproject.toml"
+lock = "requirements.lock"
+
+[[servers]]
+id = "supply_chain_data"
+entry = { kind = "python-module", dependency = "python", module = "supply_chain_planner.data_server" }
+args = []
+
+[[servers.env]]
+name = "CODEX_HOME"
+source = "profile_home"
+
+[[servers.env]]
+name = "HTTP_PROXY"
+source = "host"
+
+[[servers.env]]
+name = "HTTPS_PROXY"
+source = "host"
+
+[[servers.env]]
+name = "ALL_PROXY"
+source = "host"
+
+[[servers.env]]
+name = "NO_PROXY"
+source = "host"
+
+[[servers.env]]
+name = "http_proxy"
+source = "host"
+
+[[servers.env]]
+name = "https_proxy"
+source = "host"
+
+[[servers.env]]
+name = "all_proxy"
+source = "host"
+
+[[servers.env]]
+name = "no_proxy"
+source = "host"
+
+[[servers]]
+id = "supply_chain"
+entry = { kind = "python-module", dependency = "python", module = "supply_chain_planner.server" }
+args = []
+
+[[servers.env]]
+name = "CODEX_HOME"
+source = "profile_home"
+
+[[servers.env]]
+name = "HTTP_PROXY"
+source = "host"
+
+[[servers.env]]
+name = "HTTPS_PROXY"
+source = "host"
+
+[[servers.env]]
+name = "ALL_PROXY"
+source = "host"
+
+[[servers.env]]
+name = "NO_PROXY"
+source = "host"
+
+[[servers.env]]
+name = "http_proxy"
+source = "host"
+
+[[servers.env]]
+name = "https_proxy"
+source = "host"
+
+[[servers.env]]
+name = "all_proxy"
+source = "host"
+
+[[servers.env]]
+name = "no_proxy"
+source = "host"

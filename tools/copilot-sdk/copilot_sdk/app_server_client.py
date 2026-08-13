@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import signal
 import subprocess
 import threading
 from contextlib import suppress
@@ -70,6 +71,13 @@ class AppServerClient:
         if environment is not None:
             process_environment.update(environment)
         try:
+            process_group_options: dict[str, Any]
+            if os.name == "nt":
+                process_group_options = {
+                    "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP
+                }
+            else:
+                process_group_options = {"start_new_session": True}
             process = subprocess.Popen(
                 [str(codex_bin), "app-server"],
                 cwd=process_cwd,
@@ -80,18 +88,26 @@ class AppServerClient:
                 text=True,
                 encoding="utf-8",
                 bufsize=1,
+                **process_group_options,
             )
         except OSError as exc:
             raise AppServerClientError("AppServerUnavailable", "could not start app-server", str(exc)) from exc
         return cls(process, timeout_seconds=timeout_seconds)
 
-    def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    def request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
         request_id = self._next_id
         self._next_id += 1
         self._write({"id": request_id, "method": method, "params": params})
+        timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
         while True:
             try:
-                message = self._messages.get(timeout=self.timeout_seconds)
+                message = self._messages.get(timeout=timeout)
             except queue.Empty as exc:
                 raise AppServerClientError("RpcFailed", f"timed out waiting for {method}", self.stderr) from exc
             if message is None:
@@ -117,14 +133,14 @@ class AppServerClient:
             message = self._notifications.get(timeout=timeout)
         except queue.Empty as exc:
             raise AppServerClientError(
-                "RpcFailed", "timed out waiting for app-server notification", self.stderr
+                "NotificationTimedOut", "timed out waiting for app-server notification"
             ) from exc
         if message is None:
             raise AppServerClientError(
-                "RpcFailed", "app-server closed while waiting for a notification", self.stderr
+                "AppServerClosed", "app-server closed while waiting for a notification"
             )
         if isinstance(message, BaseException):
-            raise AppServerClientError("RpcFailed", "invalid app-server output", str(message))
+            raise AppServerClientError("InvalidAppServerOutput", "invalid app-server output")
         return message
 
     def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
@@ -157,11 +173,11 @@ class AppServerClient:
             with suppress(OSError):
                 self.process.stdin.close()
         if self.process.poll() is None:
-            self.process.terminate()
+            self._terminate_owned_process_group()
             try:
                 self.process.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                self.process.kill()
+                self._kill_owned_process_group()
                 self.process.wait(timeout=3)
         self._stdout_thread.join(timeout=1)
         self._stderr_thread.join(timeout=1)
@@ -169,6 +185,22 @@ class AppServerClient:
             if stream is not None and not stream.closed:
                 with suppress(OSError):
                     stream.close()
+
+    def _terminate_owned_process_group(self) -> None:
+        if os.name == "nt":
+            with suppress(OSError):
+                self.process.send_signal(signal.CTRL_BREAK_EVENT)
+            return
+        with suppress(ProcessLookupError, PermissionError):
+            os.killpg(self.process.pid, signal.SIGTERM)
+
+    def _kill_owned_process_group(self) -> None:
+        if os.name == "nt":
+            with suppress(OSError):
+                self.process.kill()
+            return
+        with suppress(ProcessLookupError, PermissionError):
+            os.killpg(self.process.pid, signal.SIGKILL)
 
     def _write(self, payload: dict[str, Any]) -> None:
         if self.process.stdin is None:
