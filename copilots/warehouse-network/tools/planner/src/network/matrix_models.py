@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -46,13 +46,53 @@ class RouteMatrixRow(MatrixModel):
     navigation_profile: str | None = Field(default=None, min_length=1, max_length=128)
 
 
+class ProvidedRouteMatrixStats(MatrixModel):
+    kind: Literal["provided"] = "provided"
+    expected_pair_count: int = Field(ge=0)
+    provided_pair_count: int = Field(ge=0)
+    ignored_input_pair_count: int = Field(ge=0)
+    missing_pair_count: int = Field(ge=0)
+    complete: bool
+    source_method_counts: dict[str, int]
+
+
+class HaversineRouteMatrixStats(MatrixModel):
+    kind: Literal["haversine"] = "haversine"
+    expected_pair_count: int = Field(ge=0)
+    reused_pair_count: int = Field(ge=0)
+    computed_pair_count: int = Field(ge=0)
+    stale_pair_count: int = Field(ge=0)
+    ignored_prior_row_count: int = Field(ge=0)
+    missing_pair_count: int = Field(ge=0)
+    last_mile_pair_count: int = Field(ge=0)
+    linehaul_pair_count: int = Field(ge=0)
+    detour_coefficient: float = Field(gt=0)
+    average_speed_kph: float = Field(gt=0)
+    complete: bool
+
+
+class NavigationRouteMatrixStats(MatrixModel):
+    kind: Literal["navigation"] = "navigation"
+    route_count: int = Field(ge=0)
+    reused_pair_count: int = Field(ge=0)
+    registered_pair_count: int = Field(ge=0)
+    missing_pair_count: int = Field(ge=0)
+    complete: bool
+
+
+RouteMatrixStats = Annotated[
+    ProvidedRouteMatrixStats | HaversineRouteMatrixStats | NavigationRouteMatrixStats,
+    Field(discriminator="kind"),
+]
+
+
 class RouteMatrix(MatrixModel):
     schema_version: Literal["route_matrix.v2"] = "route_matrix.v2"
     method: RouteMethod
     warehouse_scope: WarehouseScope
     rows: list[RouteMatrixRow] = Field(default_factory=list)
     missing_routes: list[tuple[str, str, NetworkLayer]] = Field(default_factory=list)
-    validation: dict[str, object] = Field(default_factory=dict)
+    stats: RouteMatrixStats
 
 
 class RouteCostQuote(MatrixModel):
@@ -106,6 +146,17 @@ class CostCalculationPolicy(MatrixModel):
     rules: list[DemandUnitCostRule] = Field(min_length=1)
 
 
+class CostMatrixStats(MatrixModel):
+    expected_pair_count: int = Field(ge=0)
+    reused_pair_count: int = Field(ge=0)
+    computed_pair_count: int = Field(ge=0)
+    missing_pair_count: int = Field(ge=0)
+    ignored_quote_count: int = Field(ge=0)
+    ignored_prior_row_count: int = Field(ge=0)
+    stale_pair_count: int = Field(ge=0)
+    complete: bool
+
+
 class CostMatrix(MatrixModel):
     schema_version: Literal["cost_matrix.v2"] = "cost_matrix.v2"
     currency: str = Field(pattern=r"^[A-Z]{3}$")
@@ -113,4 +164,11 @@ class CostMatrix(MatrixModel):
     rows: list[CostMatrixRow] = Field(default_factory=list)
     missing_routes: list[tuple[str, str, NetworkLayer]] = Field(default_factory=list)
     calculation_rule: CostCalculationPolicy | None = None
-    validation: dict[str, object] = Field(default_factory=dict)
+    stats: CostMatrixStats
+
+
+class RouteMatrixValidation(MatrixModel):
+    valid: bool
+    errors: list[str]
+    missing_routes: list[tuple[str, str, NetworkLayer]]
+    route_count: int = Field(ge=0)

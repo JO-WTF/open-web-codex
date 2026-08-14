@@ -13,6 +13,7 @@ from _network_fixtures import (
     indonesia_route_quotes,
 )
 from open_web_codex_provider import (
+    GeoJsonResourceRef,
     McpResourceRuntime,
     ProviderContractError,
     PublishedResource,
@@ -41,11 +42,14 @@ from supply_chain_planner.network.optimization_models import (
 )
 from supply_chain_planner.network.solver import compare_assignments, solve_assignment
 from supply_chain_planner.shared.models import (
+    ComparableNetworkResultRef,
     FacilityChangeAssessmentToolResult,
     NetworkBaselineReportInput,
     NetworkBaselineResourceToolResult,
     NetworkComparisonReportInput,
     NetworkFinalArtifactToolResult,
+    NetworkPlanComparisonResource,
+    NetworkPlanComparisonResourceRef,
     PreparedNetworkResource,
 )
 
@@ -164,6 +168,14 @@ def _result_ref(result) -> ResourceRef:
     return ref
 
 
+def _comparison_from_ref(ref: ResourceRef) -> AssignmentComparison:
+    return server._runtime().load_model(
+        ref,
+        "network_plan_comparison.v1",
+        NetworkPlanComparisonResource,
+    ).comparison
+
+
 def _sample2_resource_refs(
     store: ResourceStore,
     ctx: SimpleNamespace,
@@ -192,7 +204,8 @@ def _sample2_resource_refs(
         12,
         18,
     ]
-    assert typed_baseline.uncovered_city_count == len(typed_baseline.uncovered_cities)
+    assert typed_baseline.uncovered_city_count >= len(typed_baseline.uncovered_cities)
+    assert len(typed_baseline.uncovered_cities) <= 10
     facility_ref = _result_ref(
         server.solve_p_median(
             prepared_ref,
@@ -207,6 +220,7 @@ def _sample2_resource_refs(
     )
     comparison_ref = _result_ref(
         server.compare_network_scenarios(
+            normalized_input_ref=prepared_ref,
             before_ref=baseline_ref,
             after_ref=facility_ref,
             service_targets=[6, 12, 18],
@@ -220,17 +234,13 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
     tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
 
     safe_local_tools = {
-        "plan_route_matrix",
-        "build_haversine_route_matrix",
-        "build_provided_route_matrix",
-        "validate_route_matrix",
+        "prepare_route_matrix",
         "register_navigation_route_matrix",
         "plan_cost_matrix",
         "prepare_network_distribution_map",
         "prepare_network_comparison_map",
         "evaluate_network_baseline",
         "assess_facility_change",
-        "evaluate_facility_scenario",
         "compare_network_scenarios",
     }
     for name in safe_local_tools:
@@ -270,14 +280,15 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
         "coverage_mode",
     }.issubset(baseline["required"])
 
-    scenario = tools["evaluate_facility_scenario"].inputSchema
-    assert "ctx" not in scenario["properties"]
-    assert {"normalized_input_ref", "route_matrix_ref", "scenario"}.issubset(scenario["required"])
+    route_output = tools["prepare_route_matrix"].outputSchema
+    assert set(route_output["required"]) == {"state", "summary", "resource_ref"}
+    assert route_output["properties"]["state"]["enum"] == [
+        "ready",
+        "navigation_required",
+    ]
 
     assessment = tools["assess_facility_change"].inputSchema
     assert "single call" in tools["assess_facility_change"].description
-    assert "do not chain" in tools["assess_facility_change"].description
-    assert "assess_facility_change instead" in tools["evaluate_facility_scenario"].description
     assert "ctx" not in assessment["properties"]
     assert {
         "normalized_input_ref",
@@ -286,12 +297,14 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
         "scenario",
     }.issubset(assessment["required"])
     assert "cost_matrix_ref" not in assessment["required"]
-    assert assessment["properties"]["before_ref"]["$ref"].endswith("/ComparableResourceRef")
+    assert assessment["properties"]["before_ref"]["$ref"].endswith(
+        "/ComparableNetworkResultRef"
+    )
     assessment_output = tools["assess_facility_change"].outputSchema
     assert assessment_output["properties"]["coverage"]["maxItems"] == 32
-    assert assessment_output["properties"]["affected_city_ids"]["maxItems"] == 100
-    assert assessment_output["properties"]["affected_city_changes"]["maxItems"] == 100
-    assert assessment_output["properties"]["reassigned_city_ids"]["maxItems"] == 100
+    assert assessment_output["properties"]["affected_city_ids"]["maxItems"] == 10
+    assert assessment_output["properties"]["affected_city_changes"]["maxItems"] == 10
+    assert assessment_output["properties"]["reassigned_city_ids"]["maxItems"] == 10
 
     p_median = tools["solve_p_median"].inputSchema
     assert "ctx" not in p_median["properties"]
@@ -308,11 +321,16 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
 
     comparison = tools["compare_network_scenarios"].inputSchema
     assert "ctx" not in comparison["properties"]
-    assert {"before_ref", "after_ref", "service_targets"}.issubset(comparison["required"])
+    assert {
+        "normalized_input_ref",
+        "before_ref",
+        "after_ref",
+        "service_targets",
+    }.issubset(comparison["required"])
     assert "baseline_ref" not in comparison["properties"]
     assert "candidate_ref" not in comparison["properties"]
     assert comparison["properties"]["before_ref"] == comparison["properties"]["after_ref"]
-    comparable_ref_schema = comparison["$defs"]["ComparableResourceRef"]
+    comparable_ref_schema = comparison["$defs"]["ComparableNetworkResultRef"]
     assert comparable_ref_schema["properties"]["resource_schema"]["enum"] == [
         "network_baseline.v2",
         "network_scenario.v2",
@@ -323,7 +341,7 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
         in comparable_ref_schema["properties"]["resource_schema"]["description"]
     )
 
-    route_plan = tools["plan_route_matrix"].inputSchema
+    route_plan = tools["prepare_route_matrix"].inputSchema
     assert "Route method" in route_plan["properties"]["route_method"]["description"]
     assert (
         "both detour_coefficient and average_speed_kph"
@@ -348,19 +366,10 @@ def test_network_planning_tools_require_explicit_parameters_and_hide_context() -
     assert "optional_existing_ids" not in p_median["properties"]
     comparison_map = tools["prepare_network_comparison_map"].inputSchema
     assert "ctx" not in comparison_map["properties"]
-    assert set(comparison_map["required"]) == {
-        "normalized_input_ref",
-        "baseline_ref",
-        "facility_location_ref",
-        "comparison_ref",
-    }
-    assert "same exact result" in comparison_map["properties"]["comparison_ref"]["description"]
+    assert set(comparison_map["required"]) == {"plan_comparison_ref"}
 
     final_required = {
-        "normalized_input_ref",
-        "baseline_ref",
-        "facility_location_ref",
-        "comparison_ref",
+        "plan_comparison_ref",
         "output_relative_path",
     }
     final_schema = tools["render_network_comparison_map"].inputSchema
@@ -405,22 +414,19 @@ def test_s2_creates_inline_comparison_map_and_markdown_report_artifact(
     monkeypatch.setattr(server, "enumerate_p_median", reject_solver_recompute)
 
     map_result = server.render_network_comparison_map(
-        *refs,
-        "outputs/network-map.json",
-        ctx,
+        refs[3], "outputs/network-map.json", ctx
     )
     report_input = NetworkComparisonReportInput(
-        normalized_input_ref=refs[0],
-        baseline_ref=refs[1],
-        facility_location_ref=refs[2],
-        comparison_ref=refs[3],
+        plan_comparison_ref=NetworkPlanComparisonResourceRef.model_validate(
+            refs[3].model_dump(mode="json")
+        ),
     )
     report_result = server.publish_network_planning_report(
         report_input,
         "outputs/network-report.md",
         ctx,
     )
-    inline_map_result = server.prepare_network_comparison_map(*refs, ctx)
+    inline_map_result = server.prepare_network_comparison_map(refs[3], ctx)
 
     assert map_result.structuredContent is not None
     assert report_result.structuredContent is not None
@@ -475,12 +481,11 @@ def test_s2_creates_inline_comparison_map_and_markdown_report_artifact(
     assert inline_map_result.structuredContent["feature_count"] == 187
     assert set(inline_map_result.structuredContent) == {
         "summary",
-        "resource_ref",
         "data_ref",
         "feature_count",
     }
     inline_payload = store.load(
-        ResourceRef.model_validate(inline_map_result.structuredContent["resource_ref"])
+        GeoJsonResourceRef.model_validate(inline_map_result.structuredContent["data_ref"])
     )
     demand_properties = [
         feature["properties"]
@@ -495,9 +500,7 @@ def test_s2_creates_inline_comparison_map_and_markdown_report_artifact(
 
     with pytest.raises(McpResourceContractError, match="workspace_file_invalid"):
         server.render_network_comparison_map(
-            *refs,
-            "outputs/network-map.json",
-            ctx,
+            refs[3], "outputs/network-map.json", ctx
         )
     for invalid_path in (
         (workspace / "absolute.md").as_posix(),
@@ -600,24 +603,26 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(tmp_path: Path, mon
     assert baseline.label == "actual_current"
     assert [metric.target_hours for metric in baseline.coverage] == [6, 12, 18]
 
-    scenario_result = server.evaluate_facility_scenario(
-        prepared_ref,
-        route_ref,
-        ScenarioSpec(
-            remove_warehouse_ids=[BEKASI_ID],
-            objective="min_cost",
-            service_targets=[12],
-        ),
-        ctx,
-        cost_ref,
+    assessment = FacilityChangeAssessmentToolResult.model_validate(
+        server.assess_facility_change(
+            prepared_ref,
+            route_ref,
+            ComparableNetworkResultRef.model_validate(baseline_ref.model_dump()),
+            ScenarioSpec(
+                remove_warehouse_ids=[BEKASI_ID],
+                objective="min_cost",
+                service_targets=[12],
+            ),
+            ctx,
+            cost_ref,
+        ).structuredContent
     )
-    scenario_ref = _result_ref(scenario_result)
-    assert scenario_result.structuredContent is not None
-    scenario_summary = scenario_result.structuredContent["summary"]
-    assert "10 active warehouses" in scenario_summary
+    scenario_ref = assessment.scenario_ref
+    scenario_summary = assessment.summary
+    assert "active warehouses 10" in scenario_summary
     assert f"removed [{BEKASI_ID}]" in scenario_summary
-    assert "coverage 12h city-count=" in scenario_summary
-    assert "demand-weighted=" in scenario_summary
+    assert "coverage 12h city-count " in scenario_summary
+    assert "demand-weighted " in scenario_summary
     scenario = server._runtime().load_model(
         scenario_ref,
         "network_scenario.v2",
@@ -625,28 +630,20 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(tmp_path: Path, mon
     )
     assert set(scenario.active_warehouse_ids) == existing_ids - {BEKASI_ID}
     assert not set(scenario.active_warehouse_ids) & candidate_ids
-    assert scenario.warehouse_changes == {"added": [], "removed": [BEKASI_ID]}
+    assert scenario.warehouse_changes.model_dump() == {
+        "added": [],
+        "removed": [BEKASI_ID],
+    }
     assert len(scenario.assignment.rows) == 50
     assert scenario.cost is not None and scenario.cost.complete
     assert [metric.target_hours for metric in scenario.service] == [12]
 
-    comparison_result = server.compare_network_scenarios(
-        before_ref=baseline_ref,
-        after_ref=scenario_ref,
-        service_targets=[12],
-        ctx=ctx,
-    )
-    comparison_ref = _result_ref(comparison_result)
-    assert comparison_result.structuredContent is not None
-    comparison_summary = comparison_result.structuredContent["summary"]
+    comparison_ref = assessment.plan_comparison_ref
+    comparison_summary = assessment.summary
     assert "affected 50, reassigned 50" in comparison_summary
     assert "coverage 12h city-count" in comparison_summary
     assert "demand-weighted" in comparison_summary
-    comparison = server._runtime().load_model(
-        comparison_ref,
-        "network_assignment_comparison.v2",
-        AssignmentComparison,
-    )
+    comparison = _comparison_from_ref(comparison_ref)
     assert comparison.selected_warehouse_ids == []
     assert comparison.removed_warehouse_ids == [BEKASI_ID]
     assert comparison.requested_service_targets == [12]
@@ -659,17 +656,14 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(tmp_path: Path, mon
 
     same_scenario_ref = _result_ref(
         server.compare_network_scenarios(
+            normalized_input_ref=prepared_ref,
             before_ref=scenario_ref,
             after_ref=scenario_ref,
             service_targets=[12],
             ctx=ctx,
         )
     )
-    same_scenario = server._runtime().load_model(
-        same_scenario_ref,
-        "network_assignment_comparison.v2",
-        AssignmentComparison,
-    )
+    same_scenario = _comparison_from_ref(same_scenario_ref)
     assert same_scenario.selected_warehouse_ids == []
     assert same_scenario.removed_warehouse_ids == []
     assert same_scenario.affected_city_ids == []
@@ -684,6 +678,7 @@ def test_s3_reuses_prepared_resources_and_only_closes_bekasi(tmp_path: Path, mon
         match="comparison_subject_schema_invalid",
     ):
         server.compare_network_scenarios(
+            normalized_input_ref=prepared_ref,
             before_ref=unsupported_ref,
             after_ref=scenario_ref,
             service_targets=[12],
@@ -721,7 +716,7 @@ def test_assess_facility_change_preserves_selected_candidates_and_matches_manual
         normalized_input_ref=prepared_ref,
         route_matrix_ref=route_ref,
         cost_matrix_ref=cost_ref,
-        before_ref=server.ComparableResourceRef.model_validate(facility_ref.model_dump()),
+        before_ref=ComparableNetworkResultRef.model_validate(facility_ref.model_dump()),
         scenario=ScenarioSpec(
             remove_warehouse_ids=[BEKASI_ID],
             objective="min_cost",
@@ -736,9 +731,9 @@ def test_assess_facility_change_preserves_selected_candidates_and_matches_manual
     assert bounded.removed_warehouse_ids == [BEKASI_ID]
     assert bounded.cost.currency == "IDR"
     assert bounded.cost.complete
-    assert len(bounded.affected_city_ids) <= 100
-    assert len(bounded.affected_city_changes) <= 100
-    assert len(bounded.reassigned_city_ids) <= 100
+    assert len(bounded.affected_city_ids) <= 10
+    assert len(bounded.affected_city_changes) <= 10
+    assert len(bounded.reassigned_city_ids) <= 10
 
     scenario = server._runtime().load_model(
         bounded.scenario_ref,
@@ -779,18 +774,14 @@ def test_assess_facility_change_preserves_selected_candidates_and_matches_manual
         set(facility.active_warehouse_ids),
         expected_active_ids,
     )
-    comparison = server._runtime().load_model(
-        bounded.comparison_ref,
-        "network_assignment_comparison.v2",
-        AssignmentComparison,
-    )
+    comparison = _comparison_from_ref(bounded.plan_comparison_ref)
     assert scenario.assignment == manual_assignment
     assert comparison == manual_comparison
     assert bounded.coverage == comparison.coverage
     assert bounded.affected_city_count == len(comparison.affected_city_ids)
     assert bounded.affected_city_changes == [
         change for change in comparison.city_changes if change.affected
-    ][:100]
+    ][:10]
     assert all(
         change.before_warehouse_id is not None
         and change.after_warehouse_id is not None
@@ -798,7 +789,7 @@ def test_assess_facility_change_preserves_selected_candidates_and_matches_manual
     )
     assert bounded.reassigned_city_count == len(comparison.reassigned_city_ids)
 
-    wrong_server_ref = server.ComparableResourceRef(
+    wrong_server_ref = ComparableNetworkResultRef(
         server="another_provider",
         uri=facility_ref.uri,
         resource_schema="facility_location_solution.v3",
@@ -823,7 +814,7 @@ def test_assess_facility_change_preserves_selected_candidates_and_matches_manual
         server.assess_facility_change(
             prepared_ref,
             route_ref,
-            server.ComparableResourceRef.model_validate(facility_ref.model_dump()),
+            ComparableNetworkResultRef.model_validate(facility_ref.model_dump()),
             ScenarioSpec(
                 remove_warehouse_ids=[BEKASI_ID],
                 objective="min_cost",
@@ -864,17 +855,14 @@ def test_comparison_accepts_actual_and_optimized_baseline_resources(
 
     comparison_ref = _result_ref(
         server.compare_network_scenarios(
+            normalized_input_ref=prepared_ref,
             before_ref=actual_ref,
             after_ref=optimized_ref,
             service_targets=[12],
             ctx=ctx,
         )
     )
-    comparison = server._runtime().load_model(
-        comparison_ref,
-        "network_assignment_comparison.v2",
-        AssignmentComparison,
-    )
+    comparison = _comparison_from_ref(comparison_ref)
 
     assert comparison.selected_warehouse_ids == []
     assert comparison.removed_warehouse_ids == []
@@ -941,10 +929,11 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
     assert facility.cost is not None and facility.cost.complete
     assert [metric.target_hours for metric in facility.service] == [6, 12, 18]
 
-    scenario_ref = _result_ref(
-        server.evaluate_facility_scenario(
+    facility_assessment = FacilityChangeAssessmentToolResult.model_validate(
+        server.assess_facility_change(
             prepared_ref,
             route_ref,
+            ComparableNetworkResultRef.model_validate(facility_ref.model_dump()),
             ScenarioSpec(
                 remove_warehouse_ids=[BEKASI_ID],
                 objective="min_cost",
@@ -952,21 +941,11 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
             ),
             ctx,
             cost_ref,
-        )
+        ).structuredContent
     )
-    facility_to_scenario_ref = _result_ref(
-        server.compare_network_scenarios(
-            before_ref=facility_ref,
-            after_ref=scenario_ref,
-            service_targets=[12],
-            ctx=ctx,
-        )
-    )
-    facility_to_scenario = server._runtime().load_model(
-        facility_to_scenario_ref,
-        "network_assignment_comparison.v2",
-        AssignmentComparison,
-    )
+    scenario_ref = facility_assessment.scenario_ref
+    facility_to_scenario_ref = facility_assessment.plan_comparison_ref
+    facility_to_scenario = _comparison_from_ref(facility_to_scenario_ref)
     assert facility_to_scenario.requested_service_targets == [12]
     assert BEKASI_ID in facility_to_scenario.removed_warehouse_ids
 
@@ -981,6 +960,7 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
         match="comparable_assignment_unavailable",
     ):
         server.compare_network_scenarios(
+            normalized_input_ref=prepared_ref,
             before_ref=facility_without_assignment_ref,
             after_ref=scenario_ref,
             service_targets=[12],
@@ -988,6 +968,7 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
         )
 
     comparison_result = server.compare_network_scenarios(
+        normalized_input_ref=prepared_ref,
         before_ref=baseline_ref,
         after_ref=facility_ref,
         service_targets=[6, 12, 18],
@@ -999,11 +980,7 @@ def test_s2_opens_exactly_two_candidates_and_compares_actual_baseline(
     assert "selected [WH-CANDIDATE-KENDARI, WH-CANDIDATE-MANADO]" in comparison_summary
     assert "coverage 6h city-count" in comparison_summary and "18h" in comparison_summary
     assert "demand-weighted" in comparison_summary
-    comparison = server._runtime().load_model(
-        comparison_ref,
-        "network_assignment_comparison.v2",
-        AssignmentComparison,
-    )
+    comparison = _comparison_from_ref(comparison_ref)
     assert comparison.selected_warehouse_ids == facility.opened_candidate_ids
     assert comparison.removed_warehouse_ids == []
     assert comparison.requested_service_targets == [6, 12, 18]
@@ -1050,9 +1027,21 @@ def test_baseline_and_p_median_reject_missing_explicit_inputs(tmp_path: Path, mo
         McpResourceContractError,
         match="scenario_active_upstream_required",
     ):
-        server.evaluate_facility_scenario(
+        baseline_ref = _result_ref(
+            server.evaluate_network_baseline(
+                prepared_ref,
+                route_ref,
+                "min_cost",
+                [12],
+                "actual_current",
+                ctx,
+                cost_ref,
+            )
+        )
+        server.assess_facility_change(
             prepared_ref,
             route_ref,
+            ComparableNetworkResultRef.model_validate(baseline_ref.model_dump()),
             ScenarioSpec(
                 remove_warehouse_ids=["WH-CENTER-JAKARTA"],
                 objective="min_cost",

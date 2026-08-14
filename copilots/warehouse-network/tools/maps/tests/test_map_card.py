@@ -18,6 +18,7 @@ def data_ref(uri: str = "maps-data://geojson/map-data-1234") -> dict[str, object
         "type": "mcp_resource",
         "server": "map_utils",
         "uri": uri,
+        "resource_schema": "geojson.v1",
         "format": "geojson",
         "profile": {
             "schema_version": "geojson-profile.v1",
@@ -44,6 +45,7 @@ def network_data_ref() -> dict[str, object]:
         "type": "mcp_resource",
         "server": "supply_chain",
         "uri": "supply-chain://resources/network_distribution_geojson.v1-digest",
+        "resource_schema": "network_distribution_geojson.v1",
         "format": "geojson",
         "profile": {
             "schema_version": "geojson-profile.v1",

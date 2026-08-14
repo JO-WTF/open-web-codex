@@ -23,7 +23,6 @@ from supply_chain_planner.network.optimization_models import (
     PMedianSolution,
     ServiceMetric,
 )
-from supply_chain_planner.network.solver import coverage_metrics
 
 DeliveryValue = TypeVar("DeliveryValue")
 
@@ -335,38 +334,41 @@ def _service(
         raise ValueError("delivery_baseline_service_targets_mismatch")
     if set(after) != requested:
         raise ValueError("delivery_facility_service_targets_mismatch")
-    baseline_coverage = {
-        item.target_hours: item for item in coverage_metrics(baseline.assignment, requested)
-    }
-    facility_coverage = {
-        item.target_hours: item for item in coverage_metrics(facility.assignment, requested)
-    }
+    baseline_coverage = {item.target_hours: item for item in baseline.coverage}
+    if set(baseline_coverage) != requested:
+        raise ValueError("delivery_baseline_coverage_targets_mismatch")
     for target in requested:
         item = compared[target]
         expected_before = baseline_coverage[target]
-        expected_after = facility_coverage[target]
         if item.before != expected_before:
             raise ValueError("delivery_baseline_comparison_coverage_mismatch")
-        if item.after != expected_after:
-            raise ValueError("delivery_facility_comparison_coverage_mismatch")
+        if (
+            after[target].covered_demand != item.after.covered_demand
+            or after[target].total_demand != item.after.total_demand
+            or not _close(
+                after[target].coverage_rate,
+                item.after.demand_weighted_coverage_rate,
+            )
+        ):
+            raise ValueError("delivery_facility_comparison_service_mismatch")
         if item.delta.covered_city_count != (
-            expected_after.covered_city_count - expected_before.covered_city_count
+            item.after.covered_city_count - expected_before.covered_city_count
         ) or item.delta.total_city_count != (
-            expected_after.total_city_count - expected_before.total_city_count
+            item.after.total_city_count - expected_before.total_city_count
         ):
             raise ValueError("delivery_comparison_city_coverage_delta_mismatch")
         if item.delta.covered_demand != (
-            expected_after.covered_demand - expected_before.covered_demand
+            item.after.covered_demand - expected_before.covered_demand
         ) or item.delta.total_demand != (
-            expected_after.total_demand - expected_before.total_demand
+            item.after.total_demand - expected_before.total_demand
         ):
             raise ValueError("delivery_comparison_demand_coverage_delta_mismatch")
         if not _close(
             item.delta.city_coverage_rate,
-            expected_after.city_coverage_rate - expected_before.city_coverage_rate,
+            item.after.city_coverage_rate - expected_before.city_coverage_rate,
         ) or not _close(
             item.delta.demand_weighted_coverage_rate,
-            expected_after.demand_weighted_coverage_rate
+            item.after.demand_weighted_coverage_rate
             - expected_before.demand_weighted_coverage_rate,
         ):
             raise ValueError("delivery_comparison_coverage_rate_delta_mismatch")

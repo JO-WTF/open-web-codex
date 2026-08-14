@@ -12,7 +12,7 @@
 | Server | 责任 |
 | --- | --- |
 | `supply_chain_data` | 发现和检查授权 Workspace 的 CSV/JSON/XLSX，发布来源画像、映射、标准化输入和行政区结果 |
-| `supply_chain_planner` | 构建路线/成本矩阵，计算覆盖、成本、场景、p-median、服务约束选址、比较地图和报告 |
+| `supply_chain` | 构建路线/成本矩阵，计算覆盖、成本、场景、p-median、服务约束选址、比较地图和报告 |
 没有独立的 Indonesia 或 Demo MCP。国家由用户问题确定，行政区能力属于 `supply_chain_data`；地图由 Network Agent 使用 Planner 的确定性地图工具生成。示例数据只能由用户显式放入 Workspace，工具不会在失败时自动回退到 Demo fixture。
 
 ## 当前网络工具
@@ -20,16 +20,12 @@
 Network Agent 的主要工具是：
 
 ```text
-plan_route_matrix
-build_haversine_route_matrix
-build_provided_route_matrix
+prepare_route_matrix
 register_navigation_route_matrix
-validate_route_matrix
 plan_cost_matrix
 prepare_network_distribution_map
 evaluate_network_baseline
 assess_facility_change
-evaluate_facility_scenario
 solve_p_median
 compare_network_scenarios
 prepare_network_comparison_map
@@ -53,14 +49,15 @@ Data Tool 会把用户输入中完整的起点、终点、距离、时长与来�
 
 `assess_facility_change` 接受精确的标准化输入、路线、可选成本以及 baseline/scenario/facility
 结果引用，以引用中的活动仓集合为起点，一次完成增仓、关仓或迁仓后的分配求解和前后比较。
-它发布完整的 `network_scenario.v2` 与 `network_assignment_comparison.v2` Resource，同时只把
-有界的仓库变化、成本、两种覆盖率和受影响/重分配城市摘要返回给 Agent。旧的
-`evaluate_facility_scenario` 仍明确从全部现有仓起算。
+它发布完整的 `network_scenario.v2` 与绑定输入、前后方案和比较结果的
+`network_plan_comparison.v1` Resource，同时只把
+有界的仓库变化、成本、两种覆盖率和最多 10 个重点受影响/重分配城市返回给 Agent。
+单仓增加、关闭或搬迁统一由 `assess_facility_change` 完成计算与比较；不再向 Agent 暴露重复的独立场景入口。
 
 ## Tool 审批
 
 Data Role 的四个文件准备 Tool 都是已评审的有界本地能力，可在精确 allowlist 内预批准。
-Network/standalone Plugin 以 `prompt` 为默认，只对路线规划、本地矩阵、验证、baseline、scenario、
+Network/standalone Plugin 以 `prompt` 为默认，只对路线准备、baseline、scenario、
 p-median、comparison 和卡片数据准备等无外部副作用的 Tool 配置逐项预批准。对话内地图卡片
 复用 `map_utils/create_map_card`，当空间分布、覆盖关系、仓库变动或城市重分配有助于理解时可由
 Skill 自动使用，不创建 Workspace 文件。最终 map 文件与 Markdown report Tool 会以 create-new
@@ -71,7 +68,7 @@ Skill 自动使用，不创建 Workspace 文件。最终 map 文件与 Markdown 
 
 仓库—需求城市对应关系、距离、时长和成本是结构化计算结果；业务结果简报是独立的 Markdown
 交付。`publish_network_planning_report` 通过带判别字段的 `report_input` 分别接受单一 baseline
-评估或完整 baseline-versus-plan comparison，从经过验证的 typed 结果确定性生成中文 `.md`，同时返回
+评估或单一 `plan_comparison_ref`，从经过验证且来源一致的 typed 结果确定性生成中文 `.md`，同时返回
 一个指向该 Workspace 文件的安全相对链接。对话只概括关键结论并展示链接，不重复插入整份简报；完整对应明细不重复塞进简报；需要 Excel 时必须使用真实
 表格导出 Tool，当前没有该 Tool 就显式报告能力缺口，不能用 JSON 或改扩展名冒充 Excel。
 

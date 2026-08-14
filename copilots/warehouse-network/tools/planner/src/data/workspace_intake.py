@@ -64,21 +64,6 @@ def _iter_files(root: Path) -> list[Path]:
     return files
 
 
-def workspace_contains_supported_sources(root: Path) -> bool:
-    """Detect any supported source, including files discovery would reject by size."""
-    for path in root.rglob("*"):
-        relative = path.relative_to(root)
-        if any(part in EXCLUDED_DIRS for part in relative.parts):
-            continue
-        if path.suffix.lower() not in SUPPORTED_SUFFIXES:
-            continue
-        if path.is_symlink():
-            raise ValueError("workspace_supported_source_symlink_rejected")
-        if path.is_file():
-            return True
-    return False
-
-
 def _validated_source_path(root: Path, relative_path: str) -> Path:
     """Resolve one model-visible Workspace path without following symlinks."""
     canonical_root = root.resolve(strict=True)
@@ -216,14 +201,6 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def media_type(path: Path) -> str:
-    return {
-        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".csv": "text/csv",
-        ".json": "application/json",
-    }[path.suffix.lower()]
 
 
 def inspect(root: Path, relative_path: str) -> dict[str, Any]:
@@ -476,34 +453,6 @@ def _xlsx_shared_strings(archive: zipfile.ZipFile) -> list[str]:
     return ["".join(node.itertext())[:MAX_JSON_STRING] for node in root]
 
 
-def _xlsx_sheet(
-    archive: zipfile.ZipFile,
-    name: str,
-    shared: list[str],
-    max_rows: int = MAX_SAMPLE_ROWS + 1,
-) -> dict[str, Any]:
-    root = ElementTree.fromstring(archive.read(name))
-    rows: list[list[str]] = []
-    for row in root.iter():
-        if row.tag.rsplit("}", 1)[-1] != "row":
-            continue
-        values: list[str] = []
-        for cell in list(row)[:MAX_XLSX_COLUMNS]:
-            if cell.tag.rsplit("}", 1)[-1] != "c":
-                continue
-            value = next(
-                (child.text or "" for child in cell if child.tag.rsplit("}", 1)[-1] == "v"), ""
-            )
-            if cell.attrib.get("t") == "s" and value.isdigit() and int(value) < len(shared):
-                value = shared[int(value)]
-            values.append(value[:MAX_JSON_STRING])
-        if values:
-            rows.append(values)
-        if len(rows) >= max_rows:
-            break
-    return {"sheet": name.rsplit("/", 1)[-1], "columns": rows[0] if rows else [], "rows": rows[1:]}
-
-
 def read_rows(root: Path, relative_path: str) -> list[dict[str, Any]]:
     """Read bounded records from one validated Workspace-relative path."""
     path = _validated_source_path(root, relative_path)
@@ -588,23 +537,6 @@ def read_json_document(root: Path, relative_path: str) -> dict[str, Any]:
     return payload
 
 
-def flatten_record(record: dict[str, Any]) -> dict[str, Any]:
-    flattened: dict[str, Any] = {}
-
-    def walk(value: Any, prefix: str) -> None:
-        if isinstance(value, dict):
-            for key, child in value.items():
-                walk(child, f"{prefix}.{key}" if prefix else str(key))
-        elif isinstance(value, list):
-            return
-        else:
-            flattened[prefix] = value
-            flattened.setdefault(prefix.rsplit(".", 1)[-1], value)
-
-    walk(record, "")
-    return flattened
-
-
 def _read_prefix(path: Path, limit: int) -> bytes:
     with path.open("rb") as stream:
         raw = stream.read(limit + 1)
@@ -639,50 +571,3 @@ def _iter_json_events(stream: BinaryIO):
 
 def _json_depth(prefix: str) -> int:
     return sum(1 for token in prefix.split(".") if token and token != "item")
-
-
-def _validate_json_stream(stream: BinaryIO) -> None:
-    count = 0
-    max_depth = 0
-    try:
-        for prefix, event, value in ijson.parse(stream):
-            count += 1
-            if count > MAX_JSON_NODES:
-                raise ValueError("json_node_limit_exceeded")
-            depth = prefix.count(".") + prefix.count("item")
-            max_depth = max(max_depth, depth)
-            if max_depth > MAX_JSON_DEPTH:
-                raise ValueError("json_depth_limit_exceeded")
-            if event == "string" and isinstance(value, str) and len(value) > MAX_JSON_STRING:
-                raise ValueError("json_string_limit_exceeded")
-    except (ijson.common.IncompleteJSONError, ijson.common.JSONError) as error:
-        raise ValueError("invalid_json") from error
-
-
-def field_names(structure: dict[str, Any]) -> list[str]:
-    if structure.get("kind") == "table":
-        return [str(value) for value in structure.get("columns", []) if value]
-    if structure.get("kind") == "workbook":
-        sheets = structure.get("sheets", [])
-        counts: dict[str, int] = {}
-        for sheet in sheets:
-            for value in sheet.get("columns", []):
-                if value:
-                    key = str(value).strip()
-                    counts[key] = counts.get(key, 0) + 1
-        fields: list[str] = []
-        for sheet in sheets:
-            sheet_name = str(sheet.get("sheet", "Sheet"))
-            for value in sheet.get("columns", []):
-                if not value:
-                    continue
-                key = str(value).strip()
-                fields.append(f"{sheet_name}::{key}" if counts.get(key, 0) > 1 else key)
-        return fields
-    names: list[str] = []
-    for array in structure.get("arrays", []):
-        preview_rows = array.get("preview", {}).get("rows", [])
-        for item in preview_rows:
-            if item.get("kind") == "object":
-                names.extend(item.get("fields", {}).keys())
-    return names

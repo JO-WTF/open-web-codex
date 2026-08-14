@@ -5,7 +5,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from supply_chain_planner.network.matrix import build_haversine_route_matrix
-from supply_chain_planner.network.matrix_models import CostMatrix, CostMatrixRow, RouteCostQuote
+from supply_chain_planner.network.matrix_models import (
+    CostMatrix,
+    CostMatrixRow,
+    CostMatrixStats,
+    RouteCostQuote,
+)
 from supply_chain_planner.network.models import (
     CurrentAssignmentRecord,
     DemandCityRecord,
@@ -232,4 +237,14 @@ def complete_cost_matrix(case: NetworkFixture) -> CostMatrix:
             )
             for destination, price in {"cross-b": 5.0, "candidate-c": 2.0}.items()
         ],
+        stats=CostMatrixStats(
+            expected_pair_count=8,
+            reused_pair_count=0,
+            computed_pair_count=8,
+            missing_pair_count=0,
+            ignored_quote_count=0,
+            ignored_prior_row_count=0,
+            stale_pair_count=0,
+            complete=True,
+        ),
     )

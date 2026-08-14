@@ -26,7 +26,7 @@ def test_haversine_plan_and_matrix_use_explicit_parameters() -> None:
     assert plan.estimated_billable_calls == 0
     assert len(matrix.rows) == plan.route_count
     assert matrix.rows[0].duration_hours > 0
-    assert matrix.validation["detour_coefficient"] == 1.2
+    assert matrix.stats.detour_coefficient == 1.2
 
 
 def test_haversine_requires_speed_and_detour_coefficient() -> None:
@@ -49,7 +49,7 @@ def test_provided_route_matrix_materializes_exact_existing_scope() -> None:
     assert matrix.method == "provided"
     assert len(matrix.rows) == 556
     assert matrix.missing_routes == []
-    assert matrix.validation == {
+    assert matrix.stats.model_dump(exclude={"kind"}) == {
         "expected_pair_count": 556,
         "provided_pair_count": 556,
         "ignored_input_pair_count": 24,
@@ -89,8 +89,8 @@ def test_navigation_registration_reports_missing_routes_without_filling_them() -
     validation = validate_route_matrix(case.demand, case.warehouses, matrix)
 
     assert len(matrix.missing_routes) == 7
-    assert validation["valid"] is False
-    assert validation["missing_routes"] == matrix.missing_routes
+    assert validation.valid is False
+    assert validation.missing_routes == matrix.missing_routes
 
     with pytest.raises(ValueError, match="navigation_route_duplicate_pair"):
         register_navigation_route_matrix(
@@ -154,10 +154,10 @@ def test_route_reuse_is_exact_per_pair_and_ignores_unrelated_prior_rows() -> Non
         warehouse_scope="all_warehouses",
     )
 
-    assert rebuilt.validation["reused_pair_count"] == 1
-    assert rebuilt.validation["stale_pair_count"] == 3
-    assert rebuilt.validation["ignored_prior_row_count"] == 1
-    assert rebuilt.validation["computed_pair_count"] == 7
+    assert rebuilt.stats.reused_pair_count == 1
+    assert rebuilt.stats.stale_pair_count == 3
+    assert rebuilt.stats.ignored_prior_row_count == 1
+    assert rebuilt.stats.computed_pair_count == 7
     assert exact in rebuilt.rows
     refreshed = next(
         row
@@ -194,9 +194,9 @@ def test_indonesia_route_reuse_only_computes_two_removed_round_sensitive_pairs()
     )
 
     assert len(original.rows) == 1168
-    assert rebuilt.validation["reused_pair_count"] == 1166
-    assert rebuilt.validation["computed_pair_count"] == 2
-    assert rebuilt.validation["stale_pair_count"] == 0
+    assert rebuilt.stats.reused_pair_count == 1166
+    assert rebuilt.stats.computed_pair_count == 2
+    assert rebuilt.stats.stale_pair_count == 0
 
 
 def test_crossdock_requires_explicit_upstream_center() -> None:
@@ -221,7 +221,7 @@ def test_missing_coordinates_are_reported_as_layered_pairs() -> None:
 
     matrix = build_haversine_route_matrix(demand, case.warehouses, 1.2, 40)
 
-    assert matrix.validation["missing_pair_count"] == 3
+    assert matrix.stats.missing_pair_count == 3
     assert ("center-a", "city-a", "last_mile") in matrix.missing_routes
     assert ("cross-b", "city-a", "last_mile") in matrix.missing_routes
     assert ("candidate-c", "city-a", "last_mile") in matrix.missing_routes
@@ -266,8 +266,8 @@ def test_haversine_builder_does_not_mislabel_navigation_prior_fact() -> None:
     )
 
     assert rebuilt.method == "haversine"
-    assert rebuilt.validation["reused_pair_count"] == 0
-    assert rebuilt.validation["stale_pair_count"] == 1
+    assert rebuilt.stats.reused_pair_count == 0
+    assert rebuilt.stats.stale_pair_count == 1
     matching = next(
         row
         for row in rebuilt.rows

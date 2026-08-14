@@ -47,22 +47,18 @@ const DATA_TOOLS: [&str; 4] = [
     "normalize_network_input",
     "prepare_network_geography",
 ];
-const NETWORK_TOOLS: [&str; 15] = [
-    "build_haversine_route_matrix",
-    "build_provided_route_matrix",
+const NETWORK_TOOLS: [&str; 11] = [
     "assess_facility_change",
     "compare_network_scenarios",
-    "evaluate_facility_scenario",
     "evaluate_network_baseline",
     "plan_cost_matrix",
-    "plan_route_matrix",
+    "prepare_route_matrix",
     "prepare_network_comparison_map",
     "prepare_network_distribution_map",
     "publish_network_planning_report",
     "register_navigation_route_matrix",
     "render_network_comparison_map",
     "solve_p_median",
-    "validate_route_matrix",
 ];
 const MAP_TOOLS: [&str; 3] = ["create_map_card", "distance_matrix", "get_route"];
 const ROOT_PROMPT: &str = "runtime-gate-root-spawn-data-and-network";

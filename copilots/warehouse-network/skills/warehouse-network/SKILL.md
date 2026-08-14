@@ -19,20 +19,20 @@ description: 仅供仓网 Supervisor 原生创建的 network_agent 使用。用�
 - 最低数据包括需求城市 ID、名称、需求量，以及已有仓库 ID、名称、仓型和城市。真实现状对比需要当前分配，选址需要候选仓，成本和时效分析需要对应的报价、距离或时长。
 - 只消费 Supervisor 提供的 `ready` `normalized_network_input.v1` ResourceRef。上游国家代码必须保持 ISO 两位大写形式，有误时让 Data Agent 重新发布，不在 Network 层修补。
 - 依用户目标选择 `warehouse_scope`：当前仓网或真实现状使用 `existing_only`；明确包含候选仓的模拟或规划使用 `all_warehouses`。
-- 已有 provided 路线事实适用时直接物化并复用。缺失时才确认曲面距离估算或地图导航。估算需要绕路系数和平均速度；付费导航必须先报告请求量与费用并取得许可。
+- 调用 `prepare_route_matrix` 选择 `provided`、`haversine` 或 `navigation`。已有 provided 路线事实适用时直接物化；否则才确认曲面距离估算或地图导航。估算需要绕路系数和平均速度；navigation 返回请求量与费用估算后，取得许可再调用外部地图能力并注册结果。
 - 成本优先使用用户报价。`route_quotes` 为空且用户没有确认包含 `rules` 的补算规则时，不调用 `plan_cost_matrix`，不虚构币种或费率；直接将成本标为不可用并说明所需数据。
 
 ## 时效、模拟与选址
 
 - 用户只问“当前仓网 N 小时时效达标率”时，在已有仓范围按 `min_time` 计算，同时返回城市等权时效达标率与需求量加权时效达标率。provided 时长存在时明确这是纯运输时长。
 - 成本最优必须有完整成本矩阵，时效最优必须有完整路线矩阵。`current_assignments` 为空时直接使用 `optimized_existing_footprint`，不先试调 `actual_current`；只有输入包含当前分配时才将基线称为“真实现状”。
-- 增加、关闭或搬迁单个仓库且 `assess_facility_change` 输入完整时，只调用它一次，不拆成两步模拟和比较。关闭已有仓必须获得用户许可。
+- 增加、关闭或搬迁单个仓库时调用 `assess_facility_change`；关闭已有仓必须获得用户许可。
 - 只有用户要求仓网规划时才调用 p-median。默认保留全部已有仓；仅当用户明确允许时，才将指定已有仓列为可关闭。明确新增仓数、时效目标、求解时限和时效达标约束。
 - 比较时报告成本、时效、活动仓库、受影响城市和重新分配城市；只使用 typed Tool 实际返回的字段。
 
 ## 地图与报告
 
-- 只展示当前分布时调用 `prepare_network_distribution_map`，默认不包含候选仓。展示已有基线时把精确 `baseline_ref` 一并传入，使需求城市带有原始 `assigned_warehouse_id`、`distance_km`、`duration_hours` 和 `unit_cost`。已有精确基线、方案和 comparison 时调用 `prepare_network_comparison_map`，需求城市会带有对应的 `baseline_*` 与 `facility_*` 原始字段。不为地图重算路线、成本或方案。
+- 只展示当前分布时调用 `prepare_network_distribution_map`，默认不包含候选仓。展示已有基线时把精确 `baseline_ref` 一并传入，使需求城市带有原始 `assigned_warehouse_id`、`distance_km`、`duration_hours` 和 `unit_cost`。已有前后方案比较时，把 `compare_network_scenarios` 或 `assess_facility_change` 返回的单一 `plan_comparison_ref` 传给 `prepare_network_comparison_map`；该引用已经绑定标准化输入、前方案、后方案和比较结果，需求城市会带有对应的 `baseline_*` 与 `facility_*` 原始字段。不分别拼装四个引用，也不为地图重算路线、成本或方案。
 - 地图的标题、图层、筛选、颜色、大小、标签、悬浮信息和图例都属于当次展示意图：优先服从用户当前自然语言要求，再结合本次分析选择清晰表达；不得把展示样式当成业务数据或达标判定写回 Resource。
 - 用户未指定时采用以下高对比度默认点样式（尺寸单位为屏幕像素）：中心仓（`center`）使用深蓝色 `#1D4ED8`、半径 `11`、白色描边 `2.5`；XD 前置仓（`cross_docking`）使用橙色 `#F97316`、半径 `8`、白色描边 `2`。仓库图层置于需求城市图层之上，中心仓视觉层级高于 XD，并在图例中分别说明。
 - 需求城市不得默认使用浅灰色。没有时效结果的分布图使用蓝色 `#2563EB`、半径 `5`、白色描边 `1.25`；有时效结果时以用户选择的目标为口径，达标城市使用绿色 `#16A34A`、半径 `6`、白色描边 `1.5`，不达标城市使用黄色 `#FACC15`、半径 `7`、深黄色描边 `#854D0E`、宽度 `1.5`，并在图例中明确标注“时效达标”和“时效未达标”。

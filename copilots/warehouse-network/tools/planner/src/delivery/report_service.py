@@ -29,7 +29,6 @@ from supply_chain_planner.network.optimization_models import (
     PMedianSolution,
     ServiceMetric,
 )
-from supply_chain_planner.network.solver import coverage_metrics
 
 NETWORK_PLANNING_MARKDOWN_SCHEMA = "network_planning_report_markdown.v1"
 NETWORK_PLANNING_MARKDOWN_MARKER = "<!-- network_planning_report_markdown.v1 -->"
@@ -217,20 +216,12 @@ def render_network_planning_report_markdown(
 ) -> str:
     """Render a deterministic business brief from one validated report bundle."""
 
-    targets = sorted(
-        {
-            *bundle.comparison.requested_service_targets,
-            *(metric.target_hours for metric in bundle.baseline.service),
-            *(metric.target_hours for metric in bundle.facility.service),
-        }
-    )
+    targets = sorted(bundle.comparison.requested_service_targets)
     baseline_coverage = {
-        metric.target_hours: metric
-        for metric in coverage_metrics(bundle.baseline.assignment, targets)
+        metric.target_hours: metric.before for metric in bundle.comparison.coverage
     }
     facility_coverage = {
-        metric.target_hours: metric
-        for metric in coverage_metrics(bundle.facility.assignment, targets)
+        metric.target_hours: metric.after for metric in bundle.comparison.coverage
     }
     city_by_id = {city.city_id: city for city in bundle.entities.demand_cities}
     changed_cities = sorted(

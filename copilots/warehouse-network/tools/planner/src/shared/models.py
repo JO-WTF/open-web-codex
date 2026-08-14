@@ -22,6 +22,7 @@ from supply_chain_planner.network.models import (
     WarehouseRecord,
 )
 from supply_chain_planner.network.optimization_models import (
+    AssignmentComparison,
     CityAssignmentChange,
     CoverageComparison,
     CoverageMetricSummary,
@@ -99,6 +100,22 @@ class DataAgentResourceToolResult(StrictModel):
     resource_ref: _ResourceRef
 
 
+class RouteMatrixPreparationToolResult(StrictModel):
+    state: Literal["ready", "navigation_required"]
+    summary: str
+    resource_ref: _ResourceRef
+
+    @model_validator(mode="after")
+    def validate_state_schema(self) -> RouteMatrixPreparationToolResult:
+        expected = {
+            "ready": "route_matrix.v2",
+            "navigation_required": "route_matrix_plan.v2",
+        }[self.state]
+        if self.resource_ref.resource_schema != expected:
+            raise ValueError(f"{self.state} requires {expected}")
+        return self
+
+
 class UncoveredCitySummary(StrictModel):
     demand_city_id: str = Field(min_length=1, max_length=128)
     demand_city_name: str = Field(min_length=1, max_length=256)
@@ -114,7 +131,7 @@ class NetworkBaselineResourceToolResult(StrictModel):
     coverage_metrics: list[CoverageMetricSummary] = Field(max_length=32)
     detail_target_hours: float = Field(gt=0)
     uncovered_city_count: int = Field(ge=0)
-    uncovered_cities: list[UncoveredCitySummary] = Field(max_length=100)
+    uncovered_cities: list[UncoveredCitySummary] = Field(max_length=10)
     uncovered_cities_truncated: bool
 
 
@@ -132,10 +149,26 @@ class NetworkScenarioResourceRef(_ResourceRef):
     resource_schema: Literal["network_scenario.v2"] = "network_scenario.v2"
 
 
-class NetworkAssignmentComparisonResourceRef(_ResourceRef):
-    resource_schema: Literal["network_assignment_comparison.v2"] = (
-        "network_assignment_comparison.v2"
-    )
+class ComparableNetworkResultRef(_ResourceRef):
+    resource_schema: Literal[
+        "network_baseline.v2",
+        "network_scenario.v2",
+        "facility_location_solution.v3",
+    ] = Field(description="Comparable network result schema.")
+
+
+class NetworkPlanComparisonResourceRef(_ResourceRef):
+    resource_schema: Literal["network_plan_comparison.v1"] = "network_plan_comparison.v1"
+
+
+class NetworkPlanComparisonResource(StrictModel):
+    """One complete, provenance-bound before-versus-after planning result."""
+
+    schema_version: Literal["network_plan_comparison.v1"] = "network_plan_comparison.v1"
+    normalized_input_ref: _ResourceRef
+    before_ref: ComparableNetworkResultRef
+    after_ref: ComparableNetworkResultRef
+    comparison: AssignmentComparison
 
 
 class FacilityChangeAssessmentToolResult(StrictModel):
@@ -143,19 +176,19 @@ class FacilityChangeAssessmentToolResult(StrictModel):
 
     summary: str = Field(min_length=1, max_length=2048)
     scenario_ref: NetworkScenarioResourceRef
-    comparison_ref: NetworkAssignmentComparisonResourceRef
+    plan_comparison_ref: NetworkPlanComparisonResourceRef
     active_warehouse_count: int = Field(ge=0)
     added_warehouse_ids: list[str] = Field(max_length=256)
     removed_warehouse_ids: list[str] = Field(max_length=256)
     cost: FacilityChangeCostComparison
     coverage: list[CoverageComparison] = Field(max_length=32)
     affected_city_count: int = Field(ge=0)
-    affected_city_ids: list[str] = Field(max_length=100)
+    affected_city_ids: list[str] = Field(max_length=10)
     affected_city_ids_truncated: bool
-    affected_city_changes: list[CityAssignmentChange] = Field(max_length=100)
+    affected_city_changes: list[CityAssignmentChange] = Field(max_length=10)
     affected_city_changes_truncated: bool
     reassigned_city_count: int = Field(ge=0)
-    reassigned_city_ids: list[str] = Field(max_length=100)
+    reassigned_city_ids: list[str] = Field(max_length=10)
     reassigned_city_ids_truncated: bool
 
 
@@ -193,27 +226,9 @@ class NetworkComparisonReportInput(StrictModel):
     """Exact typed inputs for a baseline-versus-plan comparison brief."""
 
     mode: Literal["comparison"] = "comparison"
-    normalized_input_ref: Annotated[
-        _ResourceRef,
-        Field(description="The exact normalized input used by all report results."),
-    ]
-    baseline_ref: Annotated[
-        _ResourceRef,
-        Field(description="The exact baseline used as the comparison before subject."),
-    ]
-    facility_location_ref: Annotated[
-        _ResourceRef,
-        Field(description="The exact selected result used as the comparison after subject."),
-    ]
-    comparison_ref: Annotated[
-        _ResourceRef,
-        Field(
-            description=(
-                "The comparison produced from the same exact result referenced by "
-                "facility_location_ref and this exact baseline_ref; a semantically "
-                "equivalent recomputation is invalid."
-            )
-        ),
+    plan_comparison_ref: Annotated[
+        NetworkPlanComparisonResourceRef,
+        Field(description="The exact provenance-bound planning comparison to report."),
     ]
 
 

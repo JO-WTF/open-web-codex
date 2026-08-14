@@ -119,10 +119,10 @@ def test_cost_reuse_is_pair_exact_and_currency_mismatch_is_rejected() -> None:
         warehouse_scope="all_warehouses",
     )
 
-    assert rebuilt.validation["reused_pair_count"] == 1
-    assert rebuilt.validation["stale_pair_count"] == 3
-    assert rebuilt.validation["ignored_prior_row_count"] == 1
-    assert rebuilt.validation["computed_pair_count"] == 7
+    assert rebuilt.stats.reused_pair_count == 1
+    assert rebuilt.stats.stale_pair_count == 3
+    assert rebuilt.stats.ignored_prior_row_count == 1
+    assert rebuilt.stats.computed_pair_count == 7
 
     quote = RouteCostQuote(
         origin_id="center-a",
@@ -164,7 +164,7 @@ def test_unrelated_quote_is_ignored_without_invalidating_required_pairs() -> Non
     )
 
     assert matrix.missing_routes == []
-    assert matrix.validation["ignored_quote_count"] == 1
+    assert matrix.stats.ignored_quote_count == 1
 
 
 def test_linehaul_without_quote_or_explicit_layer_rule_is_typed_missing() -> None:
@@ -238,6 +238,6 @@ def test_indonesia_extra_linehaul_quotes_do_not_invalidate_required_pairs() -> N
     )
 
     assert matrix.missing_routes == []
-    assert matrix.validation["ignored_quote_count"] == 24
-    assert matrix.validation["expected_pair_count"] == 1_168
-    assert matrix.validation["computed_pair_count"] == 1_168
+    assert matrix.stats.ignored_quote_count == 24
+    assert matrix.stats.expected_pair_count == 1_168
+    assert matrix.stats.computed_pair_count == 1_168

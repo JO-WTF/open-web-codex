@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from open_web_codex_provider import (
+    GeoJsonResourceRef,
     McpResourceRuntime,
     ProviderContractError,
     ResourceRef,
@@ -13,7 +14,6 @@ from open_web_codex_provider import (
     derive_geojson_profile,
 )
 from pydantic import BaseModel, ConfigDict, Field
-from supply_chain_planner.delivery.map_service import MapResourceRef
 
 McpResourceContractError = ProviderContractError
 
@@ -74,9 +74,10 @@ def test_runtime_publishes_generic_reference_fields_without_workspace_file(tmp_p
         tmp_path,
         ResourceStore(tmp_path / "resources", uri_prefix=URI_PREFIX),
     )
-    map_ref = MapResourceRef(
+    map_ref = GeoJsonResourceRef(
         server=SERVER_NAME,
         uri="supply-chain://resources/example_geojson.v1-exact",
+        resource_schema="example_geojson.v1",
         profile=derive_geojson_profile({"type": "FeatureCollection", "features": []}),
     )
     result = runtime.publish(
@@ -92,7 +93,7 @@ def test_runtime_publishes_generic_reference_fields_without_workspace_file(tmp_p
     resource_ref = ResourceRef.model_validate(
         result.structuredContent["resource_ref"]
     )
-    data_ref = MapResourceRef.model_validate(result.structuredContent["data_ref"])
+    data_ref = GeoJsonResourceRef.model_validate(result.structuredContent["data_ref"])
     assert data_ref.server == resource_ref.server == SERVER_NAME
     assert data_ref.format == "geojson"
     assert result.content[1].mimeType == "application/geo+json"

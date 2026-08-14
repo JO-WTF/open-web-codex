@@ -75,20 +75,16 @@ DATA_TOOLS = {
 }
 NETWORK_TOOLS = {
     "assess_facility_change",
-    "build_haversine_route_matrix",
-    "build_provided_route_matrix",
     "compare_network_scenarios",
-    "evaluate_facility_scenario",
     "evaluate_network_baseline",
-    "plan_route_matrix",
     "plan_cost_matrix",
+    "prepare_route_matrix",
     "prepare_network_comparison_map",
     "prepare_network_distribution_map",
     "publish_network_planning_report",
     "register_navigation_route_matrix",
     "render_network_comparison_map",
     "solve_p_median",
-    "validate_route_matrix",
 }
 
 

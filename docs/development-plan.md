@@ -80,10 +80,11 @@ Runtime ready 刻意保持 instance-scoped observation，不建设持久 readine
 毫秒级，却因多个模型回合和重复 child history 变成分钟级。当前修复保持以下边界：
 
 1. 设施增减搬迁的单次影响评估由供应链 MCP domain owner 提供一个 typed 粗粒度 Tool；它以
-   exact before result 为基座，一次求解后直接比较，并返回同次调用产生的 scenario/comparison
-   refs 和有界成本、覆盖、城市变更结果。
-2. Supervisor 拥有 child 使用策略：handoff 已完整结构化时使用 `fork_turns=none` 的新有界
-   Network child；只有正确性依赖尚未结构化的旧对话时才 same-child follow-up。
+   exact before result 为基座，一次求解后直接比较，并返回 scenario ref、绑定标准化输入与
+   前后方案的单一 `plan_comparison_ref`，以及有界成本、覆盖和城市变更结果。
+2. Supervisor 拥有 child 使用策略：同一 Task 内原 Network child 已完成且仍适配后续目标时，
+   优先 follow-up 唤醒同一 child；只有不存在合适 child、原 child 失败/取消/不可用，或用户明确
+   要求独立上下文时，才创建 `fork_turns=none` 的新 child。正确性仍依赖 typed handoff，不依赖记忆。
 3. 不新增 Platform workflow、handoff ledger、业务缓存、自动重试、固定案例流程或 Codex seam。
 4. 先以 Python/stdio/Role/Skill 合同证明结果不变，再用用户原始 follow-up 请求做真实 Web 计时；
    记录 Tool 时间、模型调用数、输入 token 和总墙钟时间，不在测量前伪造性能承诺。
@@ -359,7 +360,7 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
    owning-layer 适配，包括把官方 child Thread/Turn/Item 生命周期投影为可追踪的 Agent activity；
    不建立第二 Runtime、第二上下文、第二执行日志或固定业务流程。
 3. **C — 通用可组合 Tools。** 统一 `supply_chain` provider 和单一 `ResourceRef`，Data4 已完成
-   strict inspect→confirmed-normalize→optional-geography active surface；Network15 active surface
+   strict inspect→confirmed-normalize→optional-geography active surface；Network11 active surface
    已完成 provided/haversine/navigation 路线、route/cost pair-level 复用、双覆盖口径以及 final
    地图卡片、map 文件与单份中文 Markdown 简报的最小交付合同；正文只显示关键结论和 durable Artifact 授权下载链接，不复制整份简报。Stage E non-active compatibility tail 已完成尾删，后续只维护
    Platform 业务状态。
@@ -631,7 +632,7 @@ Runtime history 和 Artifact 权威记录重建浏览器视图。
    MCP Resource，普通文件只走授权 Workspace。
 3. Runtime 原生 discovery/reload、多 Agent、approval、history 与 Workspace metadata 被真实使用；
    pending approval 的整页刷新恢复通过。
-4. Data4/Network15、双覆盖口径、完整规划与场景复用通过 typed 测试、stdio 和 Web 证据。
+4. Data4/Network11、双覆盖口径、完整规划与场景复用通过 typed 测试、stdio 和 Web 证据。
 5. 旧重型路径已从 active 代码、数据库、测试和当前文档删除。
 6. clean DB/Profile/Workspace 从当前 schema/config 初始化成功。
 

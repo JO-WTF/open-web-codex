@@ -11,7 +11,7 @@ from uuid import uuid4
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
 from mcp.types import CallToolResult, ResourceLink, TextContent, ToolAnnotations
-from open_web_codex_provider import GeoJsonProfile, derive_geojson_profile
+from open_web_codex_provider import GeoJsonResourceRef, derive_geojson_profile
 from pydantic import BaseModel, ConfigDict, Field
 
 from .clients import GoogleMapsClient, MapboxMapsClient
@@ -57,39 +57,13 @@ class Point(BaseModel):
     longitude: float = Field(ge=-180, le=180)
 
 
-class McpResourceMapData(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["mcp_resource"] = "mcp_resource"
-    server: Literal["map_utils"] = Field(
-        description=(
-            "Raw MCP server ID for Resource reads. Use this exact value, not the "
-            "model-visible mcp__map_utils Tool namespace."
-        ),
-    )
-    uri: str = Field(
-        pattern=r"^maps-data://geojson/[A-Za-z0-9_.-]{1,128}$",
-        description=(
-            "Canonical MCP Resource URI. Copy this unchanged into create_map_card and use "
-            "the same value as read_mcp_resource.uri when the GeoJSON contents are needed."
-        ),
-    )
-    format: Literal["geojson"] = "geojson"
-    profile: GeoJsonProfile = Field(
-        description=(
-            "Bounded profile derived from this exact GeoJSON. Copy it unchanged with the "
-            "rest of data_ref so create_map_card can validate property references."
-        )
-    )
-
-
 class GeoJsonToolResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: str
     summary: str
     feature_count: int = Field(ge=0)
-    data_ref: McpResourceMapData = Field(
+    data_ref: GeoJsonResourceRef = Field(
         description=(
             "Copy this object unchanged into create_map_card sources.<source-id>.data_ref. "
             "Its server and uri are the canonical MCP Resource routing identity."
@@ -179,9 +153,10 @@ def _resource_result(
         provider=str(provider),
         summary=summary,
         feature_count=len(geojson.get("features", [])),
-        data_ref=McpResourceMapData(
+        data_ref=GeoJsonResourceRef(
             server=MCP_SERVER_NAME,
             uri=published.uri,
+            resource_schema="geojson.v1",
             profile=derive_geojson_profile(geojson),
         ),
     ).model_dump(mode="json")

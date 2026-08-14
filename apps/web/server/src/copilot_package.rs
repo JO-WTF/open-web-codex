@@ -1629,17 +1629,13 @@ runtime = "tools/maps/runtime.toml"
         assert_eq!(
             supply_chain_tools,
             vec![
-                "plan_route_matrix",
-                "build_haversine_route_matrix",
-                "build_provided_route_matrix",
-                "validate_route_matrix",
+                "prepare_route_matrix",
                 "register_navigation_route_matrix",
                 "plan_cost_matrix",
                 "prepare_network_distribution_map",
                 "prepare_network_comparison_map",
                 "evaluate_network_baseline",
                 "assess_facility_change",
-                "evaluate_facility_scenario",
                 "solve_p_median",
                 "compare_network_scenarios",
                 "render_network_comparison_map",
@@ -1650,14 +1646,14 @@ runtime = "tools/maps/runtime.toml"
             network["mcp_servers"]["supply_chain"]["default_tools_approval_mode"].as_str(),
             Some("prompt")
         );
-        for tool in &supply_chain_tools[..13] {
+        for tool in &supply_chain_tools[..9] {
             assert_eq!(
                 network["mcp_servers"]["supply_chain"]["tools"][*tool]["approval_mode"].as_str(),
                 Some("approve"),
                 "safe Network Tool {tool} must be preapproved",
             );
         }
-        for tool in &supply_chain_tools[13..] {
+        for tool in &supply_chain_tools[9..] {
             assert!(
                 network["mcp_servers"]["supply_chain"]["tools"]
                     .get(*tool)
@@ -1732,7 +1728,7 @@ runtime = "tools/maps/runtime.toml"
         assert!(network["developer_instructions"]
             .as_str()
             .expect("network instructions")
-            .contains("Do not use shell, Workspace command, Git, jq, or ad-hoc Python"));
+            .contains("Follow the warehouse-network Skill as the workflow authority"));
         let network_instructions = network["instructions"]
             .as_str()
             .expect("network Role instructions");

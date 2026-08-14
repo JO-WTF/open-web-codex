@@ -82,7 +82,12 @@ def test_min_cost_includes_crossdock_upstream_linehaul() -> None:
         case.demand,
         case.warehouses,
         route_matrix(case),
-        CostMatrix(currency="IDR", warehouse_scope="all_warehouses", rows=adjusted),
+        CostMatrix(
+            currency="IDR",
+            warehouse_scope="all_warehouses",
+            rows=adjusted,
+            stats=costs.stats,
+        ),
         "min_cost",
         {"center-a", "cross-b"},
     )

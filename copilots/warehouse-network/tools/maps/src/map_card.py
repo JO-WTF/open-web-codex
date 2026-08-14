@@ -7,12 +7,15 @@ camera defaults, and the optional hover/legend extensions.
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from pathlib import Path
 from typing import Literal
 
-from open_web_codex_provider import GeoJsonFeatureTypeProfile, GeoJsonProfile
+from open_web_codex_provider import (
+    GeoJsonFeatureTypeProfile,
+    GeoJsonProfile,
+    GeoJsonResourceRef,
+)
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _VALIDATOR = Path(__file__).parent / "assets" / "validate-mapbox-style.mjs"
@@ -20,50 +23,6 @@ _VALIDATOR = Path(__file__).parent / "assets" / "validate-mapbox-style.mjs"
 
 class ExtensibleModel(BaseModel):
     model_config = ConfigDict(extra="allow")
-
-
-class MapResourceRef(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["mcp_resource"] = "mcp_resource"
-    server: str = Field(
-        pattern=r"^[a-z0-9](?:[a-z0-9_.-]{0,126}[a-z0-9])?$",
-        description=(
-            "Raw local MCP server ID that owns the GeoJSON Resource. Copy it "
-            "unchanged; do not use the model-visible mcp__ namespace."
-        ),
-    )
-    uri: str = Field(
-        min_length=1,
-        max_length=2048,
-        description=("Canonical non-public MCP Resource URI returned by the producing Tool."),
-    )
-    format: Literal["geojson"] = "geojson"
-    profile: GeoJsonProfile = Field(
-        description=(
-            "Bounded profile derived by the GeoJSON-producing Tool. Copy it unchanged; "
-            "create_map_card validates layer and hover property references against it."
-        )
-    )
-
-    @model_validator(mode="after")
-    def validate_local_resource_identity(self) -> MapResourceRef:
-        if self.server.startswith("mcp__"):
-            raise ValueError("data_ref.server must be the raw MCP server ID")
-        if any(
-            character.isspace() or ord(character) < 32 or ord(character) == 127
-            for character in self.uri
-        ):
-            raise ValueError("data_ref.uri contains invalid characters")
-        scheme, separator, resource = self.uri.partition("://")
-        if (
-            not separator
-            or not resource
-            or scheme in {"file", "http", "https"}
-            or re.fullmatch(r"[a-z][a-z0-9+.-]*", scheme) is None
-        ):
-            raise ValueError("data_ref.uri must be a non-public MCP Resource URI")
-        return self
 
 
 class GeoJsonSource(ExtensibleModel):
@@ -75,7 +34,7 @@ class GeoJsonSource(ExtensibleModel):
     )
 
     type: Literal["geojson"]
-    data_ref: MapResourceRef = Field(
+    data_ref: GeoJsonResourceRef = Field(
         description=(
             "Copy the reviewed local MCP GeoJSON data_ref unchanged; GeoJSON contents "
             "must not be passed through the model context."

@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from open_web_codex_provider.codec import canonical_json_bytes, decode_json_object
 from open_web_codex_provider.contracts import ResourceRef
 from open_web_codex_provider.errors import ProviderContractError, WorkspaceFileError
-from open_web_codex_provider.geojson import derive_geojson_profile
+from open_web_codex_provider.geojson import GeoJsonResourceRef, derive_geojson_profile
 from open_web_codex_provider.runtime import McpResourceRuntime
 from open_web_codex_provider.store import ResourceStore, resource_ref, workspace_resource_root
 from open_web_codex_provider.workspace import create_workspace_file, trusted_workspace_root
@@ -51,6 +51,33 @@ def test_resource_ref_is_strict_and_bounded() -> None:
     }
     with pytest.raises(ValueError):
         ResourceRef.model_validate({**ref.model_dump(), "unexpected": True})
+
+
+def test_geojson_resource_ref_carries_the_exact_schema_and_bounded_profile() -> None:
+    ref = GeoJsonResourceRef(
+        server="network",
+        uri="network-data://resources/network-map",
+        resource_schema="network_distribution_geojson.v1",
+        profile={
+            "feature_count": 1,
+            "discriminator_property": "kind",
+            "feature_types": [
+                {
+                    "value": "demand",
+                    "feature_count": 1,
+                    "geometry_types": ["Point"],
+                    "properties": [{"name": "city_name", "types": ["string"]}],
+                    "sample_properties": {"city_name": "Alpha"},
+                }
+            ],
+        },
+    )
+    assert ref.resource_schema == "network_distribution_geojson.v1"
+    assert ref.profile.feature_types[0].properties[0].name == "city_name"
+    with pytest.raises(ValueError):
+        GeoJsonResourceRef.model_validate(
+            {**ref.model_dump(mode="json"), "uri": "https://example.com/map.geojson"}
+        )
 
 
 def test_canonical_codec_is_stable_and_bounded() -> None:

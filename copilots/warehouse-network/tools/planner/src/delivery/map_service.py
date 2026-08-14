@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from decimal import Decimal
 from typing import Literal
 
-from open_web_codex_provider import GeoJsonProfile
 from pydantic import Field
 from supply_chain_planner.delivery.models import (
     DeliveryModel,
@@ -25,16 +24,6 @@ from supply_chain_planner.network.optimization_models import (
     CoverageComparison,
     PMedianSolution,
 )
-
-
-class MapResourceRef(DeliveryModel):
-    """A reviewed local GeoJSON Resource accepted by map-card authoring."""
-
-    type: Literal["mcp_resource"] = "mcp_resource"
-    server: str = Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_.-]*$")
-    uri: str = Field(min_length=1, max_length=2048)
-    format: Literal["geojson"] = "geojson"
-    profile: GeoJsonProfile
 
 
 class PointGeometry(DeliveryModel):

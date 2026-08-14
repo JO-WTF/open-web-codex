@@ -14,6 +14,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from open_web_codex_provider import (
     MAX_WORKSPACE_FILE_BYTES,
+    GeoJsonResourceRef,
     McpResourceRuntime,
     ProviderContractError,
     ResourceRef,
@@ -25,7 +26,6 @@ from open_web_codex_provider import (
 from pydantic import Field, ValidationError
 from supply_chain_planner.data.workspace_intake import read_json_document
 from supply_chain_planner.delivery.map_service import (
-    MapResourceRef,
     NetworkComparisonGeoJson,
     NetworkComparisonMapBundle,
     NetworkDistributionGeoJson,
@@ -70,6 +70,7 @@ from supply_chain_planner.network.optimization_models import (
     ScenarioSpec,
     ServiceCoverageConstraint,
     ServiceMetric,
+    WarehouseChanges,
 )
 from supply_chain_planner.network.solver import (
     SolverUnavailable,
@@ -82,15 +83,18 @@ from supply_chain_planner.network.solver import (
     summarize_assignment_cost,
 )
 from supply_chain_planner.shared.models import (
+    ComparableNetworkResultRef,
     FacilityChangeAssessmentToolResult,
     FacilityChangeCostComparison,
-    NetworkAssignmentComparisonResourceRef,
     NetworkBaselineResourceToolResult,
     NetworkFinalArtifactDescriptor,
     NetworkFinalArtifactToolResult,
+    NetworkPlanComparisonResource,
+    NetworkPlanComparisonResourceRef,
     NetworkReportInput,
     NetworkScenarioResourceRef,
     PreparedNetworkResource,
+    RouteMatrixPreparationToolResult,
     UncoveredCitySummary,
 )
 from supply_chain_planner.shared.resource_identity import (
@@ -220,21 +224,6 @@ _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".code
 _mcp_resource_runtime: McpResourceRuntime | None = None
 
 
-class ComparableResourceRef(ResourceRef):
-    """A network result Resource that can be used as either comparison subject."""
-
-    resource_schema: Literal[
-        "network_baseline.v2",
-        "network_scenario.v2",
-        "facility_location_solution.v3",
-    ] = Field(
-        description=(
-            "Comparable network result schema: network_baseline.v2, "
-            "network_scenario.v2, or facility_location_solution.v3."
-        )
-    )
-
-
 def _store() -> ResourceStore:
     return _runtime().store
 
@@ -274,7 +263,7 @@ def read_supply_chain_resource(resource_id: str) -> str:
 
 
 def _load_comparable_resource(
-    resource_ref: ComparableResourceRef,
+    resource_ref: ComparableNetworkResultRef,
 ) -> tuple[AssignmentResult, set[str]]:
     """Load one supported comparison subject through the provider runtime."""
     if resource_ref.resource_schema == "network_baseline.v2":
@@ -304,13 +293,20 @@ def _load_comparable_resource(
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def compare_network_scenarios(
-    before_ref: ComparableResourceRef,
-    after_ref: ComparableResourceRef,
+    normalized_input_ref: ResourceRef,
+    before_ref: ComparableNetworkResultRef,
+    after_ref: ComparableNetworkResultRef,
     service_targets: Annotated[list[float], Field(min_length=1, max_length=32)],
     ctx: Context,
 ) -> CallToolResult:
     """Compare two typed network results in either direction."""
     _runtime().require_workspace(ctx)
+    _load_ready_network(normalized_input_ref)
+    try:
+        before_ref = ComparableNetworkResultRef.model_validate(before_ref.model_dump(mode="json"))
+        after_ref = ComparableNetworkResultRef.model_validate(after_ref.model_dump(mode="json"))
+    except ValidationError as error:
+        raise McpResourceContractError("comparison_subject_schema_invalid") from error
     if any(target <= 0 for target in service_targets):
         raise McpResourceContractError("comparison_service_targets_invalid")
     before_assignment, before_active_ids = _load_comparable_resource(before_ref)
@@ -343,9 +339,15 @@ def compare_network_scenarios(
         else f"{comparison.before_cost:.2f}→{comparison.after_cost:.2f} "
         f"({comparison.cost_delta or 0:+.2f})"
     )
+    plan_comparison = NetworkPlanComparisonResource(
+        normalized_input_ref=normalized_input_ref,
+        before_ref=before_ref,
+        after_ref=after_ref,
+        comparison=comparison,
+    )
     return _runtime().publish(
-        comparison.schema_version,
-        comparison,
+        plan_comparison.schema_version,
+        plan_comparison,
         f"Compared {len(comparison.city_changes)} city assignments; selected "
         f"[{_bounded_id_summary(comparison.selected_warehouse_ids)}], removed "
         f"[{_bounded_id_summary(comparison.removed_warehouse_ids)}], affected "
@@ -386,11 +388,14 @@ def _publish_geojson(
     if structured is None:
         raise McpResourceContractError("map_data_result_missing")
     resource_ref = ResourceRef.model_validate(structured["resource_ref"])
-    structured["data_ref"] = MapResourceRef(
+    data_ref = GeoJsonResourceRef(
         server=resource_ref.server,
         uri=resource_ref.uri,
+        resource_schema=resource_ref.resource_schema,
         profile=derive_geojson_profile(payload),
-    ).model_dump(mode="json")
+    )
+    structured.pop("resource_ref", None)
+    structured["data_ref"] = data_ref.model_dump(mode="json")
     return result
 
 
@@ -459,7 +464,7 @@ def prepare_network_distribution_map(
 
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
-def plan_route_matrix(
+def prepare_route_matrix(
     normalized_input_ref: ResourceRef,
     route_method: Annotated[
         Literal["haversine", "navigation", "provided"],
@@ -471,6 +476,7 @@ def plan_route_matrix(
         ),
     ],
     ctx: Context,
+    warehouse_scope: Literal["existing_only", "all_warehouses"] = "all_warehouses",
     detour_coefficient: Annotated[
         float | None,
         Field(
@@ -487,37 +493,32 @@ def plan_route_matrix(
             )
         ),
     ] = None,
-) -> CallToolResult:
-    """Plan required layered route pairs without persisting workflow state."""
-    _runtime().require_workspace(ctx)
-    prepared = _load_ready_network(normalized_input_ref)
-    plan = _plan_composable_route_matrix(
-        prepared.demand_cities,
-        prepared.warehouses,
-        route_method,
-        detour_coefficient,
-        average_speed_kph,
-    )
-    return _runtime().publish(
-        plan.schema_version,
-        plan,
-        f"Planned {plan.route_count} layered routes using {plan.method}; "
-        f"estimated billable navigation calls: {plan.estimated_billable_calls}; "
-        f"provided route facts available: {len(prepared.provided_route_facts)}.",
-    )
-
-
-@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
-def build_haversine_route_matrix(
-    normalized_input_ref: ResourceRef,
-    detour_coefficient: float,
-    average_speed_kph: float,
-    ctx: Context,
     prior_route_matrix_ref: ResourceRef | None = None,
-) -> CallToolResult:
-    """Build missing haversine facts and reuse only exact prior pair facts."""
+) -> Annotated[CallToolResult, RouteMatrixPreparationToolResult]:
+    """Prepare one validated route matrix, or a navigation request estimate."""
     _runtime().require_workspace(ctx)
     prepared = _load_ready_network(normalized_input_ref)
+    warehouses = prepared.warehouses
+    if warehouse_scope == "existing_only":
+        warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
+    if route_method == "navigation":
+        plan = _plan_composable_route_matrix(
+            prepared.demand_cities,
+            warehouses,
+            route_method,
+            detour_coefficient,
+            average_speed_kph,
+        )
+        result = _runtime().publish(
+            plan.schema_version,
+            plan,
+            f"Navigation is required for {plan.route_count} layered routes; "
+            f"estimated billable calls: {plan.estimated_billable_calls}.",
+        )
+        if result.structuredContent is None:
+            raise McpResourceContractError("route_matrix_result_missing")
+        result.structuredContent["state"] = "navigation_required"
+        return result
     prior = (
         _runtime().load_model(
             prior_route_matrix_ref,
@@ -527,86 +528,37 @@ def build_haversine_route_matrix(
         if prior_route_matrix_ref is not None
         else None
     )
-    matrix = build_route_matrix_with_reuse(
-        prepared.demand_cities,
-        prepared.warehouses,
-        prior.rows if prior is not None else [],
-        detour_coefficient,
-        average_speed_kph,
-        warehouse_scope="all_warehouses",
-    )
-    validation = matrix.validation
-    return _runtime().publish(
+    if route_method == "provided":
+        matrix = _build_provided_route_matrix(
+            prepared.demand_cities,
+            warehouses,
+            prepared.provided_route_facts,
+            warehouse_scope=warehouse_scope,
+        )
+    else:
+        if detour_coefficient is None or average_speed_kph is None:
+            raise McpResourceContractError("haversine_route_parameters_required")
+        matrix = build_route_matrix_with_reuse(
+            prepared.demand_cities,
+            warehouses,
+            prior.rows if prior is not None else [],
+            detour_coefficient,
+            average_speed_kph,
+            warehouse_scope=warehouse_scope,
+        )
+    stats = matrix.stats
+    result = _runtime().publish(
         matrix.schema_version,
         matrix,
-        "Built route matrix with "
-        f"{validation['reused_pair_count']} reused, "
-        f"{validation['computed_pair_count']} computed, and "
-        f"{validation['missing_pair_count']} missing pairs.",
+        f"Prepared {route_method} route matrix for {warehouse_scope}; "
+        f"{getattr(stats, 'reused_pair_count', 0)} reused, "
+        f"{getattr(stats, 'computed_pair_count', getattr(stats, 'provided_pair_count', 0))} "
+        f"materialized, and {stats.missing_pair_count} missing pairs.",
     )
-
-
-@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
-def build_provided_route_matrix(
-    normalized_input_ref: ResourceRef,
-    warehouse_scope: Literal["existing_only", "all_warehouses"],
-    ctx: Context,
-) -> CallToolResult:
-    """Materialize uploaded distance and duration facts for one warehouse scope."""
-    _runtime().require_workspace(ctx)
-    prepared = _load_ready_network(normalized_input_ref)
-    warehouses = prepared.warehouses
-    if warehouse_scope == "existing_only":
-        warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
-    matrix = _build_provided_route_matrix(
-        prepared.demand_cities,
-        warehouses,
-        prepared.provided_route_facts,
-        warehouse_scope=warehouse_scope,
-    )
-    validation = matrix.validation
-    return _runtime().publish(
-        matrix.schema_version,
-        matrix,
-        f"Built provided route matrix for {warehouse_scope} with "
-        f"{validation['provided_pair_count']} supplied, "
-        f"{validation['missing_pair_count']} missing, and "
-        f"{validation['ignored_input_pair_count']} out-of-scope pair facts.",
-    )
-
-
-@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
-def validate_route_matrix(
-    normalized_input_ref: ResourceRef,
-    route_matrix_ref: ResourceRef,
-    ctx: Context,
-) -> CallToolResult:
-    """Validate completeness and uniqueness against the normalized network."""
-    _runtime().require_workspace(ctx)
-    prepared = _load_ready_network(normalized_input_ref)
-    matrix = _runtime().load_model(
-        route_matrix_ref,
-        "route_matrix.v2",
-        ComposableRouteMatrix,
-    )
-    warehouses = prepared.warehouses
-    if matrix.warehouse_scope == "existing_only":
-        warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
-    validation = _validate_route_matrix_model(
-        prepared.demand_cities,
-        warehouses,
-        matrix,
-    )
-    payload = {
-        "schemaVersion": "route_matrix_validation.v1",
-        **{key: value for key, value in validation.items() if key != "schema"},
-    }
-    return _runtime().publish(
-        "route_matrix_validation.v1",
-        payload,
-        f"Route matrix validation {'passed' if validation['valid'] else 'failed'} "
-        f"for {validation['route_count']} routes.",
-    )
+    if result.structuredContent is None:
+        raise McpResourceContractError("route_matrix_result_missing")
+    result.structuredContent["state"] = "ready"
+    return result
 
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
@@ -654,12 +606,14 @@ def register_navigation_route_matrix(
         raise McpResourceContractError("navigation_matrix_incomplete")
     matrix = matrix.model_copy(
         update={
-            "validation": {
-                **matrix.validation,
-                "reused_pair_count": len(prior_rows),
-                "registered_pair_count": len(supplied.rows),
-                "missing_pair_count": 0,
-            }
+            "stats": matrix.stats.model_copy(
+                update={
+                    "reused_pair_count": len(prior_rows),
+                    "registered_pair_count": len(supplied.rows),
+                    "missing_pair_count": 0,
+                    "complete": True,
+                }
+            )
         }
     )
     return _runtime().publish(
@@ -712,14 +666,14 @@ def plan_cost_matrix(
         prior.rows if prior is not None else None,
         warehouse_scope=warehouse_scope,
     )
-    validation = matrix.validation
+    stats = matrix.stats
     return _runtime().publish(
         matrix.schema_version,
         matrix,
         "Built cost matrix with "
-        f"{validation['reused_pair_count']} reused, "
-        f"{validation['computed_pair_count']} computed, and "
-        f"{validation['missing_pair_count']} missing lane costs.",
+        f"{stats.reused_pair_count} reused, "
+        f"{stats.computed_pair_count} computed, and "
+        f"{stats.missing_pair_count} missing lane costs.",
     )
 
 
@@ -811,8 +765,8 @@ def evaluate_network_baseline(
             "coverage_metrics": [metric.model_dump(mode="json") for metric in coverage],
             "detail_target_hours": detail_target,
             "uncovered_city_count": len(uncovered),
-            "uncovered_cities": [item.model_dump(mode="json") for item in uncovered[:100]],
-            "uncovered_cities_truncated": len(uncovered) > 100,
+            "uncovered_cities": [item.model_dump(mode="json") for item in uncovered[:10]],
+            "uncovered_cities_truncated": len(uncovered) > 10,
         }
     )
     return result
@@ -914,7 +868,10 @@ def _evaluate_facility_change(
         assignment=assignment,
         cost=summarize_assignment_cost(assignment, costs) if costs is not None else None,
         service=service_metrics(assignment, ordered_targets),
-        warehouse_changes={"added": sorted(add_ids), "removed": sorted(remove_ids)},
+        warehouse_changes=WarehouseChanges(
+            added=sorted(add_ids),
+            removed=sorted(remove_ids),
+        ),
     )
 
 
@@ -922,7 +879,7 @@ def _evaluate_facility_change(
 def assess_facility_change(
     normalized_input_ref: ResourceRef,
     route_matrix_ref: ResourceRef,
-    before_ref: ComparableResourceRef,
+    before_ref: ComparableNetworkResultRef,
     scenario: ScenarioSpec,
     ctx: Context,
     cost_matrix_ref: ResourceRef | None = None,
@@ -932,8 +889,7 @@ def assess_facility_change(
     Use this tool when a user adds, removes, or relocates facilities and the
     exact normalized input, route matrix, prior result, scenario, and optional
     cost matrix are already available. It returns both the changed scenario and
-    its comparison; do not chain evaluate_facility_scenario and
-    compare_network_scenarios for that request.
+    its comparison without requiring a second model-selected Tool call.
     """
     _runtime().require_workspace(ctx)
     prepared, routes, costs, targets, add_ids, remove_ids = _load_facility_scenario_inputs(
@@ -998,25 +954,31 @@ def assess_facility_change(
     )
 
     scenario_published = _runtime().publish(after.schema_version, after, summary)
+    if scenario_published.structuredContent is None:
+        raise McpResourceContractError("facility_change_result_missing")
+    scenario_ref = NetworkScenarioResourceRef.model_validate(
+        scenario_published.structuredContent["resource_ref"]
+    )
+    plan_comparison = NetworkPlanComparisonResource(
+        normalized_input_ref=normalized_input_ref,
+        before_ref=before_ref,
+        after_ref=ComparableNetworkResultRef.model_validate(scenario_ref.model_dump(mode="json")),
+        comparison=comparison,
+    )
     comparison_published = _runtime().publish(
-        comparison.schema_version,
-        comparison,
+        plan_comparison.schema_version,
+        plan_comparison,
         summary,
     )
-    if (
-        scenario_published.structuredContent is None
-        or comparison_published.structuredContent is None
-    ):
+    if comparison_published.structuredContent is None:
         raise McpResourceContractError("facility_change_result_missing")
     affected_city_changes = [
         change for change in comparison.city_changes if change.affected
     ]
     result = FacilityChangeAssessmentToolResult(
         summary=summary,
-        scenario_ref=NetworkScenarioResourceRef.model_validate(
-            scenario_published.structuredContent["resource_ref"]
-        ),
-        comparison_ref=NetworkAssignmentComparisonResourceRef.model_validate(
+        scenario_ref=scenario_ref,
+        plan_comparison_ref=NetworkPlanComparisonResourceRef.model_validate(
             comparison_published.structuredContent["resource_ref"]
         ),
         active_warehouse_count=len(after.active_warehouse_ids),
@@ -1031,13 +993,13 @@ def assess_facility_change(
         ),
         coverage=comparison.coverage,
         affected_city_count=len(comparison.affected_city_ids),
-        affected_city_ids=comparison.affected_city_ids[:100],
-        affected_city_ids_truncated=len(comparison.affected_city_ids) > 100,
-        affected_city_changes=affected_city_changes[:100],
-        affected_city_changes_truncated=len(affected_city_changes) > 100,
+        affected_city_ids=comparison.affected_city_ids[:10],
+        affected_city_ids_truncated=len(comparison.affected_city_ids) > 10,
+        affected_city_changes=affected_city_changes[:10],
+        affected_city_changes_truncated=len(affected_city_changes) > 10,
         reassigned_city_count=len(comparison.reassigned_city_ids),
-        reassigned_city_ids=comparison.reassigned_city_ids[:100],
-        reassigned_city_ids_truncated=len(comparison.reassigned_city_ids) > 100,
+        reassigned_city_ids=comparison.reassigned_city_ids[:10],
+        reassigned_city_ids_truncated=len(comparison.reassigned_city_ids) > 10,
     )
     return CallToolResult(
         content=[
@@ -1046,50 +1008,6 @@ def assess_facility_change(
             *comparison_published.content[1:],
         ],
         structuredContent=result.model_dump(mode="json"),
-    )
-
-
-@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
-def evaluate_facility_scenario(
-    normalized_input_ref: ResourceRef,
-    route_matrix_ref: ResourceRef,
-    scenario: ScenarioSpec,
-    ctx: Context,
-    cost_matrix_ref: ResourceRef | None = None,
-) -> CallToolResult:
-    """Evaluate a standalone scenario from the normalized existing footprint.
-
-    Use assess_facility_change instead when one facility change must be applied
-    to and compared with an exact prior baseline, scenario, or location result.
-    """
-    _runtime().require_workspace(ctx)
-    prepared, routes, costs, targets, add_ids, remove_ids = _load_facility_scenario_inputs(
-        normalized_input_ref,
-        route_matrix_ref,
-        cost_matrix_ref,
-        scenario,
-    )
-    base_active_ids = {
-        warehouse.warehouse_id for warehouse in prepared.warehouses if warehouse.is_existing
-    }
-    result = _evaluate_facility_change(
-        prepared,
-        routes,
-        costs,
-        scenario,
-        base_active_ids,
-        add_ids,
-        remove_ids,
-        targets,
-    )
-    return _runtime().publish(
-        result.schema_version,
-        result,
-        f"Evaluated a scenario with {len(result.active_warehouse_ids)} active warehouses; "
-        f"added [{_bounded_id_summary(sorted(add_ids))}], removed "
-        f"[{_bounded_id_summary(sorted(remove_ids))}]; cost "
-        f"{_cost_metric_summary(result.cost)}, coverage "
-        f"{_coverage_metric_summary(coverage_metrics(result.assignment, targets))}.",
     )
 
 
@@ -1143,7 +1061,7 @@ def solve_p_median(
         prepared.warehouses,
         routes,
     )
-    if not route_validation["valid"]:
+    if not route_validation.valid:
         raise McpResourceContractError("p_median_route_matrix_incomplete")
     if costs.warehouse_scope != "all_warehouses" or costs.missing_routes:
         raise McpResourceContractError("p_median_cost_matrix_incomplete")
@@ -1182,6 +1100,7 @@ def solve_p_median(
         unavailable_message = str(error)
     else:
         unavailable_message = None
+    solution_coverage: list[CoverageMetricSummary] = []
     if solved is None:
         status = (
             "timeout" if timed_out else ("unavailable" if unavailable_message else "infeasible")
@@ -1195,6 +1114,10 @@ def solve_p_median(
             message=unavailable_message or "No feasible p-median solution was found.",
         )
     else:
+        solution_coverage = coverage_metrics(
+            solved.assignment,
+            sorted(set(service_targets)),
+        )
         solution = PMedianSolution(
             status="timeout" if timed_out else "optimal",
             active_warehouse_ids=solved.active_warehouse_ids,
@@ -1220,15 +1143,12 @@ def solve_p_median(
         f"[{_bounded_id_summary(solution.opened_candidate_ids)}], closed "
         f"[{_bounded_id_summary(solution.closed_existing_ids)}]; cost "
         f"{_cost_metric_summary(solution.cost)}, coverage "
-        f"{_coverage_metric_summary(coverage_metrics(solution.assignment, sorted(set(service_targets)))) if solution.assignment is not None else 'none'}.",
+        f"{_coverage_metric_summary(solution_coverage) if solution.assignment is not None else 'none'}.",
     )
 
 
 def _load_final_delivery_inputs(
-    normalized_input_ref: ResourceRef,
-    baseline_ref: ResourceRef,
-    facility_location_ref: ResourceRef,
-    comparison_ref: ResourceRef,
+    plan_comparison_ref: NetworkPlanComparisonResourceRef,
 ) -> tuple[
     PreparedNetworkResource,
     NormalizedInputBatch,
@@ -1236,21 +1156,25 @@ def _load_final_delivery_inputs(
     PMedianSolution,
     AssignmentComparison,
 ]:
-    prepared = _load_ready_network(normalized_input_ref)
+    plan_comparison = _runtime().load_model(
+        plan_comparison_ref,
+        "network_plan_comparison.v1",
+        NetworkPlanComparisonResource,
+    )
+    if plan_comparison.before_ref.resource_schema != "network_baseline.v2":
+        raise McpResourceContractError("delivery_before_baseline_required")
+    if plan_comparison.after_ref.resource_schema != "facility_location_solution.v3":
+        raise McpResourceContractError("delivery_after_facility_solution_required")
+    prepared = _load_ready_network(plan_comparison.normalized_input_ref)
     baseline = _runtime().load_model(
-        baseline_ref,
+        plan_comparison.before_ref,
         "network_baseline.v2",
         BaselineResult,
     )
     facility = _runtime().load_model(
-        facility_location_ref,
+        plan_comparison.after_ref,
         "facility_location_solution.v3",
         PMedianSolution,
-    )
-    comparison = _runtime().load_model(
-        comparison_ref,
-        "network_assignment_comparison.v2",
-        AssignmentComparison,
     )
     normalized = NormalizedInputBatch(
         demand_cities=prepared.demand_cities,
@@ -1260,7 +1184,7 @@ def _load_final_delivery_inputs(
         provided_route_facts=prepared.provided_route_facts,
         issues=prepared.issues,
     )
-    return prepared, normalized, baseline, facility, comparison
+    return prepared, normalized, baseline, facility, plan_comparison.comparison
 
 
 def _write_final_delivery_json_bundle(
@@ -1331,39 +1255,13 @@ def _write_final_delivery_markdown(
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def prepare_network_comparison_map(
-    normalized_input_ref: Annotated[
-        ResourceRef,
-        Field(description="The exact normalized input used by the baseline and selected result."),
-    ],
-    baseline_ref: Annotated[
-        ResourceRef,
-        Field(description="The exact baseline result used as the comparison before subject."),
-    ],
-    facility_location_ref: Annotated[
-        ResourceRef,
-        Field(
-            description="The exact selected facility result used as the comparison after subject."
-        ),
-    ],
-    comparison_ref: Annotated[
-        ResourceRef,
-        Field(
-            description=(
-                "The comparison produced from the same exact result referenced by "
-                "facility_location_ref and this exact baseline_ref; a semantically "
-                "equivalent recomputation is invalid."
-            )
-        ),
-    ],
+    plan_comparison_ref: NetworkPlanComparisonResourceRef,
     ctx: Context,
 ) -> CallToolResult:
     """Publish raw baseline-versus-plan GeoJSON for a separately authored map."""
     _runtime().require_workspace(ctx)
     prepared, normalized, baseline, facility, comparison = _load_final_delivery_inputs(
-        normalized_input_ref,
-        baseline_ref,
-        facility_location_ref,
-        comparison_ref,
+        plan_comparison_ref,
     )
     bundle = build_network_comparison_map_bundle(
         normalized,
@@ -1391,40 +1289,14 @@ def prepare_network_comparison_map(
 
 @mcp.tool(structured_output=True, annotations=FINAL_WORKSPACE_DELIVERY_TOOL)
 def render_network_comparison_map(
-    normalized_input_ref: Annotated[
-        ResourceRef,
-        Field(description="The exact normalized input used by the baseline and selected result."),
-    ],
-    baseline_ref: Annotated[
-        ResourceRef,
-        Field(description="The exact baseline result used as the comparison before subject."),
-    ],
-    facility_location_ref: Annotated[
-        ResourceRef,
-        Field(
-            description="The exact selected facility result used as the comparison after subject."
-        ),
-    ],
-    comparison_ref: Annotated[
-        ResourceRef,
-        Field(
-            description=(
-                "The comparison produced from the same exact result referenced by "
-                "facility_location_ref and this exact baseline_ref; a semantically "
-                "equivalent recomputation is invalid."
-            )
-        ),
-    ],
+    plan_comparison_ref: NetworkPlanComparisonResourceRef,
     output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     ctx: Context,
 ) -> CallToolResult:
     """Create a self-contained baseline-versus-facility map JSON file."""
     _runtime().require_workspace(ctx)
     prepared, normalized, baseline, facility, comparison = _load_final_delivery_inputs(
-        normalized_input_ref,
-        baseline_ref,
-        facility_location_ref,
-        comparison_ref,
+        plan_comparison_ref,
     )
     bundle = build_network_comparison_map_bundle(
         normalized,
@@ -1449,21 +1321,21 @@ def publish_network_planning_report(
 ) -> CallToolResult:
     """Create a Markdown brief for a baseline assessment or plan comparison."""
     _runtime().require_workspace(ctx)
-    prepared = _load_ready_network(report_input.normalized_input_ref)
-    normalized = NormalizedInputBatch(
-        demand_cities=prepared.demand_cities,
-        warehouses=prepared.warehouses,
-        current_assignments=prepared.current_assignments,
-        route_quotes=prepared.route_quotes,
-        provided_route_facts=prepared.provided_route_facts,
-        issues=prepared.issues,
-    )
-    baseline = _runtime().load_model(
-        report_input.baseline_ref,
-        "network_baseline.v2",
-        BaselineResult,
-    )
     if report_input.mode == "baseline":
+        prepared = _load_ready_network(report_input.normalized_input_ref)
+        normalized = NormalizedInputBatch(
+            demand_cities=prepared.demand_cities,
+            warehouses=prepared.warehouses,
+            current_assignments=prepared.current_assignments,
+            route_quotes=prepared.route_quotes,
+            provided_route_facts=prepared.provided_route_facts,
+            issues=prepared.issues,
+        )
+        baseline = _runtime().load_model(
+            report_input.baseline_ref,
+            "network_baseline.v2",
+            BaselineResult,
+        )
         bundle = build_network_baseline_assessment_report_bundle(
             normalized,
             baseline,
@@ -1471,15 +1343,8 @@ def publish_network_planning_report(
         )
         markdown = render_network_baseline_assessment_markdown(bundle)
     else:
-        facility = _runtime().load_model(
-            report_input.facility_location_ref,
-            "facility_location_solution.v3",
-            PMedianSolution,
-        )
-        comparison = _runtime().load_model(
-            report_input.comparison_ref,
-            "network_assignment_comparison.v2",
-            AssignmentComparison,
+        prepared, normalized, baseline, facility, comparison = _load_final_delivery_inputs(
+            report_input.plan_comparison_ref,
         )
         bundle = build_network_planning_report_bundle(
             normalized,

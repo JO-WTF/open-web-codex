@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Literal
+from typing import Literal
 
 from supply_chain_planner.network.geo import haversine_km
 from supply_chain_planner.network.matrix_models import (
     CostCalculationPolicy,
     CostMatrix,
     CostMatrixRow,
+    CostMatrixStats,
     DemandUnitCostRule,
+    HaversineRouteMatrixStats,
+    NavigationRouteMatrixStats,
     NetworkLayer,
+    ProvidedRouteMatrixStats,
     RouteCostQuote,
     RouteFactProvenance,
     RouteMatrix,
     RouteMatrixPlan,
     RouteMatrixRow,
+    RouteMatrixValidation,
     WarehouseScope,
 )
 from supply_chain_planner.network.models import (
@@ -116,14 +121,14 @@ def build_provided_route_matrix(
         warehouse_scope=warehouse_scope,
         rows=rows,
         missing_routes=missing,
-        validation={
-            "expected_pair_count": len(expected),
-            "provided_pair_count": len(rows),
-            "ignored_input_pair_count": ignored,
-            "missing_pair_count": len(missing),
-            "complete": not missing,
-            "source_method_counts": dict(sorted(source_methods.items())),
-        },
+        stats=ProvidedRouteMatrixStats(
+            expected_pair_count=len(expected),
+            provided_pair_count=len(rows),
+            ignored_input_pair_count=ignored,
+            missing_pair_count=len(missing),
+            complete=not missing,
+            source_method_counts=dict(sorted(source_methods.items())),
+        ),
     )
 
 
@@ -220,18 +225,19 @@ def build_route_matrix_with_reuse(
         warehouse_scope=warehouse_scope,
         rows=rows,
         missing_routes=missing,
-        validation={
-            "expected_pair_count": len(expected),
-            "reused_pair_count": reused,
-            "computed_pair_count": computed,
-            "stale_pair_count": stale,
-            "ignored_prior_row_count": ignored_prior_rows,
-            "missing_pair_count": len(missing),
-            "last_mile_pair_count": sum(1 for _, _, layer in expected if layer == "last_mile"),
-            "linehaul_pair_count": sum(1 for _, _, layer in expected if layer == "linehaul"),
-            "detour_coefficient": detour_coefficient,
-            "average_speed_kph": average_speed_kph,
-        },
+        stats=HaversineRouteMatrixStats(
+            expected_pair_count=len(expected),
+            reused_pair_count=reused,
+            computed_pair_count=computed,
+            stale_pair_count=stale,
+            ignored_prior_row_count=ignored_prior_rows,
+            missing_pair_count=len(missing),
+            last_mile_pair_count=sum(1 for _, _, layer in expected if layer == "last_mile"),
+            linehaul_pair_count=sum(1 for _, _, layer in expected if layer == "linehaul"),
+            detour_coefficient=detour_coefficient,
+            average_speed_kph=average_speed_kph,
+            complete=not missing,
+        ),
     )
 
 
@@ -372,7 +378,13 @@ def register_navigation_route_matrix(
         warehouse_scope=warehouse_scope,
         rows=rows,
         missing_routes=missing,
-        validation={"route_count": len(rows), "complete": not missing},
+        stats=NavigationRouteMatrixStats(
+            route_count=len(rows),
+            reused_pair_count=0,
+            registered_pair_count=len(rows),
+            missing_pair_count=len(missing),
+            complete=not missing,
+        ),
     )
 
 
@@ -407,7 +419,7 @@ def validate_route_matrix(
     demand_cities: list[DemandCityRecord],
     warehouses: list[WarehouseRecord],
     matrix: RouteMatrix,
-) -> dict[str, Any]:
+) -> RouteMatrixValidation:
     expected = set(_expected_route_pairs(demand_cities, warehouses))
     supplied = {(row.origin_id, row.destination_id, row.layer) for row in matrix.rows}
     unknown = sorted(supplied - expected)
@@ -418,13 +430,12 @@ def validate_route_matrix(
         errors.append(f"unknown_routes:{len(unknown)}")
     if duplicate_count:
         errors.append(f"duplicate_routes:{duplicate_count}")
-    return {
-        "schema": "route_matrix_validation.v1",
-        "valid": not errors and not missing,
-        "errors": errors,
-        "missing_routes": missing,
-        "route_count": len(matrix.rows),
-    }
+    return RouteMatrixValidation(
+        valid=not errors and not missing,
+        errors=errors,
+        missing_routes=missing,
+        route_count=len(matrix.rows),
+    )
 
 
 def build_cost_matrix(
@@ -559,15 +570,16 @@ def build_cost_matrix(
         rows=rows,
         missing_routes=missing,
         calculation_rule=policy,
-        validation={
-            "expected_pair_count": len(expected),
-            "reused_pair_count": reused,
-            "computed_pair_count": computed,
-            "missing_pair_count": len(missing),
-            "ignored_quote_count": ignored_quotes,
-            "ignored_prior_row_count": ignored_prior_rows,
-            "stale_pair_count": stale,
-        },
+        stats=CostMatrixStats(
+            expected_pair_count=len(expected),
+            reused_pair_count=reused,
+            computed_pair_count=computed,
+            missing_pair_count=len(missing),
+            ignored_quote_count=ignored_quotes,
+            ignored_prior_row_count=ignored_prior_rows,
+            stale_pair_count=stale,
+            complete=not missing,
+        ),
     )
 
 

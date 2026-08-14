@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .contracts import ResourceRef
 from .errors import ProviderContractError
 
 MAX_FEATURES = 100_000
@@ -51,6 +53,32 @@ class GeoJsonProfile(BaseModel):
     feature_count: int = Field(ge=0, le=MAX_FEATURES)
     discriminator_property: str | None = Field(default=None, min_length=1, max_length=128)
     feature_types: list[GeoJsonFeatureTypeProfile] = Field(max_length=MAX_FEATURE_TYPES)
+
+
+class GeoJsonResourceRef(ResourceRef):
+    """One exact GeoJSON Resource identity plus its bounded model-visible profile."""
+
+    format: Literal["geojson"] = "geojson"
+    profile: GeoJsonProfile
+
+    @model_validator(mode="after")
+    def validate_local_resource_identity(self) -> GeoJsonResourceRef:
+        if self.server.startswith("mcp__"):
+            raise ValueError("GeoJSON Resource server must be the raw MCP server ID")
+        if any(
+            character.isspace() or ord(character) < 32 or ord(character) == 127
+            for character in self.uri
+        ):
+            raise ValueError("GeoJSON Resource URI contains invalid characters")
+        scheme, separator, resource = self.uri.partition("://")
+        if (
+            not separator
+            or not resource
+            or scheme in {"file", "http", "https"}
+            or re.fullmatch(r"[a-z][a-z0-9+.-]*", scheme) is None
+        ):
+            raise ValueError("GeoJSON Resource URI must be a non-public MCP Resource URI")
+        return self
 
 
 def derive_geojson_profile(

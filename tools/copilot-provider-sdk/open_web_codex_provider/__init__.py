@@ -6,6 +6,7 @@ from .geojson import (
     GeoJsonFeatureTypeProfile,
     GeoJsonProfile,
     GeoJsonPropertyProfile,
+    GeoJsonResourceRef,
     derive_geojson_profile,
 )
 from .runtime import McpResourceRuntime, bind_runtime
@@ -22,6 +23,7 @@ __all__ = [
     "GeoJsonFeatureTypeProfile",
     "GeoJsonProfile",
     "GeoJsonPropertyProfile",
+    "GeoJsonResourceRef",
     "MAX_WORKSPACE_FILE_BYTES",
     "McpResourceRuntime",
     "ProviderContractError",

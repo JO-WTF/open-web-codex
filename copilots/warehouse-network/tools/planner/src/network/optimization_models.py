@@ -90,13 +90,18 @@ class ScenarioSpec(OptimizationModel):
     service_targets: list[float] = Field(default_factory=list)
 
 
+class WarehouseChanges(OptimizationModel):
+    added: list[str] = Field(default_factory=list)
+    removed: list[str] = Field(default_factory=list)
+
+
 class ScenarioResult(OptimizationModel):
     schema_version: Literal["network_scenario.v2"] = "network_scenario.v2"
     active_warehouse_ids: list[str]
     assignment: AssignmentResult
     cost: CostSummary | None = None
     service: list[ServiceMetric] = Field(default_factory=list)
-    warehouse_changes: dict[str, list[str]] = Field(default_factory=dict)
+    warehouse_changes: WarehouseChanges = Field(default_factory=WarehouseChanges)
 
 
 class CoverageMetricDelta(OptimizationModel):

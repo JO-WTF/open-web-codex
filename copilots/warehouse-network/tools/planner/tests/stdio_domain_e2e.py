@@ -273,17 +273,13 @@ async def _run_network_s3_then_s2(
             await asyncio.wait_for(session.initialize(), timeout=30)
             inventory = {tool.name for tool in (await session.list_tools()).tools}
             assert inventory == {
-                "plan_route_matrix",
-                "build_haversine_route_matrix",
-                "build_provided_route_matrix",
-                "validate_route_matrix",
+                "prepare_route_matrix",
                 "register_navigation_route_matrix",
                 "plan_cost_matrix",
                 "prepare_network_comparison_map",
                 "prepare_network_distribution_map",
                 "evaluate_network_baseline",
                 "assess_facility_change",
-                "evaluate_facility_scenario",
                 "solve_p_median",
                 "compare_network_scenarios",
                 "render_network_comparison_map",
@@ -294,12 +290,13 @@ async def _run_network_s3_then_s2(
                 item["warehouse_id"] for item in prepared["warehouses"] if item["is_existing"]
             )
             common_trace: list[str] = []
-            common_trace.append("build_provided_route_matrix")
+            common_trace.append("prepare_route_matrix:provided")
             provided_result = await _call(
                 session,
-                "build_provided_route_matrix",
+                "prepare_route_matrix",
                 {
                     "normalized_input_ref": normalized_ref,
+                    "route_method": "provided",
                     "warehouse_scope": "existing_only",
                 },
                 workspace,
@@ -307,14 +304,15 @@ async def _run_network_s3_then_s2(
             provided_ref = provided_result.structuredContent["resource_ref"]
             provided = await _read_resource(session, provided_ref)
             assert len(provided["rows"]) == 556
-            assert provided["validation"]["missing_pair_count"] == 0
+            assert provided["stats"]["missing_pair_count"] == 0
 
-            common_trace.append("build_haversine_route_matrix")
+            common_trace.append("prepare_route_matrix:haversine")
             routes_result = await _call(
                 session,
-                "build_haversine_route_matrix",
+                "prepare_route_matrix",
                 {
                     "normalized_input_ref": normalized_ref,
+                    "route_method": "haversine",
                     "detour_coefficient": 1.2,
                     "average_speed_kph": 42,
                 },
@@ -323,8 +321,8 @@ async def _run_network_s3_then_s2(
             routes_ref = routes_result.structuredContent["resource_ref"]
             routes = await _read_resource(session, routes_ref)
             assert len(routes["rows"]) == 1168
-            assert routes["validation"]["computed_pair_count"] == 1168
-            assert routes["validation"]["missing_pair_count"] == 0
+            assert routes["stats"]["computed_pair_count"] == 1168
+            assert routes["stats"]["missing_pair_count"] == 0
 
             common_trace.append("plan_cost_matrix")
             costs_result = await _call(
@@ -404,12 +402,12 @@ async def _run_network_s3_then_s2(
             }
             s3_comparison = await _read_resource(
                 session,
-                assessment_result.structuredContent["comparison_ref"],
+                assessment_result.structuredContent["plan_comparison_ref"],
             )
-            assert s3_comparison["selected_warehouse_ids"] == []
-            assert s3_comparison["removed_warehouse_ids"] == [BEKASI_ID]
-            assert len(s3_comparison["affected_city_ids"]) == 50
-            assert len(s3_comparison["reassigned_city_ids"]) == 50
+            assert s3_comparison["comparison"]["selected_warehouse_ids"] == []
+            assert s3_comparison["comparison"]["removed_warehouse_ids"] == [BEKASI_ID]
+            assert len(s3_comparison["comparison"]["affected_city_ids"]) == 50
+            assert len(s3_comparison["comparison"]["reassigned_city_ids"]) == 50
             assert set(s3_trace).isdisjoint(
                 {
                     "solve_p_median",
@@ -449,6 +447,7 @@ async def _run_network_s3_then_s2(
                 session,
                 "compare_network_scenarios",
                 {
+                    "normalized_input_ref": normalized_ref,
                     "before_ref": baseline_ref,
                     "after_ref": facility_ref,
                     "service_targets": [6, 12, 18],
@@ -457,14 +456,11 @@ async def _run_network_s3_then_s2(
             )
             comparison_ref = s2_comparison_result.structuredContent["resource_ref"]
             comparison = await _read_resource(session, comparison_ref)
-            assert comparison["selected_warehouse_ids"] == EXPECTED_OPENED
-            assert comparison["removed_warehouse_ids"] == []
+            assert comparison["comparison"]["selected_warehouse_ids"] == EXPECTED_OPENED
+            assert comparison["comparison"]["removed_warehouse_ids"] == []
 
             final_refs = {
-                "normalized_input_ref": normalized_ref,
-                "baseline_ref": baseline_ref,
-                "facility_location_ref": facility_ref,
-                "comparison_ref": comparison_ref,
+                "plan_comparison_ref": comparison_ref,
             }
             s2_trace.append("prepare_network_comparison_map")
             inline_map_result = await _call(
@@ -475,7 +471,7 @@ async def _run_network_s3_then_s2(
             )
             inline_map = await _read_resource(
                 session,
-                inline_map_result.structuredContent["resource_ref"],
+                inline_map_result.structuredContent["data_ref"],
             )
             demand_features = [
                 feature
