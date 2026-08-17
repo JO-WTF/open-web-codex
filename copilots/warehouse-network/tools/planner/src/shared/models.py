@@ -49,6 +49,7 @@ class PreparedNetworkResource(StrictModel):
     route_quotes: list[RouteQuoteRecord]
     provided_route_facts: list[ProvidedRouteFactRecord] = Field(default_factory=list)
     issues: list[DataQualityIssue] = Field(default_factory=list)
+    parent_resource_ref: _ResourceRef | None = Field(default=None, alias="parentResourceRef")
 
 
 class PreparedNetworkInputRef(_ResourceRef):
@@ -118,6 +119,35 @@ class DataAgentResourceToolResult(StrictModel):
     resource_ref: _ResourceRef
 
 
+class CandidateWarehouseDeltaResource(StrictModel):
+    """A candidate-only change set that can derive a new normalized input."""
+
+    schema_version: Literal["candidate_warehouse_delta.v1"] = Field(
+        default="candidate_warehouse_delta.v1",
+        alias="schemaVersion",
+    )
+    upsert_warehouses: list[WarehouseRecord] = Field(default_factory=list, alias="upsertWarehouses")
+    remove_warehouse_ids: list[str] = Field(default_factory=list, alias="removeWarehouseIds")
+
+    @model_validator(mode="after")
+    def validate_candidate_only(self) -> CandidateWarehouseDeltaResource:
+        ids = [warehouse.warehouse_id for warehouse in self.upsert_warehouses]
+        if len(ids) != len(set(ids)):
+            raise ValueError("candidate_delta_upsert_ids_must_be_unique")
+        if any(warehouse.is_existing for warehouse in self.upsert_warehouses):
+            raise ValueError("candidate_delta_must_not_contain_existing_warehouse")
+        if len(self.remove_warehouse_ids) != len(set(self.remove_warehouse_ids)):
+            raise ValueError("candidate_delta_remove_ids_must_be_unique")
+        if set(ids) & set(self.remove_warehouse_ids):
+            raise ValueError("candidate_delta_cannot_upsert_and_remove_same_warehouse")
+        return self
+
+
+class CandidateWarehouseDeltaRef(_ResourceRef):
+    server: Literal[DATA_MCP_SERVER_NAME]
+    resource_schema: Literal["candidate_warehouse_delta.v1"]
+
+
 class RouteMatrixPreparationToolResult(StrictModel):
     state: Literal["ready", "navigation_required"]
     summary: str
@@ -165,6 +195,16 @@ class FacilityChangeCostComparison(StrictModel):
 
 class NetworkScenarioResourceRef(_ResourceRef):
     resource_schema: Literal["network_scenario.v2"] = "network_scenario.v2"
+
+
+class AssignmentResultResourceRef(_ResourceRef):
+    """A solved result that can be rendered as a single coverage map."""
+
+    resource_schema: Literal[
+        "network_baseline.v2",
+        "network_scenario.v2",
+        "facility_location_solution.v3",
+    ]
 
 
 class ComparableNetworkResultRef(_ResourceRef):

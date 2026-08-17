@@ -195,6 +195,15 @@ pub(crate) fn warehouse_test_registry() -> DeliveryRegistry {
             mime_type: "application/vnd.open-web-codex.map-card+json".into(),
             display_name: "Interactive map".into(),
         },
+        DeliveryContract {
+            id: "network-map-card-revision".into(),
+            server: "map_utils".into(),
+            tool: "revise_map_card".into(),
+            kind: DeliveryKind::InlineGeoJsonMapCard,
+            schema: "map.v3".into(),
+            mime_type: "application/vnd.open-web-codex.map-card+json".into(),
+            display_name: "Revised interactive map".into(),
+        },
     ])
     .expect("warehouse delivery registry")
 }

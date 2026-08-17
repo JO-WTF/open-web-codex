@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 from typing import Annotated, Literal
@@ -11,17 +12,19 @@ from uuid import uuid4
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
 from mcp.types import CallToolResult, ResourceLink, TextContent, ToolAnnotations
-from open_web_codex_provider import GeoJsonResourceRef, derive_geojson_profile
+from open_web_codex_provider import GeoJsonResourceRef, ResourceRef, derive_geojson_profile
 from pydantic import BaseModel, ConfigDict, Field
 
 from .clients import GoogleMapsClient, MapboxMapsClient
 from .credential_prompt import LoopbackCredentialPrompt
 from .credentials import WorkspaceCredentialStore
-from .data_refs import GeoJsonResourceStore, PublishedGeoJson
+from .data_refs import GeoJsonResourceStore, MapCardSpecStore, PublishedGeoJson
 from .map_card import (
     Artifact,
     Embed,
     GeoJsonSource,
+    MapCardPatch,
+    MapCardSpec,
     MapExtensions,
     MapPayload,
     Renderer,
@@ -97,6 +100,27 @@ mcp = FastMCP(
 )
 _credential_store = WorkspaceCredentialStore(Path.cwd())
 _resource_store = GeoJsonResourceStore(Path.cwd())
+_map_card_spec_store = MapCardSpecStore(Path.cwd())
+
+
+def _map_card_spec_ref(uri: str) -> ResourceRef:
+    return ResourceRef(
+        server=MCP_SERVER_NAME,
+        uri=uri,
+        resource_schema="map_card_spec.v1",
+    )
+
+
+def _map_card_spec_link(resource_id: str, uri: str, size: int) -> ResourceLink:
+    return ResourceLink(
+        type="resource_link",
+        name=resource_id,
+        title="map_card_spec.v1",
+        uri=uri,
+        description="Reusable map presentation spec",
+        mimeType="application/json",
+        size=size,
+    )
 
 
 @mcp.resource(
@@ -108,6 +132,17 @@ _resource_store = GeoJsonResourceStore(Path.cwd())
 def read_geojson_resource(resource_id: str) -> str:
     """Read GeoJSON previously published by a maps data tool."""
     return _resource_store.read(resource_id)
+
+
+@mcp.resource(
+    "maps-data://map-card-spec/{resource_id}",
+    name="map_card_spec",
+    title="Map card presentation spec",
+    mime_type="application/json",
+)
+def read_map_card_spec(resource_id: str) -> str:
+    """Read one immutable provider-owned map presentation spec."""
+    return _map_card_spec_store.read(resource_id)
 
 
 async def _client(ctx: Context[ServerSession, None]):
@@ -294,6 +329,7 @@ async def create_map_card(
     bearing: float | None = None,
     pitch: float | None = None,
     extensions: MapExtensions | None = None,
+    parent_spec_ref: ResourceRef | None = None,
 ) -> Annotated[CallToolResult, ToolResult]:
     """Create the current typed Map Artifact from Mapbox Style layer JSON.
 
@@ -368,6 +404,22 @@ async def create_map_card(
         pitch=pitch,
         extensions=sanitized_extensions(extensions),
     )
+    spec = MapCardSpec(
+        title=clean_title,
+        intent=intent.strip() or "visualization",
+        fallback_text=fallback_text.strip() if fallback_text else None,
+        summary=summary.strip() if summary else None,
+        sources=sources,
+        layers=layers,
+        center=center,
+        zoom=zoom,
+        bearing=bearing,
+        pitch=pitch,
+        extensions=sanitized_extensions(extensions),
+        parentSpecRef=parent_spec_ref,
+    )
+    published_spec = _map_card_spec_store.publish(spec.model_dump(mode="json", by_alias=True))
+    map_spec_ref = _map_card_spec_ref(published_spec.uri)
     artifact_ref = f"map-{uuid4()}"
     embed_code = f'::codex-inline-vis{{artifact="{artifact_ref}"}}'
     result = ToolResult(
@@ -381,6 +433,7 @@ async def create_map_card(
             syntax="codex-inline-vis.artifact.v1",
             code=embed_code,
         ),
+        map_spec_ref=map_spec_ref,
         warnings=warnings or None,
     )
     structured_content = result.model_dump(mode="json", exclude_none=True)
@@ -403,10 +456,54 @@ async def create_map_card(
                     f"{embed_code}\n\n"
                     f"{warning_text}"
                 ),
-            )
+            ),
+            _map_card_spec_link(
+                published_spec.resource_id,
+                published_spec.uri,
+                published_spec.size,
+            ),
         ],
         structuredContent=structured_content,
     )
+
+
+@mcp.tool(structured_output=True, annotations=LOCAL_PRESENTATION_TOOL)
+async def revise_map_card(
+    map_spec_ref: ResourceRef,
+    patch: MapCardPatch,
+) -> Annotated[CallToolResult, ToolResult]:
+    """Create a new map card by applying a bounded patch to one exact map spec."""
+    if (
+        map_spec_ref.server != MCP_SERVER_NAME
+        or map_spec_ref.resource_schema != "map_card_spec.v1"
+        or not map_spec_ref.uri.startswith("maps-data://map-card-spec/")
+    ):
+        raise ValueError("map_card_spec_ref_invalid")
+    resource_id = map_spec_ref.uri.removeprefix("maps-data://map-card-spec/")
+    try:
+        parent = MapCardSpec.model_validate(json.loads(_map_card_spec_store.read(resource_id)))
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("map_card_spec_unavailable") from error
+    values = parent.model_dump(mode="python", by_alias=True)
+    for field in patch.model_fields_set:
+        values[field] = getattr(patch, field)
+    values["parentSpecRef"] = map_spec_ref
+    revised = MapCardSpec.model_validate(values)
+    result = await create_map_card(
+        title=revised.title,
+        sources=revised.sources,
+        layers=revised.layers,
+        intent=revised.intent,
+        fallback_text=revised.fallback_text,
+        summary=revised.summary,
+        center=revised.center,
+        zoom=revised.zoom,
+        bearing=revised.bearing,
+        pitch=revised.pitch,
+        extensions=revised.extensions,
+        parent_spec_ref=map_spec_ref,
+    )
+    return result
 
 
 def _point(point: Point) -> dict[str, float]:
@@ -526,9 +623,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    global _credential_store, _resource_store
+    global _credential_store, _resource_store, _map_card_spec_store
     _credential_store = WorkspaceCredentialStore(args.workspace_root)
     _resource_store = GeoJsonResourceStore(args.workspace_root)
+    _map_card_spec_store = MapCardSpecStore(args.workspace_root)
     mcp.run(transport=args.transport)
 
 

@@ -42,6 +42,7 @@ enabled_tools = [
   "plan_cost_matrix",
   "prepare_network_distribution_map",
   "prepare_network_comparison_map",
+  "prepare_network_coverage_map",
   "evaluate_network_baseline",
   "assess_facility_change",
   "solve_p_median",
@@ -63,6 +64,9 @@ approval_mode = "approve"
 approval_mode = "approve"
 
 [plugins.supply_chain.mcp_servers.supply_chain.tools.prepare_network_comparison_map]
+approval_mode = "approve"
+
+[plugins.supply_chain.mcp_servers.supply_chain.tools.prepare_network_coverage_map]
 approval_mode = "approve"
 
 [plugins.supply_chain.mcp_servers.supply_chain.tools.evaluate_network_baseline]
@@ -90,7 +94,11 @@ enabled_tools = [
   "get_route",
   "distance_matrix",
   "create_map_card",
+  "revise_map_card",
 ]
 
 [plugins.map_utils.mcp_servers.map_utils.tools.create_map_card]
+approval_mode = "approve"
+
+[plugins.map_utils.mcp_servers.map_utils.tools.revise_map_card]
 approval_mode = "approve"

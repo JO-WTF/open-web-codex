@@ -1421,15 +1421,26 @@ runtime = "tools/maps/runtime.toml"
             &serde_json::to_string_pretty(&serde_json::json!({
                 "schemaVersion": 1,
                 "compositionDescriptorSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "deliveries": [{
-                    "id": "map-card",
-                    "server": "map_utils",
-                    "tool": "create_map_card",
-                    "kind": "inline_geojson_map_card",
-                    "schema": "map.v3",
-                    "mimeType": "application/vnd.open-web-codex.map-card+json",
-                    "displayName": "Interactive map"
-                }],
+                "deliveries": [
+                    {
+                        "id": "map-card",
+                        "server": "map_utils",
+                        "tool": "create_map_card",
+                        "kind": "inline_geojson_map_card",
+                        "schema": "map.v3",
+                        "mimeType": "application/vnd.open-web-codex.map-card+json",
+                        "displayName": "Interactive map"
+                    },
+                    {
+                        "id": "map-card-revision",
+                        "server": "map_utils",
+                        "tool": "revise_map_card",
+                        "kind": "inline_geojson_map_card",
+                        "schema": "map.v3",
+                        "mimeType": "application/vnd.open-web-codex.map-card+json",
+                        "displayName": "Revised interactive map"
+                    }
+                ],
                 "capabilityRoots": [
                     {
                         "id": "supply_chain",
@@ -1496,6 +1507,17 @@ runtime = "tools/maps/runtime.toml"
                 .deliveries()
                 .for_item(
                     serde_json::json!({"server":"map_utils","tool":"create_map_card"})
+                        .as_object()
+                        .expect("item")
+                )
+                .map(|contract| &contract.kind),
+            Some(DeliveryKind::InlineGeoJsonMapCard)
+        ));
+        assert!(matches!(
+            assets
+                .deliveries()
+                .for_item(
+                    serde_json::json!({"server":"map_utils","tool":"revise_map_card"})
                         .as_object()
                         .expect("item")
                 )
@@ -1592,6 +1614,8 @@ runtime = "tools/maps/runtime.toml"
                 "discover_workspace_sources",
                 "inspect_workspace_sources",
                 "normalize_network_input",
+                "normalize_candidate_delta",
+                "derive_normalized_network_input",
                 "prepare_network_geography",
             ]
         );
@@ -1638,6 +1662,7 @@ runtime = "tools/maps/runtime.toml"
                 "plan_cost_matrix",
                 "prepare_network_distribution_map",
                 "prepare_network_comparison_map",
+                "prepare_network_coverage_map",
                 "evaluate_network_baseline",
                 "assess_facility_change",
                 "solve_p_median",
@@ -1650,7 +1675,7 @@ runtime = "tools/maps/runtime.toml"
             network["mcp_servers"]["supply_chain"]["default_tools_approval_mode"].as_str(),
             Some("prompt")
         );
-        for tool in &supply_chain_tools[..9] {
+        for tool in &supply_chain_tools[..10] {
             assert_eq!(
                 network["mcp_servers"]["supply_chain"]["tools"][*tool]["approval_mode"].as_str(),
                 Some("approve"),
@@ -1715,7 +1740,12 @@ runtime = "tools/maps/runtime.toml"
             .collect::<Vec<_>>();
         assert_eq!(
             map_tools,
-            vec!["get_route", "distance_matrix", "create_map_card",]
+            vec![
+                "get_route",
+                "distance_matrix",
+                "create_map_card",
+                "revise_map_card",
+            ]
         );
         assert_eq!(
             network["mcp_servers"]["map_utils"]["default_tools_approval_mode"].as_str(),
@@ -1723,6 +1753,11 @@ runtime = "tools/maps/runtime.toml"
         );
         assert_eq!(
             network["mcp_servers"]["map_utils"]["tools"]["create_map_card"]["approval_mode"]
+                .as_str(),
+            Some("approve")
+        );
+        assert_eq!(
+            network["mcp_servers"]["map_utils"]["tools"]["revise_map_card"]["approval_mode"]
                 .as_str(),
             Some("approve")
         );

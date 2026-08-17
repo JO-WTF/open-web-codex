@@ -1,9 +1,12 @@
 import CornerDownRight from "lucide-react/dist/esm/icons/corner-down-right";
 import Trash2 from "lucide-react/dist/esm/icons/trash-2";
+import type { ExplicitResourceSelection } from "../../../browser/types";
 
 export type QueuedFollowUp = {
   id: string;
   text: string;
+  mapCardRef?: string | null;
+  selectedResources?: ExplicitResourceSelection[];
 };
 
 type Props = {
@@ -22,16 +25,18 @@ export default function FollowUpQueue({ items, canSteer, steeringId, onSteer, on
       {items.map((item, index) => (
         <div className="web-followup-item" key={item.id} style={{ zIndex: items.length - index }}>
           <CornerDownRight size={14} aria-hidden="true" />
-          <span>{item.text}</span>
+          <span>{item.text}{item.mapCardRef ? " (includes selected map card)" : ""}{item.selectedResources?.length ? ` (includes ${item.selectedResources.length} processed result${item.selectedResources.length === 1 ? "" : "s"})` : ""}</span>
           <button
             type="button"
             className="web-followup-steer"
-            disabled={!canSteer || steeringId !== null}
+            disabled={!canSteer || steeringId !== null || Boolean(item.mapCardRef) || Boolean(item.selectedResources?.length)}
             onClick={() => onSteer(item.id)}
-            aria-label={`Steer now: ${item.text}`}
+            aria-label={item.mapCardRef || item.selectedResources?.length
+              ? "A queued map revision starts as its own turn"
+              : `Steer now: ${item.text}`}
           >
             <CornerDownRight size={13} aria-hidden="true" />
-            {steeringId === item.id ? "Steering…" : "Steer"}
+            {steeringId === item.id ? "Steering…" : item.mapCardRef || item.selectedResources?.length ? "Queued turn" : "Steer"}
           </button>
           <button type="button" className="web-followup-delete" onClick={() => onDelete(item.id)} aria-label={`Delete queued message: ${item.text}`}>
             <Trash2 size={14} aria-hidden="true" />

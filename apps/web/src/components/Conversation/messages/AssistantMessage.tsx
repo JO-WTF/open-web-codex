@@ -17,6 +17,7 @@ type Props = {
   showInlineArtifacts?: boolean;
   hiddenInlineArtifactRefs?: string[];
   inlineVisualizationThreadId?: string | null;
+  onReviseMapCard?: (cardId: string, title: string) => void;
 };
 
 export default function AssistantMessage({
@@ -28,6 +29,7 @@ export default function AssistantMessage({
   showInlineArtifacts = true,
   hiddenInlineArtifactRefs,
   inlineVisualizationThreadId,
+  onReviseMapCard,
 }: Props) {
   const commentary = variant === "commentary";
   const segments = useMemo(
@@ -71,6 +73,7 @@ export default function AssistantMessage({
                 <ReplyCard
                   key={`artifact-${segment.ref}-${index}`}
                   card={artifact.card}
+                  onRevise={onReviseMapCard}
                 />
               );
             }

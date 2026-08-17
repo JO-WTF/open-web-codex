@@ -19,6 +19,7 @@ description: 仅供仓网 Supervisor 原生创建的 network_agent 使用。用�
 - 最低数据包括需求城市 ID、名称、需求量，以及已有仓库 ID、名称、仓型和城市。真实现状对比需要当前分配，选址需要候选仓，成本和时效分析需要对应的报价、距离或时长。
 - 只消费 Supervisor 提供的 `ready` `normalized_network_input.v1` ResourceRef：完整对象必须为 `server=supply_chain_data`、精确 `uri` 与该 schema，并原样作为 `normalized_input_ref` 传给 Network Tool。不得调用 `list_mcp_resources`、`list_mcp_resource_templates` 或 `read_mcp_resource` 来寻找、读取或验证它；Network Tool 会在 provider 内部消费该引用。上游国家代码必须保持 ISO 两位大写形式，有误时让 Data Agent 重新发布，不在 Network 层修补。
 - 依用户目标选择 `warehouse_scope`：当前仓网或真实现状使用 `existing_only`；明确包含候选仓的模拟或规划使用 `all_warehouses`。
+- 需要展示方案后的覆盖关系时，调用 `prepare_network_coverage_map` 并传入同一 exact normalized input 与已求解的方案结果；它生成坐标直线，不调用道路导航。
 - 调用 `prepare_route_matrix` 选择 `provided`、`haversine` 或 `navigation`。已有 provided 路线事实适用时直接物化；否则才确认曲面距离估算或地图导航。估算需要绕路系数和平均速度；navigation 返回请求量与费用估算后，取得许可再调用外部地图能力并注册结果。
 - 成本优先使用用户报价。`route_quotes` 为空且用户没有确认包含 `rules` 的补算规则时，不调用 `plan_cost_matrix`，不虚构币种或费率；直接将成本标为不可用并说明所需数据。
 
@@ -39,5 +40,6 @@ description: 仅供仓网 Supervisor 原生创建的 network_agent 使用。用�
 - Planner 返回的 `data_ref.profile` 是从本次完整 GeoJSON 自动生成的有界概览，也是图层字段、类型、枚举值和几何类型的唯一模型可见真相。按它的 `discriminator_property` 与 `feature_types` 构造每个图层；筛选、表达式、标签和 tooltip 只使用对应 feature type 的 `properties`，不得从业务名或历史地图猜字段。纯分布数据没有时效字段时不猜测达标状态。
 - 为仓库、需求城市和干线连接配置 `extensions.hover`。从对应 feature type 的可用字段中选择人类可读名称作为标题，并按本次实际存在的字段展示业务标识、仓型或需求量、服务关系、运输时长、距离、成本和方案状态；缺失字段直接省略，不制造通用 `name` 或其他替代字段。
 - 将 Planner 返回的完整 `data_ref`（包括 `profile`）原样放入 `map_utils.create_map_card` 的 GeoJSON source，自行按上述展示意图构造标准 Mapbox Style `layers` 与可选 hover/legend；不得读取完整 Resource 内容，也不得改写数据引用、概览、原始指标或用户选择的阈值。地图 Tool 会依据 profile 拒绝不存在的字段和不兼容的几何图层。再将 `structuredContent.embed.code` 原样作为独立段落返回。地图 Tool 失败时明确报告，不制作 HTML、图片或文本地图替代。
+- 用户要求“基于此图修改”时，当前 Turn 会带入用户显式选择的 exact `map_card_spec.v1`。纯标题、图层、颜色、图例、悬浮或视角调整只调用 `revise_map_card` 并提交有界 patch；不得重新读取或发布 GeoJSON。若要求新增城市→仓库覆盖线，先用 exact 分配结果调用 `prepare_network_coverage_map` 发布新几何，再创建或修订一张引用该几何的新卡片。
 - 完整分析、模拟或规划达到可交付终态时，只调用一次 `publish_network_planning_report`，生成 create-new 中文 Markdown 报告。正文只概括关键结论，并原样保留 Tool 返回的链接。
 - 只有用户明确要求导出地图文件时才调用 `render_network_comparison_map`。中间 Resource 和导航文件不是 Artifact。

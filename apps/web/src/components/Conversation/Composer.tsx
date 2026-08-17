@@ -14,6 +14,7 @@ import Save from "lucide-react/dist/esm/icons/save";
 import ShieldCheck from "lucide-react/dist/esm/icons/shield-check";
 import Trash2 from "lucide-react/dist/esm/icons/trash-2";
 import X from "lucide-react/dist/esm/icons/x";
+import type { ResourceReferenceSummary } from "../../../browser/types";
 
 type Props = {
   draft: string;
@@ -36,6 +37,16 @@ type Props = {
   selectedModelId?: string | null;
   onSelectModel?: (modelId: string) => void;
   providerCatalogOpenRequest?: number;
+  mapCardAttachment?: { ref: string; title: string } | null;
+  onClearMapCardAttachment?: () => void;
+  resourceAttachments?: ResourceReferenceSummary[];
+  resourceOptions?: ResourceReferenceSummary[];
+  resourcePickerOpen?: boolean;
+  resourceRefsLoading?: boolean;
+  resourceRefsError?: string | null;
+  onToggleResourcePicker?: () => void;
+  onToggleResourceAttachment?: (resource: ResourceReferenceSummary) => void;
+  onClearResourceAttachment?: (producerEventId: string, ordinal: number) => void;
 };
 
 export type ModelProviderSummary = {
@@ -103,7 +114,7 @@ function providerDescription(provider: ModelProviderSummary): string {
   return provider.kind === "builtIn" ? "Built-in catalog" : "No models fetched";
 }
 
-export default function Composer({ draft, onDraftChange, onSend, onStop, running, stopping, busy, disabled, tokenUsage, providers = [], currentProviderId = null, models = [], catalogLoading = false, catalogError = null, onRefreshCatalog, onWriteProvider, onSelectProvider, selectedModelId = null, onSelectModel, providerCatalogOpenRequest = 0 }: Props) {
+export default function Composer({ draft, onDraftChange, onSend, onStop, running, stopping, busy, disabled, tokenUsage, providers = [], currentProviderId = null, models = [], catalogLoading = false, catalogError = null, onRefreshCatalog, onWriteProvider, onSelectProvider, selectedModelId = null, onSelectModel, providerCatalogOpenRequest = 0, mapCardAttachment = null, onClearMapCardAttachment, resourceAttachments = [], resourceOptions = [], resourcePickerOpen = false, resourceRefsLoading = false, resourceRefsError = null, onToggleResourcePicker, onToggleResourceAttachment, onClearResourceAttachment }: Props) {
   const textRef = useRef<HTMLTextAreaElement>(null);
   const catalogRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
@@ -442,6 +453,68 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
       >
       <div className="web-composer-main">
         <div className="web-composer-inner">
+          <div className="web-composer-resource-picker">
+            <button
+              type="button"
+              className="web-composer-resource-picker-toggle"
+              onClick={onToggleResourcePicker}
+              disabled={disabled || !onToggleResourcePicker}
+              aria-expanded={resourcePickerOpen}
+            >
+              Reuse processed result
+            </button>
+            {resourcePickerOpen ? (
+              <div className="web-composer-resource-picker-options" role="listbox" aria-label="Processed results">
+                {resourceRefsLoading ? <span>Loading processed results…</span> : null}
+                {resourceRefsError ? <span role="alert">{resourceRefsError}</span> : null}
+                {!resourceRefsLoading && !resourceRefsError && resourceOptions.length === 0 ? (
+                  <span>No reusable processed results in this Workspace.</span>
+                ) : null}
+                {resourceOptions.map((resource) => {
+                  const selected = resourceAttachments.some((attachment) => (
+                    attachment.producerEventId === resource.producerEventId
+                    && attachment.ordinal === resource.ordinal
+                  ));
+                  return (
+                    <button
+                      key={`${resource.producerEventId}-${resource.ordinal}`}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      onClick={() => onToggleResourceAttachment?.(resource)}
+                    >
+                      <strong>{resource.resourceSchema}</strong>
+                      <span>{resource.producerTool} · {resource.displayName}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+          {resourceAttachments.map((resource) => (
+            <div className="web-composer-resource-attachment" key={`${resource.producerEventId}-${resource.ordinal}`}>
+              <span>复用：{resource.resourceSchema}</span>
+              <button
+                type="button"
+                onClick={() => onClearResourceAttachment?.(resource.producerEventId, resource.ordinal)}
+                aria-label={`移除已选处理结果 ${resource.resourceSchema}`}
+              >
+                <X size={14} aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+          {mapCardAttachment ? (
+            <div className="web-composer-map-attachment" role="status">
+              <span>基于地图：{mapCardAttachment.title}</span>
+              <button
+                type="button"
+                onClick={onClearMapCardAttachment}
+                aria-label="移除已选地图"
+              >
+                <X size={14} aria-hidden="true" />
+              </button>
+            </div>
+          ) : null}
           <textarea
             ref={textRef}
             value={draft}

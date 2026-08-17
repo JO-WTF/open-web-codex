@@ -71,6 +71,8 @@ DATA_TOOLS = {
     "discover_workspace_sources",
     "inspect_workspace_sources",
     "normalize_network_input",
+    "normalize_candidate_delta",
+    "derive_normalized_network_input",
     "prepare_network_geography",
 }
 NETWORK_TOOLS = {
@@ -80,6 +82,7 @@ NETWORK_TOOLS = {
     "plan_cost_matrix",
     "prepare_route_matrix",
     "prepare_network_comparison_map",
+    "prepare_network_coverage_map",
     "prepare_network_distribution_map",
     "publish_network_planning_report",
     "register_navigation_route_matrix",

@@ -11,7 +11,6 @@ import pytest
 from _network_fixtures import network_case
 from open_web_codex_provider import (
     GeoJsonResourceRef,
-    McpResourceRuntime,
     ProviderContractError,
     PublishedResource,
     ResourceRef,
@@ -29,6 +28,7 @@ from supply_chain_planner.network.matrix_models import (
 )
 from supply_chain_planner.network.models import ProvidedRouteFactRecord
 from supply_chain_planner.shared.models import PreparedNetworkInputRef, PreparedNetworkResource
+from supply_chain_planner.shared.resources import SupplyChainResources
 
 McpResourceContractError = ProviderContractError
 
@@ -48,22 +48,9 @@ def _resource_ref(
 def _runtime(tmp_path: Path, monkeypatch) -> tuple[Path, ResourceStore]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    store = ResourceStore(
-        tmp_path / "profile" / "resources",
-        uri_prefix=server.RESOURCE_URI_PREFIX,
-    )
-    monkeypatch.setattr(
-        server,
-        "_mcp_resource_runtime",
-        McpResourceRuntime(
-            workspace,
-            tmp_path / "profile",
-            server.NETWORK_MCP_SERVER_NAME,
-            "supply-chain://resources/",
-            store=store,
-        ),
-    )
-    return workspace, store
+    resources = SupplyChainResources(workspace, tmp_path / "profile")
+    monkeypatch.setattr(server, "_supply_chain_resources", resources)
+    return workspace, resources.store
 
 
 def _context(workspace: Path) -> SimpleNamespace:
@@ -215,7 +202,7 @@ def test_main_starts_stdio_without_case_repository(tmp_path: Path, monkeypatch) 
     monkeypatch.chdir(workspace)
     monkeypatch.setenv("CODEX_HOME", str(profile))
     monkeypatch.setattr(sys, "argv", ["supply-chain-planner", "--transport", "stdio"])
-    for name in ("_workspace_root", "_profile_state_root", "_mcp_resource_runtime"):
+    for name in ("_workspace_root", "_profile_state_root", "_supply_chain_resources"):
         monkeypatch.setattr(server, name, getattr(server, name))
     captured: dict[str, bool] = {}
 
@@ -345,6 +332,55 @@ def test_distribution_map_publishes_geojson_for_map_card_only(
         and not feature["properties"]["is_existing"]
     ]
     assert len(candidate_features) == expected_candidates
+
+
+def test_coverage_map_reuses_exact_normalized_input_without_workspace_parsing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace, store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    prepared_ref = _prepared_ref(store)
+    route_ref = _result_ref(
+        server.prepare_route_matrix(
+            prepared_ref,
+            "haversine",
+            ctx,
+            detour_coefficient=1.2,
+            average_speed_kph=40,
+        )
+    )
+    baseline = server.evaluate_network_baseline(
+        prepared_ref,
+        route_ref,
+        "min_time",
+        [12],
+        "optimized_existing_footprint",
+        ctx,
+    )
+    assert baseline.structuredContent is not None
+    baseline_ref = ResourceRef.model_validate(baseline.structuredContent["resource_ref"])
+
+    def reject_workspace_parse(*_args, **_kwargs):
+        raise AssertionError("coverage map must consume normalized_input_ref, not Workspace files")
+
+    monkeypatch.setattr(server, "read_json_document", reject_workspace_parse)
+    result = server.prepare_network_coverage_map(prepared_ref, baseline_ref, ctx)
+
+    assert result.structuredContent is not None
+    data_ref = GeoJsonResourceRef.model_validate(result.structuredContent["data_ref"])
+    assert data_ref.resource_schema == "network_coverage_geojson.v1"
+    payload = store.load(data_ref)
+    kinds = [feature["properties"]["kind"] for feature in payload["features"]]
+    assert kinds.count("demand") == 2
+    assert kinds.count("warehouse") == 3
+    assert kinds.count("last_mile_assignment") == 2
+    assert kinds.count("linehaul_connection") == 1
+    assert all(
+        feature["geometry"]["type"] == "LineString"
+        for feature in payload["features"]
+        if feature["properties"]["kind"] in {"last_mile_assignment", "linehaul_connection"}
+    )
+    assert not list(workspace.rglob("*.json"))
 
 
 def test_route_and_cost_tools_use_exact_pair_reuse(tmp_path: Path, monkeypatch) -> None:

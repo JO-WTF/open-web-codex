@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 import maps_mcp.server as server
-from maps_mcp.map_card import GeoJsonSource
+from maps_mcp.data_refs import GeoJsonResourceStore, MapCardSpecStore
+from maps_mcp.map_card import GeoJsonSource, MapCardPatch, MapCardSpec
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult
 from pydantic import ValidationError
@@ -88,6 +92,73 @@ def network_data_ref() -> dict[str, object]:
 
 
 class MapCardTests(unittest.IsolatedAsyncioTestCase):
+    def test_provider_resources_are_content_addressed_and_immutable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            geojson_store = server.GeoJsonResourceStore(root)
+            spec_store = MapCardSpecStore(root)
+
+            geojson = {"type": "FeatureCollection", "features": []}
+            spec = {"schemaVersion": "map_card_spec.v1", "title": "Coverage"}
+            first_geojson = geojson_store.publish(geojson)
+            second_geojson = geojson_store.publish(geojson)
+            first_spec = spec_store.publish(spec)
+            second_spec = spec_store.publish(spec)
+
+            self.assertEqual(first_geojson.uri, second_geojson.uri)
+            self.assertEqual(first_spec.uri, second_spec.uri)
+            self.assertEqual(
+                GeoJsonResourceStore(root).read(first_geojson.resource_id),
+                json.dumps(geojson, ensure_ascii=False, separators=(",", ":")),
+            )
+            self.assertEqual(
+                json.loads(MapCardSpecStore(root).read(first_spec.resource_id)),
+                spec,
+            )
+            self.assertEqual(len(list((root / ".codex" / "maps-data").glob("*.geojson"))), 1)
+            self.assertEqual(len(list((root / ".codex" / "map-card-specs").glob("*.json"))), 1)
+
+    async def test_revise_card_creates_one_child_spec_and_reuses_geojson_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            original_store = server._map_card_spec_store
+            store = MapCardSpecStore(Path(directory))
+            server._map_card_spec_store = store
+            try:
+                created = await server.create_map_card(
+                    title="Coverage",
+                    sources={"network": GeoJsonSource(type="geojson", data_ref=network_data_ref())},
+                    layers=[
+                        {
+                            "id": "cities",
+                            "type": "circle",
+                            "source": "network",
+                            "paint": {"circle-color": "#2563eb"},
+                        }
+                    ],
+                )
+                assert created.structuredContent is not None
+                parent_ref = created.structuredContent["map_spec_ref"]
+                revised = await server.revise_map_card(
+                    server.ResourceRef.model_validate(parent_ref),
+                    MapCardPatch(title="Coverage — revised style"),
+                )
+                assert revised.structuredContent is not None
+                child_ref = revised.structuredContent["map_spec_ref"]
+                self.assertNotEqual(parent_ref["uri"], child_ref["uri"])
+                parent_id = parent_ref["uri"].rsplit("/", 1)[1]
+                child_id = child_ref["uri"].rsplit("/", 1)[1]
+                parent = MapCardSpec.model_validate(json.loads(store.read(parent_id)))
+                child = MapCardSpec.model_validate(json.loads(store.read(child_id)))
+                self.assertEqual(parent.sources, child.sources)
+                self.assertEqual(child.title, "Coverage — revised style")
+                self.assertEqual(
+                    child.parent_spec_ref,
+                    server.ResourceRef.model_validate(parent_ref),
+                )
+                self.assertNotIn("data", json.loads(store.read(child_id))["sources"]["network"])
+            finally:
+                server._map_card_spec_store = original_store
+
     async def test_preserves_standard_mapbox_layers(self) -> None:
         layer = {
             "id": "routes",
@@ -265,7 +336,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
 
         assert result.structuredContent is not None
         embed_code = result.structuredContent["embed"]["code"]
-        self.assertEqual(len(result.content), 1)
+        self.assertEqual(len(result.content), 2)
         message = result.content[0]
         self.assertEqual(message.type, "text")
         assert message.text is not None
@@ -273,6 +344,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("standalone paragraph", message.text)
         self.assertIn("may appear anywhere", message.text)
         self.assertIn(f"\n\n{embed_code}\n\n", message.text)
+        self.assertEqual(result.content[1].type, "resource_link")
 
     async def test_official_validator_warns_unknown_and_rejects_invalid_known_syntax(
         self,

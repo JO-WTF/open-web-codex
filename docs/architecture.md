@@ -3,7 +3,7 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前事实 |
-| 快照日期 | 2026-08-13 |
+| 快照日期 | 2026-08-17 |
 | 代码快照 | 阶段二 Copilot 平台工作树（基于 `9530e5e54b`） |
 | 当前阶段边界 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 与 [开发计划](development-plan.md) |
 | 接受决策 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
@@ -38,7 +38,7 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | Provider 定义、模型目录与 Profile 的未来 Thread 默认选择 | Codex Profile config + Runtime；Platform 保存 Browser catalog 投影 | `config/batchWrite` 持久化 Runtime 配置；Platform 的 Profile catalog 保存 Web 配置入口所需的 provider/model 投影和非敏感 credential env-key 名称。真实 fresh Profile 已通过 provider-scoped Fetch、选择、重启恢复和新 Thread 创建，不再把空 model pair 发给 Server |
 | Provider Secret | Platform encrypted Secret store 或显式环境凭据 | Direct credential 只进入 Profile/provider scoped Secret store；环境凭据只持久化变量名称并由 owned Profile process 注入。Codex config、Browser DTO、日志和文档不保存明文 |
 | Workspace 授权、执行根与普通文件 | Platform + Runner | Workspace 独立于 Thread/Run；Task 已固定唯一授权 Workspace，Run/fork/recovery 受数据库和服务端不变量约束；真实 Runtime Probe 已证明 Root/child 使用同一 native `sandboxCwd`，同时观察到 macOS `/var` 与 `/private/var` 的同 inode 词法差异；physical-path join 的通用收敛进入后续 backlog，当前仓网链继续以既有 Workspace denial gate 为边界；通用文件 Web 产品流已统一到 `/workspaces/{id}/files` 与 `GitRuntime` |
-| MCP Resource 内容与生命周期 | 各个 MCP provider | Codex 按 Thread/Turn 当前 server inventory 执行 list/read，official Tool Item 保存 ResourceLink/structuredContent；供应链 provider 当前把字节保存在 Profile 私有、按 canonical Workspace 隔离的 `ResourceStore` 中。Platform 不复制内容或提供通用 Resource API；active Copilot 可用 `[[deliveries]]` 声明 exact producer 与固定 `inline_geojson`/`map_card` 合同，Platform 只持久化 bounded renderer/ref 投影，浏览器按组织与 Run 授权通过 producing Thread 的 official `mcpServer/resource/read` 即时取得 GeoJSON |
+| MCP Resource 内容与生命周期 | 各个 MCP provider | Codex 按 Thread/Turn 当前 server inventory 执行 list/read，official Tool Item 保存 ResourceLink/structuredContent；供应链 Data/Network 是同一 `supply_chain` provider Resource 域的两个 Tool，字节保存在 Profile 私有、按 canonical Workspace 隔离且内容寻址的 `ResourceStore`。Resource 只表示可复用的确切处理结果，不表示来源可信、业务准入或“最新”。Platform 不复制内容或提供通用 Resource API；只从完成 Tool Item 的 ResourceLink 投影 exact identity/provenance，供同 Profile+Workspace 的用户显式选择，并逐字段复验。地图卡片另保存 bounded renderer、exact `map_card_spec` ref 及父卡片 ref；浏览器按组织与 Run 授权通过 producing Thread 的 official `mcpServer/resource/read` 即时取得 GeoJSON |
 | 通用 Copilot Resource/Workspace 基础合同 | Platform/Workspace authority 与 `tools/copilot-provider-sdk` 分工拥有 | Workspace 授权与 Artifact 物化属于 Platform/Runner；独立、领域无关的 provider SDK 提供 `ResourceRef` envelope、expected-schema 校验、canonical codec、payload bounds、typed errors、Workspace canonical/no-follow writer 与 provider load/publish primitives。Tool 用 `runtime.toml.platform_packages` 声明受 SDK registry 管理的平台包；generic provisioner 从已安装 SDK distribution 构建并注入 Tool 环境，不读取仓网路径或在 Runtime 启动时安装 |
 | Task、Run、Approval、Artifact、Audit | Platform | 持久 Artifact 只接受 active Copilot `[[deliveries]]` 声明的 exact producer、固定 typed kind/schema/MIME/verifier 和 Workspace-relative descriptor，并按 producing Item provenance 物化；中间 Resource 永不注册 Artifact。仓网包当前声明 Markdown 报告、地图文件和 inline map card，meeting 包声明 Markdown 报告；Platform 不理解其业务字段。producer-time verifier snapshot 随 Artifact 持久化，恢复和下载不依赖届时 active package registry，切换 Copilot 不会使既有交付失效。Browser 依据 MIME 安全预览、授权下载，并从 durable `ArtifactSummary.download_url` 在对话正文区域显示文件链接，不依赖 Assistant 复述路径或简报正文 |
 | Codex Inline Visualization | Codex Runtime + Platform 授权投影 | Runtime 仍生成原生 `visualize`/`file` 引用和 Thread-scoped 文件；Platform 将执行器绝对路径投影为 basename，并只允许当前授权 Profile/Thread 读取。Web 直接支持原生 HTML 与静态 PNG/JPEG/GIF/WebP；HTML 复用 Codex viewer assets 并运行在无 same-origin 权限的脚本沙箱/CSP 中，图片验证扩展名、大小与文件签名。SVG、Markdown 和任意 Artifact 脚本不进入该表面；额外 typed 卡片只来自 active Copilot 声明的固定 delivery kind，当前实例是仓网 `map.v3` |
@@ -47,7 +47,7 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | Capability Draft/Release/Installation | 无当前生产 owner | Catalog/Studio/Python publish crate、route、DTO、client、UI 与无 owner 数据表均已删除，不参与启动或 readiness |
 | Work State 与 Platform coordination | 无当前 production owner | work-state-service、route、MCP、gate、schema 与第二控制面已由 Slice 4B.2-A 删除；不建设替代状态机 |
 | Data Intake | 无当前 owner | 生产 route、validation crate、SourceAsset/Dataset/Task binding 表与产品入口已删除；阶段一不建设替代状态机 |
-| 仓网规划能力 | 供应链 Python 包的 domain owners | 当前阶段统一拥有 demand/facility/candidate/location/lane/route/cost records，Data mapping/normalization/geography，route/cost fact 与 matrix build/validate/partial reuse，actual/optimized baseline、open/close/relocation scenario、assignment/service/cost evaluation、p-median、before/after comparison、卡片数据和确定性 Markdown 简报。单次增仓、关仓或搬迁评估可由一个 domain Tool 以 exact before result 为基座完成一次求解和比较，并在同一调用中返回 scenario/comparison exact refs 与有界成本、覆盖和城市变更指标；它不引入 Platform workflow、缓存或第二份业务状态。报告输入以 discriminated typed contract 区分单一 baseline 评估和完整 baseline-versus-plan comparison，不为交付伪造方案结果。结构化计算结果与业务简报分离，不拥有通用 Resource/Workspace infrastructure。Stage E 已删除 Case/NetworkSnapshot/source_ref/ArtifactRef 与多层 hashes 旧偏离。未来若第二个供应链 Copilot 证明存在稳定公共领域合同，再评估内部提取 |
+| 仓网规划能力 | 供应链 Python 包的 domain owners | 当前阶段统一拥有 demand/facility/candidate/location/lane/route/cost records，Data mapping/normalization/geography、candidate-only delta derivation，route/cost fact 与 matrix build/validate/partial reuse，actual/optimized baseline、open/close/relocation scenario、assignment/service/cost evaluation、p-median、before/after comparison、分配覆盖 GeoJSON、地图卡片数据和确定性 Markdown 简报。候选仓增量只派生新的完整不可变输入；需求、现网仓、实际分配、路线或报价事实变动必须完整归一化。Network 覆盖线从精确分配和坐标派生，不含城市/仓库名称分支；它不引入 Platform workflow、缓存或第二份业务状态。报告输入以 discriminated typed contract 区分单一 baseline 评估和完整 baseline-versus-plan comparison，不为交付伪造方案结果。结构化计算结果与业务简报分离，不拥有通用 Resource/Workspace infrastructure。Stage E 已删除 Case/NetworkSnapshot/source_ref/ArtifactRef 与多层 hashes 旧偏离。未来若第二个供应链 Copilot 证明存在稳定公共领域合同，再评估内部提取 |
 
 Codex Runtime 仍是模型可见对话状态的唯一权威。Platform events、execution、activity
 和协作状态都是投影，不应成为第二个 Thread、Memory 或 Supervisor。
@@ -110,12 +110,12 @@ list endpoint，因此单独报告 configured，真实可执行性仍由 native 
 Platform 侧过滤 Runtime discovery 或 Tool。
 
 Data/Network Role TOML 只持有 `plugins.<tool>.mcp_servers.<server>` 下的精确 allowlist 与 Tool 级审批策略；
-Root 没有全局仓网 MCP。Data 的四个有界本地 Tool 统一预批准；Network 以 `prompt` 为默认，
-预批准路线/成本/验证/分析/选址/比较等本地 Tool 与最终 Markdown 报告 `publish_network_planning_report`；`map_utils` 仅预批准 `create_map_card`。
+Root 没有全局仓网 MCP。Data 的六个有界本地 Tool（含 candidate delta/derive）统一预批准；Network 以 `prompt` 为默认，
+预批准路线/成本/验证/分析/选址/比较、coverage GeoJSON 等本地 Tool 与最终 Markdown 报告 `publish_network_planning_report`；`map_utils` 预批准 `create_map_card` 与 `revise_map_card`。
 外部导航、距离矩阵和 final Workspace 地图导出继续保留 official approval。MCP provider
 将 Data→Network 输入声明为严格的 `normalized_input_ref`：必须是 `supply_chain_data` 发布的
-`normalized_network_input.v1` 精确 `{server, uri, resource_schema}`，由 Network Tool 在 provider 内部消费；
-Network Role 不枚举、读取或验证 Data provider Resource。Platform 不为此建立消息或数据平面。
+`normalized_network_input.v1` 精确 `{server, uri, resource_schema}`，由 Network Tool 通过 package-owned facade 在同一 provider 域内消费；
+Network Role 不枚举、猜测、扫描或重解析 Data 输入。Platform 不为当前原生协作链建立消息或数据平面。
 同时在 Tool annotations 中声明 read-only、destructive、idempotent 和 open-world 事实，Role
 policy 只裁决该 child 的精确允许面，不修改全局 `approvalPolicy`。prepared transport 不固定 MCP
 process cwd；Runtime 使用该 Thread 已授权的 Workspace 作为 stdio MCP cwd。依赖环境与
@@ -198,8 +198,10 @@ revision、operation、dependency、readiness 或 deliverable 状态。
 字节；这一 provider content owner 与 Codex 官方 MCP Resource 合同一致。Data4 与 Network 的
 decorated active surface 已统一使用 strict typed
 `ResourceRef`：
-Data Server 的 inspect 只发布 `source_profile.v1`，normalize 只接受显式确认的 source
-mapping，prepare-geography 只接受已校验的行政区输入。CaseRepository、NetworkSnapshot、
+Data Server 的 inspect 只发布 `source_profile.v1`，首次 normalize 只接受显式确认的 source
+mapping 并保留所有确认的候选仓；candidate-only change 先发布 `candidate_warehouse_delta.v1`，再以
+exact base/delta ref 派生新的 `normalized_network_input.v1`。prepare-geography 只接受已校验的行政区输入。
+CaseRepository、NetworkSnapshot、
 ArtifactRef 和其 wrappers 已在 Stage E 原子删除；不能通过新增第二套 resolver 或兼容包装
 恢复该切换。通用的 scope/ref/store/codec/bounds/error/writer 已迁到
 `tools/copilot-provider-sdk`；仓网包只保留数据准备、网络规划、地图与报告等领域模型和算法。
@@ -213,8 +215,10 @@ Data4 active surface 不再接受 `source_ref/sourceRef/source_refs/sourceRefs/s
 catalog 与可选 overrides。Network active surface 已是 strict `ResourceRef`；旧
 Case/ArtifactRef compatibility tail 已删除。用户文件继续使用经校验的 Workspace 相对路径，provider-owned intermediate
 继续使用单一 typed MCP Resource ref；Platform 不建立数据 revision/binding/fingerprint/cache
-或通用 Broker。跨 Task 可发现若在阶段一实现，只能是从 official history exact Item 重建的授权
-`{server, uri}` 引用投影。
+或通用 Broker。`resource_ref_projections` 是当前已实现的有界投影：只保存 completed official Tool Item
+ResourceLink 的 producer event/item、ordinal、`{server, uri, resource_schema}`、Tool 与显示名；不保存
+Resource content、摘要语义、版本列表或“最佳/最新”判断。它只支持同 Profile+Workspace 的用户显式选择，
+Server 在 Turn 前重验所有字段。
 
 用户输入中的完整路线距离、时长和来源方法由 Data provider 作为 typed pair facts 保存在同一个
 `normalized_network_input.v1` Resource 中；Network provider 按明确仓库范围将其物化为
@@ -229,7 +233,9 @@ DTO、数据库工作流或 Skill 中的案例规则。
 Markdown 文件登记并下载。对话内 `map.v3` 只保存 bounded renderer 与 exact producing Resource
 引用，原生 Codex inline visualization 则从授权 Profile/Thread 目录即时读取，二者都不会把
 中间 MCP Resource 提升为 Artifact。`content_sha256` 只记录复制后字节完整性，不参与业务复用
-或准入。
+或准入。`map.v3` 的 provider-owned、内容寻址 `map_card_spec.v1` 只保存精确 GeoJSON refs、图层、视角和可选父 spec ref；
+纯样式修订复用原 GeoJSON，新增覆盖线先由 Network 产生新的 GeoJSON 再创建 child spec。Platform 的
+`inline_map_cards` 只投影该 exact spec ref 和父卡片关系，浏览器不接收 GeoJSON 内容。
 
 ## 6. Profile 与认证的当前边界
 

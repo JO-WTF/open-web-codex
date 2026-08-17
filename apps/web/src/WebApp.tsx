@@ -9,6 +9,8 @@ import type {
   McpFormResponseAction,
   PendingMcpFormSummary,
   PendingUserInputSummary,
+  ExplicitResourceSelection,
+  ResourceReferenceSummary,
 } from "../browser/types";
 import {
   isPlatformRequestError,
@@ -419,6 +421,15 @@ export default function WebApp() {
   const [threadsByWorkspace, setThreadsByWorkspace] = useState<Record<string, ThreadInfo[]>>({});
   const [threadLoading, setThreadLoading] = useState(false);
   const [draft, setDraft] = useState("");
+  const [mapCardAttachment, setMapCardAttachment] = useState<{
+    ref: string;
+    title: string;
+  } | null>(null);
+  const [resourceAttachments, setResourceAttachments] = useState<ResourceReferenceSummary[]>([]);
+  const [resourceOptions, setResourceOptions] = useState<ResourceReferenceSummary[]>([]);
+  const [resourcePickerOpen, setResourcePickerOpen] = useState(false);
+  const [resourceRefsLoading, setResourceRefsLoading] = useState(false);
+  const [resourceRefsError, setResourceRefsError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [queuedFollowUps, setQueuedFollowUps] = useState<QueuedFollowUp[]>([]);
@@ -2353,6 +2364,8 @@ export default function WebApp() {
     text: string,
     targetWorkspaceId = activeWorkspaceId,
     targetThreadId = activeThreadId,
+    mapCardRef: string | null = null,
+    selectedResources: ExplicitResourceSelection[] = [],
   ) => {
     if (!targetWorkspaceId || !targetThreadId || !text.trim()) return false;
     appendLog("user", text);
@@ -2369,6 +2382,8 @@ export default function WebApp() {
         text,
         selectedModel?.model ?? selectedProviderModelId,
         currentProviderId,
+        mapCardRef,
+        selectedResources,
       );
       const payload = unwrapWebRpcResult(response);
       const record = payload && typeof payload === "object"
@@ -2404,6 +2419,49 @@ export default function WebApp() {
     }
   }, [activeThreadId, activeWorkspaceId, appendLog, client, currentProviderId, providerModels, selectedProviderModelId]);
 
+  const toggleResourcePicker = useCallback(async () => {
+    if (resourcePickerOpen) {
+      setResourcePickerOpen(false);
+      return;
+    }
+    if (!activeThreadId) {
+      setResourceRefsError("Start a conversation before selecting a processed result.");
+      setResourcePickerOpen(true);
+      return;
+    }
+    setResourcePickerOpen(true);
+    setResourceRefsError(null);
+    setResourceRefsLoading(true);
+    try {
+      setResourceOptions(await client.listReusableResources(activeThreadId));
+    } catch (error) {
+      setResourceRefsError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setResourceRefsLoading(false);
+    }
+  }, [activeThreadId, client, resourcePickerOpen]);
+
+  const toggleResourceAttachment = useCallback((resource: ResourceReferenceSummary) => {
+    setResourceAttachments((previous) => {
+      const selected = previous.some((attachment) => (
+        attachment.producerEventId === resource.producerEventId
+        && attachment.ordinal === resource.ordinal
+      ));
+      return selected
+        ? previous.filter((attachment) => (
+          attachment.producerEventId !== resource.producerEventId
+          || attachment.ordinal !== resource.ordinal
+        ))
+        : [...previous, resource];
+    });
+  }, []);
+
+  const clearResourceAttachment = useCallback((producerEventId: string, ordinal: number) => {
+    setResourceAttachments((previous) => previous.filter((attachment) => (
+      attachment.producerEventId !== producerEventId || attachment.ordinal !== ordinal
+    )));
+  }, []);
+
   const sendMessage = useCallback(async () => {
     const text = draft.trim();
     if (!activeWorkspaceId || !text) return;
@@ -2411,26 +2469,52 @@ export default function WebApp() {
       const threadId = await startThread(activeWorkspaceId);
       if (!threadId) return;
       setDraft("");
-      await sendText(text, activeWorkspaceId, threadId);
+      await sendText(text, activeWorkspaceId, threadId, null);
       return;
     }
-    setDraft("");
+    const selectedMapCardRef = mapCardAttachment?.ref ?? null;
+    const selectedResources: ExplicitResourceSelection[] = resourceAttachments.map((resource) => ({
+      producerEventId: resource.producerEventId,
+      ordinal: resource.ordinal,
+      server: resource.server,
+      uri: resource.uri,
+      resourceSchema: resource.resourceSchema,
+    }));
     const running = thinking
       || threadStatus === "running"
       || threadStatus === "reconnecting"
       || threadStatus.startsWith("active");
     if (running) {
-      if (text) setQueuedFollowUps((previous) => [...previous, { id: newLogId(), text }]);
+      setDraft("");
+      setMapCardAttachment(null);
+      setResourceAttachments([]);
+      if (text) {
+        setQueuedFollowUps((previous) => [
+          ...previous,
+          { id: newLogId(), text, mapCardRef: selectedMapCardRef, selectedResources },
+        ]);
+      }
       return;
     }
-    await sendText(text, activeWorkspaceId, activeThreadId);
-  }, [activeThreadId, activeWorkspaceId, draft, sendText, startThread, thinking, threadStatus]);
+    setDraft("");
+    setMapCardAttachment(null);
+    setResourceAttachments([]);
+    await sendText(text, activeWorkspaceId, activeThreadId, selectedMapCardRef, selectedResources);
+  }, [activeThreadId, activeWorkspaceId, draft, mapCardAttachment, resourceAttachments, sendText, startThread, thinking, threadStatus]);
 
   const stopTurn = useCallback(() => {
     if (!activeWorkspaceId || !activeThreadId || stopping) return;
     interruptRequestTurnId.current = null;
     setStopping(true);
   }, [activeThreadId, activeWorkspaceId, stopping]);
+
+  useEffect(() => {
+    setMapCardAttachment(null);
+    setResourceAttachments([]);
+    setResourceOptions([]);
+    setResourcePickerOpen(false);
+    setResourceRefsError(null);
+  }, [activeThreadId]);
 
   useEffect(() => {
     if (!stopping || !activeWorkspaceId || !activeThreadId || !activeTurnId) return;
@@ -2468,7 +2552,13 @@ export default function WebApp() {
     if (running || busy || !next || queueDispatching.current) return;
     queueDispatching.current = true;
     setQueuedFollowUps((previous) => previous.filter((item) => item.id !== next.id));
-    void sendText(next.text).finally(() => {
+    void sendText(
+      next.text,
+      activeWorkspaceId,
+      activeThreadId,
+      next.mapCardRef ?? null,
+      next.selectedResources ?? [],
+    ).finally(() => {
       queueDispatching.current = false;
     });
   }, [busy, queuedFollowUps, sendText, thinking, threadStatus]);
@@ -3060,6 +3150,19 @@ export default function WebApp() {
         thinking={thinking}
         turnStartedAt={turnStartedAt}
         onResolveApproval={resolveApproval}
+        mapCardAttachment={mapCardAttachment}
+        onSelectMapCardForRevision={(ref, title) => {
+          setMapCardAttachment({ ref, title });
+        }}
+        onClearMapCardAttachment={() => setMapCardAttachment(null)}
+        resourceAttachments={resourceAttachments}
+        resourceOptions={resourceOptions}
+        resourcePickerOpen={resourcePickerOpen}
+        resourceRefsLoading={resourceRefsLoading}
+        resourceRefsError={resourceRefsError}
+        onToggleResourcePicker={() => { void toggleResourcePicker(); }}
+        onToggleResourceAttachment={toggleResourceAttachment}
+        onClearResourceAttachment={clearResourceAttachment}
       />
     </Layout>
   );

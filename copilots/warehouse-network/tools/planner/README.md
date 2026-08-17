@@ -56,10 +56,10 @@ Data Tool 会把用户输入中完整的起点、终点、距离、时长与来�
 
 ## Tool 审批
 
-Data Role 的四个文件准备 Tool 都是已评审的有界本地能力，可在精确 allowlist 内预批准。
+Data Role 的六个文件准备 Tool 都是已评审的有界本地能力，可在精确 allowlist 内预批准。
 Network/standalone Plugin 以 `prompt` 为默认，只对路线准备、baseline、scenario、
 p-median、comparison 和卡片数据准备等无外部副作用的 Tool 配置逐项预批准。对话内地图卡片
-复用 `map_utils/create_map_card`，当空间分布、覆盖关系、仓库变动或城市重分配有助于理解时可由
+复用 `map_utils/create_map_card` 或 `revise_map_card`，当空间分布、覆盖关系、仓库变动或城市重分配有助于理解时可由
 Skill 自动使用，不创建 Workspace 文件。最终 map 文件与 Markdown report Tool 会以 create-new
 语义写 Workspace 文件，因此继续请求 official approval。地图导航和距离矩阵属于 `map_utils`
 的外部、可能计费操作，也不能由本包预批准。Tool annotations 描述 provider

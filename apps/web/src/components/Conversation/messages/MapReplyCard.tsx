@@ -16,6 +16,7 @@ import MapsConfigurationModal from "./MapsConfigurationModal";
 
 type Props = {
   card: MapReplyCardData;
+  onRevise?: (cardId: string, title: string) => void;
 };
 
 type LoadedSource = {
@@ -495,7 +496,7 @@ function MapCanvas({
 }
 
 const MapReplyCard = memo(
-  function MapReplyCard({ card }: Props) {
+  function MapReplyCard({ card, onRevise }: Props) {
   const [fullscreen, setFullscreen] = useState(false);
   const [configurationOpen, setConfigurationOpen] = useState(false);
   const mapsConfiguration = useMapsConfiguration();
@@ -512,6 +513,16 @@ const MapReplyCard = memo(
           <span>{card.title}</span>
         </div>
         <span className="web-map-card-status">{statusLabel(card.status)}</span>
+        {!fullscreenBody ? (
+          <button
+            type="button"
+            className="web-map-card-revise"
+            onClick={() => onRevise?.(card.id, card.title)}
+            disabled={!onRevise}
+          >
+            基于此图修改
+          </button>
+        ) : null}
         {!fullscreenBody ? (
           <button
             type="button"

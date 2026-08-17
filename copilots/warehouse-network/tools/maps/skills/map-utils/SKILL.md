@@ -23,10 +23,11 @@ pass a provider key in chat; the MCP server owns configuration.
 4. Keep the Resource server exactly as returned by its producing Tool. Maps-provider data uses
    `map_utils`; reviewed domain GeoJSON may use its own raw MCP server ID. Never substitute the
    model-visible `mcp__...` Tool namespace.
-5. A successful `create_map_card` call only creates the Artifact; it does not display the map.
-   To display it, copy `structuredContent.embed.code` verbatim into the Assistant response as a
-   standalone paragraph, with a blank line before and after it. The paragraph may appear anywhere
-   in the response where the map should be shown.
+5. A successful `create_map_card` or `revise_map_card` call returns an inline map card plus an
+   immutable `map_card_spec.v1` Resource reference; it does not create a durable Artifact or
+   display the map by itself. To display it, copy `structuredContent.embed.code` verbatim into the
+   Assistant response as a standalone paragraph, with a blank line before and after it. The
+   paragraph may appear anywhere in the response where the map should be shown.
 6. Do not wrap the embed code in a code fence, blockquote, or list, and do not merely describe the
    map. The map is not displayed until the standalone embed paragraph is present.
 
@@ -41,6 +42,14 @@ pass a provider key in chat; the MCP server owns configuration.
 
 Do not wrap these fields in `style`. The renderer calls `map.addSource` and `map.addLayer`; it
 does not call `map.setStyle`.
+
+### Revisions
+
+For a user-selected current map card, call `revise_map_card` with its exact `map_spec_ref` and a
+bounded `patch`. The Tool writes a new immutable child spec whose `parentSpecRef` is the selected
+spec. Pure presentation changes reuse the existing GeoJSON source references. Do not use a map
+revision to infer warehouse assignments or coverage; a new coverage relationship must first be
+published by the domain Network Tool as a new GeoJSON Resource.
 
 ### Sources
 

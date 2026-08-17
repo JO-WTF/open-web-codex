@@ -68,6 +68,15 @@ schema = "map.v3"
 mime_type = "application/vnd.open-web-codex.map-card+json"
 display_name = "Interactive map"
 
+[[deliveries]]
+id = "network-map-card-revision"
+server = "map_utils"
+tool = "revise_map_card"
+kind = "inline_geojson_map_card"
+schema = "map.v3"
+mime_type = "application/vnd.open-web-codex.map-card+json"
+display_name = "Revised interactive map"
+
 [[tests]]
 id = "empty-workspace-source-discovery"
 prompt = "Discover supported source files in the authorized empty Workspace and return the verified catalog."

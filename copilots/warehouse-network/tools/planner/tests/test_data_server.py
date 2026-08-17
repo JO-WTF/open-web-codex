@@ -4,34 +4,36 @@ import asyncio
 import json
 
 import pytest
-from open_web_codex_provider import ResourceRef, ResourceStore, bind_runtime
+from open_web_codex_provider import ResourceRef, ResourceStore
 from supply_chain_planner.data import server as data_server
-from supply_chain_planner.shared.models import ConfirmedSourceDecision
+from supply_chain_planner.network.models import DemandCityRecord, WarehouseRecord
+from supply_chain_planner.shared.models import (
+    CandidateWarehouseDeltaRef,
+    ConfirmedSourceDecision,
+    PreparedNetworkInputRef,
+    PreparedNetworkResource,
+)
+from supply_chain_planner.shared.resources import SupplyChainResources
 
 RESOURCE_URI_PREFIX = "supply-chain://resources/"
 
 
 def _use_store(tmp_path, monkeypatch) -> ResourceStore:
-    store = ResourceStore(tmp_path / "profile-state", uri_prefix=RESOURCE_URI_PREFIX)
-    runtime = bind_runtime(
-        tmp_path,
-        tmp_path / "profile",
-        data_server.DATA_MCP_SERVER_NAME,
-        RESOURCE_URI_PREFIX,
-        store=store,
-    )
-    monkeypatch.setattr(data_server, "_mcp_resource_runtime", runtime)
+    resources = SupplyChainResources(tmp_path, tmp_path / "profile")
+    monkeypatch.setattr(data_server, "_supply_chain_resources", resources)
     monkeypatch.setattr(data_server, "_workspace", lambda _ctx: tmp_path)
-    return store
+    return resources.store
 
 
-def test_data_server_exposes_only_four_composable_tools() -> None:
+def test_data_server_exposes_only_candidate_delta_composable_tools() -> None:
     tools = asyncio.run(data_server.mcp.list_tools())
 
     assert [tool.name for tool in tools] == [
         "discover_workspace_sources",
         "inspect_workspace_sources",
         "normalize_network_input",
+        "normalize_candidate_delta",
+        "derive_normalized_network_input",
         "prepare_network_geography",
     ]
     for tool in tools[1:]:
@@ -222,3 +224,108 @@ def test_confirmed_rows_normalize_then_prepare_geography_with_country(
     assert prepared_payload["country_code"] == "ID"
     assert prepared_payload["state"] == "ready"
     assert prepared_payload["demand_cities"][0]["longitude"] == 106.8
+
+
+def test_candidate_delta_derives_new_snapshot_without_reparsing_base_facts(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "candidate-delta.csv").write_text(
+        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,longitude,latitude\n"
+        "CAND-DELTA,Delta Candidate,center,CITY-1,Jakarta,106.9,-6.3\n",
+        encoding="utf-8",
+    )
+    store = _use_store(tmp_path, monkeypatch)
+    source_profile = data_server.inspect_workspace_sources(["candidate-delta.csv"], object())
+    assert source_profile.structuredContent is not None
+    source_profile_ref = ResourceRef.model_validate(source_profile.structuredContent["resource_ref"])
+    candidate_decision = ConfirmedSourceDecision.model_validate(
+        {
+            "relative_path": "candidate-delta.csv",
+            "role": "candidate_warehouse",
+            "mappings": [
+                {"source_field": "warehouse_id", "target_field": "warehouse_id", "transform": "normalize_identifier"},
+                {"source_field": "warehouse_name", "target_field": "warehouse_name", "transform": "trim"},
+                {"source_field": "warehouse_type", "target_field": "warehouse_type", "transform": "normalize_warehouse_type"},
+                {"source_field": "city_id", "target_field": "city_id", "transform": "normalize_identifier"},
+                {"source_field": "city_name", "target_field": "city_name", "transform": "trim"},
+                {"source_field": "longitude", "target_field": "longitude", "transform": "parse_decimal"},
+                {"source_field": "latitude", "target_field": "latitude", "transform": "parse_decimal"},
+            ],
+        }
+    )
+    delta_result = data_server.normalize_candidate_delta(
+        source_profile_ref,
+        [candidate_decision],
+        [],
+        object(),
+    )
+    assert delta_result.structuredContent is not None
+    delta_ref = CandidateWarehouseDeltaRef.model_validate(
+        delta_result.structuredContent["resource_ref"]
+    )
+
+    base = PreparedNetworkResource(
+        country_code="ID",
+        state="ready",
+        demand_cities=[
+            DemandCityRecord(
+                city_id="CITY-1",
+                city_name="Jakarta",
+                demand_quantity=10,
+                longitude=106.8,
+                latitude=-6.2,
+            )
+        ],
+        warehouses=[
+            WarehouseRecord(
+                warehouse_id="EXISTING-1",
+                warehouse_name="Existing",
+                warehouse_type="center",
+                city_id="CITY-1",
+                city_name="Jakarta",
+                longitude=106.8,
+                latitude=-6.2,
+                is_existing=True,
+                is_fixed=True,
+            ),
+            WarehouseRecord(
+                warehouse_id="CAND-ORIGINAL",
+                warehouse_name="Original Candidate",
+                warehouse_type="center",
+                city_id="CITY-1",
+                city_name="Jakarta",
+                longitude=106.8,
+                latitude=-6.2,
+                is_existing=False,
+                is_fixed=False,
+            ),
+        ],
+        current_assignments=[],
+        route_quotes=[],
+    )
+    published_base = store.publish(base.schema_version, base)
+    base_ref = PreparedNetworkInputRef(
+        server=data_server.DATA_MCP_SERVER_NAME,
+        uri=published_base.uri,
+        resource_schema=published_base.schema,
+    )
+
+    def reject_workspace_parse(*_args, **_kwargs):
+        raise AssertionError("derivation must not reparse a Workspace source")
+
+    monkeypatch.setattr(data_server, "read_rows", reject_workspace_parse)
+    derived_result = data_server.derive_normalized_network_input(base_ref, delta_ref, object())
+    assert derived_result.structuredContent is not None
+    derived_ref = ResourceRef.model_validate(derived_result.structuredContent["resource_ref"])
+    base_payload = store.load(base_ref)
+    derived_payload = store.load(derived_ref)
+    assert [item["warehouse_id"] for item in base_payload["warehouses"]] == [
+        "EXISTING-1",
+        "CAND-ORIGINAL",
+    ]
+    assert [item["warehouse_id"] for item in derived_payload["warehouses"]] == [
+        "CAND-DELTA",
+        "CAND-ORIGINAL",
+        "EXISTING-1",
+    ]
+    assert derived_payload["parentResourceRef"] == base_ref.model_dump(mode="json")

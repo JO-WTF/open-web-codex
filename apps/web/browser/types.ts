@@ -45,6 +45,20 @@ export type Task = {
   updated_at: string;
 };
 
+export type ExplicitResourceSelection = {
+  producerEventId: string;
+  ordinal: number;
+  server: string;
+  uri: string;
+  resourceSchema: string;
+};
+
+export type ResourceReferenceSummary = ExplicitResourceSelection & {
+  displayName: string;
+  producerTool: string;
+  createdAt: string;
+};
+
 export type Run = {
   id: string;
   task_id: string;

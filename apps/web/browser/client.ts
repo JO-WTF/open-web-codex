@@ -42,6 +42,8 @@ import type {
   RuntimeAgentProjection,
   ArtifactSummary,
   ArtifactContent,
+  ExplicitResourceSelection,
+  ResourceReferenceSummary,
 } from "./types";
 
 type ClientOptions = {
@@ -611,6 +613,12 @@ export class PlatformClient {
     );
   }
 
+  listTaskResourceRefs(taskId: string) {
+    return this.request<ResourceReferenceSummary[]>(
+      `/api/tasks/${encodeURIComponent(taskId)}/resource-refs`,
+    );
+  }
+
   getArtifact(artifactId: string) {
     return this.request<ArtifactSummary>(
       `/api/artifacts/${encodeURIComponent(artifactId)}`,
@@ -633,6 +641,8 @@ export class PlatformClient {
       serviceTier?: string | null;
       accessMode?: string | null;
       images?: string[];
+      mapCardRef?: string | null;
+      selectedResources?: ExplicitResourceSelection[];
       collaborationMode?: Record<string, unknown> | null;
     } = {},
   ) {
@@ -653,6 +663,8 @@ export class PlatformClient {
           service_tier: options.serviceTier ?? null,
           access_mode: options.accessMode ?? null,
           images: options.images ?? [],
+          mapCardRef: options.mapCardRef ?? null,
+          selectedResources: options.selectedResources ?? [],
           collaboration_mode: options.collaborationMode ?? null,
         }),
       },

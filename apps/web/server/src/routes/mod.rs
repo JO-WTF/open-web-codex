@@ -477,6 +477,10 @@ pub fn router(
             axum::routing::get(tasks::list_task_events),
         )
         .route(
+            "/tasks/{id}/resource-refs",
+            axum::routing::get(tasks::list_task_resource_refs),
+        )
+        .route(
             "/tasks/{id}/artifacts",
             axum::routing::get(artifacts::list_for_task),
         )

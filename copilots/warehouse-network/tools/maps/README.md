@@ -8,6 +8,7 @@ Python MCP server that exposes paid Google Maps and Mapbox operations without mo
 - `get_route`
 - `distance_matrix`
 - `create_map_card`
+- `revise_map_card`
 
 The geocoding and routing tools use one active provider/key pair selected in
 configuration; provider and credentials are never model-visible tool arguments.
@@ -22,10 +23,11 @@ save replaces the previous provider and key. Google credentials remain server-on
 Mapbox public browser token is returned only because Mapbox GL needs it to render cards.
 
 The MCP server deliberately does not read provider keys from environment variables. It can read a
-locally delivered credential from this ignored owner-only file:
+locally delivered credential from this ignored owner-only file under its private provider tool
+state root:
 
 ```text
-<workspace>/.codex/maps-tool-memory.json
+<tool-state-root>/.codex/maps-tool-memory.json
 ```
 
 If no provider/key is configured, the tool sends an MCP URL elicitation request.
@@ -76,7 +78,7 @@ writes hidden Profile configuration.
 
 The Network Role keeps `default_tools_approval_mode` at `prompt` because geocoding, routing and
 distance matrix calls reach a credentialed external provider and may be billable. Only
-`create_map_card` is explicitly preapproved. This Role policy remains separate from environment
+`create_map_card` and `revise_map_card` are explicitly preapproved. This Role policy remains separate from environment
 preparation and from provider credential elicitation. The MCP client must advertise URL elicitation
 support; if the browser cannot render the request, the Tool fails safely instead of exposing a key
 to the model.
@@ -110,14 +112,17 @@ Camera fields are the standard top-level `center`, `zoom`, `bearing`, and `pitch
 `extensions.hover` and `extensions.legend`. There is no `style` wrapper, old `view` object,
 layer-local hover, or top-level legend.
 
-The Tool returns an `open-web-artifact` / `inline-visualization.v1` envelope with a typed
-`map.v3` renderer. The host independently validates the browser DTO, resolves authorized
-`data_ref` values to opaque Artifact URLs, and strips MCP Resource identity from public events.
-The browser passes every layer to `map.addLayer` unchanged except for browser-local layer/source
-IDs. Tool completion only creates the Artifact; it does not display the map. To display it,
-Assistant messages copy only `structuredContent.embed.code` verbatim as a standalone paragraph
-with a blank line before and after it. That paragraph may appear anywhere in the response where
-the map should be shown and must not be wrapped in a code fence, blockquote, or list.
+The Tool returns an `open-web-artifact` / `inline-visualization.v1` envelope with a typed `map.v3`
+renderer and a provider-owned immutable, content-addressed `map_card_spec.v1` ResourceLink. The host independently
+validates the browser DTO, resolves authorized `data_ref` values to opaque URLs, and strips MCP
+Resource identity from public events. The browser passes every layer to `map.addLayer` unchanged
+except for browser-local layer/source IDs. Tool completion only creates an inline card; it does not
+display the map. `revise_map_card` consumes one exact map spec plus a bounded patch and returns a
+new child spec; pure style revisions reuse source GeoJSON, while new coverage geometry must come
+from the domain Network Tool. To display the card, Assistant messages copy only
+`structuredContent.embed.code` verbatim as a standalone paragraph with a blank line before and
+after it. That paragraph may appear anywhere in the response where the map should be shown and
+must not be wrapped in a code fence, blockquote, or list.
 
 Provider endpoints implemented:
 

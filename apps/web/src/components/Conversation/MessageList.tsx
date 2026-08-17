@@ -46,6 +46,7 @@ type Props = {
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
   inlineVisualizationThreadId?: string | null;
   onOpenAgentPanel?: () => void;
+  onReviseMapCard?: (cardId: string, title: string) => void;
 };
 
 function isAssistantProcessEntry(entry: MessageEntry) {
@@ -61,9 +62,11 @@ function typedArtifactDeliveries(entry: MessageEntry) {
 function ArtifactDeliveries({
   artifacts,
   entryId,
+  onReviseMapCard,
 }: {
   artifacts: InlineVisualizationArtifact[];
   entryId: string;
+  onReviseMapCard?: (cardId: string, title: string) => void;
 }) {
   return (
     <div className="web-msg-assistant has-inline-visualization">
@@ -72,6 +75,7 @@ function ArtifactDeliveries({
           <ReplyCard
             key={`${entryId}-${artifact.ref}-${index}`}
             card={artifact.card}
+            onRevise={onReviseMapCard}
           />
         ))}
       </div>
@@ -175,7 +179,7 @@ export function foldTerminalApprovals(items: MessageEntry[]) {
   return folded.filter((_, index) => !consumedApprovals.has(index));
 }
 
-export default function MessageList({ items, thinking = false, turnStartedAt, onOpenFile, workspaceId, onResolveApproval, inlineVisualizationThreadId, onOpenAgentPanel }: Props) {
+export default function MessageList({ items, thinking = false, turnStartedAt, onOpenFile, workspaceId, onResolveApproval, inlineVisualizationThreadId, onOpenAgentPanel, onReviseMapCard }: Props) {
   if (items.length === 0) {
     return (
       <div className="web-empty">
@@ -294,6 +298,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
                 showInlineArtifacts={!entry.suppressInlineArtifacts}
                 hiddenInlineArtifactRefs={entry.hiddenInlineArtifactRefs}
                 inlineVisualizationThreadId={inlineVisualizationThreadId}
+                onReviseMapCard={onReviseMapCard}
               />
             );
           case "system":
@@ -427,6 +432,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
           key={`artifact-deliveries-${item.id}`}
           artifacts={newlySurfacedArtifacts}
           entryId={item.id}
+          onReviseMapCard={onReviseMapCard}
         />,
       );
     }

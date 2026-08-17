@@ -6,8 +6,9 @@ use axum::{
 use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter, TurnOptions};
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
-    CreateTaskRequest, ListTaskEventsParams, ModelSelection, RunEvent, SendMessageRequest,
-    SendMessageResponse, Task, UpdateTaskModelSelectionRequest,
+    CreateTaskRequest, ExplicitResourceSelection, ListTaskEventsParams, ModelSelection,
+    ResourceReferenceSummary, RunEvent, SendMessageRequest, SendMessageResponse, Task,
+    UpdateTaskModelSelectionRequest,
 };
 use open_web_codex_platform_store::configuration::{
     get_global, put_global, MODEL_SELECTION_CONFIG_KEY,
@@ -17,6 +18,7 @@ use open_web_codex_provider_service::secured::{AuthorizedProviderOperations, Pro
 use open_web_codex_run_orchestrator::{RecoverRunRequest, RunOrchestrator};
 use serde::Deserialize;
 use sqlx::Row;
+use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -290,6 +292,62 @@ pub async fn list_task_events(
     Ok(Json(events))
 }
 
+/// GET /api/tasks/:id/resource-refs — list exact provider-owned Resource
+/// references produced in the same authorized Profile + Workspace. This is a
+/// selector projection, not a Resource content API.
+pub async fn list_task_resource_refs(
+    auth: AuthenticatedUser,
+    State(state): State<AppState>,
+    Extension(profile): Extension<RuntimeProfileBinding>,
+    Path(task_id): Path<Uuid>,
+) -> ApiResult<Vec<ResourceReferenceSummary>> {
+    require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
+    let rows = sqlx::query(
+        "SELECT projection.producer_event_id, projection.ordinal, projection.server,
+                projection.resource_uri, projection.resource_schema, projection.display_name,
+                projection.producer_tool, projection.created_at
+         FROM resource_ref_projections projection
+         JOIN tasks task ON task.id = $1
+           AND task.organization_id = projection.organization_id
+           AND task.workspace_id = projection.workspace_id
+         JOIN profiles runtime_profile ON runtime_profile.id = projection.profile_id
+           AND runtime_profile.organization_id = projection.organization_id
+           AND runtime_profile.owner_user_id = $2
+           AND runtime_profile.runtime_key = $3
+           AND runtime_profile.status = 'active'
+         JOIN workspace_grants workspace_grant
+           ON workspace_grant.workspace_id = projection.workspace_id
+          AND workspace_grant.organization_id = projection.organization_id
+          AND workspace_grant.user_id = $2
+          AND workspace_grant.profile_id = projection.profile_id
+          AND workspace_grant.role IN ('owner', 'write')
+         WHERE projection.organization_id = $4
+         ORDER BY projection.created_at DESC, projection.ordinal ASC
+         LIMIT 200",
+    )
+    .bind(task_id)
+    .bind(auth.user_id)
+    .bind(&profile.runtime_key)
+    .bind(auth.organization_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(database_error)?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|row| ResourceReferenceSummary {
+                producer_event_id: row.get("producer_event_id"),
+                ordinal: row.get("ordinal"),
+                server: row.get("server"),
+                uri: row.get("resource_uri"),
+                resource_schema: row.get("resource_schema"),
+                display_name: row.get("display_name"),
+                producer_tool: row.get("producer_tool"),
+                created_at: row.get("created_at"),
+            })
+            .collect(),
+    ))
+}
+
 /// POST /api/tasks/:id/messages — send a user message to the task's active thread.
 pub async fn send_message(
     State(state): State<AppState>,
@@ -312,7 +370,7 @@ pub async fn send_message(
 
     // Resolve the server-owned workspace; the browser never supplies a path.
     let active_run = sqlx::query(
-        "SELECT r.id, r.status, r.codex_thread_id, r.workspace_id, w.root_path, \
+        "SELECT r.id, r.status, r.codex_thread_id, r.workspace_id, w.profile_id, w.root_path, \
                 t.title, t.model_provider, t.model \
          FROM runs r JOIN tasks t ON t.id = r.task_id \
            AND t.organization_id = r.organization_id \
@@ -361,6 +419,7 @@ pub async fn send_message(
         )
     })?;
     let workspace_id: Uuid = active_run.get("workspace_id");
+    let profile_id: Uuid = active_run.get("profile_id");
     let workspace = AuthorizedWorkspace {
         id: workspace_id.to_string(),
         root: active_run.get::<String, _>("root_path").into(),
@@ -393,6 +452,23 @@ pub async fn send_message(
         normalize_model_selection(active_run.get("model_provider"), active_run.get("model"))?
     };
     let persist_requested_selection = req.model.is_some();
+    let message_text = selected_map_card_turn_text(
+        &state,
+        auth.organization_id,
+        active_run.get("id"),
+        req.map_card_ref.as_deref(),
+        &req.text,
+    )
+    .await?;
+    let message_text = selected_resource_turn_text(
+        &state,
+        auth.organization_id,
+        profile_id,
+        workspace_id,
+        &req.selected_resources,
+        &message_text,
+    )
+    .await?;
     let suggested_thread_name =
         suggested_thread_name(active_run.get::<String, _>("title").as_str(), &req.text);
 
@@ -400,7 +476,7 @@ pub async fn send_message(
         .send_user_message(
             &workspace,
             &thread_id,
-            &req.text,
+            &message_text,
             &TurnOptions {
                 model: selection.as_ref().map(|value| value.model_id.clone()),
                 model_provider: selection.as_ref().map(|value| value.provider_id.clone()),
@@ -513,6 +589,123 @@ pub async fn send_message(
         turn_id,
         thread_name,
     }))
+}
+
+async fn selected_map_card_turn_text(
+    state: &AppState,
+    organization_id: Uuid,
+    run_id: Uuid,
+    card_ref: Option<&str>,
+    text: &str,
+) -> Result<String, (StatusCode, Json<PlatformError>)> {
+    let Some(card_ref) = card_ref else {
+        return Ok(text.to_string());
+    };
+    let map_spec_ref =
+        crate::inline_map_cards::map_spec_ref(&state.db, organization_id, run_id, card_ref)
+            .await
+            .map_err(database_error)?
+            .ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(PlatformError::bad_request(
+                        "selected map card is unavailable in this Task",
+                    )),
+                )
+            })?;
+    let encoded = serde_json::to_string(&map_spec_ref).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "selected map reference could not be encoded",
+            )),
+        )
+    })?;
+    Ok(format!(
+        "{text}\n\nUser explicitly selected this exact map presentation Resource for revision: {encoded}"
+    ))
+}
+
+async fn selected_resource_turn_text(
+    state: &AppState,
+    organization_id: Uuid,
+    profile_id: Uuid,
+    workspace_id: Uuid,
+    selections: &[ExplicitResourceSelection],
+    text: &str,
+) -> Result<String, (StatusCode, Json<PlatformError>)> {
+    if selections.is_empty() {
+        return Ok(text.to_string());
+    }
+    if selections.len() > 8 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request("too many selected Resources")),
+        ));
+    }
+    let mut unique = HashSet::new();
+    let mut requested = Vec::with_capacity(selections.len());
+    for selection in selections {
+        if selection.ordinal < 0
+            || selection.server.is_empty()
+            || selection.server.len() > 128
+            || selection.uri.is_empty()
+            || selection.uri.len() > 2048
+            || selection.resource_schema.is_empty()
+            || selection.resource_schema.len() > 128
+        {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(PlatformError::bad_request(
+                    "selected Resource reference is invalid",
+                )),
+            ));
+        }
+        let key = (
+            selection.producer_event_id,
+            selection.ordinal,
+            selection.server.clone(),
+            selection.uri.clone(),
+            selection.resource_schema.clone(),
+        );
+        if !unique.insert(key.clone()) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(PlatformError::bad_request(
+                    "selected Resource reference is duplicated",
+                )),
+            ));
+        }
+        requested.push(key);
+    }
+    let refs = crate::resource_ref_projections::exact_authorized_refs(
+        &state.db,
+        organization_id,
+        profile_id,
+        workspace_id,
+        &requested,
+    )
+    .await
+    .map_err(database_error)?;
+    if refs.len() != requested.len() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "selected Resource is unavailable in this Profile and Workspace",
+            )),
+        ));
+    }
+    let encoded = serde_json::to_string(&refs).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PlatformError::internal(
+                "selected Resource references could not be encoded",
+            )),
+        )
+    })?;
+    Ok(format!(
+        "{text}\n\nUser explicitly selected these exact MCP Resources for this Turn: {encoded}"
+    ))
 }
 
 /// GET /api/tasks/:id

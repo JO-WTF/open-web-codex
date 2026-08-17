@@ -1239,6 +1239,34 @@ pub struct RememberApprovalRuleRequest {
 
 // ── Messages ──────────────────────────────────────────────────────
 
+/// One explicit, provenance-bound MCP Resource selected by the user. The
+/// Platform validates every field against its bounded projection before it is
+/// passed back to Codex as an exact provider-owned reference.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExplicitResourceSelection {
+    pub producer_event_id: Uuid,
+    pub ordinal: i32,
+    pub server: String,
+    pub uri: String,
+    pub resource_schema: String,
+}
+
+/// Safe browser selector row for an already completed official Tool Item. It
+/// deliberately omits provider Resource content and business interpretation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceReferenceSummary {
+    pub producer_event_id: Uuid,
+    pub ordinal: i32,
+    pub server: String,
+    pub uri: String,
+    pub resource_schema: String,
+    pub display_name: String,
+    pub producer_tool: String,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Request to send a user message to a task's active thread.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendMessageRequest {
@@ -1256,6 +1284,17 @@ pub struct SendMessageRequest {
     pub access_mode: Option<String>,
     #[serde(default)]
     pub images: Vec<String>,
+    /// One explicit current-Run inline map card selected by the user. The
+    /// Platform resolves its exact provider-owned presentation spec after
+    /// authorization; this is not a generic Resource attachment channel.
+    #[serde(default)]
+    #[serde(rename = "mapCardRef")]
+    pub map_card_ref: Option<String>,
+    /// Exact Resources explicitly selected from authorized producer Item
+    /// provenance. This is bounded message input, not a Task-to-Task API.
+    #[serde(default)]
+    #[serde(rename = "selectedResources")]
+    pub selected_resources: Vec<ExplicitResourceSelection>,
     #[serde(default)]
     pub collaboration_mode: Option<serde_json::Value>,
 }

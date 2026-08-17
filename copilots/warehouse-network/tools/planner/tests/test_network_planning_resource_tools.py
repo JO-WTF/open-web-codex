@@ -14,7 +14,6 @@ from _network_fixtures import (
 )
 from open_web_codex_provider import (
     GeoJsonResourceRef,
-    McpResourceRuntime,
     ProviderContractError,
     PublishedResource,
     ResourceRef,
@@ -52,6 +51,7 @@ from supply_chain_planner.shared.models import (
     NetworkPlanComparisonResourceRef,
     PreparedNetworkResource,
 )
+from supply_chain_planner.shared.resources import SupplyChainResources
 
 McpResourceContractError = ProviderContractError
 
@@ -73,22 +73,9 @@ def _resource_ref(
 def _runtime(tmp_path: Path, monkeypatch) -> tuple[Path, ResourceStore]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    store = ResourceStore(
-        tmp_path / "profile" / "resources",
-        uri_prefix=server.RESOURCE_URI_PREFIX,
-    )
-    monkeypatch.setattr(
-        server,
-        "_mcp_resource_runtime",
-        McpResourceRuntime(
-            workspace,
-            tmp_path / "profile",
-            server.NETWORK_MCP_SERVER_NAME,
-            "supply-chain://resources/",
-            store=store,
-        ),
-    )
-    return workspace, store
+    resources = SupplyChainResources(workspace, tmp_path / "profile")
+    monkeypatch.setattr(server, "_supply_chain_resources", resources)
+    return workspace, resources.store
 
 
 def _context(workspace: Path) -> SimpleNamespace:
@@ -744,7 +731,8 @@ def test_assess_facility_change_preserves_selected_candidates_and_matches_manual
     assert set(facility.opened_candidate_ids) <= set(scenario.active_warehouse_ids)
     assert set(scenario.active_warehouse_ids) == expected_active_ids
 
-    prepared = server._data_resource_runtime().load_model(
+    prepared = server._resources().load_model(
+        server.DATA_MCP_SERVER_NAME,
         prepared_ref,
         "normalized_network_input.v1",
         PreparedNetworkResource,
@@ -990,7 +978,8 @@ def test_baseline_and_p_median_reject_missing_explicit_inputs(tmp_path: Path, mo
     workspace, store = _runtime(tmp_path, monkeypatch)
     ctx = _context(workspace)
     prepared_ref, route_ref, cost_ref, existing_ids, candidate_ids = _published_network(store)
-    prepared = server._data_resource_runtime().load_model(
+    prepared = server._resources().load_model(
+        server.DATA_MCP_SERVER_NAME,
         prepared_ref,
         "normalized_network_input.v1",
         PreparedNetworkResource,

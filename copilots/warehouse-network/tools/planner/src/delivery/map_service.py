@@ -19,6 +19,7 @@ from supply_chain_planner.network.models import (
 )
 from supply_chain_planner.network.optimization_models import (
     AssignmentComparison,
+    AssignmentResult,
     AssignmentRow,
     BaselineResult,
     CoverageComparison,
@@ -75,7 +76,7 @@ class DemandMapProperties(DeliveryModel):
 
 class AssignmentMapProperties(DeliveryModel):
     kind: Literal["last_mile_assignment"] = "last_mile_assignment"
-    scenario: Literal["baseline", "facility"]
+    scenario: Literal["baseline", "scenario", "facility"]
     result_label: str
     warehouse_id: str
     demand_city_id: str
@@ -87,7 +88,7 @@ class AssignmentMapProperties(DeliveryModel):
 
 class LinehaulMapProperties(DeliveryModel):
     kind: Literal["linehaul_connection"] = "linehaul_connection"
-    scenario: Literal["baseline", "facility"]
+    scenario: Literal["baseline", "scenario", "facility"]
     upstream_center_id: str
     crossdock_warehouse_id: str
     assigned_demand: Decimal
@@ -122,6 +123,14 @@ class NetworkComparisonGeoJson(DeliveryModel):
     """Comparison GeoJSON published specifically for an inline map card."""
 
     schema_version: Literal["network_comparison_geojson.v1"] = "network_comparison_geojson.v1"
+    type: Literal["FeatureCollection"] = "FeatureCollection"
+    features: list[NetworkMapFeature]
+
+
+class NetworkCoverageGeoJson(DeliveryModel):
+    """One assignment result and all of its straight-line coverage facts."""
+
+    schema_version: Literal["network_coverage_geojson.v1"] = "network_coverage_geojson.v1"
     type: Literal["FeatureCollection"] = "FeatureCollection"
     features: list[NetworkMapFeature]
 
@@ -351,8 +360,93 @@ def build_network_comparison_map_bundle(
     )
 
 
+def build_network_coverage_geojson(
+    normalized: NormalizedInputBatch,
+    assignment: AssignmentResult,
+    active_warehouse_ids: list[str],
+    *,
+    result_label: str,
+    scenario: Literal["baseline", "scenario", "facility"],
+) -> NetworkCoverageGeoJson:
+    """Build presentation-neutral after-result points and coverage lines.
+
+    The function deliberately receives an already solved assignment.  It does
+    not select facilities, calculate routes, or infer a business scenario.
+    """
+
+    if any(issue.severity == "error" for issue in normalized.issues):
+        raise ValueError("delivery_normalized_input_has_errors")
+    warehouses = {item.warehouse_id: item for item in normalized.warehouses}
+    cities = {item.city_id: item for item in normalized.demand_cities}
+    if len(warehouses) != len(normalized.warehouses) or len(cities) != len(normalized.demand_cities):
+        raise ValueError("delivery_duplicate_map_entity")
+    active = set(active_warehouse_ids)
+    if len(active) != len(active_warehouse_ids) or not active <= set(warehouses):
+        raise ValueError("delivery_active_warehouse_invalid")
+    rows = {row.demand_city_id: row for row in assignment.rows}
+    if len(rows) != len(assignment.rows) or set(rows) != set(cities):
+        raise ValueError("delivery_assignment_city_set_mismatch")
+    for city_id, row in rows.items():
+        if row.demand_quantity != cities[city_id].demand_quantity:
+            raise ValueError(f"delivery_assignment_demand_mismatch:{city_id}")
+        if row.warehouse_id is not None and row.warehouse_id not in active:
+            raise ValueError(f"delivery_assignment_warehouse_inactive:{row.warehouse_id}")
+    features: list[NetworkMapFeature] = []
+    for warehouse_id in sorted(warehouses):
+        warehouse = warehouses[warehouse_id]
+        features.append(
+            NetworkMapFeature(
+                id=_feature_id("warehouse", warehouse_id),
+                geometry=PointGeometry(
+                    coordinates=_required_coordinates(
+                        "warehouse", warehouse_id, warehouse.longitude, warehouse.latitude
+                    )
+                ),
+                properties=WarehouseMapProperties(
+                    warehouse_id=warehouse_id,
+                    warehouse_name=warehouse.warehouse_name,
+                    warehouse_type=warehouse.warehouse_type,
+                    city_id=warehouse.city_id,
+                    city_name=warehouse.city_name,
+                    province_id=warehouse.province_id,
+                    province_name=warehouse.province_name,
+                    is_existing=warehouse.is_existing,
+                    baseline_active=warehouse.is_existing,
+                    facility_active=warehouse_id in active,
+                    opened_candidate=not warehouse.is_existing and warehouse_id in active,
+                    closed_existing=warehouse.is_existing and warehouse_id not in active,
+                ),
+            )
+        )
+    for city_id in sorted(cities):
+        city = cities[city_id]
+        row = rows[city_id]
+        features.append(
+            NetworkMapFeature(
+                id=_feature_id("demand", city_id),
+                geometry=PointGeometry(
+                    coordinates=_required_coordinates("demand", city_id, city.longitude, city.latitude)
+                ),
+                properties=DemandMapProperties(
+                    city_id=city_id,
+                    city_name=city.city_name,
+                    province_id=city.province_id,
+                    province_name=city.province_name,
+                    demand_quantity=city.demand_quantity,
+                    assigned_warehouse_id=row.warehouse_id,
+                    distance_km=row.distance_km,
+                    duration_hours=row.duration_hours,
+                    unit_cost=row.cost,
+                ),
+            )
+        )
+    features.extend(_assignment_features(scenario, result_label, rows, warehouses, cities))
+    features.extend(_linehaul_features(scenario, frozenset(active), rows, warehouses))
+    return NetworkCoverageGeoJson(features=features)
+
+
 def _assignment_features(
-    scenario: Literal["baseline", "facility"],
+    scenario: Literal["baseline", "scenario", "facility"],
     result_label: str,
     rows_by_city: Mapping[str, AssignmentRow],
     warehouse_by_id: Mapping[str, WarehouseRecord],
@@ -404,7 +498,7 @@ def _assignment_features(
 
 
 def _linehaul_features(
-    scenario: Literal["baseline", "facility"],
+    scenario: Literal["baseline", "scenario", "facility"],
     active_ids: frozenset[str],
     rows_by_city: Mapping[str, AssignmentRow],
     warehouse_by_id: Mapping[str, WarehouseRecord],
@@ -425,7 +519,11 @@ def _linehaul_features(
         warehouse = warehouse_by_id[warehouse_id]
         if warehouse.warehouse_type != "cross_docking":
             continue
-        upstream = warehouse_by_id[warehouse.upstream_center_id]
+        if warehouse.upstream_center_id is None:
+            raise ValueError(f"delivery_linehaul_upstream_missing:{warehouse_id}")
+        upstream = warehouse_by_id.get(warehouse.upstream_center_id)
+        if upstream is None:
+            raise ValueError(f"delivery_linehaul_upstream_missing:{warehouse_id}")
         origin = _required_coordinates(
             "warehouse",
             upstream.warehouse_id,

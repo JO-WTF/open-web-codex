@@ -11,6 +11,7 @@ use crate::delivery_artifacts::{
 };
 use crate::delivery_contracts::DeliveryRegistry;
 use crate::inline_map_cards::{self, InlineMapCandidate};
+use crate::resource_ref_projections::{self, ResourceRefCandidate};
 
 const PROJECTION_VERSION: i16 = 1;
 
@@ -25,6 +26,7 @@ struct ProjectedEvent {
     thread_metadata: Option<ProjectedThreadMetadata>,
     artifacts: Vec<FinalArtifactCandidate>,
     inline_map: Option<InlineMapCandidate>,
+    resource_refs: Vec<ResourceRefCandidate>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -173,6 +175,25 @@ pub async fn persist_frame_with_deliveries(
     .map_err(|error| format!("event insert error: {error}"))?;
     let event_sequence = persisted.get::<i64, _>("sequence");
     let event_created_at = persisted.get::<chrono::DateTime<chrono::Utc>, _>("created_at");
+    if let Some(item_id) = event
+        .item_id
+        .as_deref()
+        .filter(|_| !event.resource_refs.is_empty())
+    {
+        resource_ref_projections::register(
+            &mut transaction,
+            context.organization_id,
+            context.profile_id,
+            context.workspace_id,
+            context.run_id,
+            persisted.get("id"),
+            &event.thread_id,
+            event.turn_id.as_deref(),
+            item_id,
+            &event.resource_refs,
+        )
+        .await?;
+    }
     project_provider_call_metric(&mut transaction, &context, &event, event_sequence).await?;
     project_runtime_agent_execution(
         &mut transaction,
@@ -593,6 +614,12 @@ fn project_frame_with_deliveries(
     } else {
         None
     };
+    let resource_refs = if event_type == "codex.item.completed" {
+        item.map(resource_ref_projections::candidates)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let thread_metadata = project_thread_metadata(runtime_method, &params);
     let thread_metadata =
         merge_thread_identity(&thread_id, thread_metadata, thread_identity.as_ref());
@@ -630,6 +657,7 @@ fn project_frame_with_deliveries(
         thread_metadata,
         artifacts,
         inline_map,
+        resource_refs,
     }))
 }
 
@@ -3648,6 +3676,11 @@ mod tests {
         let frame = format!("data: {item}\n\n");
         let projected = project_frame(frame.as_bytes()).unwrap().unwrap();
         assert!(projected.artifacts.is_empty());
+        assert_eq!(projected.resource_refs.len(), 1);
+        assert_eq!(
+            projected.resource_refs[0].resource_schema,
+            "network_comparison.v2"
+        );
         assert!(projected.payload.pointer("/data/artifacts").is_none());
 
         let mut invalid =
@@ -3764,6 +3797,7 @@ mod tests {
             thread_metadata: None,
             artifacts: Vec::new(),
             inline_map: None,
+            resource_refs: Vec::new(),
         }
     }
 
@@ -3861,6 +3895,7 @@ mod tests {
                 thread_metadata: None,
                 artifacts: Vec::new(),
                 inline_map: None,
+                resource_refs: Vec::new(),
             };
 
             assert_eq!(projected_turn_terminal_outcome(&event.payload), expected);
@@ -3896,6 +3931,7 @@ mod tests {
             thread_metadata: None,
             artifacts: Vec::new(),
             inline_map: None,
+            resource_refs: Vec::new(),
         };
 
         let descriptor =

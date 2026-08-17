@@ -15,6 +15,7 @@ from open_web_codex_provider import (
     GeoJsonFeatureTypeProfile,
     GeoJsonProfile,
     GeoJsonResourceRef,
+    ResourceRef,
 )
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -164,6 +165,7 @@ class ToolResult(BaseModel):
     kind: Literal["inline-visualization.v1"]
     artifact: Artifact
     embed: Embed
+    map_spec_ref: ResourceRef
     warnings: list[Warning] | None = None
 
     @model_validator(mode="after")
@@ -172,6 +174,46 @@ class ToolResult(BaseModel):
         if self.embed.code != expected:
             raise ValueError("embed code must reference artifact.ref exactly")
         return self
+
+
+class MapCardSpec(BaseModel):
+    """A reusable map presentation that keeps only exact source references."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["map_card_spec.v1"] = Field(
+        default="map_card_spec.v1", alias="schemaVersion"
+    )
+    title: str = Field(min_length=1)
+    intent: str = Field(min_length=1)
+    fallback_text: str | None = None
+    summary: str | None = None
+    sources: dict[str, GeoJsonSource]
+    layers: list[dict[str, object]]
+    center: tuple[float, float] | None = None
+    zoom: float | None = None
+    bearing: float | None = None
+    pitch: float | None = None
+    extensions: MapExtensions | None = None
+    parent_spec_ref: ResourceRef | None = Field(default=None, alias="parentSpecRef")
+
+
+class MapCardPatch(BaseModel):
+    """Whole-field replacement patch; omitted values keep the parent spec value."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = None
+    intent: str | None = None
+    fallback_text: str | None = None
+    summary: str | None = None
+    sources: dict[str, GeoJsonSource] | None = None
+    layers: list[dict[str, object]] | None = None
+    center: tuple[float, float] | None = None
+    zoom: float | None = None
+    bearing: float | None = None
+    pitch: float | None = None
+    extensions: MapExtensions | None = None
 
 
 def renderer_sources(

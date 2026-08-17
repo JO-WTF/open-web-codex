@@ -3,7 +3,7 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前与下一里程碑的执行计划 |
-| 更新日期 | 2026-08-13 |
+| 更新日期 | 2026-08-17 |
 | 当前阶段 | 阶段二：公开 SDK 与 Web 创作体验 |
 | 当前状态 | 阶段一正常业务主链完成；Copilot SDK、单 Profile local/private 安装正常链与第二领域参考包已落地 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018 已接受并作为当前基线 |
@@ -133,8 +133,8 @@ mailbox、Workflow DSL、Run Completion Controller、签名链或 exactly-once�
 | typed intermediate 内容与生命周期 | MCP provider | 通过官方 Resource URI/template/read 使用；Platform 不存内容或建通用 Broker |
 | Workspace authority | Platform/Runner | authenticated Workspace capability、canonical containment/no-follow、final file atomic create-new 与 Artifact 授权物化 |
 | 通用 Copilot provider primitives | `tools/copilot-provider-sdk` | 独立提供 `ResourceRef` envelope、expected-schema validation、canonical codec、payload bounds、typed errors、Workspace scope/writer 与 provider-scoped load/publish；Tool 通过 `runtime.toml.platform_packages` 声明，generic provisioner 从单一 SDK registry 注入，不依赖仓网路径 |
-| Resource ref 可发现与授权 | Codex official Item + 有界 Platform projection | 只引用 exact itemId 与 `{server, uri}`，可重建，不猜模型文本 |
-| 文件选择、字段、映射、标准化、复用和合并 | 用户 + Skill + Tool | Platform 不分类、不猜测、不限制业务复用 |
+| Resource ref 可发现与授权 | Codex official Item + 有界 Platform projection | 只投影 completed Tool Item 的 exact ResourceLink provenance；同 Profile+Workspace 的用户显式选择带 producer event/ordinal 与完整 `{server, uri, resource_schema}`，Server 逐字段复验；不读或保存内容、不猜模型文本 |
+| 文件选择、字段、映射、标准化、复用和合并 | 用户 + Skill + Tool | Platform 不分类、不猜测、不限制业务复用；Resource 是可消费的不可变计算快照，不代表来源真实、业务可信或自动复用许可 |
 | Agent 协同方法 | Supervisor Skill | 不落 Platform workflow 状态机 |
 | 仓网规划能力 | Data/Network MCP domain Tool bindings、Role/Skill 与 pure owners | 阶段一统一拥有 Data mapping/normalize/geography、route/cost facts与matrix、baseline/scenario/p-median/comparison 以及 final map/report；输入输出为 Workspace 相对路径、typed Resource ref 或普通业务参数，不拥有通用 scope/store/codec/writer。未来公共供应链领域层只记为触发式 TODO，不增加当前实现层、提交线或验收节点 |
 | Agent 活动与问题卡片 | Codex Runtime 提供 child Thread/Turn/Item 事实；Platform projection 只做授权、安全裁剪和浏览器 DTO | 保留 item type、Tool 身份、bounded action/result、生命周期、错误与时间顺序并容忍乱序；不另建 child 日志、执行历史或状态机，不用通用占位文案替代可安全展示的官方事实 |
@@ -276,13 +276,14 @@ Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。
 3. Root 只暴露原生多 Agent 面，不配置全局仓网 MCP；Data/Network Role 通过原生 Role
    config 启用各自 Skill、MCP server、`enabled_tools` 和精确 Tool approval policy。Data4 全部
    有界本地预批准；Network 预批准本地路线/成本/验证/分析/选址/比较与 `publish_network_planning_report`，`map_utils` 只预批准
-   `create_map_card`；外部地图请求和 final Workspace 地图导出保持 `prompt`，不把全局
+   `create_map_card` 与 `revise_map_card`；外部地图请求和 final Workspace 地图导出保持 `prompt`，不把全局
    `approvalPolicy` 降为 `never`。prepared transport 不固定 MCP cwd；Runtime 使用 Thread
    已授权的 Workspace 作为 stdio MCP cwd。maps
    credential/resource state 位于 Profile 私有 runtime，业务 Workspace 只能来自 native
    `sandboxCwd`。Data→Network 只交接完整的 `supply_chain_data` / `normalized_network_input.v1`
-   ResourceRef；Network Tool schema 固定该 server 与 schema，Role 不用 Resource discovery/read
-   重建输入。工具代码、共享 venv、Node 依赖、Mock、测试和缓存均不复制进 Profile。
+   ResourceRef；Data/Network 由 capability package facade 共享同一 Profile+Workspace `supply_chain`
+   Resource owner，Network 按 exact ref/schema 读取而不重建 Data runtime、扫描或重解析输入。工具代码、
+   共享 venv、Node 依赖、Mock、测试和缓存均不复制进 Profile。
 4. Skill watcher/`forceReload` 对下一 Turn 生效；Role 文件修改对下一次 spawn 生效；MCP
    reload 在安全 step 边界切换。Role 集合、allowlist、增删改名只对新 Root Thread 保证，
    不修改 Codex 弥补这一边界。
@@ -362,7 +363,7 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
    owning-layer 适配，包括把官方 child Thread/Turn/Item 生命周期投影为可追踪的 Agent activity；
    不建立第二 Runtime、第二上下文、第二执行日志或固定业务流程。
 3. **C — 通用可组合 Tools。** 统一 `supply_chain` provider 和单一 `ResourceRef`，Data4 已完成
-   strict inspect→confirmed-normalize→optional-geography active surface；Network11 active surface
+   strict inspect→confirmed-normalize→optional-geography active surface；Network12 active surface
    已完成 provided/haversine/navigation 路线、route/cost pair-level 复用、双覆盖口径以及 final
    地图卡片、map 文件与单份中文 Markdown 简报的最小交付合同；正文只显示关键结论和 durable Artifact 授权下载链接，不复制整份简报。Stage E non-active compatibility tail 已完成尾删，后续只维护
    Platform 业务状态。
@@ -485,9 +486,13 @@ producer-time verifier snapshot，恢复不依赖届时 active package registry�
    不按时间或文件名猜“最新”。
 3. 推断字段并映射数据要求；缺字段或映射歧义时用通俗业务语言解释并询问。
 4. 获取国家行政区 city/province ID/name 与经纬度，为需求城市、已有仓和候选仓补坐标。
-5. 有候选仓文件则使用；没有则询问省级、市级或用户指定范围。
+5. 有候选仓文件则使用；没有则询问省级、市级或用户指定范围。首次归一化保留所有已确认候选仓；
+   baseline 通过计算范围排除，不删除已处理的候选事实。
 6. 按用户与 Skill 要求，把需用户看到或跨 package 交接的结果写成 Workspace 文件，
    把 provider-owned typed intermediate 保存为 MCP Resource；是否保存和如何使用由用户与 Skill 决定。
+7. 仅新增、替换或移除候选仓时，Data Tool 先产出 candidate delta，再由 exact base input 与 delta
+   派生新的完整 immutable `normalized_network_input`。城市、现网仓、实际分配、需求或原始路线事实
+   变化时明确要求完整归一化；校验结果不构成授权、可信等级或自动复用许可。
 
 #### 距离、成本与分析
 
@@ -501,7 +506,9 @@ producer-time verifier snapshot，恢复不依赖届时 active package registry�
 4. 计算全网和分仓运输成本，完成增仓、减仓、搬迁三类模拟。
 5. 执行 p-median：明确 `p`，已有仓默认固定；只有用户明确许可时才允许指定已有仓关闭。
 6. 执行给定 SLA 下的成本最优规划，输出覆盖、时效、距离、成本和仓库变动。
-7. 当空间关系有助理解时生成对话内交互地图卡片；结构化计算明细与 Markdown 结果简报分开交付。
+7. 当空间关系有助理解时生成对话内交互地图卡片；Network 从 exact 分配结果产生城市、设施、实际
+   分配和城市→仓库 LineString 的通用覆盖 GeoJSON，Maps 只消费该精确几何 ref。结构化计算明细与
+   Markdown 结果简报分开交付。
 8. 路线按起终点坐标/身份、计算方法、provider 参数和 Tool 版本的 exact pair fact 复用；
    成本按路线 fact、报价/规则、币种和 Tool 版本的 exact lane fact 复用，只补算缺失项。
 
@@ -512,10 +519,18 @@ producer-time verifier snapshot，恢复不依赖届时 active package registry�
   由官方 Item/用户显式选择的精确 Resource ref；没有 Task A→Task B context/result API，Artifact 不作输入。
 - Web Resource selector 从已授权 producer event 的 exact Item provenance 返回 bounded exact
   ResourceRef。Browser 选择时提交 producer event ID、ordinal 和 exact ref；Server 再次校验
-  user/organization/Profile/Workspace、event/ordinal 与 `{server, uri}` 全字段相等。普通 RunEvent
-  WS/HTTP 不广播 raw URI，不建立 opaque handle、latest alias、dedupe registry 或新投影表。
+  user/organization/Profile/Workspace、event/ordinal 与 `{server, uri, resource_schema}` 全字段相等。
+  普通 RunEvent WS/HTTP 不广播 raw URI。唯一允许的 `resource_ref_projections` 只保存 official Item
+  provenance、精确 ref 与安全展示摘要，不保存 Resource content，也不建立 opaque handle、latest/head
+  alias、版本目录、dedupe registry、相似性匹配或 Platform 数据状态机。
 - Tool 根据真实输入和用户要求最大化复用，可以复用部分 pair/行并只补算缺失部分；
   Platform 不以 SHA 或整个数据版本限制复用。
+- 自动交接只发生在当前 Codex 原生 Root→child 协作链；后续复用必须由用户显式选择。同一
+  Profile+Workspace 之外不得共享 provider Resource，跨 Workspace 只能导出普通文件后重新处理。
+- Maps provider 保存 immutable、内容寻址的 `map_card_spec`（精确几何来源、图层、视角、标题与 parent spec ref）；
+  Platform 只投影其 exact ref 供当前对话卡片修订鉴权。纯样式修订复用 GeoJSON；新增覆盖线先产生新的
+  Network geometry Resource，再产生有 parent 的新 map spec。开发数据库按此 schema 重建，不从历史
+  renderer payload 反推 spec。
 - 文件名和目录由用户与 Skill 决定；默认 create-new，同名时询问覆盖、改名或取消。
 - Mock 只在用户明确选择“使用印尼仓网完整示例”时把 fixture 作为普通可见文件放入干净
   Workspace，绝不能在真实输入失败后静默回退。
@@ -634,7 +649,7 @@ Runtime history 和 Artifact 权威记录重建浏览器视图。
    MCP Resource，普通文件只走授权 Workspace。
 3. Runtime 原生 discovery/reload、多 Agent、approval、history 与 Workspace metadata 被真实使用；
    pending approval 的整页刷新恢复通过。
-4. Data4/Network11、双覆盖口径、完整规划与场景复用通过 typed 测试、stdio 和 Web 证据。
+4. Data4/Network12、双覆盖口径、完整规划与场景复用通过 typed 测试、stdio 和 Web 证据。
 5. 旧重型路径已从 active 代码、数据库、测试和当前文档删除。
 6. clean DB/Profile/Workspace 从当前 schema/config 初始化成功。
 

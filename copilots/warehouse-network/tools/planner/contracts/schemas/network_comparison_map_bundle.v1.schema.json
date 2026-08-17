@@ -54,6 +54,7 @@
         "scenario": {
           "enum": [
             "baseline",
+            "scenario",
             "facility"
           ],
           "title": "Scenario",
@@ -537,6 +538,7 @@
         "scenario": {
           "enum": [
             "baseline",
+            "scenario",
             "facility"
           ],
           "title": "Scenario",

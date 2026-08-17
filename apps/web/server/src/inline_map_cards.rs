@@ -17,6 +17,7 @@ const MAP_TOOL: &str = "create_map_card";
 pub(crate) struct InlineMapCandidate {
     pub(crate) card_ref: String,
     pub(crate) renderer_payload: Value,
+    pub(crate) map_spec_ref: Value,
 }
 
 #[derive(Debug, PartialEq)]
@@ -46,7 +47,7 @@ pub(crate) fn candidate_with_registry(
         || structured.keys().any(|key| {
             !matches!(
                 key.as_str(),
-                "type" | "kind" | "artifact" | "embed" | "warnings"
+                "type" | "kind" | "artifact" | "embed" | "map_spec_ref" | "warnings"
             )
         })
     {
@@ -81,10 +82,28 @@ pub(crate) fn candidate_with_registry(
     {
         return None;
     }
+    let map_spec_ref = validate_map_spec_ref(structured.get("map_spec_ref")?)?;
     Some(InlineMapCandidate {
         card_ref: card_ref.to_string(),
         renderer_payload,
+        map_spec_ref,
     })
+}
+
+fn validate_map_spec_ref(value: &Value) -> Option<Value> {
+    let value = value.as_object()?;
+    if value.len() != 4
+        || value.get("type")?.as_str()? != "mcp_resource"
+        || value.get("server")?.as_str()? != "map_utils"
+        || value.get("resource_schema")?.as_str()? != "map_card_spec.v1"
+    {
+        return None;
+    }
+    let uri = value.get("uri")?.as_str()?;
+    if !uri.starts_with("maps-data://map-card-spec/") || !valid_resource_uri(uri) {
+        return None;
+    }
+    Some(Value::Object(value.clone()))
 }
 
 #[cfg(test)]
@@ -200,8 +219,8 @@ pub(crate) async fn register(
     let inserted = sqlx::query(
         "INSERT INTO inline_map_cards (
             organization_id, run_id, producer_thread_id, producer_turn_id,
-            producer_item_id, card_ref, renderer_payload
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            producer_item_id, card_ref, renderer_payload, map_spec_ref
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (run_id, card_ref) DO NOTHING",
     )
     .bind(organization_id)
@@ -211,6 +230,7 @@ pub(crate) async fn register(
     .bind(item_id)
     .bind(&candidate.card_ref)
     .bind(&candidate.renderer_payload)
+    .bind(&candidate.map_spec_ref)
     .execute(&mut **transaction)
     .await
     .map_err(|error| format!("inline map registration error: {error}"))?;
@@ -218,7 +238,7 @@ pub(crate) async fn register(
         return Ok(());
     }
     let existing = sqlx::query(
-        "SELECT producer_thread_id, producer_turn_id, producer_item_id, renderer_payload
+        "SELECT producer_thread_id, producer_turn_id, producer_item_id, renderer_payload, map_spec_ref
          FROM inline_map_cards WHERE run_id = $1 AND card_ref = $2",
     )
     .bind(run_id)
@@ -231,6 +251,7 @@ pub(crate) async fn register(
         && existing.get::<String, _>("producer_turn_id") == turn_id
         && existing.get::<String, _>("producer_item_id") == item_id
         && existing.get::<Value, _>("renderer_payload") == candidate.renderer_payload
+        && existing.get::<Value, _>("map_spec_ref") == candidate.map_spec_ref
     {
         Ok(())
     } else {
@@ -239,6 +260,27 @@ pub(crate) async fn register(
             candidate.card_ref
         ))
     }
+}
+
+pub(crate) async fn map_spec_ref(
+    db: &PgPool,
+    organization_id: Uuid,
+    run_id: Uuid,
+    card_ref: &str,
+) -> Result<Option<Value>, sqlx::Error> {
+    if !valid_identifier(card_ref) {
+        return Ok(None);
+    }
+    let row = sqlx::query(
+        "SELECT map_spec_ref FROM inline_map_cards
+         WHERE organization_id = $1 AND run_id = $2 AND card_ref = $3",
+    )
+    .bind(organization_id)
+    .bind(run_id)
+    .bind(card_ref)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.and_then(|row| validate_map_spec_ref(&row.get::<Value, _>("map_spec_ref"))))
 }
 
 pub(crate) async fn resolve_in_transaction(
@@ -468,6 +510,12 @@ mod tests {
             "result": {"structuredContent": {
                 "type": "open-web-artifact",
                 "kind": "inline-visualization.v1",
+                "map_spec_ref": {
+                    "type": "mcp_resource",
+                    "server": "map_utils",
+                    "uri": "maps-data://map-card-spec/map-card-spec-network",
+                    "resource_schema": "map_card_spec.v1"
+                },
                 "artifact": {
                     "ref": "map-network",
                     "renderer": {"kind": "map.v3", "payload": {
@@ -513,6 +561,13 @@ mod tests {
         let map_candidate =
             candidate(value.as_object().expect("map item")).expect("valid map card");
         assert_eq!(map_candidate.card_ref, "map-network");
+        assert_eq!(
+            map_candidate
+                .map_spec_ref
+                .pointer("/uri")
+                .and_then(Value::as_str),
+            Some("maps-data://map-card-spec/map-card-spec-network")
+        );
         let projected = browser_payload(
             Uuid::nil(),
             &map_candidate.card_ref,

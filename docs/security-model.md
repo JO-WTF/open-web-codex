@@ -170,12 +170,14 @@ Task 间也没有消息、上下文、结果或数据 API。跨 Task 复用由�
 普通文件，或同一授权 Profile/provider 内有精确 official Item provenance 的 MCP Resource ref。
 
 MCP Resource 不是 Workspace 路径。内容由 provider 持有，Codex 按当前 Thread 已配置的同名
-server 执行发现和读取。Web 若提供跨 Task 可发现，必须由专用授权 selector 从已授权 Thread
-history 的 exact Item provenance 返回 bounded exact ResourceRef。Browser 选择时提交 producer
-event ID、ordinal 和 exact ref；Server 重新校验 user/organization/Profile/Workspace、producer
-provenance 以及 `{server, uri}` 逐字段相等。普通 RunEvent WS/HTTP 不广播 raw URI，但 URI 本身
-不是 Secret 或宿主路径；不得另造 opaque handle、latest alias 或通用 Resource registry，也不得
-从模型文本或标题猜测。在 provider scope 和拒绝测试完成前，不对外宣称跨 Workspace/Profile 共享。
+server 执行发现和读取。跨 Task 可发现由专用授权 selector 完成：`resource_ref_projections` 只从
+已授权、完成的 official Tool Item `ResourceLink` 投影 producer event/item、ordinal、Tool、显示名和
+exact `{server, uri, resource_schema}`，不复制 Resource content、ResourceLink description 或业务摘要。
+Browser 选择时提交 producer event ID、ordinal 和 exact ref；Server 重新校验
+user/organization/Profile/Workspace、producer provenance 以及 `{server, uri, resource_schema}` 逐字段相等。
+普通 RunEvent WS/HTTP 不广播 raw URI，但 URI 本身不是 Secret 或宿主路径；不得另造 opaque handle、
+latest alias、相似性匹配或通用 Resource registry，也不得从模型文本或标题猜测。不同
+Workspace/Profile 的选择明确拒绝。
 
 SHA 只用于字节完整性、ETag 或 provider 物理去重，不能替代授权，也不能用整数据集指纹
 裁决业务复用。
@@ -254,6 +256,12 @@ Root/child Thread provenance，再从该 Profile 的精确 Thread visualization 
 非符号链接普通文件并满足 containment 与大小限制。HTML 使用 Codex viewer 资源、CSP 和不含
 `allow-same-origin` 的脚本沙箱；静态图片只允许 PNG/JPEG/GIF/WebP 并校验文件签名；SVG、Markdown、
 任意路径、任意 Artifact HTML 和其它内容类型显式拒绝。
+
+`map.v3` 卡片的“基于此图修改”也不是 Resource 内容读取：Platform 仅从同一授权 Run 的
+`inline_map_cards` 投影取得 exact `map_card_spec.v1` ref，并把该 ref 作为用户明确选择的 Turn 输入。
+Maps provider 保存 immutable spec 和 parent ref；纯样式 revision 复用原 GeoJSON ref，涉及覆盖线的
+revision 必须先由 Network provider 发布新几何。Browser payload 和 Platform database 都不得包含
+GeoJSON 字节。
 
 ## 多 Agent 与企业 Tool
 

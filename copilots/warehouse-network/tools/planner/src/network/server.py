@@ -19,17 +19,17 @@ from open_web_codex_provider import (
     ProviderContractError,
     ResourceRef,
     ResourceStore,
-    bind_runtime,
     derive_geojson_profile,
-    workspace_resource_root,
 )
 from pydantic import Field, ValidationError
 from supply_chain_planner.data.workspace_intake import read_json_document
 from supply_chain_planner.delivery.map_service import (
     NetworkComparisonGeoJson,
     NetworkComparisonMapBundle,
+    NetworkCoverageGeoJson,
     NetworkDistributionGeoJson,
     build_network_comparison_map_bundle,
+    build_network_coverage_geojson,
     build_network_distribution_geojson,
 )
 from supply_chain_planner.delivery.report_service import (
@@ -83,6 +83,7 @@ from supply_chain_planner.network.solver import (
     summarize_assignment_cost,
 )
 from supply_chain_planner.shared.models import (
+    AssignmentResultResourceRef,
     ComparableNetworkResultRef,
     FacilityChangeAssessmentToolResult,
     FacilityChangeCostComparison,
@@ -100,9 +101,8 @@ from supply_chain_planner.shared.models import (
 )
 from supply_chain_planner.shared.resource_identity import (
     DATA_MCP_SERVER_NAME,
-    NETWORK_MCP_SERVER_NAME,
-    RESOURCE_PROVIDER_NAMESPACE,
 )
+from supply_chain_planner.shared.resources import SupplyChainResources
 
 McpResourceContractError = ProviderContractError
 
@@ -222,7 +222,7 @@ mcp = FastMCP(
 
 _workspace_root = Path.cwd().resolve()
 _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
-_mcp_resource_runtime: McpResourceRuntime | None = None
+_supply_chain_resources: SupplyChainResources | None = None
 
 
 def _store() -> ResourceStore:
@@ -230,26 +230,16 @@ def _store() -> ResourceStore:
 
 
 def _runtime() -> McpResourceRuntime:
-    global _mcp_resource_runtime
-    if _mcp_resource_runtime is None:
-        _mcp_resource_runtime = bind_runtime(
-            _workspace_root,
-            _profile_state_root,
-            NETWORK_MCP_SERVER_NAME,
-            RESOURCE_URI_PREFIX,
-        )
-    return _mcp_resource_runtime
+    global _supply_chain_resources
+    if _supply_chain_resources is None:
+        _supply_chain_resources = SupplyChainResources(_workspace_root, _profile_state_root)
+    return _supply_chain_resources.network
 
 
-def _data_resource_runtime() -> McpResourceRuntime:
-    runtime = _runtime()
-    return McpResourceRuntime(
-        runtime.startup_workspace,
-        _profile_state_root,
-        DATA_MCP_SERVER_NAME,
-        RESOURCE_URI_PREFIX,
-        store=runtime.store,
-    )
+def _resources() -> SupplyChainResources:
+    _runtime()
+    assert _supply_chain_resources is not None
+    return _supply_chain_resources
 
 
 @mcp.resource(
@@ -359,7 +349,8 @@ def compare_network_scenarios(
 
 
 def _load_ready_network(resource_ref: PreparedNetworkInputRef) -> PreparedNetworkResource:
-    prepared = _data_resource_runtime().load_model(
+    prepared = _resources().load_model(
+        DATA_MCP_SERVER_NAME,
         resource_ref,
         "normalized_network_input.v1",
         PreparedNetworkResource,
@@ -369,9 +360,33 @@ def _load_ready_network(resource_ref: PreparedNetworkInputRef) -> PreparedNetwor
     return prepared
 
 
+def _load_assignment_coverage_result(
+    resource_ref: AssignmentResultResourceRef,
+) -> tuple[AssignmentResult, list[str], str, Literal["baseline", "scenario", "facility"]]:
+    """Adapt one solved domain result without choosing or recomputing it."""
+    if resource_ref.resource_schema == "network_baseline.v2":
+        baseline = _runtime().load_model(
+            resource_ref, "network_baseline.v2", BaselineResult
+        )
+        return baseline.assignment, baseline.active_warehouse_ids, baseline.label, "baseline"
+    if resource_ref.resource_schema == "network_scenario.v2":
+        scenario = _runtime().load_model(
+            resource_ref, "network_scenario.v2", ScenarioResult
+        )
+        return scenario.assignment, scenario.active_warehouse_ids, "scenario", "scenario"
+    facility = _runtime().load_model(
+        resource_ref, "facility_location_solution.v3", PMedianSolution
+    )
+    if facility.assignment is None:
+        raise McpResourceContractError("coverage_assignment_required")
+    if facility.status not in {"optimal", "feasible"}:
+        raise McpResourceContractError("coverage_solution_not_deliverable")
+    return facility.assignment, facility.active_warehouse_ids, facility.status, "facility"
+
+
 def _publish_geojson(
     schema: str,
-    value: NetworkComparisonGeoJson | NetworkDistributionGeoJson,
+    value: NetworkComparisonGeoJson | NetworkCoverageGeoJson | NetworkDistributionGeoJson,
     description: str,
 ) -> CallToolResult:
     payload = value.model_dump(mode="json", by_alias=True)
@@ -1288,6 +1303,45 @@ def prepare_network_comparison_map(
     return result
 
 
+@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
+def prepare_network_coverage_map(
+    normalized_input_ref: PreparedNetworkInputRef,
+    assignment_result_ref: AssignmentResultResourceRef,
+    ctx: Context,
+) -> CallToolResult:
+    """Publish all straight-line coverage facts for one exact solved result."""
+    _runtime().require_workspace(ctx)
+    prepared = _load_ready_network(normalized_input_ref)
+    assignment, active_ids, result_label, scenario = _load_assignment_coverage_result(
+        assignment_result_ref
+    )
+    normalized = NormalizedInputBatch(
+        demand_cities=prepared.demand_cities,
+        warehouses=prepared.warehouses,
+        current_assignments=prepared.current_assignments,
+        route_quotes=prepared.route_quotes,
+        provided_route_facts=prepared.provided_route_facts,
+        issues=prepared.issues,
+    )
+    geojson = build_network_coverage_geojson(
+        normalized,
+        assignment,
+        active_ids,
+        result_label=result_label,
+        scenario=scenario,
+    )
+    result = _publish_geojson(
+        geojson.schema_version,
+        geojson,
+        f"Prepared {len(geojson.features)} map features, including every assigned city coverage line.",
+    )
+    structured = result.structuredContent
+    if structured is None:
+        raise McpResourceContractError("map_data_result_missing")
+    structured.update({"feature_count": len(geojson.features)})
+    return result
+
+
 @mcp.tool(structured_output=True, annotations=FINAL_WORKSPACE_DELIVERY_TOOL)
 def render_network_comparison_map(
     plan_comparison_ref: NetworkPlanComparisonResourceRef,
@@ -1372,24 +1426,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    global _workspace_root, _profile_state_root, _mcp_resource_runtime
+    global _workspace_root, _profile_state_root, _supply_chain_resources
     _workspace_root = Path.cwd().resolve(strict=True)
     _profile_state_root = Path(os.environ.get("CODEX_HOME", _workspace_root / ".codex")).resolve()
-    store = ResourceStore(
-        workspace_resource_root(
-            _profile_state_root,
-            _workspace_root,
-            RESOURCE_PROVIDER_NAMESPACE,
-        ),
-        uri_prefix=RESOURCE_URI_PREFIX,
-    )
-    _mcp_resource_runtime = bind_runtime(
-        _workspace_root,
-        _profile_state_root,
-        NETWORK_MCP_SERVER_NAME,
-        RESOURCE_URI_PREFIX,
-        store=store,
-    )
+    _supply_chain_resources = SupplyChainResources(_workspace_root, _profile_state_root)
     if args.transport == "stdio":
         asyncio.run(run_stdio())
     else:

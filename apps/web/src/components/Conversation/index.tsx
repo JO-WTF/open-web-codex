@@ -15,6 +15,7 @@ import type {
   McpFormResponseAction,
   PendingMcpFormSummary,
   PendingUserInputSummary,
+  ResourceReferenceSummary,
 } from "../../../browser/types";
 import type { ModelProviderSummary, ModelSummary } from "./Composer";
 import TaskApprovalQueue, {
@@ -91,6 +92,17 @@ type Props = {
   busy: boolean;
   sendDisabled: boolean;
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
+  mapCardAttachment?: { ref: string; title: string } | null;
+  onSelectMapCardForRevision?: (cardId: string, title: string) => void;
+  onClearMapCardAttachment?: () => void;
+  resourceAttachments?: ResourceReferenceSummary[];
+  resourceOptions?: ResourceReferenceSummary[];
+  resourcePickerOpen?: boolean;
+  resourceRefsLoading?: boolean;
+  resourceRefsError?: string | null;
+  onToggleResourcePicker?: () => void;
+  onToggleResourceAttachment?: (resource: ResourceReferenceSummary) => void;
+  onClearResourceAttachment?: (producerEventId: string, ordinal: number) => void;
 };
 
 function FinalArtifactLinks({ artifacts }: { artifacts: ArtifactSummary[] }) {
@@ -169,6 +181,17 @@ export default function Conversation({
   busy,
   sendDisabled,
   onResolveApproval,
+  mapCardAttachment,
+  onSelectMapCardForRevision,
+  onClearMapCardAttachment,
+  resourceAttachments,
+  resourceOptions,
+  resourcePickerOpen,
+  resourceRefsLoading,
+  resourceRefsError,
+  onToggleResourcePicker,
+  onToggleResourceAttachment,
+  onClearResourceAttachment,
 }: Props) {
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
@@ -269,6 +292,7 @@ export default function Conversation({
             onResolveApproval={onResolveApproval}
             inlineVisualizationThreadId={conversationId}
             onOpenAgentPanel={onOpenAgentPanel}
+            onReviseMapCard={onSelectMapCardForRevision}
           />
           <FinalArtifactLinks artifacts={finalArtifacts} />
           <TaskApprovalQueue
@@ -318,6 +342,16 @@ export default function Conversation({
         selectedModelId={selectedModelId}
         onSelectModel={onSelectModel}
         providerCatalogOpenRequest={providerCatalogOpenRequest}
+        mapCardAttachment={mapCardAttachment}
+        onClearMapCardAttachment={onClearMapCardAttachment}
+        resourceAttachments={resourceAttachments}
+        resourceOptions={resourceOptions}
+        resourcePickerOpen={resourcePickerOpen}
+        resourceRefsLoading={resourceRefsLoading}
+        resourceRefsError={resourceRefsError}
+        onToggleResourcePicker={onToggleResourcePicker}
+        onToggleResourceAttachment={onToggleResourceAttachment}
+        onClearResourceAttachment={onClearResourceAttachment}
       />
     </section>
   );

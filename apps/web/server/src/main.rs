@@ -8,6 +8,7 @@ mod event_projection;
 mod inline_map_cards;
 mod inline_visualizations;
 mod middleware;
+mod resource_ref_projections;
 mod routes;
 #[cfg(test)]
 mod security_integration;

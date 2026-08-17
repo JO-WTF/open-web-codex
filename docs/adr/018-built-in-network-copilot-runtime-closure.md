@@ -51,6 +51,10 @@ Profile 中的其他 Thread 只有在配置了同一命名 provider、获得授�
 Web Server 可以从官方 Thread history 的精确 Item ID 构建可重建的授权/可发现引用投影，
 但不得存储 Resource 内容、建立通用 Resource Broker 或形成第二数据系统。
 
+Resource 的目的只是复用一个确切、类型化的已处理或已计算快照，避免重复文件读取、字段映射、
+归一化和 pair 计算；它不是 Workspace 文件访问禁令，也不是来源真实性、业务可信度、版本治理或
+自动复用许可。来源确认、数据质量报告和业务判断仍各自负责这些结论。
+
 阶段一不建设：
 
 - COW、overlay、snapshot、Task-owned worktree 或 Task 私有文件层；
@@ -132,11 +136,20 @@ Workspace，不得扫描 process cwd、Workspace 或源码仓库发现能力，�
 ### 5. 仓网业务只存在于 Skill 和 Tool
 
 Data Agent 从用户指定的 Workspace Excel/CSV/JSON 读取数据，完成画像、字段映射、
-标准化、行政区和候选仓补全。用户可见数据和跨 package 交接写 Workspace 文件；
-provider-owned typed intermediate 可发布为 MCP Resource。Network Agent 通过相同官方 provider 的 Resource
-或显式 Workspace 文件读取，完成距离与时长、成本、覆盖、SLA、全网成本、增减搬迁模拟、
-p-median、服务约束规划、地图和报告。路线/成本 Tool 以 pair fact 粒度复用已有真实计算，
-只对缺失 pair 重算；不以整份数据版本指纹作为复用门。
+标准化、行政区和候选仓补全。首次 normalized input 保留全部确认的候选仓；只有 candidate
+新增、替换或移除可以通过 `candidate_warehouse_delta.v1` 加 exact base ref 派生一个新的完整输入
+快照。需求、现网仓、实际分配、路线或报价事实变化必须完整归一化。用户可见数据和跨 Workspace
+交接写 Workspace 文件；provider-owned typed intermediate 可发布为 MCP Resource。Data 与 Network
+是同一个 `supply_chain` provider Resource 域的不同 Tool，Network 通过 package-owned typed facade
+读取 exact normalized ref，绝不扫描或重解析原始文件。Network Agent 完成距离与时长、成本、覆盖、
+SLA、全网成本、增减搬迁模拟、p-median、服务约束规划、地图和报告。路线/成本 Tool 以 pair fact
+粒度复用已有真实计算，只对缺失 pair 重算；不以整份数据版本指纹作为复用门。
+
+Network 从任意 exact baseline、scenario 或 location assignment 结果产生语义 GeoJSON：城市、设施、
+实际分配和直线覆盖关系都来自坐标与分配事实，不含城市、仓库或 XD 名称分支。Maps 只消费 exact
+GeoJSON ref，保存 immutable `map_card_spec.v1`（几何引用、图层、视角和可选 parent spec ref）。纯样式
+调整产生 child spec 并复用原 GeoJSON；新增覆盖线先由 Network 发布新几何，再由 Maps 创建 child spec。
+Platform 只投影 card ref/spec ref，不保存 GeoJSON 内容。
 
 Platform API、数据库、DTO 和 projection 不出现仓网对象或仓网状态机。Tool 默认
 create-new；同名时通过原生 elicitation 询问覆盖、改名或取消。Mock 只有在用户明确选择

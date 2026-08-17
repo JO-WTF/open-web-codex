@@ -17,18 +17,19 @@ class PluginConfigTests(unittest.TestCase):
 
     def test_maps_mcp_annotations_separate_local_and_external_tools(self) -> None:
         tools = {tool.name: tool for tool in asyncio.run(maps_server.mcp.list_tools())}
-        local = tools["create_map_card"].annotations
-        self.assertIsNotNone(local)
-        assert local is not None
-        self.assertEqual(
-            local.model_dump(by_alias=True, exclude_none=True),
-            {
-                "readOnlyHint": True,
-                "destructiveHint": False,
-                "idempotentHint": False,
-                "openWorldHint": False,
-            },
-        )
+        for name in {"create_map_card", "revise_map_card"}:
+            local = tools[name].annotations
+            self.assertIsNotNone(local)
+            assert local is not None
+            self.assertEqual(
+                local.model_dump(by_alias=True, exclude_none=True),
+                {
+                    "readOnlyHint": True,
+                    "destructiveHint": False,
+                    "idempotentHint": False,
+                    "openWorldHint": False,
+                },
+            )
         for name in {"batch_geocode", "batch_reverse_geocode", "get_route", "distance_matrix"}:
             annotations = tools[name].annotations
             self.assertIsNotNone(annotations)
