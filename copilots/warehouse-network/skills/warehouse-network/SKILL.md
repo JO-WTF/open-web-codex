@@ -35,8 +35,21 @@ description: 仅供仓网 Supervisor 原生创建的 network_agent 使用。用�
 
 - 只展示当前分布时调用 `prepare_network_distribution_map`，默认不包含候选仓。展示已有基线时把精确 `baseline_ref` 一并传入，使需求城市带有原始 `assigned_warehouse_id`、`distance_km`、`duration_hours` 和 `unit_cost`。已有前后方案比较时，把 `compare_network_scenarios` 或 `assess_facility_change` 返回的单一 `plan_comparison_ref` 传给 `prepare_network_comparison_map`；该引用已经绑定标准化输入、前方案、后方案和比较结果，需求城市会带有对应的 `baseline_*` 与 `facility_*` 原始字段。不分别拼装四个引用，也不为地图重算路线、成本或方案。
 - 地图的标题、图层、筛选、颜色、大小、标签、悬浮信息和图例都属于当次展示意图：优先服从用户当前自然语言要求，再结合本次分析选择清晰表达；不得把展示样式当成业务数据或达标判定写回 Resource。
-- 用户未指定时采用以下高对比度默认点样式（尺寸单位为屏幕像素）：中心仓（`center`）使用深蓝色 `#1D4ED8`、半径 `11`、白色描边 `2.5`；XD 前置仓（`cross_docking`）使用橙色 `#F97316`、半径 `8`、白色描边 `2`。仓库图层置于需求城市图层之上，中心仓视觉层级高于 XD，并在图例中分别说明。
-- 需求城市不得默认使用浅灰色。没有时效结果的分布图使用蓝色 `#2563EB`、半径 `5`、白色描边 `1.25`；有时效结果时以用户选择的目标为口径，达标城市使用绿色 `#16A34A`、半径 `6`、白色描边 `1.5`，不达标城市使用黄色 `#FACC15`、半径 `7`、深黄色描边 `#854D0E`、宽度 `1.5`，并在图例中明确标注“时效达标”和“时效未达标”。
+- 用户未指定样式时，采用下列默认参考；用户指定的样式优先。尺寸单位为屏幕像素。
+
+  | 地图对象 | 默认参考样式 |
+  | --- | --- |
+  | 中心仓（`warehouse_type=center`） | 深蓝 `#1D4ED8`，半径 `11`，白色描边 `2.5` |
+  | XD 前置仓（`warehouse_type=cross_docking`） | 橙色 `#F97316`，半径 `8`，白色描边 `2` |
+  | 候选仓（`is_existing=false` 且 `opened_candidate=false`） | 紫色 `#7C3AED`，半径 `7`，白色描边 `2`，不透明度 `0.9` |
+  | 新增启用仓（`opened_candidate=true`） | 洋红 `#C026D3`，半径 `11`，白色描边 `2.5` |
+  | 需求城市（没有时效结果） | 蓝色 `#2563EB`，半径 `5`，白色描边 `1.25` |
+  | 时效达标城市 | 绿色 `#16A34A`，半径 `6`，白色描边 `1.5` |
+  | 时效未达标城市 | 红色 `#DC2626`，半径 `7`，白色描边 `1.75` |
+  | Last mile 覆盖线（`kind=last_mile_assignment`） | 蓝色 `#2563EB`，宽度 `1.5`，不透明度 `0.6` |
+  | 干线覆盖线（`kind=linehaul_connection`） | 深蓝 `#1E3A8A`，宽度 `2.5`，不透明度 `0.75` |
+
+  仓库点图层置于需求城市之上；线图层置于所有点图层之下。图例仅列出本次实际展示的对象，并分别保留中心仓、XD 前置仓、候选仓、新增启用仓、时效达标、时效未达标、Last mile 和干线的名称。
 - Planner 返回的 `data_ref.profile` 是从本次完整 GeoJSON 自动生成的有界概览，也是图层字段、类型、枚举值和几何类型的唯一模型可见真相。按它的 `discriminator_property` 与 `feature_types` 构造每个图层；筛选、表达式、标签和 tooltip 只使用对应 feature type 的 `properties`，不得从业务名或历史地图猜字段。纯分布数据没有时效字段时不猜测达标状态。
 - 为仓库、需求城市和干线连接配置 `extensions.hover`。从对应 feature type 的可用字段中选择人类可读名称作为标题，并按本次实际存在的字段展示业务标识、仓型或需求量、服务关系、运输时长、距离、成本和方案状态；缺失字段直接省略，不制造通用 `name` 或其他替代字段。
 - 将 Planner 返回的完整 `data_ref`（包括 `profile`）原样放入 `map_utils.create_map_card` 的 GeoJSON source，自行按上述展示意图构造标准 Mapbox Style `layers` 与可选 hover/legend；不得读取完整 Resource 内容，也不得改写数据引用、概览、原始指标或用户选择的阈值。地图 Tool 会依据 profile 拒绝不存在的字段和不兼容的几何图层。再将 `structuredContent.embed.code` 原样作为独立段落返回。地图 Tool 失败时明确报告，不制作 HTML、图片或文本地图替代。
