@@ -89,6 +89,7 @@ enabled = true
 
 [plugins.map_utils.mcp_servers.map_utils]
 enabled = true
+required = true
 default_tools_approval_mode = "prompt"
 enabled_tools = [
   "get_route",

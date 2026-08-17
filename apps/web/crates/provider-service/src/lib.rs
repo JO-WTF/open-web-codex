@@ -20,6 +20,10 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use url::Url;
 
+/// Platform policy for Profiles that do not yet have an explicit Runtime
+/// reasoning setting. An explicit value remains owned by the Profile config.
+pub const DEFAULT_REASONING_EFFORT: &str = "medium";
+
 #[derive(Debug, Error)]
 pub enum ProviderServiceError {
     #[error("invalid Provider input: {0}")]
@@ -326,6 +330,45 @@ impl ProviderService {
         )])
         .await?;
         self.list().await
+    }
+
+    /// Apply the Platform default only to Profiles without an explicit
+    /// `model_reasoning_effort` value. The Runtime remains the owner of the
+    /// effective setting and performs the typed write.
+    pub async fn ensure_default_reasoning_effort(&self) -> Result<bool, ProviderServiceError> {
+        let response = self
+            .transport
+            .request(
+                "config/read",
+                json!({ "includeLayers": false, "cwd": null }),
+            )
+            .await
+            .map_err(ProviderServiceError::Runtime)?;
+        let config = unwrap_result(&response).get("config").ok_or_else(|| {
+            ProviderServiceError::InvalidResponse(
+                "config/read response is missing config".to_string(),
+            )
+        })?;
+        let configured_effort = config.get("model_reasoning_effort").ok_or_else(|| {
+            ProviderServiceError::InvalidResponse(
+                "config/read response is missing model_reasoning_effort".to_string(),
+            )
+        })?;
+        if configured_effort.is_string() {
+            return Ok(false);
+        }
+        if !configured_effort.is_null() {
+            return Err(ProviderServiceError::InvalidResponse(
+                "config/read returned an invalid model_reasoning_effort".to_string(),
+            ));
+        }
+
+        self.write_config(vec![config_edit(
+            "model_reasoning_effort".to_string(),
+            json!(DEFAULT_REASONING_EFFORT),
+        )])
+        .await?;
+        Ok(true)
     }
 
     async fn require_provider(&self, id: &str) -> Result<ProviderCatalog, ProviderServiceError> {
@@ -909,7 +952,7 @@ mod tests {
     use super::{
         parse_model_provider_models_list, provider_model_config_from_catalog, provider_path,
         upsert_provider_model_context, validate_base_url, validate_credentials, ProviderService,
-        ProviderServiceError, ProviderTransport,
+        ProviderServiceError, ProviderTransport, DEFAULT_REASONING_EFFORT,
     };
     use async_trait::async_trait;
     use open_web_codex_platform_contracts::{
@@ -1474,5 +1517,53 @@ mod tests {
         assert_eq!(calls[1].1["edits"][0]["value"], "deepseek");
         assert_eq!(calls[1].1["edits"][1]["keyPath"], "model");
         assert_eq!(calls[1].1["edits"][1]["value"], "deepseek-v4-flash");
+    }
+
+    #[tokio::test]
+    async fn unset_reasoning_effort_receives_the_platform_default() {
+        let transport = MockTransport::new(vec![
+            json!({
+                "config": { "model_reasoning_effort": null }
+            }),
+            json!({ "status": "ok" }),
+        ]);
+        let service = ProviderService::new(transport.clone());
+
+        assert!(service
+            .ensure_default_reasoning_effort()
+            .await
+            .expect("set default reasoning effort"));
+
+        let calls = transport.calls.lock().await;
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, "config/read");
+        assert_eq!(calls[0].1, json!({ "includeLayers": false, "cwd": null }));
+        assert_eq!(calls[1].0, "config/batchWrite");
+        assert_eq!(
+            calls[1].1["edits"],
+            json!([{
+                "keyPath": "model_reasoning_effort",
+                "value": DEFAULT_REASONING_EFFORT,
+                "mergeStrategy": "replace",
+            }])
+        );
+        assert_eq!(calls[1].1["reloadUserConfig"], true);
+    }
+
+    #[tokio::test]
+    async fn explicit_reasoning_effort_is_not_overwritten_by_the_platform_default() {
+        let transport = MockTransport::new(vec![json!({
+            "config": { "model_reasoning_effort": "high" }
+        })]);
+        let service = ProviderService::new(transport.clone());
+
+        assert!(!service
+            .ensure_default_reasoning_effort()
+            .await
+            .expect("preserve explicit reasoning effort"));
+
+        let calls = transport.calls.lock().await;
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "config/read");
     }
 }

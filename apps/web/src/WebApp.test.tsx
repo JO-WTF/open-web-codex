@@ -602,7 +602,6 @@ describe("WebApp workspace-first messaging", () => {
       "deepseek-v4-flash",
       "deepseek",
       null,
-      [],
     ));
     expect(client.startThread.mock.invocationCallOrder[0]).toBeLessThan(
       client.sendUserMessage.mock.invocationCallOrder[0],

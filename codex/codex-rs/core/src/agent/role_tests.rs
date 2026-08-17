@@ -150,7 +150,7 @@ args = []
         },
     );
 
-    reapply_role_to_config_for_multi_agent_v2(&mut config, "resource-reader")
+    reapply_role_to_config_for_child_resume(&mut config, "resource-reader")
         .await
         .expect("persisted role should reapply");
 

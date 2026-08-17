@@ -108,6 +108,7 @@ export type RuntimeAgentActivityKind =
   | "tool_started"
   | "tool_completed"
   | "tool_failed"
+  | "reasoning"
   | "reporting"
   | "waiting"
   | "input_requested"

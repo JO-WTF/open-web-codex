@@ -8,6 +8,7 @@ export type AgentWaitHistoryUpdate = {
   agentLabel: string;
   text: string;
   status: string;
+  kind: RuntimeAgentActivity["kind"] | null;
 };
 
 function agentLabel(agent: RuntimeAgentProjection): string {
@@ -42,19 +43,24 @@ export function latestAgentHistoryUpdates(
     const latest = latestByThread.get(agent.thread_id);
     const waiting = agent.active_flags.some((flag) => flag.toLowerCase().includes("waiting"));
     const reportedStatus = agent.status_type?.trim();
-    // `starting` is a provisional Thread projection. A later durable Item
-    // can already have reached its terminal state before that projection is
-    // replaced, so it must not hide the newest History status in the card.
-    const status = waiting
-      ? "waiting"
-      : reportedStatus?.toLowerCase() === "starting" && latest
-        ? latest.status
-        : reportedStatus || latest?.status || "pending";
+    // This row describes `latest`, not the Agent as a whole. Runtime Agent
+    // status remains active while an Item can already be terminal, so using
+    // it first created contradictory cards such as “Starting / Completed
+    // codex · list mcp resources”. Only fall back to the Agent projection
+    // before any durable Item has been observed.
+    const status = latest?.status
+      || (waiting ? "waiting" : reportedStatus || "pending");
     return {
       threadId: agent.thread_id,
       agentLabel: agentLabel(agent),
-      text: latest?.title.trim() || "No recorded History item yet.",
+      // Reasoning may arrive with incremental text while its Item is still
+      // running. Keep the wait card stable until the terminal projection for
+      // that same Item supplies its bounded final summary.
+      text: latest?.kind === "reasoning" && latest.status === "running"
+        ? "Thinking"
+        : latest?.title.trim() || "No recorded History item yet.",
       status,
+      kind: latest?.kind ?? null,
     };
   });
 }

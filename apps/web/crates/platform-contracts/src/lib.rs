@@ -422,8 +422,9 @@ pub struct RuntimeAgentProjection {
 /// Browser-safe description of one observable step performed by a
 /// Runtime-owned Agent Thread.
 ///
-/// Activities are derived from persisted Run events. They intentionally omit
-/// model reasoning, tool arguments, tool results and host-local identifiers.
+/// Activities are derived from persisted Run events. They may include bounded,
+/// redacted Runtime-provided reasoning text, but omit encrypted reasoning,
+/// tool arguments, tool results and host-local identifiers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeAgentActivityKind {
@@ -434,6 +435,7 @@ pub enum RuntimeAgentActivityKind {
     ToolStarted,
     ToolCompleted,
     ToolFailed,
+    Reasoning,
     Reporting,
     Waiting,
     InputRequested,

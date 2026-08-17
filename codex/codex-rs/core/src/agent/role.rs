@@ -65,13 +65,13 @@ pub(crate) async fn apply_role_to_config_for_multi_agent_v2(
     .await
 }
 
-/// Reapplies a persisted v2 child Role while preserving runtime-owned session state.
+/// Reapplies a persisted child Role while preserving runtime-owned session state.
 ///
-/// Both native collaboration residency recovery and app-server cold resume use this helper so a
-/// resumed child regains the same Role-owned Skills and MCP inventory without allowing the Role
-/// layer to replace its persisted model selection or the caller-authorized cwd, approval policy,
-/// reviewer, and permission profile.
-pub(crate) async fn reapply_role_to_config_for_multi_agent_v2(
+/// Both native collaboration recovery paths use this helper so a resumed child regains the same
+/// Role-owned Skills and MCP inventory without allowing the Role layer to replace its persisted
+/// model selection or the caller-authorized cwd, approval policy, reviewer, and permission
+/// profile.
+pub(crate) async fn reapply_role_to_config_for_child_resume(
     config: &mut Config,
     role_name: &str,
 ) -> Result<(), String> {

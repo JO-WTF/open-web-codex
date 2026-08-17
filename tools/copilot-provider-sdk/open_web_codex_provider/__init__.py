@@ -5,7 +5,6 @@ from .errors import ProviderContractError, WorkspaceFileError
 from .geojson import (
     GeoJsonFeatureTypeProfile,
     GeoJsonProfile,
-    GeoJsonPropertyProfile,
     GeoJsonResourceRef,
     derive_geojson_profile,
 )
@@ -22,7 +21,6 @@ __all__ = [
     "CreatedWorkspaceFile",
     "GeoJsonFeatureTypeProfile",
     "GeoJsonProfile",
-    "GeoJsonPropertyProfile",
     "GeoJsonResourceRef",
     "MAX_WORKSPACE_FILE_BYTES",
     "McpResourceRuntime",

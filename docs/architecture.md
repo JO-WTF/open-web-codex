@@ -43,7 +43,7 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | Task、Run、Approval、Artifact、Audit | Platform | 持久 Artifact 只接受 active Copilot `[[deliveries]]` 声明的 exact producer、固定 typed kind/schema/MIME/verifier 和 Workspace-relative descriptor，并按 producing Item provenance 物化；中间 Resource 永不注册 Artifact。仓网包当前声明 Markdown 报告、地图文件和 inline map card，meeting 包声明 Markdown 报告；Platform 不理解其业务字段。producer-time verifier snapshot 随 Artifact 持久化，恢复和下载不依赖届时 active package registry，切换 Copilot 不会使既有交付失效。Browser 依据 MIME 安全预览、授权下载；当前 Thread 的正文只把 durable `ArtifactSummary.download_url` 锚定到 exact producing Item 所在 Turn，跨 Thread 交付留在 Agent History 的交付区，不依赖 Assistant 复述路径、简报正文或“最新 Turn”位置 |
 | Codex Inline Visualization | Codex Runtime + Platform 授权投影 | Runtime 仍生成原生 `visualize`/`file` 引用和 Thread-scoped 文件；Platform 将执行器绝对路径投影为 basename，并只允许当前授权 Profile/Thread 读取。Web 直接支持原生 HTML 与静态 PNG/JPEG/GIF/WebP；HTML 复用 Codex viewer assets 并运行在无 same-origin 权限的脚本沙箱/CSP 中，图片验证扩展名、大小与文件签名。SVG、Markdown 和任意 Artifact 脚本不进入该表面；额外 typed 卡片只来自 active Copilot 声明的固定 delivery kind，当前实例是仓网 `map.v3` |
 | 用户输入 | Runtime 请求，Platform Approval 投影 | Root 官方输入路径已在真实 E2E 中通过 |
-| Agent execution | Runtime 事件，Platform projection | 有等待、输入和完整终态投影；属于可重建视图 |
+| Agent execution | Runtime 事件，Platform projection | 有等待、输入、完整终态和有界、裁剪后的 reasoning 文本投影；属于可重建视图，不暴露 encrypted reasoning |
 | Capability Draft/Release/Installation | 无当前生产 owner | Catalog/Studio/Python publish crate、route、DTO、client、UI 与无 owner 数据表均已删除，不参与启动或 readiness |
 | Work State 与 Platform coordination | 无当前 production owner | work-state-service、route、MCP、gate、schema 与第二控制面已由 Slice 4B.2-A 删除；不建设替代状态机 |
 | Data Intake | 无当前 owner | 生产 route、validation crate、SourceAsset/Dataset/Task binding 表与产品入口已删除；阶段一不建设替代状态机 |
@@ -85,11 +85,12 @@ host 绑定，再把 transport 与 Role policy 合成原生 Role-local MCP。描
 默认复用 SDK 的本机 Tool 环境缓存；Skill、Role 或提示词变化只更新组合描述，不重装 Tool
 依赖。
 普通 `run-local` 启动与重启始终无损，不自动删除数据库或 prepared Tool 环境。开发 checkout
-发生不兼容的数据库或 prepared composition 变化时，操作者可显式使用 `--refresh-local`：该入口
-只接受仓库默认 data directory 与固定 loopback `open_web_codex` 开发数据库，先停止该目录精确
-记录的 Server，再重建数据库并只删除 launcher-owned Copilot environment roots；Profile home、
-Workspace 文件、master key 与构建缓存保持不变。外部数据库 URL、URL file、data directory override
-和 `--no-build` 一律拒绝。`run-local` 始终使用当前 checkout 按精确构建指纹生成的 Codex；不接受
+发生不兼容的数据库或 prepared composition 变化时，操作者可显式使用
+`--rebuild-development-database`：该入口只接受仓库默认 data directory 与固定 loopback
+`open_web_codex` 开发数据库，先停止该目录精确记录的 Server，重建数据库并恢复 Provider
+定义、加密 Provider 凭据、默认模型选择和加密 Maps 凭据；Profile home、Workspace 文件、master key
+与构建缓存保持不变。外部数据库 URL、URL file、data directory override 一律拒绝。`run-local`
+始终使用当前 checkout 按精确构建指纹生成的 Codex；不接受
 外部 `CODEX_BIN` 或 `--codex-bin`。这是因为当前平台依赖 Patch Map 中保留的 Runtime seam，
 通用 Codex binary 即使能够启动，也不能被当作具备相同的 child Role/MCP 冷恢复能力。
 
@@ -234,7 +235,9 @@ Markdown 文件登记并下载。对话内 `map.v3` 只保存 bounded renderer �
 引用，原生 Codex inline visualization 则从授权 Profile/Thread 目录即时读取，二者都不会把
 中间 MCP Resource 提升为 Artifact。`content_sha256` 只记录复制后字节完整性，不参与业务复用
 或准入。`map.v3` 的 provider-owned、内容寻址 `map_card_spec.v1` 只保存精确 GeoJSON refs、图层、视角和可选父 spec ref；
-纯样式修订复用原 GeoJSON，新增覆盖线先由 Network 产生新的 GeoJSON 再创建 child spec。Platform 的
+GeoJSON ref 的紧凑 profile 还声明每个字段的观测值类型但不复制任何值，Maps 因此能拒绝全空字段、类型
+不匹配的 source expression，以及当前 renderer 未声明 image asset 的 `icon-image`，而非发布假 Ready 卡片。纯样式
+修订复用原 GeoJSON，新增覆盖线先由 Network 产生新的 GeoJSON 再创建 child spec。Platform 的
 `inline_map_cards` 只投影该 exact spec ref 和父卡片关系，浏览器不接收 GeoJSON 内容。
 
 ## 6. Profile 与认证的当前边界

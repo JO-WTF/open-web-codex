@@ -1309,6 +1309,48 @@ mod tests {
     const NETWORK_ROLE: &str =
         include_str!("../../../../copilots/warehouse-network/agents/network_agent.toml");
 
+    #[test]
+    fn warehouse_network_skill_preserves_default_map_visual_hierarchy() {
+        assert!(
+            NETWORK_SKILL.contains("中心仓（`warehouse_type=center`） | 深蓝 `#1D4ED8`，半径 `12`")
+        );
+        assert!(NETWORK_SKILL
+            .contains("XD 前置仓（`warehouse_type=cross_docking`） | 橙色 `#F97316`，半径 `9`"));
+        assert!(NETWORK_SKILL.contains("中心仓半径 `12` 或 XD 半径 `9`"));
+        assert!(NETWORK_SKILL.contains("需求城市（没有时效结果） | 蓝色 `#2563EB`，半径 `4`"));
+        assert!(NETWORK_SKILL.contains("时效达标城市 | 绿色 `#16A34A`，半径 `5`"));
+        assert!(NETWORK_SKILL.contains("时效未达标城市 | 红色 `#DC2626`，半径 `6`"));
+        assert!(NETWORK_SKILL.contains("不透明度 `0.5`"));
+        assert!(NETWORK_SKILL.contains("不透明度 `0.65`"));
+        assert!(NETWORK_SKILL.contains(
+            "点图层必须依次传入需求城市、全部 XD 前置仓、全部中心仓，使中心仓始终位于最上层",
+        ));
+        assert!(NETWORK_SKILL.contains(
+            "中心仓和 XD 前置仓必须是两个独立图层，使用表中不同的颜色，不能合并为同色仓库图层",
+        ));
+        assert!(NETWORK_SKILL.contains(
+            "必须分别传入 Last mile 和干线两个覆盖线图层，不能省略、合并或以其中一类替代另一类",
+        ));
+    }
+
+    #[test]
+    fn warehouse_supervisor_skill_does_not_retry_terminal_child_failures() {
+        assert!(SUPERVISOR_SKILL.contains(
+            "任一 child 报告 `failed`、`errored`、`cancelled`、`interrupted`、`rejected` 或 `timeout`",
+        ));
+        assert!(SUPERVISOR_SKILL.contains("即使错误文本看似瞬时传输或 JSON 问题"));
+        assert!(SUPERVISOR_SKILL.contains(
+            "不得把该终态解释为可自行重试，不得用 follow-up、resume、同一或另一 Role、新 child 来补跑、替代或继续这一个请求",
+        ));
+        assert!(NETWORK_SKILL.contains(
+            "MCP Tool 返回失败、拒绝、超时、能力不可用或输入无效时，返回该 Tool 的 typed failure 并停止当前任务",
+        ));
+        assert!(
+            SUPERVISOR_SKILL.contains("只有用户在该终态之后明确发起新的“重试”或“重新运行”请求",)
+        );
+        assert!(!SUPERVISOR_SKILL.contains("原 child 已失败/取消/不可用，或用户明确要求独立上下文"));
+    }
+
     fn write_file(path: &Path, contents: &str, executable: bool) {
         fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
         fs::write(path, contents).expect("write fixture");
@@ -1731,6 +1773,11 @@ runtime = "tools/maps/runtime.toml"
         assert_eq!(
             network["mcp_servers"]["map_utils"]["tool_timeout_sec"].as_integer(),
             Some(90)
+        );
+        assert_eq!(
+            network["mcp_servers"]["map_utils"]["required"].as_bool(),
+            Some(true),
+            "the Network Role's map capability must be ready before its tool catalog is exposed",
         );
         let map_tools = network["mcp_servers"]["map_utils"]["enabled_tools"]
             .as_array()

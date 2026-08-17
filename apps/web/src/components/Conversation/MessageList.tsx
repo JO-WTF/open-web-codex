@@ -49,7 +49,7 @@ type Props = {
   inlineVisualizationThreadId?: string | null;
   finalArtifacts?: ArtifactSummary[];
   agentWaitUpdates?: AgentWaitHistoryUpdate[];
-  onOpenAgentPanel?: () => void;
+  onShowAgentActivity?: () => void;
   onReviseMapCard?: (cardId: string, title: string) => void;
 };
 
@@ -199,7 +199,7 @@ export function foldTerminalApprovals(items: MessageEntry[]) {
   return folded.filter((_, index) => !consumedApprovals.has(index));
 }
 
-export default function MessageList({ items, thinking = false, turnStartedAt, onOpenFile, workspaceId, onResolveApproval, inlineVisualizationThreadId, finalArtifacts = [], agentWaitUpdates = [], onOpenAgentPanel, onReviseMapCard }: Props) {
+export default function MessageList({ items, thinking = false, turnStartedAt, onOpenFile, workspaceId, onResolveApproval, inlineVisualizationThreadId, finalArtifacts = [], agentWaitUpdates = [], onShowAgentActivity, onReviseMapCard }: Props) {
   if (items.length === 0) {
     return (
       <div className="web-empty">
@@ -275,7 +275,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
               <AgentWaitCard
                 key={entry.id}
                 status={entry.toolStatus ?? ""}
-                onOpenAgentPanel={onOpenAgentPanel}
+                onShowAgentActivity={onShowAgentActivity}
               />
             );
           }
@@ -436,7 +436,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
           activeItem={activeItem && !activeAgentWait ? renderEntry(activeItem) : null}
           agentWaitStatus={activeAgentWait?.toolStatus}
           agentWaitUpdates={agentWaitUpdates}
-          onOpenAgentPanel={onOpenAgentPanel}
+          onShowAgentActivity={onShowAgentActivity}
           activityLabel={activityLabel}
         >
           {timelineItems.map(renderEntry)}

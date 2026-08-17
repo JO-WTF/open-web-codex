@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import Bot from "lucide-react/dist/esm/icons/bot";
 import Download from "lucide-react/dist/esm/icons/download";
 import FileCheck2 from "lucide-react/dist/esm/icons/file-check-2";
@@ -38,6 +38,7 @@ type Props = {
   onLoadAgentHistory?: (threadId: string) => Promise<ThreadHistoryTurn[]>;
   onLoadArtifactContent?: (artifactId: string) => Promise<ArtifactContent>;
   onDownloadArtifact?: (artifactId: string) => Promise<{ blob: Blob; filename: string }>;
+  behaviorLogFocusRequest?: number;
   loading?: boolean;
   error?: string | null;
 };
@@ -45,7 +46,6 @@ type Props = {
 type StatusTone = "idle" | "active" | "waiting" | "terminal" | "error";
 
 type AgentExecutionStatus = RuntimeAgentExecution["status"];
-type AgentActivityStatus = RuntimeAgentActivity["status"];
 
 type ReviewState =
   | {
@@ -134,11 +134,19 @@ function executionStatusPresentation(status: AgentExecutionStatus): {
   }
 }
 
-function activityStatusPresentation(status: AgentActivityStatus): {
+function isLiveReasoning(activity: RuntimeAgentActivity): boolean {
+  return activity.kind === "reasoning" && activity.status === "running";
+}
+
+function activityStatusPresentation(activity: RuntimeAgentActivity): {
   label: string;
   tone: StatusTone;
 } {
-  switch (status) {
+  if (isLiveReasoning(activity)) {
+    return { label: "Thinking", tone: "active" };
+  }
+
+  switch (activity.status) {
     case "pending":
       return { label: "Queued", tone: "idle" };
     case "running":
@@ -189,8 +197,17 @@ function activitySubjectAction(
 }
 
 function activityAction(activity: RuntimeAgentActivity): string {
+  if (isLiveReasoning(activity)) return "Thinking";
   return activitySubjectAction(activity.subject)
     ?? (activity.title.trim() || activityKindLabel(activity.kind));
+}
+
+function activityDetail(activity: RuntimeAgentActivity): string | null {
+  // A live reasoning Item can receive incremental Runtime text. The browser
+  // intentionally holds a stable Thinking presentation until that same Item
+  // reaches its terminal projection, when the final bounded summary replaces
+  // this row in place.
+  return isLiveReasoning(activity) ? null : activity.detail;
 }
 
 type ActivityRowProps = {
@@ -207,6 +224,7 @@ function ActivityRow({ activity, actorName, action, status }: ActivityRowProps) 
   const statusId = `${rowId}-status`;
   const hasCommandDetail = activity.subject?.kind === "workspace_action";
   const timestamp = activityTime(activity.created_at);
+  const detail = activityDetail(activity);
 
   return (
     <li
@@ -244,7 +262,7 @@ function ActivityRow({ activity, actorName, action, status }: ActivityRowProps) 
               <time dateTime={activity.created_at}>{timestamp}</time>
             ) : null}
           </div>
-          {activity.detail ? (
+          {detail ? (
             <details className="web-supervisor-activity-detail">
               <summary
                 role="button"
@@ -254,7 +272,7 @@ function ActivityRow({ activity, actorName, action, status }: ActivityRowProps) 
               >
                 {hasCommandDetail ? "Command details" : "Show details"}
               </summary>
-              <p>{activity.detail}</p>
+              <p>{detail}</p>
             </details>
           ) : null}
         </article>
@@ -284,15 +302,20 @@ function activitySortKey(activity: RuntimeAgentActivity): string {
   ].join("\u001f");
 }
 
-function toolLifecycleIdentity(activity: RuntimeAgentActivity): string | null {
+function itemLifecycleIdentity(activity: RuntimeAgentActivity): string | null {
   if (!activity.item_id || ![
     "tool_started",
     "tool_completed",
     "tool_failed",
+    "reasoning",
   ].includes(activity.kind)) {
     return null;
   }
   return [activity.run_id, activity.thread_id, activity.item_id].join("\u001f");
+}
+
+function activityRenderIdentity(activity: RuntimeAgentActivity): string {
+  return itemLifecycleIdentity(activity) ?? activityIdentity(activity);
 }
 
 /**
@@ -318,7 +341,7 @@ export function orderAndDedupeActivities(
       const identity = activityIdentity(activity);
       if (seen.has(identity)) return;
       seen.add(identity);
-      const lifecycleIdentity = toolLifecycleIdentity(activity);
+      const lifecycleIdentity = itemLifecycleIdentity(activity);
       const lifecycleIndex = lifecycleIdentity
         ? lifecycleIndexes.get(lifecycleIdentity)
         : undefined;
@@ -351,6 +374,8 @@ function activityKindLabel(kind: RuntimeAgentActivity["kind"]): string {
     case "tool_completed":
     case "tool_failed":
       return "Tool";
+    case "reasoning":
+      return "Reasoning";
     case "reporting":
       return "Progress";
     case "waiting":
@@ -430,12 +455,15 @@ export default function SupervisorOverview({
   onLoadAgentHistory,
   onLoadArtifactContent,
   onDownloadArtifact,
+  behaviorLogFocusRequest = 0,
   loading = false,
   error = null,
 }: Props) {
   const [review, setReview] = useState<ReviewState | null>(null);
   const [downloadingArtifactId, setDownloadingArtifactId] = useState<string | null>(null);
   const [artifactActionError, setArtifactActionError] = useState<string | null>(null);
+  const behaviorLogRef = useRef<HTMLDetailsElement>(null);
+  const lastFocusedBehaviorLogRequest = useRef(0);
   const rootAgent = agents.find((agent) => agent.is_root) ?? null;
   const orderedActivities = orderAndDedupeActivities(activities);
   const rootActivities = orderedActivities
@@ -467,6 +495,17 @@ export default function SupervisorOverview({
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [review]);
+
+  useEffect(() => {
+    if (behaviorLogFocusRequest <= lastFocusedBehaviorLogRequest.current) return;
+    const behaviorLog = behaviorLogRef.current;
+    if (!behaviorLog) return;
+    behaviorLog.open = true;
+    const summary = behaviorLog.querySelector<HTMLElement>("summary");
+    summary?.focus({ preventScroll: true });
+    behaviorLog.scrollIntoView?.({ block: "nearest" });
+    lastFocusedBehaviorLogRequest.current = behaviorLogFocusRequest;
+  }, [activities.length, agents.length, behaviorLogFocusRequest]);
 
   const openAgentHistory = async (
     execution: RuntimeAgentExecution,
@@ -613,9 +652,9 @@ export default function SupervisorOverview({
                 <Detail label="Current task">{taskTitle}</Detail>
                 <Detail label="Run status">{rootStatus.label}</Detail>
                 <Detail label="Current behavior">
-                  {rootBehavior?.detail
-                    ?? (rootBehavior ? activityAction(rootBehavior) : null)
-                    ?? "Coordinating the collaboration"}
+                  {rootBehavior
+                    ? activityDetail(rootBehavior) ?? activityAction(rootBehavior)
+                    : "Coordinating the collaboration"}
                 </Detail>
                 <Detail label="Latest progress">
                   {rootProgress?.detail
@@ -699,6 +738,7 @@ export default function SupervisorOverview({
           </div>
 
           <details
+            ref={behaviorLogRef}
             className="web-supervisor-activity"
             aria-label="Agent behavior log"
             open={behaviorLogStartsOpen ? true : undefined}
@@ -716,11 +756,11 @@ export default function SupervisorOverview({
                     const actor = agentsByThread.get(activity.thread_id);
                     return (
                       <ActivityRow
-                        key={activityIdentity(activity)}
+                        key={activityRenderIdentity(activity)}
                         activity={activity}
                         actorName={actor ? agentLabel(actor) : "Runtime Agent"}
                         action={activityAction(activity)}
-                        status={activityStatusPresentation(activity.status)}
+                        status={activityStatusPresentation(activity)}
                       />
                     );
                   })}

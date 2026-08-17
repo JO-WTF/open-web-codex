@@ -85,7 +85,9 @@ mcp = FastMCP(
         "this server use map_utils; create_map_card may also consume an unchanged GeoJSON "
         "reference from another reviewed local MCP server. Never use a model-visible mcp__ "
         "namespace or copy Resource JSON into the assistant reply. "
-        "create_map_card accepts standard Mapbox Style Specification layer JSON. Open Web "
+        "create_map_card accepts standard non-image Mapbox Style Specification layer JSON. "
+        "The current map.v3 renderer does not declare image assets, so icon-image is rejected. "
+        "Open Web "
         "manages GeoJSON source data and adds optional extensions.hover and "
         "extensions.legend. The official Mapbox validator reports unknown style properties "
         "as warnings and rejects invalid known syntax. The Tool returns a schema-validated "
@@ -343,6 +345,9 @@ async def create_map_card(
     is passed to ``map.addLayer`` unchanged except that each authorized source ID is replaced
     by its browser-local source ID. Standard Mapbox layer types, paint/layout properties,
     filters, expressions, minzoom/maxzoom, metadata, and source-layer are not redefined here.
+    The current ``map.v3`` renderer does not declare image assets, so ``icon-image`` is rejected
+    rather than relying on an undeclared Mapbox sprite name. Use standard non-image layers, or a
+    declared image-asset contract when that capability is introduced.
 
     ``center`` and ``zoom`` are standard Mapbox camera fields and must be supplied together;
     omit both to fit all loaded GeoJSON. ``bearing`` and ``pitch`` are also standard camera

@@ -1,4 +1,4 @@
-"""Bounded, content-derived GeoJSON profiles for model-authored presentation."""
+"""Compact, content-derived GeoJSON profiles for model-authored presentation."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .contracts import ResourceRef
 from .errors import ProviderContractError
@@ -15,48 +15,63 @@ from .errors import ProviderContractError
 MAX_FEATURES = 100_000
 MAX_FEATURE_TYPES = 32
 MAX_PROPERTIES_PER_TYPE = 64
-MAX_ENUM_VALUES = 16
-MAX_SAMPLE_PROPERTIES = 32
-MAX_PROFILE_STRING = 128
 
-JsonValueType = Literal["null", "boolean", "number", "string", "array", "object"]
-
-
-class GeoJsonPropertyProfile(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(min_length=1, max_length=128)
-    types: list[JsonValueType] = Field(min_length=1, max_length=6)
-    enum_values: list[str] | None = Field(default=None, max_length=MAX_ENUM_VALUES)
-    minimum: float | None = None
-    maximum: float | None = None
+GeoJsonPropertyKind = Literal[
+    "boolean",
+    "number",
+    "string",
+    "null",
+    "array",
+    "object",
+    "mixed",
+    "boolean?",
+    "number?",
+    "string?",
+    "array?",
+    "object?",
+    "mixed?",
+]
 
 
 class GeoJsonFeatureTypeProfile(BaseModel):
+    """One compact schema slice used to validate a map layer."""
+
     model_config = ConfigDict(extra="forbid")
 
     value: str = Field(min_length=1, max_length=128)
     feature_count: int = Field(ge=1, le=MAX_FEATURES)
     geometry_types: list[str] = Field(min_length=1, max_length=8)
-    properties: list[GeoJsonPropertyProfile] = Field(max_length=MAX_PROPERTIES_PER_TYPE)
-    sample_properties: dict[str, bool | float | str | None] = Field(
-        max_length=MAX_SAMPLE_PROPERTIES
-    )
+    # A property-name → observed-value-kind map is deliberately kept compact:
+    # it exposes no source values, but lets a renderer reject expressions that
+    # would otherwise silently fall back at runtime (for example, numeric
+    # interpolation over a string field or a comparison against an all-null
+    # field).
+    properties: dict[str, GeoJsonPropertyKind] = Field(max_length=MAX_PROPERTIES_PER_TYPE)
+
+    @field_validator("properties")
+    @classmethod
+    def validate_properties(
+        cls,
+        properties: dict[str, GeoJsonPropertyKind],
+    ) -> dict[str, GeoJsonPropertyKind]:
+        if any(not property_name or len(property_name) > 128 for property_name in properties):
+            raise ValueError("GeoJSON feature profile property name is invalid")
+        return properties
 
 
 class GeoJsonProfile(BaseModel):
-    """Small projection derived from one exact GeoJSON FeatureCollection."""
+    """Bounded source schema needed to author and validate one map card."""
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["geojson-profile.v1"] = "geojson-profile.v1"
+    schema_version: Literal["geojson-profile.v3"] = "geojson-profile.v3"
     feature_count: int = Field(ge=0, le=MAX_FEATURES)
     discriminator_property: str | None = Field(default=None, min_length=1, max_length=128)
     feature_types: list[GeoJsonFeatureTypeProfile] = Field(max_length=MAX_FEATURE_TYPES)
 
 
 class GeoJsonResourceRef(ResourceRef):
-    """One exact GeoJSON Resource identity plus its bounded model-visible profile."""
+    """One exact GeoJSON Resource identity plus its compact map-validation profile."""
 
     format: Literal["geojson"] = "geojson"
     profile: GeoJsonProfile
@@ -124,7 +139,7 @@ def derive_geojson_profile(
     if len(groups) > MAX_FEATURE_TYPES:
         raise ProviderContractError("geojson_feature_types_too_many")
 
-    return GeoJsonProfile(
+    profile = GeoJsonProfile(
         feature_count=len(features),
         discriminator_property=discriminator_property if use_discriminator else None,
         feature_types=[
@@ -132,66 +147,48 @@ def derive_geojson_profile(
             for value, rows in sorted(groups.items(), key=lambda item: item[0])
         ],
     )
+    return profile
 
 
 def _profile_group(
     value: str,
     rows: list[tuple[str, Mapping[str, Any]]],
 ) -> GeoJsonFeatureTypeProfile:
-    property_values: dict[str, list[Any]] = {}
     geometry_types: set[str] = set()
+    property_names: set[str] = set()
     for geometry_type, properties in rows:
         geometry_types.add(geometry_type)
-        for name, item in properties.items():
+        for name in properties:
             if not isinstance(name, str) or not name or len(name) > 128:
                 raise ProviderContractError("geojson_property_name_invalid")
-            property_values.setdefault(name, []).append(item)
-    if len(property_values) > MAX_PROPERTIES_PER_TYPE:
+            property_names.add(name)
+    if len(property_names) > MAX_PROPERTIES_PER_TYPE:
         raise ProviderContractError("geojson_properties_too_many")
-
-    sample: dict[str, bool | float | str | None] = {}
-    for name, item in rows[0][1].items():
-        scalar = _sample_scalar(item)
-        if scalar is not _UNSUPPORTED and len(sample) < MAX_SAMPLE_PROPERTIES:
-            sample[name] = scalar
 
     return GeoJsonFeatureTypeProfile(
         value=value,
         feature_count=len(rows),
         geometry_types=sorted(geometry_types),
-        properties=[
-            _profile_property(name, values)
-            for name, values in sorted(property_values.items(), key=lambda item: item[0])
-        ],
-        sample_properties=sample,
+        properties={
+            name: _property_kind([properties.get(name) for _, properties in rows])
+            for name in sorted(property_names)
+        },
     )
 
 
-def _profile_property(name: str, values: list[Any]) -> GeoJsonPropertyProfile:
-    types = sorted({_json_type(value) for value in values})
-    strings = {
-        value
-        for value in values
-        if isinstance(value, str) and len(value) <= MAX_PROFILE_STRING
-    }
-    enum_values = sorted(strings) if strings and len(strings) <= MAX_ENUM_VALUES else None
-    numbers = [
-        float(value)
-        for value in values
-        if isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    ]
-    return GeoJsonPropertyProfile(
-        name=name,
-        types=types,
-        enum_values=enum_values,
-        minimum=min(numbers) if numbers else None,
-        maximum=max(numbers) if numbers else None,
-    )
+def _property_kind(values: list[Any]) -> GeoJsonPropertyKind:
+    kinds = {_json_value_kind(value) for value in values}
+    nullable = "null" in kinds
+    kinds.discard("null")
+    if not kinds:
+        return "null"
+    kind = next(iter(kinds)) if len(kinds) == 1 else "mixed"
+    return f"{kind}?" if nullable else kind
 
 
-def _json_type(value: Any) -> JsonValueType:
+def _json_value_kind(value: Any) -> Literal[
+    "boolean", "number", "string", "null", "array", "object"
+]:
     if value is None:
         return "null"
     if isinstance(value, bool):
@@ -207,19 +204,3 @@ def _json_type(value: Any) -> JsonValueType:
     if isinstance(value, Mapping):
         return "object"
     raise ProviderContractError("geojson_property_value_invalid")
-
-
-_UNSUPPORTED = object()
-
-
-def _sample_scalar(value: Any) -> bool | float | str | None | object:
-    if value is None or isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        number = float(value)
-        if not math.isfinite(number):
-            raise ProviderContractError("geojson_property_number_invalid")
-        return number
-    if isinstance(value, str):
-        return value[:MAX_PROFILE_STRING]
-    return _UNSUPPORTED

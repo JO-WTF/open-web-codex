@@ -14,7 +14,7 @@ cargo_fingerprint_tool="$script_dir/cargo-dep-fingerprint.mjs"
 source "$cargo_cache_lib"
 
 action="foreground"
-refresh_local_requested="0"
+rebuild_development_database_requested="0"
 skip_build="${OPEN_WEB_CODEX_SKIP_BUILD:-0}"
 codex_mode="${CODEX_MODE:-real}"
 build_profile="${OPEN_WEB_CODEX_BUILD_PROFILE:-debug}"
@@ -47,9 +47,11 @@ Usage: ./scripts/run-local.sh [options]
 Options:
   --background              Start the platform in the background.
   --restart                 Build, then restart the background platform.
-  --refresh-local           Explicitly rebuild launcher-owned local development
-                            database and Copilot environments, then start in
-                            the background.
+  --rebuild-development-database
+                            Rebuild the default local development database
+                            after the current build. It preserves encrypted
+                            Provider credentials/models and the active maps
+                            credential.
   --stop                    Stop the platform recorded for the data directory.
   --status                  Show process and health status.
   --no-build                Reuse existing browser and Rust build outputs.
@@ -220,24 +222,18 @@ run_progress_test() {
 while (($# > 0)); do
   case "$1" in
     --background)
-      [[ "$refresh_local_requested" == "0" ]] || { error "--refresh-local cannot be combined with another action"; exit 2; }
       action="background"
       ;;
     --restart)
-      [[ "$refresh_local_requested" == "0" ]] || { error "--refresh-local cannot be combined with another action"; exit 2; }
       action="restart"
       ;;
-    --refresh-local)
-      [[ "$refresh_local_requested" == "0" && "$action" == "foreground" ]] || { error "--refresh-local cannot be combined with another action"; exit 2; }
-      action="refresh-local"
-      refresh_local_requested="1"
+    --rebuild-development-database)
+      rebuild_development_database_requested="1"
       ;;
     --stop)
-      [[ "$refresh_local_requested" == "0" ]] || { error "--refresh-local cannot be combined with another action"; exit 2; }
       action="stop"
       ;;
     --status)
-      [[ "$refresh_local_requested" == "0" ]] || { error "--refresh-local cannot be combined with another action"; exit 2; }
       action="status"
       ;;
     --no-build) skip_build="1" ;;
@@ -282,6 +278,13 @@ while (($# > 0)); do
   esac
   shift
 done
+
+if [[ "$rebuild_development_database_requested" == "1" \
+  && "$action" != "foreground" && "$action" != "background" ]]
+then
+  error "--rebuild-development-database can only be used when starting the service"
+  exit 2
+fi
 
 if [[ "${OPEN_WEB_CODEX_RUN_LOCAL_TEST:-}" == "progress" ]]; then
   run_progress_test
@@ -330,31 +333,24 @@ fi
 health_url="http://$health_url_host:$server_port/api/health"
 web_url="http://$health_url_host:$server_port/web"
 
-validate_refresh_local_authority() {
+validate_rebuild_development_database_authority() {
   local expected_data_dir="$repo_root/.local/open-web-codex"
   [[ -z "${OPEN_WEB_CODEX_DATA_DIR+x}" && "$data_dir" == "$expected_data_dir" ]] || {
-    error "--refresh-local only accepts the launcher default data directory: $expected_data_dir"
+    error "--rebuild-development-database only accepts the launcher default data directory: $expected_data_dir"
     return 2
   }
   [[ ! -L "$repo_root/.local" && ! -L "$data_dir" ]] || {
-    error "--refresh-local refuses symlinked launcher data directories"
+    error "--rebuild-development-database refuses symlinked launcher data directories"
     return 2
   }
-  [[ -z "$database_url_environment_set" && "$database_url_option_set" == "0" ]] || {
-    error "--refresh-local refuses DATABASE_URL and --database-url"
-    return 2
-  }
-  [[ "$database_url_file_option_set" == "0" \
+  [[ -z "$database_url_environment_set" && "$database_url_option_set" == "0" \
+    && "$database_url_file_option_set" == "0" \
     && ! -e "$default_database_url_file" && ! -L "$default_database_url_file" ]] || {
-    error "--refresh-local refuses database URL files; use rebuild-development-database.sh with explicit confirmation for a selected development database"
-    return 2
-  }
-  [[ "$skip_build" == "0" ]] || {
-    error "--refresh-local requires a current build and cannot be combined with --no-build"
+    error "--rebuild-development-database only rebuilds the default local PostgreSQL database"
     return 2
   }
   [[ "$codex_mode" == "real" ]] || {
-    error "--refresh-local requires the real Codex mode so prepared environments are rebuilt"
+    error "--rebuild-development-database requires the real Codex mode"
     return 2
   }
 }
@@ -458,12 +454,13 @@ case "$action" in
   status) show_status; exit 0 ;;
 esac
 
-if [[ "$action" == "refresh-local" ]]; then
-  validate_refresh_local_authority || exit $?
+if [[ "$rebuild_development_database_requested" == "1" ]]; then
+  validate_rebuild_development_database_authority || exit $?
 fi
 
 existing_pid="$(read_pid || true)"
-if [[ "$action" != "restart" && "$action" != "refresh-local" ]] \
+if [[ "$action" != "restart" ]] \
+  && [[ "$rebuild_development_database_requested" == "0" ]] \
   && is_server_running "$existing_pid"
 then
   error "open-web-codex is already running (PID $existing_pid); use --restart to rebuild and replace it"
@@ -496,44 +493,6 @@ meeting_copilot_prepared_descriptor="$meeting_copilot_environment_root/copilot-s
 copilot_sdk_environment_root="$data_dir/sdk-environments/copilot"
 copilot_sdk_python="$copilot_sdk_environment_root/bin/python"
 copilot_sdk_source_marker="$copilot_sdk_environment_root/source-fingerprint"
-
-refresh_local_state() {
-  local expected_environment_parent="$data_dir/tool-environments"
-  local database_name="open_web_codex" database_host="127.0.0.1" database_port="5432"
-  [[ "$(dirname "$warehouse_copilot_environment_root")" == "$expected_environment_parent" \
-    && "$(dirname "$meeting_copilot_environment_root")" == "$expected_environment_parent" ]] || {
-    error "launcher-owned Copilot environment roots are invalid"
-    return 2
-  }
-  [[ ! -L "$expected_environment_parent" ]] || {
-    error "launcher-owned Copilot environment parent must not be a symlink"
-    return 2
-  }
-  [[ "$database_user" =~ ^[A-Za-z0-9_.-]{1,128}$ ]] || {
-    error "local PostgreSQL user is invalid"
-    return 2
-  }
-  command -v dropdb >/dev/null 2>&1 || { error "dropdb is required by --refresh-local"; return 1; }
-  command -v createdb >/dev/null 2>&1 || { error "createdb is required by --refresh-local"; return 1; }
-
-  stop_server
-  dropdb --if-exists --host "$database_host" --port "$database_port" \
-    --username "$database_user" "$database_name"
-  createdb --host "$database_host" --port "$database_port" \
-    --username "$database_user" "$database_name"
-  printf 'Rebuilt local development database %s on %s:%s.\n' \
-    "$database_name" "$database_host" "$database_port"
-  rm -rf -- "$warehouse_copilot_environment_root" "$meeting_copilot_environment_root"
-  printf 'Removed launcher-owned Copilot environments; Profile and Workspace data were preserved.\n'
-}
-
-if [[ "$action" == "refresh-local" ]]; then
-  refresh_local_state
-  action="background"
-  if [[ "${OPEN_WEB_CODEX_RUN_LOCAL_TEST:-}" == "refresh-local" ]]; then
-    exit 0
-  fi
-fi
 
 if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
   if [[ ! -f "$master_key_file" ]]; then
@@ -792,6 +751,13 @@ prepare_copilot_environments() {
     "$meeting_copilot_package_root" "$meeting_copilot_environment_root"
 }
 
+rebuild_development_database() {
+  DATABASE_URL="$database_url" \
+    "$script_dir/rebuild-development-database.sh" \
+      --confirm-development-only \
+      --server-bin "$server_bin"
+}
+
 prepare_build_tools() {
   command -v npm >/dev/null 2>&1 || { error "npm is required"; exit 1; }
   command -v cargo >/dev/null 2>&1 || { error "cargo is required"; exit 1; }
@@ -838,6 +804,11 @@ if [[ "$codex_mode" == "real" ]]; then
     error "Copilot prepared descriptor is missing: $meeting_copilot_prepared_descriptor"
     exit 1
   }
+fi
+
+if [[ "$rebuild_development_database_requested" == "1" ]]; then
+  run_step "Stop current service" stop_server
+  run_step "Rebuild development database" rebuild_development_database
 fi
 
 server_command=(

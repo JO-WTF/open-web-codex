@@ -59,7 +59,10 @@ class DemandMapProperties(DeliveryModel):
     city_name: str
     province_id: str | None
     province_name: str | None
-    demand_quantity: Decimal
+    # GeoJSON is a presentation boundary. Emit a JSON number here rather than
+    # Pydantic's default Decimal string so Mapbox numeric expressions remain
+    # valid while the planning domain continues to own Decimal arithmetic.
+    demand_quantity: float = Field(ge=0)
     assigned_warehouse_id: str | None = None
     distance_km: float | None = Field(default=None, ge=0)
     duration_hours: float | None = Field(default=None, ge=0)
@@ -80,7 +83,7 @@ class AssignmentMapProperties(DeliveryModel):
     result_label: str
     warehouse_id: str
     demand_city_id: str
-    demand_quantity: Decimal
+    demand_quantity: float = Field(ge=0)
     distance_km: float | None
     duration_hours: float | None
     unit_cost: float | None
@@ -91,7 +94,7 @@ class LinehaulMapProperties(DeliveryModel):
     scenario: Literal["baseline", "scenario", "facility"]
     upstream_center_id: str
     crossdock_warehouse_id: str
-    assigned_demand: Decimal
+    assigned_demand: float = Field(ge=0)
 
 
 MapProperties = (

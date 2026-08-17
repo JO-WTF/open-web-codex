@@ -8,7 +8,7 @@ type Props = {
   elapsedLabel?: string;
   live?: boolean;
   agentUpdates?: AgentWaitHistoryUpdate[];
-  onOpenAgentPanel?: () => void;
+  onShowAgentActivity?: () => void;
 };
 
 type Presentation = {
@@ -54,7 +54,7 @@ function waitPresentation(status: string): Presentation {
 
 function historyStatus(status: string): { label: string; tone: Presentation["tone"] } {
   const normalized = status.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (normalized === "inprogress" || normalized === "running") {
+  if (normalized === "active" || normalized === "inprogress" || normalized === "running") {
     return { label: "Running", tone: "active" };
   }
   if (normalized === "failed" || normalized === "error" || normalized === "systemerror") {
@@ -75,12 +75,23 @@ function historyStatus(status: string): { label: string; tone: Presentation["ton
   return { label: "Starting", tone: "pending" };
 }
 
+function historyPresentation(update: AgentWaitHistoryUpdate): {
+  label: string;
+  tone: Presentation["tone"];
+  text: string;
+} {
+  if (update.kind === "reasoning" && update.status === "running") {
+    return { label: "Thinking", tone: "active", text: "Thinking" };
+  }
+  return { ...historyStatus(update.status), text: update.text };
+}
+
 export default function AgentWaitCard({
   status,
   elapsedLabel,
   live = false,
   agentUpdates = [],
-  onOpenAgentPanel,
+  onShowAgentActivity,
 }: Props) {
   const presentation = waitPresentation(status);
   const titleId = useId();
@@ -105,14 +116,16 @@ export default function AgentWaitCard({
         {agentUpdates.length > 0 ? (
           <ol className="web-agent-wait-history" aria-label="Latest Agent History items">
             {agentUpdates.map((update) => {
-              const updateStatus = historyStatus(update.status);
+              const updatePresentation = historyPresentation(update);
               return (
                 <li key={update.threadId}>
                   <div>
                     <strong>{update.agentLabel}</strong>
-                    <span className={`is-${updateStatus.tone}`}>{updateStatus.label}</span>
+                    <span className={`is-${updatePresentation.tone}`}>
+                      {updatePresentation.label}
+                    </span>
                   </div>
-                  <p>{update.text}</p>
+                  <p>{updatePresentation.text}</p>
                 </li>
               );
             })}
@@ -125,8 +138,8 @@ export default function AgentWaitCard({
               {elapsedLabel}
             </span>
           ) : null}
-          {onOpenAgentPanel ? (
-            <button type="button" onClick={onOpenAgentPanel}>
+          {onShowAgentActivity ? (
+            <button type="button" onClick={onShowAgentActivity}>
               Open Agent activity
             </button>
           ) : null}

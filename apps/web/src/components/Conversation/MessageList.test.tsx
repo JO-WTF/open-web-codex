@@ -55,24 +55,26 @@ describe("MessageList", () => {
   });
 
   it("renders a live Agent wait as collaboration state instead of a generic tool call", () => {
-    const onOpenAgentPanel = vi.fn();
+    const onShowAgentActivity = vi.fn();
     const view = render(
       <MessageList
         thinking
         turnStartedAt={Date.now() - 5_000}
-        onOpenAgentPanel={onOpenAgentPanel}
+        onShowAgentActivity={onShowAgentActivity}
         agentWaitUpdates={[
           {
             threadId: "data-thread",
             agentLabel: "Wanwan",
             text: "Completed normalize_network_input",
             status: "completed",
+            kind: "tool_completed",
           },
           {
             threadId: "network-thread",
             agentLabel: "Euler",
             text: "Using evaluate_network_baseline",
             status: "running",
+            kind: "tool_started",
           },
         ]}
         items={[
@@ -104,7 +106,7 @@ describe("MessageList", () => {
     expect(screen.getByText("Working…")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Open Agent activity" }));
-    expect(onOpenAgentPanel).toHaveBeenCalledTimes(1);
+    expect(onShowAgentActivity).toHaveBeenCalledTimes(1);
   });
 
   it("shows a resolved approval on the command card", () => {

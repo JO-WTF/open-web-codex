@@ -31,6 +31,7 @@ function activity(
   sequence: number,
   title: string,
   itemId: string | null,
+  status: RuntimeAgentActivity["status"] = "completed",
 ): RuntimeAgentActivity {
   return {
     run_id: "run-1",
@@ -38,8 +39,8 @@ function activity(
     thread_id: threadId,
     turn_id: "turn-1",
     item_id: itemId,
-    kind: itemId ? "tool_completed" : "turn_completed",
-    status: "completed",
+    kind: itemId && status === "running" ? "tool_started" : itemId ? "tool_completed" : "turn_completed",
+    status,
     subject: null,
     title,
     detail: null,
@@ -63,7 +64,7 @@ describe("latestAgentHistoryUpdates", () => {
         activity("data-thread", 10, "Using inspect_network_sources", "item-data-1"),
         activity("data-thread", 12, "Completed normalize_network_input", "item-data-2"),
         activity("data-thread", 13, "Finished this work cycle", null),
-        activity("network-thread", 11, "Using evaluate_network_baseline", "item-network-1"),
+        activity("network-thread", 11, "Using evaluate_network_baseline", "item-network-1", "running"),
         activity("root-thread", 14, "Waiting for Agents", "item-root"),
       ],
     );
@@ -74,12 +75,14 @@ describe("latestAgentHistoryUpdates", () => {
         agentLabel: "Wanwan",
         text: "Completed normalize_network_input",
         status: "completed",
+        kind: "tool_completed",
       },
       {
         threadId: "network-thread",
         agentLabel: "Euler",
         text: "Using evaluate_network_baseline",
-        status: "active",
+        status: "running",
+        kind: "tool_started",
       },
     ]);
   });
@@ -92,6 +95,7 @@ describe("latestAgentHistoryUpdates", () => {
       agentLabel: "network_agent",
       text: "No recorded History item yet.",
       status: "running",
+      kind: null,
     }]);
   });
 
@@ -113,6 +117,60 @@ describe("latestAgentHistoryUpdates", () => {
       agentLabel: "Euler",
       text: "Completed evaluate_network_baseline",
       status: "completed",
+      kind: "tool_completed",
+    }]);
+  });
+
+  it("uses the displayed Item terminal state when the Runtime still reports the Agent as active", () => {
+    expect(latestAgentHistoryUpdates([
+      agent("network-thread", {
+        agent_nickname: "Wanwan",
+        status_type: "active",
+      }),
+    ], [
+      activity(
+        "network-thread",
+        41,
+        "Completed codex · list mcp resources",
+        "item-network-1",
+      ),
+    ])).toEqual([{
+      threadId: "network-thread",
+      agentLabel: "Wanwan",
+      text: "Completed codex · list mcp resources",
+      status: "completed",
+      kind: "tool_completed",
+    }]);
+  });
+
+  it("holds a live reasoning Item at Thinking and exposes its terminal summary", () => {
+    const liveReasoning: RuntimeAgentActivity = {
+      ...activity("network-thread", 41, "Reasoning: partial streamed text", "reasoning-item", "running"),
+      kind: "reasoning",
+      detail: "partial streamed text",
+    };
+    const completedReasoning: RuntimeAgentActivity = {
+      ...liveReasoning,
+      sequence: 42,
+      status: "completed",
+      title: "Reasoning: Checked coverage and capacity.",
+      detail: "Checked coverage and capacity.",
+    };
+    const agents = [agent("network-thread", { agent_nickname: "Wanwan" })];
+
+    expect(latestAgentHistoryUpdates(agents, [liveReasoning])).toEqual([{
+      threadId: "network-thread",
+      agentLabel: "Wanwan",
+      text: "Thinking",
+      status: "running",
+      kind: "reasoning",
+    }]);
+    expect(latestAgentHistoryUpdates(agents, [liveReasoning, completedReasoning])).toEqual([{
+      threadId: "network-thread",
+      agentLabel: "Wanwan",
+      text: "Reasoning: Checked coverage and capacity.",
+      status: "completed",
+      kind: "reasoning",
     }]);
   });
 });

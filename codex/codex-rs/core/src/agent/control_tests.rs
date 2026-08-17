@@ -3129,7 +3129,25 @@ async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
 
 #[tokio::test]
 async fn resume_thread_subagent_restores_stored_metadata() {
-    let (home, config) = test_config().await;
+    let (home, mut config) = test_config().await;
+    let role_path = home.path().join("explorer-role.toml");
+    std::fs::write(
+        &role_path,
+        r#"
+[mcp_servers.role_resources]
+command = "/bin/echo"
+args = []
+"#,
+    )
+    .expect("write role config");
+    config.agent_roles.insert(
+        "explorer".to_string(),
+        AgentRoleConfig {
+            description: Some("Explorer role".to_string()),
+            config_file: Some(role_path),
+            nickname_candidates: Some(vec!["Atlas".to_string()]),
+        },
+    );
     let thread_store = Arc::new(InMemoryThreadStore::default());
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
     let manager = ThreadManager::new(
@@ -3160,10 +3178,15 @@ async fn resume_thread_subagent_restores_stored_metadata() {
     let agent_path = AgentPath::from_string("/root/explorer".to_string())
         .expect("test agent path should be valid");
 
+    let mut child_config = harness.config.clone();
+    crate::agent::role::apply_role_to_config(&mut child_config, Some("explorer"))
+        .await
+        .expect("child role should apply");
+
     let child_thread_id = harness
         .control
         .spawn_agent(
-            harness.config.clone(),
+            child_config,
             text_input("hello child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -3207,6 +3230,13 @@ async fn resume_thread_subagent_restores_stored_metadata() {
         .await
         .expect("child should initialize before shutdown");
     }
+    let original_config = child_thread.config().await;
+    assert!(
+        original_config
+            .mcp_servers
+            .get()
+            .contains_key("role_resources")
+    );
     let original_snapshot = child_thread.config_snapshot().await;
     let original_nickname = original_snapshot
         .session_source
@@ -3256,13 +3286,19 @@ async fn resume_thread_subagent_restores_stored_metadata() {
         .expect("resume should succeed");
     assert_eq!(resumed_thread_id, child_thread_id);
 
-    let resumed_snapshot = harness
+    let resumed_thread = harness
         .manager
         .get_thread(resumed_thread_id)
         .await
-        .expect("resumed child thread should exist")
-        .config_snapshot()
-        .await;
+        .expect("resumed child thread should exist");
+    let resumed_config = resumed_thread.config().await;
+    assert!(
+        resumed_config
+            .mcp_servers
+            .get()
+            .contains_key("role_resources")
+    );
+    let resumed_snapshot = resumed_thread.config_snapshot().await;
     let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: resumed_parent_thread_id,
         depth: resumed_depth,

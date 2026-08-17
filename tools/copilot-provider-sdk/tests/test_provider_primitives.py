@@ -66,14 +66,13 @@ def test_geojson_resource_ref_carries_the_exact_schema_and_bounded_profile() -> 
                     "value": "demand",
                     "feature_count": 1,
                     "geometry_types": ["Point"],
-                    "properties": [{"name": "city_name", "types": ["string"]}],
-                    "sample_properties": {"city_name": "Alpha"},
+                    "properties": {"city_name": "string"},
                 }
             ],
         },
     )
     assert ref.resource_schema == "network_distribution_geojson.v1"
-    assert ref.profile.feature_types[0].properties[0].name == "city_name"
+    assert ref.profile.feature_types[0].properties == {"city_name": "string"}
     with pytest.raises(ValueError):
         GeoJsonResourceRef.model_validate(
             {**ref.model_dump(mode="json"), "uri": "https://example.com/map.geojson"}
@@ -189,10 +188,12 @@ def test_geojson_profile_is_bounded_and_derived_from_actual_features() -> None:
     assert profile.feature_count == 2
     assert [item.value for item in profile.feature_types] == ["demand", "warehouse"]
     demand = profile.feature_types[0]
-    assert demand.sample_properties["city_name"] == "Alpha"
-    duration = next(item for item in demand.properties if item.name == "duration_hours")
-    assert duration.types == ["number"]
-    assert duration.minimum == duration.maximum == 8.5
+    assert demand.properties == {
+        "city_name": "string",
+        "duration_hours": "number",
+        "kind": "string",
+    }
+    assert "Alpha" not in profile.model_dump_json()
 
 
 def test_geojson_profile_falls_back_to_geometry_without_kind() -> None:
@@ -210,3 +211,25 @@ def test_geojson_profile_falls_back_to_geometry_without_kind() -> None:
     )
     assert profile.discriminator_property is None
     assert profile.feature_types[0].value == "geometry:LineString"
+
+
+def test_geojson_profile_marks_missing_properties_as_nullable() -> None:
+    profile = derive_geojson_profile(
+        {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [1, 2]},
+                    "properties": {"kind": "demand", "duration_hours": 8.5},
+                },
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [3, 4]},
+                    "properties": {"kind": "demand"},
+                },
+            ],
+        }
+    )
+
+    assert profile.feature_types[0].properties["duration_hours"] == "number?"

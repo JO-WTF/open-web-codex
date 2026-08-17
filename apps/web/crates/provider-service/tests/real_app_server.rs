@@ -182,6 +182,40 @@ async fn switches_and_refreshes_isolated_provider_catalogs() {
     std::fs::remove_dir_all(home).expect("remove smoke Profile home");
 }
 
+/// Verifies the platform default through the official Runtime config contract.
+#[tokio::test]
+#[ignore = "requires a real Codex CLI binary"]
+async fn initializes_an_unset_profile_with_medium_reasoning_effort() {
+    let codex_bin = PathBuf::from(std::env::var_os("CODEX_BIN").expect("CODEX_BIN is set"));
+    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("apps/web workspace root")
+        .canonicalize()
+        .expect("canonical workspace");
+    let home = temporary_profile_home();
+    std::fs::create_dir_all(&home).expect("create Profile home");
+    std::fs::write(home.join("config.toml"), "").expect("write empty Profile config");
+    let host = spawn_host(&codex_bin, &home, &workspace).await;
+    let service = ProviderService::for_profile_host(host.clone());
+
+    assert!(service
+        .ensure_default_reasoning_effort()
+        .await
+        .expect("set Profile reasoning default"));
+    assert!(!service
+        .ensure_default_reasoning_effort()
+        .await
+        .expect("preserve explicit Profile reasoning effort"));
+    let config = std::fs::read_to_string(home.join("config.toml"))
+        .expect("read Profile reasoning configuration");
+    assert!(config.contains("model_reasoning_effort = \"medium\""));
+
+    host.shutdown().await.expect("shutdown Profile Host");
+    drop(host);
+    std::fs::remove_dir_all(home).expect("remove smoke Profile home");
+}
+
 /// Proves that the production Provider path persists ciphertext, writes only a
 /// generated environment key to Codex config, and restarts the Profile with
 /// the decrypted value in its private child environment.
@@ -409,6 +443,7 @@ async fn secured_provider_credentials_never_enter_codex_config() {
         std::fs::read_to_string(home.join("config.toml")).expect("read restored Codex config");
     assert!(config.contains(external_environment_key));
     assert!(!config.contains(external_environment_secret));
+    assert!(config.contains("model_reasoning_effort = \"medium\""));
     service
         .update_model(
             actor,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
 import maps_mcp.server as server
@@ -25,7 +26,7 @@ def data_ref(uri: str = "maps-data://geojson/map-data-1234") -> dict[str, object
         "resource_schema": "geojson.v1",
         "format": "geojson",
         "profile": {
-            "schema_version": "geojson-profile.v1",
+            "schema_version": "geojson-profile.v3",
             "feature_count": 1,
             "discriminator_property": None,
             "feature_types": [
@@ -33,11 +34,7 @@ def data_ref(uri: str = "maps-data://geojson/map-data-1234") -> dict[str, object
                     "value": "geometry:mixed",
                     "feature_count": 1,
                     "geometry_types": ["LineString", "Point"],
-                    "properties": [
-                        {"name": "distance", "types": ["number"]},
-                        {"name": "name", "types": ["string"]},
-                    ],
-                    "sample_properties": {"distance": 10.0, "name": "Example"},
+                    "properties": {"distance": "number", "name": "string"},
                 }
             ],
         },
@@ -52,7 +49,7 @@ def network_data_ref() -> dict[str, object]:
         "resource_schema": "network_distribution_geojson.v1",
         "format": "geojson",
         "profile": {
-            "schema_version": "geojson-profile.v1",
+            "schema_version": "geojson-profile.v3",
             "feature_count": 61,
             "discriminator_property": "kind",
             "feature_types": [
@@ -60,30 +57,88 @@ def network_data_ref() -> dict[str, object]:
                     "value": "demand",
                     "feature_count": 50,
                     "geometry_types": ["Point"],
-                    "properties": [
-                        {"name": "kind", "types": ["string"], "enum_values": ["demand"]},
-                        {"name": "city_name", "types": ["string"]},
-                        {"name": "duration_hours", "types": ["number"]},
-                    ],
-                    "sample_properties": {
-                        "kind": "demand",
-                        "city_name": "Alpha",
-                        "duration_hours": 8.0,
+                    "properties": {
+                        "kind": "string",
+                        "city_name": "string",
+                        "duration_hours": "number?",
                     },
                 },
                 {
                     "value": "warehouse",
                     "feature_count": 11,
                     "geometry_types": ["Point"],
-                    "properties": [
-                        {"name": "kind", "types": ["string"], "enum_values": ["warehouse"]},
-                        {"name": "warehouse_name", "types": ["string"]},
-                        {"name": "warehouse_type", "types": ["string"]},
-                    ],
-                    "sample_properties": {
-                        "kind": "warehouse",
-                        "warehouse_name": "Center",
-                        "warehouse_type": "center",
+                    "properties": {
+                        "kind": "string",
+                        "warehouse_name": "string",
+                        "warehouse_type": "string",
+                    },
+                },
+            ],
+        },
+    }
+
+
+def coverage_data_ref() -> dict[str, object]:
+    return {
+        "type": "mcp_resource",
+        "server": "supply_chain",
+        "uri": "supply-chain://resources/network_coverage_geojson.v1-digest",
+        "resource_schema": "network_coverage_geojson.v1",
+        "format": "geojson",
+        "profile": {
+            "schema_version": "geojson-profile.v3",
+            "feature_count": 129,
+            "discriminator_property": "kind",
+            "feature_types": [
+                {
+                    "value": "demand",
+                    "feature_count": 50,
+                    "geometry_types": ["Point"],
+                    "properties": {
+                        "assigned_warehouse_id": "string",
+                        "city_id": "string",
+                        "city_name": "string",
+                        "demand_quantity": "number",
+                        "distance_km": "number",
+                        "duration_hours": "number",
+                        "kind": "string",
+                    },
+                },
+                {
+                    "value": "last_mile_assignment",
+                    "feature_count": 50,
+                    "geometry_types": ["LineString"],
+                    "properties": {
+                        "demand_city_id": "string",
+                        "distance_km": "number",
+                        "duration_hours": "number",
+                        "kind": "string",
+                        "warehouse_id": "string",
+                    },
+                },
+                {
+                    "value": "linehaul_connection",
+                    "feature_count": 6,
+                    "geometry_types": ["LineString"],
+                    "properties": {
+                        "assigned_demand": "number",
+                        "crossdock_warehouse_id": "string",
+                        "kind": "string",
+                        "upstream_center_id": "string",
+                    },
+                },
+                {
+                    "value": "warehouse",
+                    "feature_count": 23,
+                    "geometry_types": ["Point"],
+                    "properties": {
+                        "city_name": "string",
+                        "is_existing": "boolean",
+                        "kind": "string",
+                        "opened_candidate": "boolean",
+                        "warehouse_id": "string",
+                        "warehouse_name": "string",
+                        "warehouse_type": "string",
                     },
                 },
             ],
@@ -293,6 +348,240 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
         source = result.structuredContent["artifact"]["renderer"]["payload"]["sources"]["network"]
         self.assertEqual(source["data"]["server"], "supply_chain")
         self.assertEqual(source["data"]["uri"], uri)
+
+    async def test_coverage_card_uses_a_compact_profile_without_losing_validation(self) -> None:
+        arguments = {
+            "title": "印尼现有仓网 12 小时覆盖",
+            "intent": "展示需求城市、末端和干线覆盖，以及中心仓和 XD 前置仓",
+            "sources": {"network": {"type": "geojson", "data_ref": coverage_data_ref()}},
+            "layers": [
+                {
+                    "id": "last-mile",
+                    "type": "line",
+                    "source": "network",
+                    "filter": ["==", ["get", "kind"], "last_mile_assignment"],
+                    "paint": {
+                        "line-color": "#2563EB",
+                        "line-opacity": 0.5,
+                        "line-width": 1.5,
+                    },
+                },
+                {
+                    "id": "linehaul",
+                    "type": "line",
+                    "source": "network",
+                    "filter": ["==", ["get", "kind"], "linehaul_connection"],
+                    "paint": {
+                        "line-color": "#1E3A8A",
+                        "line-opacity": 0.65,
+                        "line-width": 2.5,
+                    },
+                },
+                {
+                    "id": "on-time-cities",
+                    "type": "circle",
+                    "source": "network",
+                    "filter": [
+                        "all",
+                        ["==", ["get", "kind"], "demand"],
+                        ["<=", ["get", "duration_hours"], 12],
+                    ],
+                    "paint": {
+                        "circle-color": "#16A34A",
+                        "circle-radius": 5,
+                        "circle-stroke-color": "#FFFFFF",
+                        "circle-stroke-width": 1.5,
+                    },
+                },
+                {
+                    "id": "late-cities",
+                    "type": "circle",
+                    "source": "network",
+                    "filter": [
+                        "all",
+                        ["==", ["get", "kind"], "demand"],
+                        [">", ["get", "duration_hours"], 12],
+                    ],
+                    "paint": {
+                        "circle-color": "#DC2626",
+                        "circle-radius": 6,
+                        "circle-stroke-color": "#FFFFFF",
+                        "circle-stroke-width": 1.75,
+                    },
+                },
+                {
+                    "id": "xd-warehouses",
+                    "type": "circle",
+                    "source": "network",
+                    "filter": [
+                        "all",
+                        ["==", ["get", "kind"], "warehouse"],
+                        ["==", ["get", "warehouse_type"], "cross_docking"],
+                    ],
+                    "paint": {
+                        "circle-color": "#F97316",
+                        "circle-radius": 9,
+                        "circle-stroke-color": "#FFFFFF",
+                        "circle-stroke-width": 2,
+                    },
+                },
+                {
+                    "id": "center-warehouses",
+                    "type": "circle",
+                    "source": "network",
+                    "filter": [
+                        "all",
+                        ["==", ["get", "kind"], "warehouse"],
+                        ["==", ["get", "warehouse_type"], "center"],
+                    ],
+                    "paint": {
+                        "circle-color": "#1D4ED8",
+                        "circle-radius": 12,
+                        "circle-stroke-color": "#FFFFFF",
+                        "circle-stroke-width": 2.5,
+                    },
+                },
+            ],
+            "extensions": {
+                "hover": {
+                    "layers": [
+                        {
+                            "layer": "on-time-cities",
+                            "title_property": "city_name",
+                            "fields": ["demand_quantity", "assigned_warehouse_id"],
+                        },
+                        {
+                            "layer": "xd-warehouses",
+                            "title_property": "warehouse_name",
+                            "fields": ["warehouse_id", "city_name"],
+                        },
+                        {
+                            "layer": "center-warehouses",
+                            "title_property": "warehouse_name",
+                            "fields": ["warehouse_id", "city_name"],
+                        },
+                        {
+                            "layer": "linehaul",
+                            "title_property": "upstream_center_id",
+                            "fields": ["crossdock_warehouse_id", "assigned_demand"],
+                        },
+                    ]
+                },
+                "legend": {
+                    "items": [
+                        {"label": "达标城市", "color": "#16A34A", "type": "circle"},
+                        {"label": "未达标城市", "color": "#DC2626", "type": "circle"},
+                        {"label": "XD 前置仓", "color": "#F97316", "type": "circle"},
+                        {"label": "中心仓", "color": "#1D4ED8", "type": "circle"},
+                        {"label": "末端覆盖", "color": "#2563EB", "type": "line"},
+                        {"label": "干线覆盖", "color": "#1E3A8A", "type": "line"},
+                    ]
+                },
+            },
+        }
+
+        result = await server.mcp.call_tool("create_map_card", arguments)
+
+        assert result.structuredContent is not None
+        payload = result.structuredContent["artifact"]["renderer"]["payload"]
+        self.assertEqual(
+            [layer["id"] for layer in payload["layers"]],
+            [
+                "last-mile",
+                "linehaul",
+                "on-time-cities",
+                "late-cities",
+                "xd-warehouses",
+                "center-warehouses",
+            ],
+        )
+
+    async def test_rejects_all_null_fields_and_wrong_numeric_expression_input(self) -> None:
+        null_profile = coverage_data_ref()
+        demand = null_profile["profile"]["feature_types"][0]
+        assert isinstance(demand, dict)
+        properties = demand["properties"]
+        assert isinstance(properties, dict)
+        properties["baseline_duration_hours"] = "null"
+        with self.assertRaisesRegex(ToolError, "no non-null GeoJSON values"):
+            await server.mcp.call_tool(
+                "create_map_card",
+                {
+                    "title": "Invalid empty time",
+                    "sources": {"network": {"type": "geojson", "data_ref": null_profile}},
+                    "layers": [
+                        {
+                            "id": "cities",
+                            "type": "circle",
+                            "source": "network",
+                            "filter": ["==", ["get", "kind"], "demand"],
+                            "paint": {
+                                "circle-color": [
+                                    "case",
+                                    ["<=", ["get", "baseline_duration_hours"], 12],
+                                    "#16A34A",
+                                    "#DC2626",
+                                ]
+                            },
+                        }
+                    ],
+                },
+            )
+
+        string_profile = deepcopy(coverage_data_ref())
+        demand = string_profile["profile"]["feature_types"][0]
+        assert isinstance(demand, dict)
+        properties = demand["properties"]
+        assert isinstance(properties, dict)
+        properties["demand_quantity"] = "string"
+        with self.assertRaisesRegex(ToolError, "demand_quantity to be number"):
+            await server.mcp.call_tool(
+                "create_map_card",
+                {
+                    "title": "Invalid city size",
+                    "sources": {"network": {"type": "geojson", "data_ref": string_profile}},
+                    "layers": [
+                        {
+                            "id": "cities",
+                            "type": "circle",
+                            "source": "network",
+                            "filter": ["==", ["get", "kind"], "demand"],
+                            "paint": {
+                                "circle-radius": [
+                                    "interpolate",
+                                    ["linear"],
+                                    ["get", "demand_quantity"],
+                                    300,
+                                    5,
+                                    2500,
+                                    12,
+                                ]
+                            },
+                        }
+                    ],
+                },
+            )
+
+    async def test_rejects_icon_images_until_the_card_declares_assets(self) -> None:
+        with self.assertRaisesRegex(ToolError, "no declared image assets"):
+            await server.mcp.call_tool(
+                "create_map_card",
+                {
+                    "title": "Unavailable symbol",
+                    "sources": {
+                        "network": {"type": "geojson", "data_ref": network_data_ref()}
+                    },
+                    "layers": [
+                        {
+                            "id": "warehouses",
+                            "type": "symbol",
+                            "source": "network",
+                            "filter": ["==", ["get", "kind"], "warehouse"],
+                            "layout": {"icon-image": "square"},
+                        }
+                    ],
+                },
+            )
 
     async def test_rejects_public_host_and_model_visible_resource_identities(
         self,

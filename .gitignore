@@ -11,6 +11,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .codex/maps-tool-memory.json
+.codex/map-card-specs/
 artifacts/
 tmp/
 .ua/
@@ -25,3 +26,6 @@ codex/codex-rs/target/
 codex/target/
 tools/*/.venv/
 tools/*/node_modules/
+tools/copilot-provider-sdk/.codex/
+tools/copilot-provider-sdk/build/
+tools/copilot-provider-sdk/uv.lock

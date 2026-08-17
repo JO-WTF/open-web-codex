@@ -1,7 +1,8 @@
 use super::residency::is_v2_resident_session_source;
 use super::*;
-use crate::agent::role::reapply_role_to_config_for_multi_agent_v2;
+use crate::agent::role::reapply_role_to_config_for_child_resume;
 use codex_extension_api::ExtensionDataInit;
+use codex_thread_store::StoredThread;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
 
@@ -120,6 +121,39 @@ async fn load_agent_model_context(
                 .items,
         )),
     }
+}
+
+/// Restores the model selection owned by the persisted child Thread.
+///
+/// A Role is reapplied first to recover its Skills and MCP inventory. Its layer can also declare
+/// a provider, so the persisted selection must be restored afterwards, once that provider is
+/// available in the effective configuration. The Thread store is the authoritative source for
+/// the latest model and reasoning effort; the parent/root configuration must not replace them
+/// while a child is being reloaded.
+fn restore_stored_child_model_selection(
+    config: &mut Config,
+    stored_thread: &StoredThread,
+) -> CodexResult<()> {
+    if let Some(model) = stored_thread.model.clone() {
+        config.model = Some(model);
+    }
+    if config.model_provider_id != stored_thread.model_provider {
+        config.model_provider = config
+            .model_providers
+            .get(&stored_thread.model_provider)
+            .cloned()
+            .ok_or_else(|| {
+                CodexErr::InvalidRequest(format!(
+                    "Model provider `{}` not found",
+                    stored_thread.model_provider
+                ))
+            })?;
+        config.model_provider_id = stored_thread.model_provider.clone();
+    }
+    if let Some(reasoning_effort) = stored_thread.reasoning_effort.clone() {
+        config.model_reasoning_effort = Some(reasoning_effort);
+    }
+    Ok(())
 }
 
 impl AgentControl {
@@ -267,8 +301,6 @@ impl AgentControl {
                 include_history: false,
             })
             .await?;
-        let stored_model = stored_thread.model.clone();
-        let stored_model_provider = stored_thread.model_provider.clone();
         let stored_source = stored_thread.source.clone();
         let stored_parent_thread_id = stored_thread.parent_thread_id;
         let history = load_agent_model_context(&state, thread_id, stored_thread.history_mode)
@@ -277,7 +309,7 @@ impl AgentControl {
         let initial_history = InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
             history: Arc::new(history),
-            rollout_path: stored_thread.rollout_path,
+            rollout_path: stored_thread.rollout_path.clone(),
         });
         if initial_history.get_multi_agent_version() != Some(MultiAgentVersion::V2) {
             return Err(CodexErr::ThreadNotFound(thread_id));
@@ -286,25 +318,11 @@ impl AgentControl {
             .get_resumed_session_sources()
             .unwrap_or((stored_source, None));
         if let Some(role_name) = session_source.get_agent_role() {
-            reapply_role_to_config_for_multi_agent_v2(&mut config, &role_name)
+            reapply_role_to_config_for_child_resume(&mut config, &role_name)
                 .await
                 .map_err(CodexErr::InvalidRequest)?;
         }
-        if let Some(model) = stored_model {
-            config.model = Some(model);
-        }
-        if config.model_provider_id != stored_model_provider {
-            config.model_provider = config
-                .model_providers
-                .get(&stored_model_provider)
-                .cloned()
-                .ok_or_else(|| {
-                    CodexErr::InvalidRequest(format!(
-                        "Model provider `{stored_model_provider}` not found"
-                    ))
-                })?;
-            config.model_provider_id = stored_model_provider;
-        }
+        restore_stored_child_model_selection(&mut config, &stored_thread)?;
         let residency_slot = self
             .reserve_v2_residency_slot(&state, &config, Some(thread_id))
             .await?;
@@ -892,7 +910,7 @@ impl AgentControl {
 
     async fn resume_single_agent_from_rollout(
         &self,
-        config: Config,
+        mut config: Config,
         thread_id: ThreadId,
         session_source: SessionSource,
     ) -> CodexResult<(ThreadId, MultiAgentVersion)> {
@@ -911,7 +929,16 @@ impl AgentControl {
             .transpose()
             .map_err(|err| CodexErr::InvalidRequest(format!("invalid stored agent path: {err}")))?;
         let resumed_agent_nickname = stored_thread.agent_nickname.clone();
-        let resumed_agent_role = stored_thread.agent_role.clone();
+        let resumed_agent_role = stored_thread
+            .agent_role
+            .clone()
+            .or_else(|| stored_thread.source.get_agent_role());
+        if let Some(role_name) = resumed_agent_role.as_deref() {
+            reapply_role_to_config_for_child_resume(&mut config, role_name)
+                .await
+                .map_err(CodexErr::InvalidRequest)?;
+        }
+        restore_stored_child_model_selection(&mut config, &stored_thread)?;
         let history = load_agent_model_context(&state, thread_id, stored_thread.history_mode)
             .await?
             .ok_or(CodexErr::ThreadNotFound(thread_id))?;

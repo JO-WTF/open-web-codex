@@ -769,6 +769,106 @@ describe("SupervisorOverview", () => {
     expect(screen.getAllByText("Completed")).toHaveLength(2);
   });
 
+  it("expands and focuses the behavior log for an Agent activity request", () => {
+    render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        agents={[rootAgent, networkAgent]}
+        activities={[activity(41, {
+          thread_id: "network-thread",
+          turn_id: "turn-network",
+          item_id: "item-network",
+          kind: "tool_completed",
+          status: "completed",
+          title: "Completed evaluate_network_baseline",
+        })]}
+        artifacts={[]}
+        behaviorLogFocusRequest={1}
+      />,
+    );
+
+    const behaviorLog = screen.getByLabelText("Agent behavior log") as HTMLDetailsElement;
+    expect(behaviorLog.open).toBe(true);
+    expect(document.activeElement).toBe(behaviorLog.querySelector("summary"));
+  });
+
+  it("shows Thinking during live reasoning and refreshes that same row on completion", () => {
+    const started = activity(40, {
+      thread_id: "network-thread",
+      turn_id: "turn-network",
+      item_id: "reasoning-network",
+      kind: "reasoning",
+      status: "running",
+      title: "Reasoning: partial streamed text must not be shown.",
+      detail: "partial streamed text must not be shown.",
+    });
+    const completed = activity(41, {
+      thread_id: "network-thread",
+      turn_id: "turn-network",
+      item_id: "reasoning-network",
+      kind: "reasoning",
+      status: "completed",
+      title: "Reasoning: Checking coverage and capacity.",
+      detail: "Checking coverage and capacity.",
+    });
+
+    expect(orderAndDedupeActivities([completed, started])).toEqual([completed]);
+
+    const { rerender } = render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        agents={[rootAgent, networkAgent]}
+        activities={[started]}
+        artifacts={[]}
+      />,
+    );
+
+    const behaviorLog = screen.getByLabelText("Agent behavior log");
+    const liveRow = screen.getByRole("article", { name: /Network Agent.*Thinking/ });
+    expect(behaviorLog.textContent).toContain("Thinking");
+    expect(behaviorLog.textContent).not.toContain("partial streamed text");
+
+    rerender(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        agents={[rootAgent, networkAgent]}
+        activities={[started, completed]}
+        artifacts={[]}
+      />,
+    );
+
+    const completedRow = screen.getByRole("article", {
+      name: /Network Agent.*Reasoning: Checking coverage and capacity/,
+    });
+    expect(completedRow).toBe(liveRow);
+    expect(behaviorLog.textContent).toContain("Completed");
+    expect(behaviorLog.textContent).toContain("Reasoning: Checking coverage and capacity.");
+  });
+
+  it("shows bounded Runtime-provided reasoning text", () => {
+    render(
+      <SupervisorOverview
+        taskTitle="Network planning"
+        agents={[rootAgent, networkAgent]}
+        activities={[activity(41, {
+          thread_id: "network-thread",
+          turn_id: "turn-network",
+          item_id: "reasoning-network",
+          kind: "reasoning",
+          status: "completed",
+          title: "Reasoning: Checking coverage and capacity.",
+          detail: "Checking coverage and capacity.",
+        })]}
+        artifacts={[]}
+      />,
+    );
+
+    const log = screen.getByLabelText("Agent behavior log");
+    expect(log.textContent).toContain("Reasoning: Checking coverage and capacity.");
+    fireEvent.click(screen.getByRole("button", { name: "Show safe activity detail" }));
+    expect(screen.getByText("Checking coverage and capacity.")).toBeTruthy();
+  });
+
   it("keeps safe detail keyboard-expandable and exposes status semantics", () => {
     const detail = "search · inputs/planning.csv";
     const { container } = render(

@@ -381,7 +381,7 @@ def validate_profile_graph(
     layers: list[dict[str, object]],
     extensions: MapExtensions | None,
 ) -> None:
-    """Reject style and hover fields absent from the producing Resource profile."""
+    """Reject map expressions that cannot render against the source profile."""
 
     layer_profiles: dict[str, tuple[GeoJsonFeatureTypeProfile, ...]] = {}
     for layer in layers:
@@ -395,7 +395,7 @@ def validate_profile_graph(
         selected = _selected_feature_types(source.data_ref.profile, layer.get("filter"))
         layer_profiles[layer_id] = selected
         available_fields = {
-            item.name for feature_type in selected for item in feature_type.properties
+            item for feature_type in selected for item in feature_type.properties
         }
         unknown = sorted(_property_references(layer) - available_fields)
         if unknown:
@@ -403,6 +403,18 @@ def validate_profile_graph(
                 f"Mapbox layer {layer_id} references properties absent from its GeoJSON "
                 f"profile: {', '.join(unknown)}"
             )
+        unavailable = sorted(
+            property_name
+            for property_name in _property_references(layer)
+            if _property_kinds(selected, property_name) == {"null"}
+        )
+        if unavailable:
+            raise ValueError(
+                f"Mapbox layer {layer_id} references properties with no non-null GeoJSON "
+                f"values: {', '.join(unavailable)}"
+            )
+        _validate_expression_types(layer_id, layer, selected)
+        _validate_layer_assets(layer_id, layer)
         _validate_layer_geometry(layer_id, layer.get("type"), selected)
 
     if extensions is None or extensions.hover is None:
@@ -410,7 +422,7 @@ def validate_profile_graph(
     for hover in extensions.hover.layers:
         selected = layer_profiles.get(hover.layer, ())
         available_fields = {
-            item.name for feature_type in selected for item in feature_type.properties
+            item for feature_type in selected for item in feature_type.properties
         }
         requested = {
             field if isinstance(field, str) else field.property for field in hover.fields
@@ -422,6 +434,16 @@ def validate_profile_graph(
             raise ValueError(
                 f"hover layer {hover.layer} references properties absent from its GeoJSON "
                 f"profile: {', '.join(unknown)}"
+            )
+        unavailable = sorted(
+            property_name
+            for property_name in requested
+            if _property_kinds(selected, property_name) == {"null"}
+        )
+        if unavailable:
+            raise ValueError(
+                f"hover layer {hover.layer} references properties with no non-null GeoJSON "
+                f"values: {', '.join(unavailable)}"
             )
 
 
@@ -476,6 +498,118 @@ def _property_references(value: object) -> set[str]:
         for child in value.values():
             found.update(_property_references(child))
     return found
+
+
+def _property_kinds(
+    selected: tuple[GeoJsonFeatureTypeProfile, ...],
+    property_name: str,
+) -> set[str]:
+    return {
+        feature_type.properties[property_name]
+        for feature_type in selected
+        if property_name in feature_type.properties
+    }
+
+
+def _validate_expression_types(
+    layer_id: str,
+    layer: dict[str, object],
+    selected: tuple[GeoJsonFeatureTypeProfile, ...],
+) -> None:
+    """Check only the source-dependent Mapbox expression requirements.
+
+    The official style validator owns syntax and all standard style semantics.
+    This small companion check uses the provider-owned source profile only where
+    Mapbox cannot: direct ``get`` expressions that must be numeric or scalar
+    according to the exact GeoJSON values.
+    """
+
+    def require_kind(expression: object, expected: str) -> None:
+        if not (
+            isinstance(expression, list)
+            and len(expression) == 2
+            and expression[0] == "get"
+            and isinstance(expression[1], str)
+        ):
+            return
+        property_name = expression[1]
+        observed = _property_kinds(selected, property_name)
+        if observed != {expected}:
+            rendered = ", ".join(sorted(observed)) or "missing"
+            raise ValueError(
+                f"Mapbox layer {layer_id} requires {property_name} to be {expected}, "
+                f"but its GeoJSON profile is {rendered}"
+            )
+
+    def validate(value: object) -> None:
+        if not isinstance(value, list) or not value:
+            return
+        operator = value[0]
+        if operator == "interpolate" and len(value) >= 3:
+            require_kind(value[2], "number")
+        elif operator in {"<", "<=", ">", ">="} and len(value) == 3:
+            left, right = value[1], value[2]
+            if (
+                isinstance(left, list)
+                and isinstance(right, (int, float))
+                and not isinstance(right, bool)
+            ):
+                require_kind(left, "number")
+            if (
+                isinstance(right, list)
+                and isinstance(left, (int, float))
+                and not isinstance(left, bool)
+            ):
+                require_kind(right, "number")
+            if isinstance(left, list) and isinstance(right, str):
+                require_kind(left, "string")
+            if isinstance(right, list) and isinstance(left, str):
+                require_kind(right, "string")
+        for child in value:
+            validate(child)
+
+    validate(layer.get("filter"))
+    for section, property_names in {
+        "paint": {
+            "circle-radius",
+            "circle-opacity",
+            "circle-stroke-opacity",
+            "circle-stroke-width",
+            "line-opacity",
+            "line-width",
+            "line-gap-width",
+            "line-offset",
+            "fill-opacity",
+            "icon-size",
+            "icon-opacity",
+            "icon-halo-width",
+            "text-size",
+            "text-opacity",
+        },
+        "layout": {"icon-size", "text-size", "text-max-width", "text-letter-spacing"},
+    }.items():
+        values = layer.get(section)
+        if not isinstance(values, dict):
+            continue
+        for property_name in property_names:
+            require_kind(values.get(property_name), "number")
+            validate(values.get(property_name))
+
+
+def _validate_layer_assets(layer_id: str, layer: dict[str, object]) -> None:
+    """Reject image references until the map contract declares image assets.
+
+    ``map.v3`` currently forwards source and layer JSON only. It has no typed
+    image/sprite resource contract and the browser registers no arbitrary image
+    names, so accepting ``icon-image`` would claim a renderable map that the
+    renderer cannot produce.
+    """
+
+    layout = layer.get("layout")
+    if isinstance(layout, dict) and "icon-image" in layout:
+        raise ValueError(
+            f"Mapbox layer {layer_id} uses icon-image, but map.v3 has no declared image assets"
+        )
 
 
 def _validate_layer_geometry(

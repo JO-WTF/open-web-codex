@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Expand from "lucide-react/dist/esm/icons/expand";
 import KeyRound from "lucide-react/dist/esm/icons/key-round";
 import MapPinned from "lucide-react/dist/esm/icons/map-pinned";
@@ -24,7 +24,7 @@ type LoadedSource = {
   data: GeoJson;
 };
 
-type MapLoadState = "loading" | "ready" | "error";
+type MapLoadState = "loading" | "ready" | "error" | "token-required";
 type MapboxModule = typeof import("mapbox-gl");
 
 export const MAP_CARD_PROJECTION = "mercator" as const;
@@ -36,10 +36,18 @@ export function sameMapReplyCard(
   return left === right || JSON.stringify(left) === JSON.stringify(right);
 }
 
-function statusLabel(status: MapReplyCardData["status"]) {
+function statusLabel(status: MapReplyCardData["status"] | MapLoadState) {
   if (status === "ready") return "Ready";
   if (status === "error") return "Failed";
+  if (status === "token-required") return "Needs Mapbox key";
   return "Loading data";
+}
+
+export function mapCardDisplayStatus(
+  artifactStatus: MapReplyCardData["status"],
+  renderStatus: MapLoadState,
+): MapReplyCardData["status"] | MapLoadState {
+  return artifactStatus === "error" ? "error" : renderStatus;
 }
 
 function extendBounds(
@@ -266,6 +274,7 @@ function MapCanvas({
   configurationLoading,
   canConfigure,
   onConfigure,
+  onLoadStateChange,
 }: {
   card: MapReplyCardData;
   fullscreen?: boolean;
@@ -273,6 +282,7 @@ function MapCanvas({
   configurationLoading: boolean;
   canConfigure: boolean;
   onConfigure: () => void;
+  onLoadStateChange: (state: MapLoadState) => void;
 }) {
   const mapElement = useRef<HTMLDivElement | null>(null);
   const mapInstance = useRef<MapboxMap | null>(null);
@@ -284,18 +294,33 @@ function MapCanvas({
     [loaded.sources],
   );
   const mapStyle = mapStyleForToken(accessToken);
+  const reportLoadState = useCallback(
+    (state: MapLoadState, error = "") => {
+      setLoadState(state);
+      setLoadError(error);
+      onLoadStateChange(state);
+    },
+    [onLoadStateChange],
+  );
+
+  useEffect(() => {
+    if (loaded.error) reportLoadState("error", loaded.error);
+  }, [loaded.error, reportLoadState]);
 
   useEffect(() => {
     const container = mapElement.current;
-    if (!container || !loaded.sources.length || !mapStyle || loaded.error)
+    if (!container || !loaded.sources.length || loaded.error)
       return;
+    if (!mapStyle) {
+      reportLoadState("token-required");
+      return;
+    }
     if (card.viewport.mode === "fit" && !bounds) {
-      setLoadState("error");
-      setLoadError("GeoJSON does not contain valid coordinates.");
+      reportLoadState("error", "GeoJSON does not contain valid coordinates.");
       return;
     }
     if (import.meta.env.MODE === "test") {
-      setLoadState("ready");
+      reportLoadState("ready");
       return;
     }
 
@@ -303,8 +328,7 @@ function MapCanvas({
     let resizeObserver: ResizeObserver | null = null;
     let fittedAfterLayout = false;
     const hoverCleanups: Array<() => void> = [];
-    setLoadState("loading");
-    setLoadError("");
+    reportLoadState("loading");
     const applyViewport = (map: MapboxMap) => {
       map.resize();
       if (card.viewport.mode === "camera") {
@@ -369,11 +393,11 @@ function MapCanvas({
               );
             }
             applyViewport(map);
-            setLoadState("ready");
+            reportLoadState("ready");
           })().catch((reason: unknown) => {
             if (disposed) return;
-            setLoadState("error");
-            setLoadError(
+            reportLoadState(
+              "error",
               reason instanceof Error
                 ? reason.message
                 : "Map layers failed to load.",
@@ -382,8 +406,17 @@ function MapCanvas({
         });
         map.on("error", (event) => {
           if (disposed) return;
-          setLoadState("error");
-          setLoadError(event.error?.message ?? "Mapbox GL failed to load.");
+          reportLoadState(
+            "error",
+            event.error?.message ?? "Mapbox GL failed to load.",
+          );
+        });
+        map.on("styleimagemissing", (event) => {
+          if (disposed) return;
+          reportLoadState(
+            "error",
+            `Map style references an unavailable image: ${event.id}.`,
+          );
         });
         if (typeof ResizeObserver !== "undefined") {
           resizeObserver = new ResizeObserver(() => {
@@ -402,8 +435,8 @@ function MapCanvas({
       })
       .catch((reason: unknown) => {
         if (disposed) return;
-        setLoadState("error");
-        setLoadError(
+        reportLoadState(
+          "error",
           reason instanceof Error
             ? reason.message
             : "Mapbox GL failed to load.",
@@ -425,6 +458,7 @@ function MapCanvas({
     loaded.error,
     loaded.sources,
     mapStyle,
+    reportLoadState,
   ]);
 
   if (loaded.error) {
@@ -499,8 +533,13 @@ const MapReplyCard = memo(
   function MapReplyCard({ card, onRevise }: Props) {
   const [fullscreen, setFullscreen] = useState(false);
   const [configurationOpen, setConfigurationOpen] = useState(false);
+  const [renderState, setRenderState] = useState<MapLoadState>("loading");
   const mapsConfiguration = useMapsConfiguration();
   const detail = card.summary ?? card.fallbackText ?? "地图数据已就绪。";
+  const displayedStatus = mapCardDisplayStatus(card.status, renderState);
+  useEffect(() => {
+    setRenderState(card.status === "error" ? "error" : "loading");
+  }, [card.id, card.status]);
   const body = (fullscreenBody = false) => (
     <div
       className={`web-map-card is-${card.status}`}
@@ -512,7 +551,7 @@ const MapReplyCard = memo(
           <MapPinned size={16} aria-hidden="true" />
           <span>{card.title}</span>
         </div>
-        <span className="web-map-card-status">{statusLabel(card.status)}</span>
+        <span className="web-map-card-status">{statusLabel(displayedStatus)}</span>
         {!fullscreenBody ? (
           <button
             type="button"
@@ -542,6 +581,7 @@ const MapReplyCard = memo(
         configurationLoading={mapsConfiguration.loading}
         canConfigure={mapsConfiguration.canConfigure}
         onConfigure={() => setConfigurationOpen(true)}
+        onLoadStateChange={setRenderState}
       />
       <div className="web-map-card-body">
         <p>{detail}</p>

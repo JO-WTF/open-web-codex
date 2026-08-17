@@ -389,14 +389,19 @@ def _publish_geojson(
     value: NetworkComparisonGeoJson | NetworkCoverageGeoJson | NetworkDistributionGeoJson,
     description: str,
 ) -> CallToolResult:
-    payload = value.model_dump(mode="json", by_alias=True)
+    # A map source advertises only properties that exist for the exact result.
+    # Keeping optional comparison fields as JSON null makes them look usable to
+    # a style author even though every rendered feature will evaluate to the
+    # Mapbox fallback.  The immutable GeoJSON and its derived profile must use
+    # the same compact, non-null payload.
+    payload = value.model_dump(mode="json", by_alias=True, exclude_none=True)
     if payload.get("type") != "FeatureCollection" or not isinstance(
         payload.get("features"), list
     ):
         raise McpResourceContractError("geojson_feature_collection_required")
     result = _runtime().publish(
         schema,
-        value,
+        payload,
         description,
         mime_type="application/geo+json",
     )

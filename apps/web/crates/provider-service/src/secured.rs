@@ -224,6 +224,7 @@ impl SecuredProviderService {
                 self.runtime.select_model(&provider_id, &model_id).await?;
             }
         }
+        self.runtime.ensure_default_reasoning_effort().await?;
         Ok(())
     }
 

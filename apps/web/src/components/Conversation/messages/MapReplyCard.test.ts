@@ -3,6 +3,7 @@ import type { MapReplyCard as MapReplyCardData } from "../../../utils/replyCards
 import {
   dataBoundsForSources,
   MAP_CARD_PROJECTION,
+  mapCardDisplayStatus,
   mapboxLayerForCard,
   mapboxSourceForCard,
   mapStyleForToken,
@@ -100,5 +101,11 @@ describe("Mapbox map.v3 rendering", () => {
     );
     expect(mapStyleForToken("")).toBeNull();
     expect(MAP_CARD_PROJECTION).toBe("mercator");
+  });
+
+  it("does not label an artifact ready until its renderer is ready", () => {
+    expect(mapCardDisplayStatus("ready", "loading")).toBe("loading");
+    expect(mapCardDisplayStatus("ready", "error")).toBe("error");
+    expect(mapCardDisplayStatus("error", "ready")).toBe("error");
   });
 });

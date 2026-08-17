@@ -634,18 +634,7 @@ describe("Web Composer provider credentials", () => {
     });
   });
 
-  it("shows only safe processed-result metadata and attaches an exact selected reference", () => {
-    const onToggleResourceAttachment = vi.fn();
-    const resource = {
-      producerEventId: "00000000-0000-0000-0000-000000000001",
-      ordinal: 0,
-      server: "supply_chain_data",
-      uri: "supply-chain://resources/normalized-input",
-      resourceSchema: "normalized_network_input.v1",
-      displayName: "Prepared network input",
-      producerTool: "normalize_network_input",
-      createdAt: "2026-08-17T00:00:00Z",
-    };
+  it("keeps the selected-map revision attachment without a generic processed-result picker", () => {
     render(
       <Composer
         draft=""
@@ -658,17 +647,10 @@ describe("Web Composer provider credentials", () => {
         disabled={false}
         tokenUsage={null}
         mapCardAttachment={{ ref: "map-card-1", title: "Coverage" }}
-        resourceOptions={[resource]}
-        resourcePickerOpen
-        onToggleResourceAttachment={onToggleResourceAttachment}
       />,
     );
 
-    const option = screen.getByRole("option", { name: /normalized_network_input\.v1/i });
-    expect(option.textContent).toContain("normalize_network_input");
-    expect(option.textContent).not.toContain(resource.uri);
     expect(screen.getByText("基于地图：Coverage")).toBeTruthy();
-    fireEvent.click(option);
-    expect(onToggleResourceAttachment).toHaveBeenCalledWith(resource);
+    expect(screen.queryByText("Reuse processed result")).toBeNull();
   });
 });

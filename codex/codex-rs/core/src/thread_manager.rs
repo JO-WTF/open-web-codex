@@ -1,7 +1,7 @@
 use crate::CodexAppsToolsCache;
 use crate::HostSkillsService;
 use crate::agent::AgentControl;
-use crate::agent::role::reapply_role_to_config_for_multi_agent_v2;
+use crate::agent::role::reapply_role_to_config_for_child_resume;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -938,7 +938,7 @@ impl ThreadManager {
         if let Some((session_source, _)) = initial_history.get_resumed_session_sources()
             && let Some(role_name) = session_source.get_agent_role()
         {
-            reapply_role_to_config_for_multi_agent_v2(&mut config, &role_name)
+            reapply_role_to_config_for_child_resume(&mut config, &role_name)
                 .await
                 .map_err(CodexErr::InvalidRequest)?;
         }

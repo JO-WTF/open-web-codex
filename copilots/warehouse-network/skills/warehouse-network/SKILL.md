@@ -12,6 +12,7 @@ description: 仅供仓网 Supervisor 原生创建的 network_agent 使用。用�
 - 以准备调用的 Tool schema 为交接边界：只传它实际接受的必需引用、参数、用户许可和交付要求。
 - 直接沿用用户或当前 Thread 已经明确的选择；不重复询问。
 - Tool 成功后仅使用同一次 structured result 中的指标和下游引用。result 与 comparison 必须来自同一精确结果。
+- MCP Tool 返回失败、拒绝、超时、能力不可用或输入无效时，返回该 Tool 的 typed failure 并停止当前任务；不改派 Role、不试探其他 schema 或参数变体，也不调用模型、脚本或文件去补造结果。
 - Tool 返回的交付描述和 Platform 终态就是成功证据；不用文件或 Resource 重读二次核验。
 
 ## 数据与矩阵
@@ -39,18 +40,20 @@ description: 仅供仓网 Supervisor 原生创建的 network_agent 使用。用�
 
   | 地图对象 | 默认参考样式 |
   | --- | --- |
-  | 中心仓（`warehouse_type=center`） | 深蓝 `#1D4ED8`，半径 `11`，白色描边 `2.5` |
-  | XD 前置仓（`warehouse_type=cross_docking`） | 橙色 `#F97316`，半径 `8`，白色描边 `2` |
-  | 候选仓（`is_existing=false` 且 `opened_candidate=false`） | 紫色 `#7C3AED`，半径 `7`，白色描边 `2`，不透明度 `0.9` |
-  | 新增启用仓（`opened_candidate=true`） | 洋红 `#C026D3`，半径 `11`，白色描边 `2.5` |
-  | 需求城市（没有时效结果） | 蓝色 `#2563EB`，半径 `5`，白色描边 `1.25` |
-  | 时效达标城市 | 绿色 `#16A34A`，半径 `6`，白色描边 `1.5` |
-  | 时效未达标城市 | 红色 `#DC2626`，半径 `7`，白色描边 `1.75` |
-  | Last mile 覆盖线（`kind=last_mile_assignment`） | 蓝色 `#2563EB`，宽度 `1.5`，不透明度 `0.6` |
-  | 干线覆盖线（`kind=linehaul_connection`） | 深蓝 `#1E3A8A`，宽度 `2.5`，不透明度 `0.75` |
+  | 中心仓（`warehouse_type=center`） | 深蓝 `#1D4ED8`，半径 `12`，白色描边 `2.5` |
+  | XD 前置仓（`warehouse_type=cross_docking`） | 橙色 `#F97316`，半径 `9`，白色描边 `2` |
+  | 候选仓（`is_existing=false` 且 `opened_candidate=false`） | 紫色 `#7C3AED`，按仓型使用中心仓半径 `12` 或 XD 半径 `9`，白色描边 `2`，不透明度 `0.9` |
+  | 新增启用仓（`opened_candidate=true`） | 洋红 `#C026D3`，按仓型使用中心仓半径 `12` 或 XD 半径 `9`，白色描边 `2.5` |
+  | 需求城市（没有时效结果） | 蓝色 `#2563EB`，半径 `4`，白色描边 `1.25` |
+  | 时效达标城市 | 绿色 `#16A34A`，半径 `5`，白色描边 `1.5` |
+  | 时效未达标城市 | 红色 `#DC2626`，半径 `6`，白色描边 `1.75` |
+  | Last mile 覆盖线（`kind=last_mile_assignment`） | 蓝色 `#2563EB`，宽度 `1.5`，不透明度 `0.5` |
+  | 干线覆盖线（`kind=linehaul_connection`） | 深蓝 `#1E3A8A`，宽度 `2.5`，不透明度 `0.65` |
 
-  仓库点图层置于需求城市之上；线图层置于所有点图层之下。图例仅列出本次实际展示的对象，并分别保留中心仓、XD 前置仓、候选仓、新增启用仓、时效达标、时效未达标、Last mile 和干线的名称。
-- Planner 返回的 `data_ref.profile` 是从本次完整 GeoJSON 自动生成的有界概览，也是图层字段、类型、枚举值和几何类型的唯一模型可见真相。按它的 `discriminator_property` 与 `feature_types` 构造每个图层；筛选、表达式、标签和 tooltip 只使用对应 feature type 的 `properties`，不得从业务名或历史地图猜字段。纯分布数据没有时效字段时不猜测达标状态。
+  Mapbox 按 `layers` 数组顺序从下至上绘制。覆盖线图层置于所有点图层之下；当 `data_ref.profile` 中存在 `kind=linehaul_connection` 时，必须分别传入 Last mile 和干线两个覆盖线图层，不能省略、合并或以其中一类替代另一类。点图层必须依次传入需求城市、全部 XD 前置仓、全部中心仓，使中心仓始终位于最上层。中心仓和 XD 前置仓必须是两个独立图层，使用表中不同的颜色，不能合并为同色仓库图层。候选或新增状态只改变颜色和描边，不改变这三个仓型层级与尺寸关系。图例仅列出本次实际展示的对象，并分别保留中心仓、XD 前置仓、候选仓、新增启用仓、时效达标、时效未达标、Last mile 和干线的名称。
+
+  仓库点的默认展示参考中，将 `data_ref.profile` 的 `kind=warehouse` 视为仓库的容器类型，而非一个单一业务类别。当其 properties 包含 `warehouse_type` 时，优先按实际存在的 `center` 与 `cross_docking` 仓型分别建立点图层，并在各层同时筛选 `kind=warehouse` 和对应 `warehouse_type`；避免只按 `kind=warehouse` 生成笼统的“现有仓库”图层。相应图例优先分别说明中心仓与 XD；需求城市、XD 和中心仓通常按前述由下至上的顺序组织。有干线 feature 时，默认同时展示 Last mile 与干线两类覆盖线。默认点样式使用 `circle` 图层；只有 Map Tool 已声明可用图像资源时才使用 `icon-image`。用户明确指定样式时，以用户指定为准。
+- Planner 返回的 `data_ref.profile` 是从本次完整 GeoJSON 自动生成的有界字段、值类型与几何概览，也是图层字段和几何类型的唯一模型可见真相。按它的 `discriminator_property` 与 `feature_types` 构造每个图层；筛选、表达式、标签和 tooltip 只使用对应 feature type 中具有所需非空类型的 properties，不能从业务名或历史地图猜字段。单一结果的 `network_coverage_geojson.v1` 使用 `assigned_warehouse_id`、`distance_km`、`duration_hours` 和 `unit_cost`；只有 comparison GeoJSON 才使用 `baseline_*` 与 `facility_*` 字段。纯分布数据没有时效字段时不猜测达标状态。
 - 为仓库、需求城市和干线连接配置 `extensions.hover`。从对应 feature type 的可用字段中选择人类可读名称作为标题，并按本次实际存在的字段展示业务标识、仓型或需求量、服务关系、运输时长、距离、成本和方案状态；缺失字段直接省略，不制造通用 `name` 或其他替代字段。
 - 将 Planner 返回的完整 `data_ref`（包括 `profile`）原样放入 `map_utils.create_map_card` 的 GeoJSON source，自行按上述展示意图构造标准 Mapbox Style `layers` 与可选 hover/legend；不得读取完整 Resource 内容，也不得改写数据引用、概览、原始指标或用户选择的阈值。地图 Tool 会依据 profile 拒绝不存在的字段和不兼容的几何图层。再将 `structuredContent.embed.code` 原样作为独立段落返回。地图 Tool 失败时明确报告，不制作 HTML、图片或文本地图替代。
 - 用户要求“基于此图修改”时，当前 Turn 会带入用户显式选择的 exact `map_card_spec.v1`。纯标题、图层、颜色、图例、悬浮或视角调整只调用 `revise_map_card` 并提交有界 patch；不得重新读取或发布 GeoJSON。若要求新增城市→仓库覆盖线，先用 exact 分配结果调用 `prepare_network_coverage_map` 发布新几何，再创建或修订一张引用该几何的新卡片。

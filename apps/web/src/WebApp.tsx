@@ -9,8 +9,6 @@ import type {
   McpFormResponseAction,
   PendingMcpFormSummary,
   PendingUserInputSummary,
-  ExplicitResourceSelection,
-  ResourceReferenceSummary,
 } from "../browser/types";
 import {
   isPlatformRequestError,
@@ -426,11 +424,6 @@ export default function WebApp() {
     ref: string;
     title: string;
   } | null>(null);
-  const [resourceAttachments, setResourceAttachments] = useState<ResourceReferenceSummary[]>([]);
-  const [resourceOptions, setResourceOptions] = useState<ResourceReferenceSummary[]>([]);
-  const [resourcePickerOpen, setResourcePickerOpen] = useState(false);
-  const [resourceRefsLoading, setResourceRefsLoading] = useState(false);
-  const [resourceRefsError, setResourceRefsError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [queuedFollowUps, setQueuedFollowUps] = useState<QueuedFollowUp[]>([]);
@@ -470,6 +463,7 @@ export default function WebApp() {
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
   const [activeRightPanelTab, setActiveRightPanelTab] = useState<RightSidebarTab>("files");
   const [agentPanelUnread, setAgentPanelUnread] = useState(false);
+  const [agentActivityFocusRequest, setAgentActivityFocusRequest] = useState(0);
   const [rightPanelWidth, setRightPanelWidth] = useState(() => {
     if (typeof window === "undefined") return 360;
     const stored = Number(window.localStorage.getItem("open-web-codex:right-panel-width:v1"));
@@ -2366,7 +2360,6 @@ export default function WebApp() {
     targetWorkspaceId = activeWorkspaceId,
     targetThreadId = activeThreadId,
     mapCardRef: string | null = null,
-    selectedResources: ExplicitResourceSelection[] = [],
   ) => {
     if (!targetWorkspaceId || !targetThreadId || !text.trim()) return false;
     appendLog("user", text);
@@ -2384,7 +2377,6 @@ export default function WebApp() {
         selectedModel?.model ?? selectedProviderModelId,
         currentProviderId,
         mapCardRef,
-        selectedResources,
       );
       const payload = unwrapWebRpcResult(response);
       const record = payload && typeof payload === "object"
@@ -2420,49 +2412,6 @@ export default function WebApp() {
     }
   }, [activeThreadId, activeWorkspaceId, appendLog, client, currentProviderId, providerModels, selectedProviderModelId]);
 
-  const toggleResourcePicker = useCallback(async () => {
-    if (resourcePickerOpen) {
-      setResourcePickerOpen(false);
-      return;
-    }
-    if (!activeThreadId) {
-      setResourceRefsError("Start a conversation before selecting a processed result.");
-      setResourcePickerOpen(true);
-      return;
-    }
-    setResourcePickerOpen(true);
-    setResourceRefsError(null);
-    setResourceRefsLoading(true);
-    try {
-      setResourceOptions(await client.listReusableResources(activeThreadId));
-    } catch (error) {
-      setResourceRefsError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setResourceRefsLoading(false);
-    }
-  }, [activeThreadId, client, resourcePickerOpen]);
-
-  const toggleResourceAttachment = useCallback((resource: ResourceReferenceSummary) => {
-    setResourceAttachments((previous) => {
-      const selected = previous.some((attachment) => (
-        attachment.producerEventId === resource.producerEventId
-        && attachment.ordinal === resource.ordinal
-      ));
-      return selected
-        ? previous.filter((attachment) => (
-          attachment.producerEventId !== resource.producerEventId
-          || attachment.ordinal !== resource.ordinal
-        ))
-        : [...previous, resource];
-    });
-  }, []);
-
-  const clearResourceAttachment = useCallback((producerEventId: string, ordinal: number) => {
-    setResourceAttachments((previous) => previous.filter((attachment) => (
-      attachment.producerEventId !== producerEventId || attachment.ordinal !== ordinal
-    )));
-  }, []);
-
   const sendMessage = useCallback(async () => {
     const text = draft.trim();
     if (!activeWorkspaceId || !text) return;
@@ -2474,13 +2423,6 @@ export default function WebApp() {
       return;
     }
     const selectedMapCardRef = mapCardAttachment?.ref ?? null;
-    const selectedResources: ExplicitResourceSelection[] = resourceAttachments.map((resource) => ({
-      producerEventId: resource.producerEventId,
-      ordinal: resource.ordinal,
-      server: resource.server,
-      uri: resource.uri,
-      resourceSchema: resource.resourceSchema,
-    }));
     const running = thinking
       || threadStatus === "running"
       || threadStatus === "reconnecting"
@@ -2488,20 +2430,18 @@ export default function WebApp() {
     if (running) {
       setDraft("");
       setMapCardAttachment(null);
-      setResourceAttachments([]);
       if (text) {
         setQueuedFollowUps((previous) => [
           ...previous,
-          { id: newLogId(), text, mapCardRef: selectedMapCardRef, selectedResources },
+          { id: newLogId(), text, mapCardRef: selectedMapCardRef },
         ]);
       }
       return;
     }
     setDraft("");
     setMapCardAttachment(null);
-    setResourceAttachments([]);
-    await sendText(text, activeWorkspaceId, activeThreadId, selectedMapCardRef, selectedResources);
-  }, [activeThreadId, activeWorkspaceId, draft, mapCardAttachment, resourceAttachments, sendText, startThread, thinking, threadStatus]);
+    await sendText(text, activeWorkspaceId, activeThreadId, selectedMapCardRef);
+  }, [activeThreadId, activeWorkspaceId, draft, mapCardAttachment, sendText, startThread, thinking, threadStatus]);
 
   const stopTurn = useCallback(() => {
     if (!activeWorkspaceId || !activeThreadId || stopping) return;
@@ -2511,10 +2451,6 @@ export default function WebApp() {
 
   useEffect(() => {
     setMapCardAttachment(null);
-    setResourceAttachments([]);
-    setResourceOptions([]);
-    setResourcePickerOpen(false);
-    setResourceRefsError(null);
   }, [activeThreadId]);
 
   useEffect(() => {
@@ -2558,7 +2494,6 @@ export default function WebApp() {
       activeWorkspaceId,
       activeThreadId,
       next.mapCardRef ?? null,
-      next.selectedResources ?? [],
     ).finally(() => {
       queueDispatching.current = false;
     });
@@ -2916,6 +2851,12 @@ export default function WebApp() {
     setRightPanelOpen(!alreadyVisible);
     setAgentPanelUnread(false);
   };
+  const showAgentActivity = () => {
+    setActiveRightPanelTab("agents");
+    setRightPanelOpen(true);
+    setAgentPanelUnread(false);
+    setAgentActivityFocusRequest((request) => request + 1);
+  };
   const openFilePanel = () => {
     const alreadyVisible = rightPanelOpen && activeRightPanelTab === "files";
     setActiveRightPanelTab("files");
@@ -2974,6 +2915,7 @@ export default function WebApp() {
               onLoadAgentHistory={loadAgentHistory}
               onLoadArtifactContent={loadArtifactContent}
               onDownloadArtifact={downloadArtifact}
+              behaviorLogFocusRequest={agentActivityFocusRequest}
               loading={supervisorOverviewLoading}
               error={supervisorOverviewError}
             />
@@ -3045,6 +2987,7 @@ export default function WebApp() {
         agentPanelAvailable={agentPanelAvailable}
         agentPanelUnread={agentPanelUnread}
         onOpenAgentPanel={openAgentPanel}
+        onShowAgentActivity={showAgentActivity}
         onOpenFilePanel={openFilePanel}
         onOpenFile={openFile}
           tokenUsage={tokenUsage}
@@ -3161,14 +3104,6 @@ export default function WebApp() {
           setMapCardAttachment({ ref, title });
         }}
         onClearMapCardAttachment={() => setMapCardAttachment(null)}
-        resourceAttachments={resourceAttachments}
-        resourceOptions={resourceOptions}
-        resourcePickerOpen={resourcePickerOpen}
-        resourceRefsLoading={resourceRefsLoading}
-        resourceRefsError={resourceRefsError}
-        onToggleResourcePicker={() => { void toggleResourcePicker(); }}
-        onToggleResourceAttachment={toggleResourceAttachment}
-        onClearResourceAttachment={clearResourceAttachment}
       />
     </Layout>
   );

@@ -3,7 +3,6 @@ import type {
   Approval,
   ArtifactContent,
   ArtifactSummary,
-  ExplicitResourceSelection,
   McpFormContent,
   McpFormResponseAction,
   PendingMcpFormSummary,
@@ -12,7 +11,6 @@ import type {
   RuntimeAgentActivity,
   RuntimeAgentExecution,
   RuntimeAgentProjection,
-  ResourceReferenceSummary,
   PendingUserInputSummary,
   Task,
   ThreadHistoryTurn,
@@ -878,7 +876,6 @@ export class CodexMonitorWebClient {
     model?: string | null,
     modelProvider?: string | null,
     mapCardRef?: string | null,
-    selectedResources: ExplicitResourceSelection[] = [],
   ) {
     const context = await this.findThreadContext(threadId);
     this.selectedRunByWorkspace.set(context.workspaceId, context.runId);
@@ -886,7 +883,6 @@ export class CodexMonitorWebClient {
       model,
       modelProvider,
       mapCardRef,
-      selectedResources,
     });
     return {
       status: response.status,
@@ -894,11 +890,6 @@ export class CodexMonitorWebClient {
       threadName: response.thread_name ?? null,
       turn: { id: response.turn_id, status: "inProgress" },
     };
-  }
-
-  async listReusableResources(threadId: string): Promise<ResourceReferenceSummary[]> {
-    const context = await this.findThreadContext(threadId);
-    return await this.platform.listTaskResourceRefs(context.taskId);
   }
 
   async interruptTurn(_workspaceId: string, threadId: string, turnId: string) {

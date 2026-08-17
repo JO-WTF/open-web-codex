@@ -28,6 +28,7 @@ from supply_chain_planner.network.matrix_models import (
 )
 from supply_chain_planner.network.models import ProvidedRouteFactRecord
 from supply_chain_planner.shared.models import PreparedNetworkInputRef, PreparedNetworkResource
+from supply_chain_planner.shared.resource_identity import NETWORK_MCP_SERVER_NAME
 from supply_chain_planner.shared.resources import SupplyChainResources
 
 McpResourceContractError = ProviderContractError
@@ -36,7 +37,7 @@ McpResourceContractError = ProviderContractError
 def _resource_ref(
     published: PublishedResource,
     *,
-    server_name: str = server.NETWORK_MCP_SERVER_NAME,
+    server_name: str = NETWORK_MCP_SERVER_NAME,
 ) -> ResourceRef:
     return ResourceRef(
         server=server_name,
@@ -250,11 +251,11 @@ def test_distribution_map_publishes_geojson_for_map_card_only(
         "warehouse",
     ]
     demand_profile = data_ref.profile.feature_types[0]
-    assert {item.name for item in demand_profile.properties} >= {
+    assert set(demand_profile.properties) >= {
         "city_name",
-        "duration_hours",
         "kind",
     }
+    assert "duration_hours" not in demand_profile.properties
     payload = store.load(data_ref)
     assert payload["type"] == "FeatureCollection"
     kinds = [feature["properties"]["kind"] for feature in payload["features"]]
@@ -273,7 +274,7 @@ def test_distribution_map_publishes_geojson_for_map_card_only(
         for feature in payload["features"]
         if feature["properties"]["kind"] == "demand"
     ]
-    assert all(item["duration_hours"] is None for item in demand_properties)
+    assert all("duration_hours" not in item for item in demand_properties)
     assert "layers" not in payload
     assert "extensions" not in payload
     assert not list(workspace.rglob("*.json"))
@@ -375,6 +376,25 @@ def test_coverage_map_reuses_exact_normalized_input_without_workspace_parsing(
     assert kinds.count("warehouse") == 3
     assert kinds.count("last_mile_assignment") == 2
     assert kinds.count("linehaul_connection") == 1
+    demand_features = [
+        feature["properties"]
+        for feature in payload["features"]
+        if feature["properties"]["kind"] == "demand"
+    ]
+    assert all(
+        "baseline_duration_hours" not in properties
+        and "facility_duration_hours" not in properties
+        for properties in demand_features
+    )
+    assert all(isinstance(properties["demand_quantity"], (int, float)) for properties in demand_features)
+    demand_profile = next(
+        feature_type
+        for feature_type in data_ref.profile.feature_types
+        if feature_type.value == "demand"
+    )
+    assert demand_profile.properties["duration_hours"] == "number"
+    assert demand_profile.properties["demand_quantity"] == "number"
+    assert "baseline_duration_hours" not in demand_profile.properties
     assert all(
         feature["geometry"]["type"] == "LineString"
         for feature in payload["features"]

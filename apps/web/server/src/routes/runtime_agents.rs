@@ -99,7 +99,7 @@ pub async fn list_activities_for_run(
                                'mcpToolCall', 'dynamicToolCall', 'commandExecution',
                                'collabAgentToolCall', 'collabToolCall',
                                'webSearch', 'imageView', 'imageGeneration',
-                               'agentMessage'
+                               'agentMessage', 'reasoning'
                            )
                        )
                    )
@@ -418,6 +418,30 @@ fn project_activities_with_wait_context(
                 projected
             })
             .collect();
+    }
+
+    if item_type == "reasoning" {
+        let reasoning_text = reasoning_activity_text(data);
+        if completed && reasoning_text.is_none() {
+            return Vec::new();
+        }
+        let title = reasoning_text
+            .as_deref()
+            .and_then(brief_description)
+            .map(|value| format!("Reasoning: {value}"))
+            .unwrap_or_else(|| "Thinking".to_string());
+        return vec![activity(
+            &event,
+            event.thread_id.clone(),
+            RuntimeAgentActivityKind::Reasoning,
+            if completed {
+                RuntimeAgentActivityStatus::Completed
+            } else {
+                RuntimeAgentActivityStatus::Running
+            },
+            &title,
+            reasoning_text,
+        )];
     }
 
     if item_type == "agentMessage" && completed {
@@ -795,6 +819,36 @@ fn bounded_detail(value: &str) -> Option<String> {
     bounded_runtime_text(value, 1_000)
 }
 
+/// Use the official reasoning summary when present. Some compatible Runtime
+/// providers publish only text content for the same Item, so consume that
+/// already-redacted, bounded field as the fallback. Encrypted reasoning is
+/// never projected into `data` and is not consulted here.
+fn reasoning_activity_text(data: &Value) -> Option<String> {
+    reasoning_text(data.get("summary")).or_else(|| reasoning_text(data.get("content")))
+}
+
+fn reasoning_text(value: Option<&Value>) -> Option<String> {
+    match value {
+        Some(Value::String(value)) => bounded_detail(value),
+        Some(Value::Array(values)) => {
+            let summary = values
+                .iter()
+                .filter_map(|value| {
+                    value
+                        .as_str()
+                        .or_else(|| value.get("text").and_then(Value::as_str))
+                })
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .take(16)
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            bounded_detail(&summary)
+        }
+        _ => None,
+    }
+}
+
 fn public_execution_text(value: Option<String>, max_chars: usize) -> Option<String> {
     value
         .as_deref()
@@ -1013,6 +1067,53 @@ mod tests {
             activities[0].detail.as_deref(),
             Some("Validated capacity and demand inputs.")
         );
+    }
+
+    #[test]
+    fn projects_bounded_runtime_reasoning_text_for_agent_activity() {
+        let started = project_activities(event(
+            "codex.item.started",
+            "child-thread",
+            json!({
+                "itemType": "reasoning",
+                "data": {"summary": []}
+            }),
+        ));
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0].kind, RuntimeAgentActivityKind::Reasoning);
+        assert_eq!(started[0].status, RuntimeAgentActivityStatus::Running);
+        assert_eq!(started[0].title, "Thinking");
+        assert!(started[0].detail.is_none());
+
+        let completed = project_activities(event(
+            "codex.item.completed",
+            "child-thread",
+            json!({
+                "itemType": "reasoning",
+                "data": {
+                    "summary": [],
+                    "content": [{
+                        "type": "reasoning_text",
+                        "text": "Checking demand coverage and candidate capacity."
+                    }],
+                    "encrypted_content": "must not be exposed"
+                }
+            }),
+        ));
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].kind, RuntimeAgentActivityKind::Reasoning);
+        assert_eq!(completed[0].status, RuntimeAgentActivityStatus::Completed);
+        assert_eq!(
+            completed[0].title,
+            "Reasoning: Checking demand coverage and candidate capacity."
+        );
+        assert_eq!(
+            completed[0].detail.as_deref(),
+            Some("Checking demand coverage and candidate capacity.")
+        );
+        assert!(!serde_json::to_string(&completed)
+            .unwrap()
+            .contains("must not be exposed"));
     }
 
     #[test]

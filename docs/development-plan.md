@@ -82,9 +82,10 @@ Runtime ready 刻意保持 instance-scoped observation，不建设持久 readine
 1. 设施增减搬迁的单次影响评估由供应链 MCP domain owner 提供一个 typed 粗粒度 Tool；它以
    exact before result 为基座，一次求解后直接比较，并返回 scenario ref、绑定标准化输入与
    前后方案的单一 `plan_comparison_ref`，以及有界成本、覆盖和城市变更结果。
-2. Supervisor 拥有 child 使用策略：同一 Task 内原 Network child 已完成且仍适配后续目标时，
-   优先 follow-up 唤醒同一 child；只有不存在合适 child、原 child 失败/取消/不可用，或用户明确
-   要求独立上下文时，才创建 `fork_turns=none` 的新 child。正确性仍依赖 typed handoff，不依赖记忆。
+2. Supervisor 拥有 child 使用策略：同一 Task 内只有上一 Turn 已 `completed` 且仍适配后续目标的
+   child 可以 follow-up 唤醒；当前请求中 child 或其 Tool 的 failed/errored/cancelled/interrupted/
+   rejected/timeout 是 typed 终态，Root 只报告并停止，不能根据错误文本重派、续跑或新建 child。只有
+   终态之后用户明确发起的新请求才按普通路由创建独立 child；正确性仍依赖 typed handoff，不依赖记忆。
 3. 不新增 Platform workflow、handoff ledger、业务缓存、自动重试、固定案例流程或 Codex seam。
 4. 先以 Python/stdio/Role/Skill 合同证明结果不变，再用用户原始 follow-up 请求做真实 Web 计时；
    记录 Tool 时间、模型调用数、输入 token 和总墙钟时间，不在测量前伪造性能承诺。
@@ -137,7 +138,7 @@ mailbox、Workflow DSL、Run Completion Controller、签名链或 exactly-once�
 | 文件选择、字段、映射、标准化、复用和合并 | 用户 + Skill + Tool | Platform 不分类、不猜测、不限制业务复用；Resource 是可消费的不可变计算快照，不代表来源真实、业务可信或自动复用许可 |
 | Agent 协同方法 | Supervisor Skill | 不落 Platform workflow 状态机 |
 | 仓网规划能力 | Data/Network MCP domain Tool bindings、Role/Skill 与 pure owners | 阶段一统一拥有 Data mapping/normalize/geography、route/cost facts与matrix、baseline/scenario/p-median/comparison 以及 final map/report；输入输出为 Workspace 相对路径、typed Resource ref 或普通业务参数，不拥有通用 scope/store/codec/writer。未来公共供应链领域层只记为触发式 TODO，不增加当前实现层、提交线或验收节点 |
-| Agent 活动与问题卡片 | Codex Runtime 提供 child Thread/Turn/Item 事实；Platform projection 只做授权、安全裁剪和浏览器 DTO | 保留 item type、Tool 身份、bounded action/result、生命周期、错误与时间顺序并容忍乱序；不另建 child 日志、执行历史或状态机，不用通用占位文案替代可安全展示的官方事实 |
+| Agent 活动与问题卡片 | Codex Runtime 提供 child Thread/Turn/Item 事实；Platform projection 只做授权、安全裁剪和浏览器 DTO | 保留 item type、Tool 身份、bounded action/result、Runtime-provided reasoning 文本、生命周期、错误与时间顺序并容忍乱序；不另建 child 日志、执行历史或状态机，不用通用占位文案替代可安全展示的官方事实 |
 | 地图、报告和明确交付件 | Artifact | 只展示和下载，永远不作为 Task/Agent 输入或交换介质 |
 
 ### Platform 只执行的硬约束

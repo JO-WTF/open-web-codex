@@ -15,7 +15,6 @@ import type {
   McpFormResponseAction,
   PendingMcpFormSummary,
   PendingUserInputSummary,
-  ResourceReferenceSummary,
 } from "../../../browser/types";
 import type { ModelProviderSummary, ModelSummary } from "./Composer";
 import type { AgentWaitHistoryUpdate } from "../../utils/agentWaitUpdates";
@@ -43,6 +42,7 @@ type Props = {
   agentPanelAvailable?: boolean;
   agentPanelUnread?: boolean;
   onOpenAgentPanel?: () => void;
+  onShowAgentActivity?: () => void;
   onOpenFilePanel?: () => void;
   onOpenFile?: (path: string) => void;
   tokenUsage: import("../../types").ThreadTokenUsage | null;
@@ -97,14 +97,6 @@ type Props = {
   mapCardAttachment?: { ref: string; title: string } | null;
   onSelectMapCardForRevision?: (cardId: string, title: string) => void;
   onClearMapCardAttachment?: () => void;
-  resourceAttachments?: ResourceReferenceSummary[];
-  resourceOptions?: ResourceReferenceSummary[];
-  resourcePickerOpen?: boolean;
-  resourceRefsLoading?: boolean;
-  resourceRefsError?: string | null;
-  onToggleResourcePicker?: () => void;
-  onToggleResourceAttachment?: (resource: ResourceReferenceSummary) => void;
-  onClearResourceAttachment?: (producerEventId: string, ordinal: number) => void;
 };
 
 export default function Conversation({
@@ -123,6 +115,7 @@ export default function Conversation({
   agentPanelAvailable = false,
   agentPanelUnread = false,
   onOpenAgentPanel,
+  onShowAgentActivity,
   onOpenFilePanel,
   onOpenFile,
   tokenUsage,
@@ -168,14 +161,6 @@ export default function Conversation({
   mapCardAttachment,
   onSelectMapCardForRevision,
   onClearMapCardAttachment,
-  resourceAttachments,
-  resourceOptions,
-  resourcePickerOpen,
-  resourceRefsLoading,
-  resourceRefsError,
-  onToggleResourcePicker,
-  onToggleResourceAttachment,
-  onClearResourceAttachment,
 }: Props) {
   const messageAreaRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
@@ -277,7 +262,7 @@ export default function Conversation({
             inlineVisualizationThreadId={conversationId}
             finalArtifacts={finalArtifacts}
             agentWaitUpdates={agentWaitUpdates}
-            onOpenAgentPanel={onOpenAgentPanel}
+            onShowAgentActivity={onShowAgentActivity}
             onReviseMapCard={onSelectMapCardForRevision}
           />
           <TaskApprovalQueue
@@ -329,14 +314,6 @@ export default function Conversation({
         providerCatalogOpenRequest={providerCatalogOpenRequest}
         mapCardAttachment={mapCardAttachment}
         onClearMapCardAttachment={onClearMapCardAttachment}
-        resourceAttachments={resourceAttachments}
-        resourceOptions={resourceOptions}
-        resourcePickerOpen={resourcePickerOpen}
-        resourceRefsLoading={resourceRefsLoading}
-        resourceRefsError={resourceRefsError}
-        onToggleResourcePicker={onToggleResourcePicker}
-        onToggleResourceAttachment={onToggleResourceAttachment}
-        onClearResourceAttachment={onClearResourceAttachment}
       />
     </section>
   );

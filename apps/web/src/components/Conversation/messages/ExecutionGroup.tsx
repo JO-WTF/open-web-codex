@@ -15,7 +15,7 @@ type Props = {
   activityLabel?: string;
   agentWaitStatus?: string;
   agentWaitUpdates?: AgentWaitHistoryUpdate[];
-  onOpenAgentPanel?: () => void;
+  onShowAgentActivity?: () => void;
   children: ReactNode;
 };
 
@@ -29,7 +29,7 @@ export default function ExecutionGroup({
   activityLabel = "Working…",
   agentWaitStatus,
   agentWaitUpdates,
-  onOpenAgentPanel,
+  onShowAgentActivity,
   children,
 }: Props) {
   const [manuallyOpen, setManuallyOpen] = useState(false);
@@ -85,7 +85,7 @@ export default function ExecutionGroup({
             elapsedLabel={elapsedLabel}
             live
             agentUpdates={agentWaitUpdates}
-            onOpenAgentPanel={onOpenAgentPanel}
+            onShowAgentActivity={onShowAgentActivity}
           />
         </div>
       ) : null}
