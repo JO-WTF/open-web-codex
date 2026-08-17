@@ -443,6 +443,48 @@ fn replays_final_raw_reasoning_with_its_following_assistant_message() {
 }
 
 #[test]
+fn replays_raw_reasoning_with_its_following_plaintext_agent_message() {
+    let mut request = request(None);
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::Reasoning {
+            id: None,
+            summary: Vec::new(),
+            content: Some(vec![
+                codex_protocol::models::ReasoningItemContent::ReasoningText {
+                    text: "check the prepared route matrix".to_string(),
+                },
+            ]),
+            encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::AgentMessage {
+            id: None,
+            author: "network_agent".to_string(),
+            recipient: "root".to_string(),
+            content: vec![
+                codex_protocol::models::AgentMessageInputContent::InputText {
+                    text: "The route matrix is ready.".to_string(),
+                },
+            ],
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    assert_eq!(
+        responses_request_to_chat_completions_request(request)
+            .unwrap()
+            .messages,
+        vec![ChatMessage::Assistant {
+            role: "assistant".to_string(),
+            content: "The route matrix is ready.".to_string(),
+            reasoning_content: Some("check the prepared route matrix".to_string()),
+            tool_calls: None,
+        }]
+    );
+}
+
+#[test]
 fn rejects_chat_history_items_without_typed_chat_equivalents() {
     let mut unsupported_role = request(None);
     unsupported_role.input = vec![text_message("tool", "result")];

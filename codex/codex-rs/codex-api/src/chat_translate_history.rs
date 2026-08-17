@@ -74,16 +74,24 @@ pub(crate) fn responses_input_to_chat_messages(
                     encrypted_content.as_deref(),
                 )?;
                 index += 1;
-                let assistant_message_present = matches!(
-                    input.get(index),
-                    Some(ResponseItem::Message { role, .. }) if role == "assistant"
-                );
-                let assistant_content = match input.get(index) {
+                let (assistant_message_present, assistant_content) = match input.get(index) {
                     Some(ResponseItem::Message { role, content, .. }) if role == "assistant" => {
                         index += 1;
-                        response_message_text("assistant", content)?
+                        (true, response_message_text("assistant", content)?)
                     }
-                    _ => String::new(),
+                    // Native collaboration delivers a plaintext AgentMessage as the
+                    // child Agent's assistant-side reply. It has the same Chat
+                    // projection as a normal assistant Message, including when it
+                    // follows raw Chat reasoning.
+                    Some(ResponseItem::AgentMessage { content, .. }) => {
+                        index += 1;
+                        (
+                            true,
+                            plaintext_agent_message_content(content)
+                                .ok_or_else(|| unsupported("non-plaintext native Agent message"))?,
+                        )
+                    }
+                    _ => (false, String::new()),
                 };
                 let tool_calls = take_function_calls(input, &mut index);
                 if tool_calls.is_empty() {
