@@ -443,7 +443,7 @@ fn replays_final_raw_reasoning_with_its_following_assistant_message() {
 }
 
 #[test]
-fn replays_raw_reasoning_with_its_following_plaintext_agent_message() {
+fn preserves_interrupted_reasoning_and_its_following_plaintext_agent_message() {
     let mut request = request(None);
     request.instructions.clear();
     request.input = vec![
@@ -475,12 +475,56 @@ fn replays_raw_reasoning_with_its_following_plaintext_agent_message() {
         responses_request_to_chat_completions_request(request)
             .unwrap()
             .messages,
-        vec![ChatMessage::Assistant {
-            role: "assistant".to_string(),
-            content: "The route matrix is ready.".to_string(),
-            reasoning_content: Some("check the prepared route matrix".to_string()),
-            tool_calls: None,
-        }]
+        vec![
+            ChatMessage::Assistant {
+                role: "assistant".to_string(),
+                content: String::new(),
+                reasoning_content: Some("check the prepared route matrix".to_string()),
+                tool_calls: None,
+            },
+            ChatMessage::Text {
+                role: "assistant".to_string(),
+                content: "The route matrix is ready.".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn replays_interrupted_raw_reasoning_before_the_next_user_message() {
+    let mut request = request(None);
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::Reasoning {
+            id: None,
+            summary: Vec::new(),
+            content: Some(vec![
+                codex_protocol::models::ReasoningItemContent::ReasoningText {
+                    text: "wait for the network result".to_string(),
+                },
+            ]),
+            encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        text_message("user", "Continue after the network result."),
+    ];
+
+    assert_eq!(
+        responses_request_to_chat_completions_request(request)
+            .unwrap()
+            .messages,
+        vec![
+            ChatMessage::Assistant {
+                role: "assistant".to_string(),
+                content: String::new(),
+                reasoning_content: Some("wait for the network result".to_string()),
+                tool_calls: None,
+            },
+            ChatMessage::Text {
+                role: "user".to_string(),
+                content: "Continue after the network result.".to_string(),
+            },
+        ]
     );
 }
 

@@ -74,32 +74,19 @@ pub(crate) fn responses_input_to_chat_messages(
                     encrypted_content.as_deref(),
                 )?;
                 index += 1;
-                let (assistant_message_present, assistant_content) = match input.get(index) {
+                let assistant_content = match input.get(index) {
                     Some(ResponseItem::Message { role, content, .. }) if role == "assistant" => {
                         index += 1;
-                        (true, response_message_text("assistant", content)?)
+                        response_message_text("assistant", content)?
                     }
-                    // Native collaboration delivers a plaintext AgentMessage as the
-                    // child Agent's assistant-side reply. It has the same Chat
-                    // projection as a normal assistant Message, including when it
-                    // follows raw Chat reasoning.
-                    Some(ResponseItem::AgentMessage { content, .. }) => {
-                        index += 1;
-                        (
-                            true,
-                            plaintext_agent_message_content(content)
-                                .ok_or_else(|| unsupported("non-plaintext native Agent message"))?,
-                        )
-                    }
-                    _ => (false, String::new()),
+                    // A mailbox message can arrive at the safe reasoning boundary,
+                    // before the interrupted model response has emitted assistant text.
+                    // Keep the reasoning in its own empty assistant envelope; the next
+                    // loop iteration preserves the mailbox message as its own Chat item.
+                    _ => String::new(),
                 };
                 let tool_calls = take_function_calls(input, &mut index);
                 if tool_calls.is_empty() {
-                    if !assistant_message_present {
-                        return Err(unsupported(
-                            "reasoning history not followed by an assistant message",
-                        ));
-                    }
                     push_assistant(
                         &mut messages,
                         assistant_content,
