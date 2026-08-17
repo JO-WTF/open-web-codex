@@ -346,7 +346,7 @@ validate_refresh_local_authority() {
   }
   [[ "$database_url_file_option_set" == "0" \
     && ! -e "$default_database_url_file" && ! -L "$default_database_url_file" ]] || {
-    error "--refresh-local refuses database URL files"
+    error "--refresh-local refuses database URL files; use rebuild-development-database.sh with explicit confirmation for a selected development database"
     return 2
   }
   [[ "$skip_build" == "0" ]] || {

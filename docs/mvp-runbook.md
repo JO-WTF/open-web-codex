@@ -113,6 +113,32 @@ DATABASE_URL="$(<.local/database-url)" ./scripts/run-local.sh --background
 ./scripts/run-local.sh --stop
 ```
 
+## 不兼容开发 schema 的显式重建
+
+`run-local` 和 `--restart` 永远不会猜测、修补或删除已有数据库行。当前 schema 不再兼容
+旧的内联地图卡片投影：卡片必须指向 provider-owned `map_card_spec`，不能从旧 renderer payload
+反推这个引用。因此，遇到 migration 因旧开发数据停止时，必须显式重建开发库，而不是将新列改为
+可空或在迁移中伪造引用。
+
+默认 launcher 的无凭据 loopback 数据库可用以下快捷入口；它只接受默认 data directory 和固定
+`open_web_codex` 数据库：
+
+```bash
+./scripts/run-local.sh --refresh-local
+```
+
+若本地开发库使用受保护的 URL 文件、非默认数据库名或其他开发 PostgreSQL，则使用确认式重建脚本：
+
+```bash
+./scripts/rebuild-development-database.sh \
+  --confirm-development-only \
+  --database-url-file .local/open-web-codex/database-url
+```
+
+该脚本会重新创建 URL 指向的数据库，先导出再恢复 Provider 所需的组织、用户、Profile 和加密
+Provider 配置；不会保留旧 Platform 投影、Thread/Run、地图卡片或其他不兼容的开发数据。它不会输出
+或解密连接凭据和 Secret。完成后重新运行 `./scripts/run-local.sh --background`，并检查健康状态。
+
 `--restart` 先用独立的 `dev-small` Profile 完成变更，再停止并替换后台
 Server，构建失败不会中断当前进程。默认启动仍构建浏览器；平台 Server、
 `codex` 与 `codex-code-mode-host` 分别检查自己的精确 Cargo dep-info 指纹。

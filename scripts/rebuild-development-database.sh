@@ -10,7 +10,7 @@ web_root="$repo_root/apps/web"
 database_url="${DATABASE_URL:-}"
 database_url_file=""
 server_bin="${OPEN_WEB_CODEX_SERVER_BIN:-$web_root/target/debug/open-web-codex-server}"
-postgres_bin="${OPEN_WEB_CODEX_POSTGRES_BIN:-/opt/homebrew/opt/postgresql@18/bin}"
+postgres_bin="${OPEN_WEB_CODEX_POSTGRES_BIN:-}"
 confirmed="0"
 
 usage() {
@@ -27,7 +27,7 @@ Options:
   --database-url URL          PostgreSQL URL (or DATABASE_URL).
   --database-url-file PATH    File containing the PostgreSQL URL.
   --server-bin PATH           Built open-web-codex server used for --migrate-only.
-  --postgres-bin PATH         Directory containing PostgreSQL 18 client tools.
+  --postgres-bin PATH         Directory containing PostgreSQL client tools.
   -h, --help                  Show this help.
 EOF
 }
@@ -71,6 +71,17 @@ if [[ -n "$database_url_file" ]]; then
   database_url="$(<"$database_url_file")"
 fi
 [[ -n "$database_url" ]] || { printf 'error: provide --database-url, --database-url-file, or DATABASE_URL\n' >&2; exit 2; }
+
+if [[ -z "$postgres_bin" ]]; then
+  if command -v pg_config >/dev/null 2>&1; then
+    postgres_bin="$(pg_config --bindir)"
+  elif command -v psql >/dev/null 2>&1; then
+    postgres_bin="$(dirname "$(command -v psql)")"
+  else
+    printf 'error: PostgreSQL client tools are unavailable; install pg_config or provide --postgres-bin\n' >&2
+    exit 2
+  fi
+fi
 
 for executable in pg_dump pg_restore dropdb createdb psql; do
   [[ -x "$postgres_bin/$executable" ]] || {
