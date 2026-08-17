@@ -40,6 +40,7 @@ import { rememberAppServerEvent } from "./utils/webAppServerEventDedup";
 import { getAppServerThreadId } from "./utils/appServerEvents";
 import { finalizeInterruptedTurnEntries } from "./utils/webInterruptedTurn";
 import { createBrowserId } from "./utils/randomId";
+import { latestAgentHistoryUpdates } from "./utils/agentWaitUpdates";
 import {
   parseInlineVisualizationArtifact,
   type InlineVisualizationArtifact,
@@ -2904,6 +2905,10 @@ export default function WebApp() {
   const delegatedTaskApprovals = taskApprovals.filter(
     (approval) => approval.threadId !== activeThreadId,
   );
+  const agentWaitUpdates = useMemo(() => latestAgentHistoryUpdates(
+    supervisorOverview?.agents ?? [],
+    supervisorOverview?.activities ?? [],
+  ), [supervisorOverview]);
   const agentPanelAvailable = true;
   const openAgentPanel = () => {
     const alreadyVisible = rightPanelOpen && activeRightPanelTab === "agents";
@@ -3116,6 +3121,7 @@ export default function WebApp() {
           providerCatalogOpenRequest={providerCatalogOpenRequest}
         messages={messages}
         finalArtifacts={supervisorOverview?.artifacts ?? []}
+        agentWaitUpdates={agentWaitUpdates}
         taskApprovals={delegatedTaskApprovals}
         workspaceId={activeWorkspaceId ?? undefined}
         draft={draft}

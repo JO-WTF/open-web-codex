@@ -3,6 +3,7 @@ import Brain from "lucide-react/dist/esm/icons/brain";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import type { MessageEntry } from "../MessageList";
 import AgentWaitCard from "./AgentWaitCard";
+import type { AgentWaitHistoryUpdate } from "../../../utils/agentWaitUpdates";
 
 type Props = {
   items: MessageEntry[];
@@ -13,6 +14,7 @@ type Props = {
   timelineItemCount?: number;
   activityLabel?: string;
   agentWaitStatus?: string;
+  agentWaitUpdates?: AgentWaitHistoryUpdate[];
   onOpenAgentPanel?: () => void;
   children: ReactNode;
 };
@@ -26,6 +28,7 @@ export default function ExecutionGroup({
   timelineItemCount = 0,
   activityLabel = "Working…",
   agentWaitStatus,
+  agentWaitUpdates,
   onOpenAgentPanel,
   children,
 }: Props) {
@@ -81,6 +84,7 @@ export default function ExecutionGroup({
             status={agentWaitStatus}
             elapsedLabel={elapsedLabel}
             live
+            agentUpdates={agentWaitUpdates}
             onOpenAgentPanel={onOpenAgentPanel}
           />
         </div>

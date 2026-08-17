@@ -1,11 +1,13 @@
 import { useId } from "react";
 import Network from "lucide-react/dist/esm/icons/network";
 import Timer from "lucide-react/dist/esm/icons/timer";
+import type { AgentWaitHistoryUpdate } from "../../../utils/agentWaitUpdates";
 
 type Props = {
   status: string;
   elapsedLabel?: string;
   live?: boolean;
+  agentUpdates?: AgentWaitHistoryUpdate[];
   onOpenAgentPanel?: () => void;
 };
 
@@ -18,7 +20,7 @@ type Presentation = {
 
 function waitPresentation(status: string): Presentation {
   const normalized = status.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (normalized === "inprogress" || normalized === "running") {
+  if (normalized === "active" || normalized === "inprogress" || normalized === "running") {
     return {
       title: "Waiting for Agent updates",
       description: "The Supervisor is still active and will continue when an Agent reports back or you add new input.",
@@ -50,10 +52,34 @@ function waitPresentation(status: string): Presentation {
   };
 }
 
+function historyStatus(status: string): { label: string; tone: Presentation["tone"] } {
+  const normalized = status.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (normalized === "inprogress" || normalized === "running") {
+    return { label: "Running", tone: "active" };
+  }
+  if (normalized === "failed" || normalized === "error" || normalized === "systemerror") {
+    return { label: "Failed", tone: "error" };
+  }
+  if (normalized === "completed" || normalized === "done") {
+    return { label: "Completed", tone: "done" };
+  }
+  if (normalized === "waiting") {
+    return { label: "Waiting", tone: "pending" };
+  }
+  if (normalized === "idle" || normalized === "ready") {
+    return { label: "Ready", tone: "pending" };
+  }
+  if (normalized === "interrupted") {
+    return { label: "Interrupted", tone: "error" };
+  }
+  return { label: "Starting", tone: "pending" };
+}
+
 export default function AgentWaitCard({
   status,
   elapsedLabel,
   live = false,
+  agentUpdates = [],
   onOpenAgentPanel,
 }: Props) {
   const presentation = waitPresentation(status);
@@ -76,6 +102,22 @@ export default function AgentWaitCard({
           </span>
         </div>
         <p>{presentation.description}</p>
+        {agentUpdates.length > 0 ? (
+          <ol className="web-agent-wait-history" aria-label="Latest Agent History items">
+            {agentUpdates.map((update) => {
+              const updateStatus = historyStatus(update.status);
+              return (
+                <li key={update.threadId}>
+                  <div>
+                    <strong>{update.agentLabel}</strong>
+                    <span className={`is-${updateStatus.tone}`}>{updateStatus.label}</span>
+                  </div>
+                  <p>{update.text}</p>
+                </li>
+              );
+            })}
+          </ol>
+        ) : null}
         <div className="web-agent-wait-meta">
           {elapsedLabel ? (
             <span aria-hidden="true">

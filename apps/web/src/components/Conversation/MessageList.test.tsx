@@ -61,6 +61,20 @@ describe("MessageList", () => {
         thinking
         turnStartedAt={Date.now() - 5_000}
         onOpenAgentPanel={onOpenAgentPanel}
+        agentWaitUpdates={[
+          {
+            threadId: "data-thread",
+            agentLabel: "Wanwan",
+            text: "Completed normalize_network_input",
+            status: "completed",
+          },
+          {
+            threadId: "network-thread",
+            agentLabel: "Euler",
+            text: "Using evaluate_network_baseline",
+            status: "running",
+          },
+        ]}
         items={[
           { id: "user-wait", level: "user", text: "Coordinate the review." },
           {
@@ -82,6 +96,10 @@ describe("MessageList", () => {
     expect(card.textContent).toContain("Waiting for Agent updates");
     expect(card.textContent).toContain("Supervisor is still active");
     expect(card.textContent).toContain("Waiting");
+    expect(card.textContent).toContain("Wanwan");
+    expect(card.textContent).toContain("Completed normalize_network_input");
+    expect(card.textContent).toContain("Euler");
+    expect(card.textContent).toContain("Using evaluate_network_baseline");
     expect(view.container.querySelector(".web-tool-card")).toBeNull();
     expect(screen.getByText("Working…")).toBeTruthy();
 

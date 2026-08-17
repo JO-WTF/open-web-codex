@@ -11,6 +11,8 @@ import ExecutionGroup from "./messages/ExecutionGroup";
 import ReplyCard from "./messages/ReplyCard";
 import AgentWaitCard from "./messages/AgentWaitCard";
 import type { InlineVisualizationArtifact } from "../../utils/replyCards";
+import type { ArtifactSummary } from "../../../browser/types";
+import type { AgentWaitHistoryUpdate } from "../../utils/agentWaitUpdates";
 
 type DiffLine = {
   type: "add" | "del" | "ctx";
@@ -45,6 +47,8 @@ type Props = {
   workspaceId?: string;
   onResolveApproval?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
   inlineVisualizationThreadId?: string | null;
+  finalArtifacts?: ArtifactSummary[];
+  agentWaitUpdates?: AgentWaitHistoryUpdate[];
   onOpenAgentPanel?: () => void;
   onReviseMapCard?: (cardId: string, title: string) => void;
 };
@@ -80,6 +84,22 @@ function ArtifactDeliveries({
         ))}
       </div>
     </div>
+  );
+}
+
+function FinalArtifactLinks({ artifacts }: { artifacts: ArtifactSummary[] }) {
+  if (artifacts.length === 0) return null;
+  return (
+    <section className="web-final-artifact-links" aria-label="生成的文件">
+      {artifacts.map((artifact) => (
+        <p key={artifact.id}>
+          <span>{artifact.mime_type === "text/markdown" ? "正式简报" : "生成文件"}：</span>
+          <a href={artifact.download_url ?? undefined} download>
+            {artifact.mime_type === "text/markdown" ? "下载 Markdown 文件" : "下载文件"}
+          </a>
+        </p>
+      ))}
+    </section>
   );
 }
 
@@ -179,7 +199,7 @@ export function foldTerminalApprovals(items: MessageEntry[]) {
   return folded.filter((_, index) => !consumedApprovals.has(index));
 }
 
-export default function MessageList({ items, thinking = false, turnStartedAt, onOpenFile, workspaceId, onResolveApproval, inlineVisualizationThreadId, onOpenAgentPanel, onReviseMapCard }: Props) {
+export default function MessageList({ items, thinking = false, turnStartedAt, onOpenFile, workspaceId, onResolveApproval, inlineVisualizationThreadId, finalArtifacts = [], agentWaitUpdates = [], onOpenAgentPanel, onReviseMapCard }: Props) {
   if (items.length === 0) {
     return (
       <div className="web-empty">
@@ -311,6 +331,19 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
   };
 
   const rendered: React.ReactNode[] = [];
+  const finalArtifactsByProducerItem = new Map<string, ArtifactSummary[]>();
+  for (const artifact of finalArtifacts) {
+    if (
+      artifact.state !== "ready"
+      || !artifact.download_url
+      || artifact.producer_thread_id !== inlineVisualizationThreadId
+    ) {
+      continue;
+    }
+    const existing = finalArtifactsByProducerItem.get(artifact.producer_item_id) ?? [];
+    existing.push(artifact);
+    finalArtifactsByProducerItem.set(artifact.producer_item_id, existing);
+  }
   const isLiveEntry = (entry: MessageEntry) =>
     entry.streaming
     || entry.toolStatus === "inProgress"
@@ -321,6 +354,12 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
     const entry = items[index];
     if (entry.level !== "user") {
       rendered.push(renderEntry(entry));
+      const entryArtifacts = finalArtifactsByProducerItem.get(entry.id) ?? [];
+      if (entryArtifacts.length > 0) {
+        rendered.push(
+          <FinalArtifactLinks key={`final-artifacts-${entry.id}`} artifacts={entryArtifacts} />,
+        );
+      }
       index += 1;
       continue;
     }
@@ -364,6 +403,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
     // intermediate Agent messages.
     const executionSegment: MessageEntry[] = [];
     const artifactDeliveries: React.ReactNode[] = [];
+    const finalArtifactDeliveries: ArtifactSummary[] = [];
     let visibleReply: MessageEntry | null = null;
     const flushExecutionSegment = (active: boolean) => {
       if (executionSegment.length === 0 && !active) return;
@@ -395,6 +435,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
           timelineItemCount={timelineItems.length}
           activeItem={activeItem && !activeAgentWait ? renderEntry(activeItem) : null}
           agentWaitStatus={activeAgentWait?.toolStatus}
+          agentWaitUpdates={agentWaitUpdates}
           onOpenAgentPanel={onOpenAgentPanel}
           activityLabel={activityLabel}
         >
@@ -404,6 +445,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
     };
 
     for (const [turnItemIndex, item] of turnItems.entries()) {
+      finalArtifactDeliveries.push(...(finalArtifactsByProducerItem.get(item.id) ?? []));
       const typedArtifacts = typedArtifactDeliveries(item);
       const hiddenInlineArtifactRefs: string[] = [];
       const newlySurfacedArtifacts = typedArtifacts.filter((artifact) => {
@@ -444,6 +486,14 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
     }
     rendered.push(...artifactDeliveries);
     if (visibleReply) rendered.push(renderEntry(visibleReply));
+    if (finalArtifactDeliveries.length > 0) {
+      rendered.push(
+        <FinalArtifactLinks
+          key={`final-artifacts-${entry.id}`}
+          artifacts={finalArtifactDeliveries}
+        />,
+      );
+    }
     index = end;
   }
   return <>{rendered}</>;

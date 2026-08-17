@@ -18,6 +18,7 @@ import type {
   ResourceReferenceSummary,
 } from "../../../browser/types";
 import type { ModelProviderSummary, ModelSummary } from "./Composer";
+import type { AgentWaitHistoryUpdate } from "../../utils/agentWaitUpdates";
 import TaskApprovalQueue, {
   type TaskApprovalRequest,
 } from "./TaskApprovalQueue";
@@ -60,6 +61,7 @@ type Props = {
   providerCatalogOpenRequest?: number;
   messages: MessageEntry[];
   finalArtifacts?: ArtifactSummary[];
+  agentWaitUpdates?: AgentWaitHistoryUpdate[];
   taskApprovals?: TaskApprovalRequest[];
   workspaceId?: string;
   thinking?: boolean;
@@ -105,25 +107,6 @@ type Props = {
   onClearResourceAttachment?: (producerEventId: string, ordinal: number) => void;
 };
 
-function FinalArtifactLinks({ artifacts }: { artifacts: ArtifactSummary[] }) {
-  const ready = artifacts.filter((artifact) => (
-    artifact.state === "ready" && Boolean(artifact.download_url)
-  ));
-  if (ready.length === 0) return null;
-  return (
-    <section className="web-final-artifact-links" aria-label="生成的文件">
-      {ready.map((artifact) => (
-        <p key={artifact.id}>
-          <span>{artifact.mime_type === "text/markdown" ? "正式简报" : "生成文件"}：</span>
-          <a href={artifact.download_url ?? undefined} download>
-            {artifact.mime_type === "text/markdown" ? "下载 Markdown 文件" : "下载文件"}
-          </a>
-        </p>
-      ))}
-    </section>
-  );
-}
-
 export default function Conversation({
   goal,
   workspaceName,
@@ -158,6 +141,7 @@ export default function Conversation({
   providerCatalogOpenRequest,
   messages,
   finalArtifacts = [],
+  agentWaitUpdates = [],
   taskApprovals = [],
   workspaceId,
   thinking,
@@ -291,10 +275,11 @@ export default function Conversation({
             workspaceId={workspaceId}
             onResolveApproval={onResolveApproval}
             inlineVisualizationThreadId={conversationId}
+            finalArtifacts={finalArtifacts}
+            agentWaitUpdates={agentWaitUpdates}
             onOpenAgentPanel={onOpenAgentPanel}
             onReviseMapCard={onSelectMapCardForRevision}
           />
-          <FinalArtifactLinks artifacts={finalArtifacts} />
           <TaskApprovalQueue
             approvals={taskApprovals}
             ariaLabel="Task approvals"

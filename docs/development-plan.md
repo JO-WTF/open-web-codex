@@ -553,7 +553,8 @@ Data4 strict ResourceRef、完整仓网清单和 pair-level 部分复用都有�
 2. 结构化计算结果保存完整覆盖关系及城市对应仓/距离/时长/成本，可由独立表格导出能力交付；
    正式结果简报只生成一份中文 Markdown 文件，在可下载 Artifact 中说明 SLA 覆盖率、总成本、
    模拟差异、p-median 结果与仓变动。Assistant 正文只概括关键结论，Browser 从授权 Artifact DTO
-   显示指向该文件的下载链接，不把整份简报插入正文。结构化结果与简报不得用同一 JSON 报告
+   将下载链接锚定到当前 Thread 的 exact producing Item 所在 Turn；跨 Thread 交付留在 Agent History，
+   不追加到主 Thread 的最新 Turn，也不把整份简报插入正文。结构化结果与简报不得用同一 JSON 报告
    混充；地图在空间关系有助理解时使用对话卡片。
 3. Artifact 状态只投影真实的生成中、已完成、部分完成或失败；模型文本不能冒充完成。
 4. built-in final map/report Tool 使用 exact `(server, tool)` allowlist 和 typed output schema，原子

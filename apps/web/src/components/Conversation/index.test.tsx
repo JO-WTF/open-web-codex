@@ -38,11 +38,25 @@ const baseProps = {
 };
 
 describe("Conversation auto-scroll", () => {
-  it("renders ready final artifacts as downloadable links without embedding report content", () => {
-    render(
+  it("keeps a ready final artifact inside its producing turn when a later turn is added", () => {
+    const view = render(
       <Conversation
         {...baseProps}
-        messages={[{ id: "assistant-1", level: "assistant", text: "分析完成。" }]}
+        messages={[
+          { id: "user-1", level: "user", text: "生成简报。" },
+          {
+            id: "item-1",
+            level: "info",
+            kind: "tool",
+            text: "publish report",
+            toolType: "MCP",
+            toolTitle: "supply_chain / publish_network_planning_report",
+            toolStatus: "completed",
+          },
+          { id: "assistant-1", level: "assistant", text: "分析完成。" },
+          { id: "user-2", level: "user", text: "继续解释成本。" },
+          { id: "assistant-2", level: "assistant", text: "成本说明。" },
+        ]}
         finalArtifacts={[{
           id: "artifact-1",
           task_id: "task-1",
@@ -71,6 +85,44 @@ describe("Conversation auto-scroll", () => {
     expect(link.getAttribute("href")).toBe("/api/artifacts/artifact-1/download");
     expect(link.hasAttribute("download")).toBe(true);
     expect(screen.queryByText("Warehouse network planning report")).toBeNull();
+    const text = view.container.textContent ?? "";
+    expect(text.indexOf("分析完成。")).toBeLessThan(text.indexOf("下载 Markdown 文件"));
+    expect(text.indexOf("下载 Markdown 文件")).toBeLessThan(text.indexOf("继续解释成本。"));
+  });
+
+  it("does not append another Thread's final artifact to the current conversation tail", () => {
+    render(
+      <Conversation
+        {...baseProps}
+        messages={[
+          { id: "user-1", level: "user", text: "继续。" },
+          { id: "assistant-1", level: "assistant", text: "新的回复。" },
+        ]}
+        finalArtifacts={[{
+          id: "artifact-child",
+          task_id: "task-1",
+          artifact_schema: "network_planning_report_markdown.v1",
+          display_name: "Child report",
+          mime_type: "text/markdown",
+          expected_size: 512,
+          byte_size: 512,
+          content_sha256: "b".repeat(64),
+          state: "ready",
+          failure: null,
+          content_url: "/api/artifacts/artifact-child/content",
+          download_url: "/api/artifacts/artifact-child/download",
+          producer_run_id: "run-1",
+          producer_thread_id: "child-thread",
+          producer_turn_id: "child-turn",
+          producer_item_id: "child-item",
+          producer_agent_role: "network_agent",
+          created_at: "2026-08-11T00:00:00Z",
+          updated_at: "2026-08-11T00:00:00Z",
+        }]}
+      />,
+    );
+
+    expect(screen.queryByRole("link", { name: "下载 Markdown 文件" })).toBeNull();
   });
 
   it("does not show Working while the connection is reconnecting", () => {
