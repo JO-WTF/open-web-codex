@@ -93,6 +93,7 @@ from supply_chain_planner.shared.models import (
     NetworkPlanComparisonResourceRef,
     NetworkReportInput,
     NetworkScenarioResourceRef,
+    PreparedNetworkInputRef,
     PreparedNetworkResource,
     RouteMatrixPreparationToolResult,
     UncoveredCitySummary,
@@ -293,7 +294,7 @@ def _load_comparable_resource(
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def compare_network_scenarios(
-    normalized_input_ref: ResourceRef,
+    normalized_input_ref: PreparedNetworkInputRef,
     before_ref: ComparableNetworkResultRef,
     after_ref: ComparableNetworkResultRef,
     service_targets: Annotated[list[float], Field(min_length=1, max_length=32)],
@@ -357,7 +358,7 @@ def compare_network_scenarios(
     )
 
 
-def _load_ready_network(resource_ref: ResourceRef) -> PreparedNetworkResource:
+def _load_ready_network(resource_ref: PreparedNetworkInputRef) -> PreparedNetworkResource:
     prepared = _data_resource_runtime().load_model(
         resource_ref,
         "normalized_network_input.v1",
@@ -401,7 +402,7 @@ def _publish_geojson(
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def prepare_network_distribution_map(
-    normalized_input_ref: ResourceRef,
+    normalized_input_ref: PreparedNetworkInputRef,
     ctx: Context,
     include_candidates: bool = False,
     baseline_ref: Annotated[
@@ -465,7 +466,7 @@ def prepare_network_distribution_map(
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def prepare_route_matrix(
-    normalized_input_ref: ResourceRef,
+    normalized_input_ref: PreparedNetworkInputRef,
     route_method: Annotated[
         Literal["haversine", "navigation", "provided"],
         Field(
@@ -563,7 +564,7 @@ def prepare_route_matrix(
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def register_navigation_route_matrix(
-    normalized_input_ref: ResourceRef,
+    normalized_input_ref: PreparedNetworkInputRef,
     navigation_result_relative_path: Annotated[
         str,
         Field(min_length=1, max_length=1024),
@@ -626,7 +627,7 @@ def register_navigation_route_matrix(
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def plan_cost_matrix(
-    normalized_input_ref: ResourceRef,
+    normalized_input_ref: PreparedNetworkInputRef,
     warehouse_scope: Literal["existing_only", "all_warehouses"],
     ctx: Context,
     calculation_policy: CostCalculationPolicy | None = None,
@@ -679,7 +680,7 @@ def plan_cost_matrix(
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def evaluate_network_baseline(
-    normalized_input_ref: ResourceRef,
+    normalized_input_ref: PreparedNetworkInputRef,
     route_matrix_ref: ResourceRef,
     objective: Literal["min_time", "min_cost"],
     service_targets: Annotated[list[float], Field(min_length=1, max_length=32)],
@@ -773,7 +774,7 @@ def evaluate_network_baseline(
 
 
 def _load_facility_scenario_inputs(
-    normalized_input_ref: ResourceRef,
+    normalized_input_ref: PreparedNetworkInputRef,
     route_matrix_ref: ResourceRef,
     cost_matrix_ref: ResourceRef | None,
     scenario: ScenarioSpec,
@@ -877,7 +878,7 @@ def _evaluate_facility_change(
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def assess_facility_change(
-    normalized_input_ref: ResourceRef,
+    normalized_input_ref: PreparedNetworkInputRef,
     route_matrix_ref: ResourceRef,
     before_ref: ComparableNetworkResultRef,
     scenario: ScenarioSpec,
@@ -1013,7 +1014,7 @@ def assess_facility_change(
 
 @mcp.tool(structured_output=True, annotations=BOUNDED_LOCAL_COMPUTE_TOOL)
 def solve_p_median(
-    normalized_input_ref: ResourceRef,
+    normalized_input_ref: PreparedNetworkInputRef,
     route_matrix_ref: ResourceRef,
     cost_matrix_ref: ResourceRef,
     number_to_open: Annotated[

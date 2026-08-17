@@ -241,10 +241,12 @@ Profile seed 与显式应用资产 composition：
 - Profile 不复制 Tool、venv、Node dependency、Mock、cache 或 test。Data/Network Role source
   持有精确 tool allowlist 与 Tool 级 approval policy，Server 从 prepared descriptor 投影
   role-local MCP transport，Root 没有全局仓网
-  MCP；Data4 全部是有界本地预批准，Network 只预批准本地计算/验证，maps 只预批准
-  `create_map_card`，外部地图调用和 final Workspace 文件保持 `prompt`。prepared transport
+  MCP；Data4 全部是有界本地预批准，Network 预批准本地计算/验证与 `publish_network_planning_report`，maps 只预批准
+  `create_map_card`，外部地图调用和 final Workspace 地图导出保持 `prompt`。prepared transport
   不携带 cwd，Runtime 使用 Thread 已授权的 Workspace 作为 maps stdio MCP cwd；
-  状态写入 Profile 私有 `mcp-state/maps-mcp`。
+  状态写入 Profile 私有 `mcp-state/maps-mcp`。Network 所有分析入口在 Tool schema 固定为
+  Data provider 的 `supply_chain_data` / `normalized_network_input.v1` 精确 ResourceRef；Role
+  不通过 Runtime Resource 发现或读取来恢复交接。
 
 这些证据把启动 seed、prepared environment/descriptor 和低层 MCP inventory 提升到 E2。Slice 3B.2 又完成
 两个使用生产 composition、真实 Codex app-server 与本地 mock Responses provider 的 ignored

@@ -111,8 +111,11 @@ Platform 侧过滤 Runtime discovery 或 Tool。
 
 Data/Network Role TOML 只持有 `plugins.<tool>.mcp_servers.<server>` 下的精确 allowlist 与 Tool 级审批策略；
 Root 没有全局仓网 MCP。Data 的四个有界本地 Tool 统一预批准；Network 以 `prompt` 为默认，
-仅预批准路线/成本/验证/分析/选址/比较等本地 Tool；`map_utils` 仅预批准 `create_map_card`。
-外部导航、距离矩阵和 final Workspace map/Markdown report 写入始终保留 official approval。MCP provider
+预批准路线/成本/验证/分析/选址/比较等本地 Tool 与最终 Markdown 报告 `publish_network_planning_report`；`map_utils` 仅预批准 `create_map_card`。
+外部导航、距离矩阵和 final Workspace 地图导出继续保留 official approval。MCP provider
+将 Data→Network 输入声明为严格的 `normalized_input_ref`：必须是 `supply_chain_data` 发布的
+`normalized_network_input.v1` 精确 `{server, uri, resource_schema}`，由 Network Tool 在 provider 内部消费；
+Network Role 不枚举、读取或验证 Data provider Resource。Platform 不为此建立消息或数据平面。
 同时在 Tool annotations 中声明 read-only、destructive、idempotent 和 open-world 事实，Role
 policy 只裁决该 child 的精确允许面，不修改全局 `approvalPolicy`。prepared transport 不固定 MCP
 process cwd；Runtime 使用该 Thread 已授权的 Workspace 作为 stdio MCP cwd。依赖环境与

@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Annotated, Literal
 
 from open_web_codex_provider import ResourceRef as _ResourceRef
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from supply_chain_planner.data.mapping import (
     REQUIRED_FIELDS,
     TARGET_ALIASES,
@@ -27,6 +27,7 @@ from supply_chain_planner.network.optimization_models import (
     CoverageComparison,
     CoverageMetricSummary,
 )
+from supply_chain_planner.shared.resource_identity import DATA_MCP_SERVER_NAME
 
 
 class StrictModel(BaseModel):
@@ -48,6 +49,23 @@ class PreparedNetworkResource(StrictModel):
     route_quotes: list[RouteQuoteRecord]
     provided_route_facts: list[ProvidedRouteFactRecord] = Field(default_factory=list)
     issues: list[DataQualityIssue] = Field(default_factory=list)
+
+
+class PreparedNetworkInputRef(_ResourceRef):
+    """The exact Data-Agent handoff accepted by Network planning Tools."""
+
+    server: Literal[DATA_MCP_SERVER_NAME] = Field(
+        description="The Data Agent MCP server that published this normalized input."
+    )
+    resource_schema: Literal["normalized_network_input.v1"] = Field(
+        description="The ready normalized warehouse-network input schema."
+    )
+
+
+def _validate_prepared_network_input_ref(value: object) -> PreparedNetworkInputRef:
+    if isinstance(value, _ResourceRef):
+        value = value.model_dump(mode="json")
+    return PreparedNetworkInputRef.model_validate(value)
 
 
 class ConfirmedFieldDecision(StrictModel):
@@ -165,10 +183,15 @@ class NetworkPlanComparisonResource(StrictModel):
     """One complete, provenance-bound before-versus-after planning result."""
 
     schema_version: Literal["network_plan_comparison.v1"] = "network_plan_comparison.v1"
-    normalized_input_ref: _ResourceRef
+    normalized_input_ref: PreparedNetworkInputRef
     before_ref: ComparableNetworkResultRef
     after_ref: ComparableNetworkResultRef
     comparison: AssignmentComparison
+
+    @field_validator("normalized_input_ref", mode="before")
+    @classmethod
+    def validate_normalized_input_ref(cls, value: object) -> PreparedNetworkInputRef:
+        return _validate_prepared_network_input_ref(value)
 
 
 class FacilityChangeAssessmentToolResult(StrictModel):
@@ -218,8 +241,13 @@ class NetworkBaselineReportInput(StrictModel):
     """Exact typed inputs for a single current-network assessment brief."""
 
     mode: Literal["baseline"] = "baseline"
-    normalized_input_ref: _ResourceRef
+    normalized_input_ref: PreparedNetworkInputRef
     baseline_ref: _ResourceRef
+
+    @field_validator("normalized_input_ref", mode="before")
+    @classmethod
+    def validate_normalized_input_ref(cls, value: object) -> PreparedNetworkInputRef:
+        return _validate_prepared_network_input_ref(value)
 
 
 class NetworkComparisonReportInput(StrictModel):

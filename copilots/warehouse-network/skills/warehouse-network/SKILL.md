@@ -17,7 +17,7 @@ description: 仅供仓网 Supervisor 原生创建的 network_agent 使用。用�
 ## 数据与矩阵
 
 - 最低数据包括需求城市 ID、名称、需求量，以及已有仓库 ID、名称、仓型和城市。真实现状对比需要当前分配，选址需要候选仓，成本和时效分析需要对应的报价、距离或时长。
-- 只消费 Supervisor 提供的 `ready` `normalized_network_input.v1` ResourceRef。上游国家代码必须保持 ISO 两位大写形式，有误时让 Data Agent 重新发布，不在 Network 层修补。
+- 只消费 Supervisor 提供的 `ready` `normalized_network_input.v1` ResourceRef：完整对象必须为 `server=supply_chain_data`、精确 `uri` 与该 schema，并原样作为 `normalized_input_ref` 传给 Network Tool。不得调用 `list_mcp_resources`、`list_mcp_resource_templates` 或 `read_mcp_resource` 来寻找、读取或验证它；Network Tool 会在 provider 内部消费该引用。上游国家代码必须保持 ISO 两位大写形式，有误时让 Data Agent 重新发布，不在 Network 层修补。
 - 依用户目标选择 `warehouse_scope`：当前仓网或真实现状使用 `existing_only`；明确包含候选仓的模拟或规划使用 `all_warehouses`。
 - 调用 `prepare_route_matrix` 选择 `provided`、`haversine` 或 `navigation`。已有 provided 路线事实适用时直接物化；否则才确认曲面距离估算或地图导航。估算需要绕路系数和平均速度；navigation 返回请求量与费用估算后，取得许可再调用外部地图能力并注册结果。
 - 成本优先使用用户报价。`route_quotes` 为空且用户没有确认包含 `rules` 的补算规则时，不调用 `plan_cost_matrix`，不虚构币种或费率；直接将成本标为不可用并说明所需数据。

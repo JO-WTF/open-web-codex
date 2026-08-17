@@ -17,6 +17,7 @@ from open_web_codex_provider import (
     ResourceRef,
     ResourceStore,
 )
+from pydantic import ValidationError
 from supply_chain_planner.network import server
 from supply_chain_planner.network.matrix import build_haversine_route_matrix
 from supply_chain_planner.network.matrix_models import (
@@ -27,7 +28,7 @@ from supply_chain_planner.network.matrix_models import (
     RouteMatrix,
 )
 from supply_chain_planner.network.models import ProvidedRouteFactRecord
-from supply_chain_planner.shared.models import PreparedNetworkResource
+from supply_chain_planner.shared.models import PreparedNetworkInputRef, PreparedNetworkResource
 
 McpResourceContractError = ProviderContractError
 
@@ -131,6 +132,36 @@ def test_matrix_tools_expose_composable_resource_schemas() -> None:
         assert "normalized_input_ref" in schema["required"]
 
     plan = tools["prepare_route_matrix"].inputSchema
+    prepared_ref_schema = plan["$defs"]["PreparedNetworkInputRef"]
+    assert prepared_ref_schema["properties"]["server"]["const"] == "supply_chain_data"
+    assert prepared_ref_schema["properties"]["resource_schema"]["const"] == (
+        "normalized_network_input.v1"
+    )
+    for name in (
+        "prepare_route_matrix",
+        "register_navigation_route_matrix",
+        "plan_cost_matrix",
+        "prepare_network_distribution_map",
+        "evaluate_network_baseline",
+        "assess_facility_change",
+        "solve_p_median",
+        "compare_network_scenarios",
+    ):
+        assert tools[name].inputSchema["properties"]["normalized_input_ref"]["$ref"].endswith(
+            "/PreparedNetworkInputRef"
+        )
+    valid_ref = PreparedNetworkInputRef.model_validate(
+        {
+            "server": "supply_chain_data",
+            "uri": "supply-chain://resources/normalized-input",
+            "resource_schema": "normalized_network_input.v1",
+        }
+    )
+    assert valid_ref.server == "supply_chain_data"
+    with pytest.raises(ValidationError):
+        PreparedNetworkInputRef.model_validate(
+            valid_ref.model_dump() | {"server": "supply_chain"}
+        )
     assert "prior_route_matrix_ref" in plan["properties"]
     assert "Route method" in plan["properties"]["route_method"]["description"]
     assert "both detour_coefficient and average_speed_kph" in plan["properties"][

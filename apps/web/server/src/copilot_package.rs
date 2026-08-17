@@ -1531,6 +1531,10 @@ runtime = "tools/maps/runtime.toml"
 
         let data = data.parse::<DocumentMut>().expect("parse data role");
         let network = network.parse::<DocumentMut>().expect("parse network role");
+        assert!(
+            network["mcp_servers"].get("supply_chain_data").is_none(),
+            "Network Role must consume the Data Agent reference through its planning Tools, not configure the Data MCP server",
+        );
         let supply_python = _temp
             .path()
             .join("prepared 运行态/dependencies/supply python/bin/python");
@@ -1653,14 +1657,19 @@ runtime = "tools/maps/runtime.toml"
                 "safe Network Tool {tool} must be preapproved",
             );
         }
-        for tool in &supply_chain_tools[9..] {
-            assert!(
-                network["mcp_servers"]["supply_chain"]["tools"]
-                    .get(*tool)
-                    .is_none(),
-                "final Workspace Tool {tool} must inherit prompt",
-            );
-        }
+        assert!(
+            network["mcp_servers"]["supply_chain"]["tools"]
+                .get("render_network_comparison_map")
+                .is_none(),
+            "final map export must inherit prompt",
+        );
+        assert_eq!(
+            network["mcp_servers"]["supply_chain"]["tools"]["publish_network_planning_report"]
+                ["approval_mode"]
+                .as_str(),
+            Some("approve"),
+            "final report publishing must be preapproved",
+        );
         assert_eq!(
             network["mcp_servers"]["map_utils"]["command"].as_str(),
             Some(
@@ -1729,6 +1738,20 @@ runtime = "tools/maps/runtime.toml"
             .as_str()
             .expect("network instructions")
             .contains("Follow the warehouse-network Skill as the workflow authority"));
+        assert!(network["developer_instructions"]
+            .as_str()
+            .expect("network instructions")
+            .contains("server=supply_chain_data"));
+        for operation in [
+            "list_mcp_resources",
+            "list_mcp_resource_templates",
+            "read_mcp_resource",
+        ] {
+            assert!(network["developer_instructions"]
+                .as_str()
+                .expect("network instructions")
+                .contains(operation));
+        }
         let network_instructions = network["instructions"]
             .as_str()
             .expect("network Role instructions");

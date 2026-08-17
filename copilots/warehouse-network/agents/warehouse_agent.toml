@@ -85,6 +85,9 @@ approval_mode = "approve"
 [plugins.supply_chain.mcp_servers.supply_chain.tools.compare_network_scenarios]
 approval_mode = "approve"
 
+[plugins.supply_chain.mcp_servers.supply_chain.tools.publish_network_planning_report]
+approval_mode = "approve"
+
 [plugins.map_utils]
 enabled = true
 

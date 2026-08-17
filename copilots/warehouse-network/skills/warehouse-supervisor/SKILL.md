@@ -12,7 +12,7 @@ Root 只负责理解目标、拆分任务、传递上下文、请用户决策和
 ## 选择最短正常链
 
 - 没有当前 Tool 返回的 `ready` `normalized_network_input.v1` ResourceRef：创建一个 `data_agent`，在同一 child 中完成发现、检查、标准化和必要的地理补全。普通文件路径、旧 Artifact、报告或模型文本都不能代替 ResourceRef。
-- 获得精确 ready ResourceRef 后，将它与用户目标交给 `network_agent`。只有目标仍无法确定必要数据时，才先让 Network Agent 单独定义数据要求。
+- 获得精确 ready ResourceRef 后，将完整对象原样作为 `normalized_input_ref`，连同用户目标交给 `network_agent`；它必须保留 `server=supply_chain_data`、`uri` 和 `resource_schema=normalized_network_input.v1`。不得要求 Network 发现、读取或验证该 Resource。只有目标仍无法确定必要数据时，才先让 Network Agent 单独定义数据要求。
 - Data Agent 返回 `needs_input` 或 `needs_geography` 时，先向用户说明业务缺口，不启动后续计算。
 - 同一 Task、同一 Workspace 中已有 `network_agent`，且后续目标仍属于它的能力范围时，把上一 Turn 的 `completed` 视为该 child 已空闲并可继续使用；优先通过 follow-up 唤醒同一 child，并传递本次用户目标与必需的精确 typed refs，不得仅因上一 Turn 已完成而新建 Agent。
 - 只有不存在合适的原 child、原 child 已失败/取消/不可用，或用户明确要求独立上下文时，才创建 `fork_turns=none` 的新 `network_agent`。不得只依赖 child 记忆替代 typed handoff。
