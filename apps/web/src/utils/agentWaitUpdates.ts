@@ -41,11 +41,20 @@ export function latestAgentHistoryUpdates(
   return childAgents.map((agent) => {
     const latest = latestByThread.get(agent.thread_id);
     const waiting = agent.active_flags.some((flag) => flag.toLowerCase().includes("waiting"));
+    const reportedStatus = agent.status_type?.trim();
+    // `starting` is a provisional Thread projection. A later durable Item
+    // can already have reached its terminal state before that projection is
+    // replaced, so it must not hide the newest History status in the card.
+    const status = waiting
+      ? "waiting"
+      : reportedStatus?.toLowerCase() === "starting" && latest
+        ? latest.status
+        : reportedStatus || latest?.status || "pending";
     return {
       threadId: agent.thread_id,
       agentLabel: agentLabel(agent),
       text: latest?.title.trim() || "No recorded History item yet.",
-      status: waiting ? "waiting" : agent.status_type || latest?.status || "pending",
+      status,
     };
   });
 }

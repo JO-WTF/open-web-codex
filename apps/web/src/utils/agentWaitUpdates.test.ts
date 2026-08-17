@@ -94,4 +94,25 @@ describe("latestAgentHistoryUpdates", () => {
       status: "running",
     }]);
   });
+
+  it("uses the latest terminal History Item instead of a stale starting Agent projection", () => {
+    expect(latestAgentHistoryUpdates([
+      agent("network-thread", {
+        agent_nickname: "Euler",
+        status_type: "starting",
+      }),
+    ], [
+      activity(
+        "network-thread",
+        41,
+        "Completed evaluate_network_baseline",
+        "item-network-1",
+      ),
+    ])).toEqual([{
+      threadId: "network-thread",
+      agentLabel: "Euler",
+      text: "Completed evaluate_network_baseline",
+      status: "completed",
+    }]);
+  });
 });
