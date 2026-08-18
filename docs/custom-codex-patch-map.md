@@ -184,7 +184,7 @@ semantics on an OpenAI-compatible Chat Completions wire:
 - native client `tool_search` is flattened to the reserved `tool_search`
   function only for typed `wire_api = "chat"` Providers. Its call and result
   round-trip through Chat history, and the loaded schemas join only the next
-  request. The Runtime's existing deferred registry and Role allowlist remain
+  request. The Runtime's existing deferred registry and Role MCP server scope remain
   the sole source of discoverability and dispatch authority;
 - hosted `web_search` and `image_generation` remain hidden because a generic
   third-party endpoint cannot execute OpenAI-hosted tools;

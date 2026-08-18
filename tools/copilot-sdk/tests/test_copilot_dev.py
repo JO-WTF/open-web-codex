@@ -46,7 +46,7 @@ class CopilotDevProfileTests(unittest.TestCase):
             '[plugins.native]\nenabled = true\n'
             '[plugins.native.mcp_servers.native]\n'
             'enabled = true\nrequired = true\ndefault_tools_approval_mode = "approve"\n'
-            'enabled_tools = ["health"]\n',
+            'omit_tools_from = ["direct"]\n',
             encoding="utf-8",
         )
         (root / "tools" / "native" / ".codex-plugin" / "plugin.json").write_text(
@@ -114,7 +114,8 @@ class CopilotDevProfileTests(unittest.TestCase):
             with (profile / "agents/worker.toml").open("rb") as handle:
                 runtime_role = __import__("tomllib").load(handle)
             policy = runtime_role["plugins"]["native"]["mcp_servers"]["native"]
-            self.assertEqual(policy["enabled_tools"], ["health"])
+            self.assertEqual(policy["omit_tools_from"], ["direct"])
+            self.assertNotIn("enabled_tools", policy)
             self.assertTrue(policy["required"])
             self.assertEqual(policy["default_tools_approval_mode"], "approve")
             self.assertNotIn("mcp_servers", runtime_role)

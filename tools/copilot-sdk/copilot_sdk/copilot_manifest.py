@@ -22,8 +22,6 @@ ROLE_MCP_SERVER_POLICY_FIELDS = frozenset(
         "required",
         "omit_tools_from",
         "default_tools_approval_mode",
-        "enabled_tools",
-        "disabled_tools",
         "tools",
     }
 )
@@ -177,7 +175,7 @@ def validate_copilot_package(
         del skill_root
         author_files[skill_file_relative.as_posix()] = skill_file
 
-    agent_tool_policies: dict[str, dict[str, dict[str, set[str] | None]]] = {}
+    agent_tool_policies: dict[str, dict[str, dict[str, None]]] = {}
     for index, entry in enumerate(agents):
         relative = _authored_relative_path(entry["role"], f"agents[{index}].role")
         role_file = _safe_package_path(root, relative, kind="file")
@@ -881,10 +879,10 @@ def _validate_role_references(
 
 def _role_tool_policies(
     role: dict[str, Any], relative_path: str, tool_ids: tuple[str, ...]
-) -> dict[str, dict[str, set[str] | None]]:
+) -> dict[str, dict[str, None]]:
     """Return native selected-Plugin MCP policy by declared capability-root ID."""
 
-    policies: dict[str, dict[str, set[str] | None]] = {}
+    policies: dict[str, dict[str, None]] = {}
     plugins = role.get("plugins")
     if plugins is None:
         return policies
@@ -903,7 +901,7 @@ def _role_tool_policies(
         servers = plugin.get("mcp_servers")
         if not isinstance(servers, dict):
             _fail("required_field", f"{location}.mcp_servers", "required table is missing")
-        server_policies: dict[str, set[str] | None] = {}
+        server_policies: dict[str, None] = {}
         for server_id, server in servers.items():
             server_location = f"{location}.mcp_servers.{server_id}"
             if not isinstance(server_id, str) or not server_id:
@@ -924,34 +922,13 @@ def _role_tool_policies(
                         f"{server_location}.{boolean_field}",
                         "must be a boolean",
                     )
-            enabled = server.get("enabled_tools")
-            if enabled is not None and (
-                not isinstance(enabled, list)
-                or not enabled
-                or any(not isinstance(item, str) or not item for item in enabled)
-            ):
-                _fail(
-                    "invalid_type",
-                    f"{server_location}.enabled_tools",
-                    "must be a non-empty string array",
-                )
             omitted = server.get("omit_tools_from")
-            if omitted is not None and (
-                not isinstance(omitted, list)
-                or not omitted
-                or len(omitted) > 3
-                or any(
-                    not isinstance(surface, str)
-                    or surface not in {"direct", "deferred", "code_mode"}
-                    for surface in omitted
-                )
-                or len(set(omitted)) != len(omitted)
-            ):
+            if omitted != ["direct"]:
                 _fail(
                     "invalid_type",
                     f"{server_location}.omit_tools_from",
-                    "must be a one-to-three item unique array of direct, deferred, or code_mode",
+                    "must be exactly [\"direct\"] so Runtime exposes Tools through deferred discovery",
                 )
-            server_policies[server_id] = set(enabled) if enabled is not None else None
+            server_policies[server_id] = None
         policies[plugin_id] = server_policies
     return policies

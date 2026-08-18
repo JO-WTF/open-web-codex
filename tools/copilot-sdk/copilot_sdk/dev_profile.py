@@ -549,9 +549,8 @@ def _materialize_role(
             allowed_policy = {
                 "enabled",
                 "required",
+                "omit_tools_from",
                 "default_tools_approval_mode",
-                "enabled_tools",
-                "disabled_tools",
                 "tools",
             }
             for key, value in policy.items():

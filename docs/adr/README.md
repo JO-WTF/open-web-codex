@@ -29,6 +29,7 @@ ADR 记录已经接受、会长期约束实现且不能仅从当前代码推断�
 | [ADR-018](018-built-in-network-copilot-runtime-closure.md) | Codex 原生机制驱动的内置仓网 Copilot；当前阶段基线 |
 | [ADR-019](019-task-selected-copilot-packages-and-shared-tools.md) | Task 显式选择独立 Copilot 包，Tool 使用根级共享注册表；局部替代 ADR-018 的单包/default 假设 |
 | [ADR-020](020-platform-native-html-inline-visualizations.md) | Platform 快照授权 Workspace HTML 为原生 Thread inline visualization |
+| [ADR-021](021-deferred-platform-tool-discovery.md) | Role 以 MCP server 为权限边界，Tool 通过 Runtime deferred discovery 向 Copilot 开放 |
 
 ## 何时创建 ADR
 

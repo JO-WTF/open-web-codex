@@ -26,12 +26,5 @@ enabled = true
 [plugins.supply_chain.mcp_servers.supply_chain_data]
 enabled = true
 required = true
+omit_tools_from = ["direct"]
 default_tools_approval_mode = "approve"
-enabled_tools = [
-  "discover_workspace_sources",
-  "inspect_workspace_sources",
-  "normalize_network_input",
-  "normalize_candidate_delta",
-  "derive_normalized_network_input",
-  "prepare_network_geography",
-]

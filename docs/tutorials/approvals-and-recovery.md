@@ -38,7 +38,7 @@
 | 非幂等写入 | 不得因失败自动重复，除非合同和幂等键明确保证 |
 
 预批准不是全局 `never ask`。它只适用于一个经过审查且完整 Tool 集均为低风险的 MCP
-Server，并继续受 Agent Tool allowlist、capability root、数据根和平台授权约束。
+Server，并继续受 Role MCP server scope、capability root、数据根和平台授权约束。
 
 混合风险 Server 不能因为其中几个 Tool 是只读，就把整个 Server 默认批准。
 

@@ -37,20 +37,6 @@ enabled = true
 required = true
 omit_tools_from = ["direct"]
 default_tools_approval_mode = "prompt"
-enabled_tools = [
-  "prepare_route_matrix",
-  "register_navigation_route_matrix",
-  "plan_cost_matrix",
-  "prepare_network_distribution_map",
-  "prepare_network_comparison_map",
-  "prepare_network_coverage_map",
-  "evaluate_network_baseline",
-  "assess_facility_change",
-  "solve_p_median",
-  "compare_network_scenarios",
-  "render_network_comparison_map",
-  "publish_network_planning_report",
-]
 
 [plugins.supply_chain.mcp_servers.supply_chain.tools.prepare_route_matrix]
 approval_mode = "approve"
@@ -91,13 +77,8 @@ enabled = true
 [plugins.map_utils.mcp_servers.map_utils]
 enabled = true
 required = true
+omit_tools_from = ["direct"]
 default_tools_approval_mode = "prompt"
-enabled_tools = [
-  "get_route",
-  "distance_matrix",
-  "create_map_card",
-  "revise_map_card",
-]
 
 [plugins.map_utils.mcp_servers.map_utils.tools.create_map_card]
 approval_mode = "approve"

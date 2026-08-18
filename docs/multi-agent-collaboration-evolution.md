@@ -474,7 +474,7 @@ Spine 会先建立 C4 的最小创作/安装基础，再验证 C2/C3；Studio �
 | --- | --- |
 | Supervisor 有稳定行为策略 | 代码发布 Policy、不可变快照、Run/根 Thread 绑定 |
 | 子 Agent 是真实 Runtime Agent | 精确 Runtime Role 通过 Codex 原生多 Agent 工具创建子 Thread |
-| 专业角色边界明确 | Data 与 Network Agent 有独立 Definition、中文指令和 Tool allowlist |
+| 专业角色边界明确 | Data 与 Network Agent 有独立 Definition、中文指令和 MCP server scope；Tool 通过 deferred discovery 加载 |
 | Agent 过程可观察 | Runtime Thread、Turn、Item 和协作事件形成安全投影 |
 | Agent execution 有真实终态 | 最新最小仓网 E2E 中 4 个 execution 全部 completed |
 | Root 官方输入可用 | 最新最小 E2E 中 2 个输入已持久化并回答，无 pending |

@@ -274,7 +274,8 @@ Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。
    Release/Installation、registry、版本状态机或哈希信任链。Supervisor 是 Root Skill，不新增
    独立发布对象。
 2. 使用 Codex 原生 `$CODEX_HOME/skills` 与 `$CODEX_HOME/agents/*.toml`。Role TOML 源码只
-   持有 Plugin/server policy 与 `enabled_tools`；SDK prepared descriptor 提供 transport，Server
+   持有 Plugin/server policy；选中的 server 内 Tool 一律通过 deferred `tool_search` 发现，不维护
+   `enabled_tools` 名称白名单。SDK prepared descriptor 提供 transport，Server
    在当前 Profile 下解析 typed binding 后合成 Role-local MCP。不改 Profile `config.toml`、全局 role allowlist
    或 Codex built-in roles。Profile Host 的普通 startup file 只为 clean Profile seed 默认文件
    并保留已存在内容；仓网三项内置 Skill 与两项内置 Role 是显式 managed 保留 ID，部署升级
@@ -282,7 +283,7 @@ Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。
    校验的 prepared descriptor；Runtime 不扫描 process cwd、Workspace 或源码树。缺少 runtime
    声明、lock、prepared transport 或 host adapter 时明确 unavailable。
 3. Root 只暴露原生多 Agent 面，不配置全局仓网 MCP；Data/Network Role 通过原生 Role
-   config 启用各自 Skill、MCP server、`enabled_tools` 和精确 Tool approval policy。Data4 全部
+   config 启用各自 Skill、MCP server、deferred Tool discovery 和精确 Tool approval policy。Data4 全部
    有界本地预批准；Network 预批准本地路线/成本/验证/分析/选址/比较与 `publish_network_planning_report`，`map_utils` 只预批准
    `create_map_card` 与 `revise_map_card`；外部地图请求和 final Workspace 地图导出保持 `prompt`，不把全局
    `approvalPolicy` 降为 `never`。prepared transport 不固定 MCP cwd；Runtime 使用 Thread
@@ -471,7 +472,7 @@ progress、approval 与 terminal outcome 可区分，且没有第二 Thread/hist
 
 #### Active surface 切换硬门
 
-Data/Network 新 Resource 工具进入 Role allowlist、真实调用或 E2E 之前，必须删除 generic
+Data/Network 新 Resource 工具进入已授权 MCP server、真实调用或 E2E 之前，必须删除 generic
 `ResourceLink→Artifact` 注册、任意 renderer 注册、跨 child Resource 搜索和 Artifact 输入回流，
 否则每个中间 profile、mapping、matrix、scenario Resource 都会被 Platform 二次物化为 Artifact，
 形成第二数据面。当前对话内额外展示只接受 active Copilot `[[deliveries]]` 声明的 exact producer

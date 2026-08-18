@@ -17,5 +17,5 @@ enabled = true
 
 [plugins.meeting_review.mcp_servers.meeting_action_review]
 enabled = true
+omit_tools_from = ["direct"]
 default_tools_approval_mode = "approve"
-enabled_tools = ["review_action_items", "review_meeting_notes", "publish_action_review"]

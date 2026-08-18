@@ -16,5 +16,5 @@ enabled = true
 enabled = true
 
 [plugins.__TOOL_ID__.mcp_servers.__TOOL_ID__]
+omit_tools_from = ["direct"]
 default_tools_approval_mode = "approve"
-enabled_tools = ["health"]

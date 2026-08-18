@@ -33,8 +33,7 @@ class CopilotManifestTests(unittest.TestCase):
             "[plugins.routes]\nenabled = true\n"
             "[plugins.routes.mcp_servers.routing_api]\n"
             "required = true\n"
-            "omit_tools_from = [\"direct\"]\n"
-            "enabled_tools = [\"health\"]\n",
+            "omit_tools_from = [\"direct\"]\n",
             encoding="utf-8",
         )
         (self.root / "tools/routes/pyproject.toml").write_text(
@@ -205,9 +204,9 @@ display_name = "Map"
         self.add_test(server="other_api")
         self.assert_code("missing_reference")
 
-    def test_test_tool_name_must_be_in_server_allowlist(self) -> None:
+    def test_test_tool_name_is_not_limited_by_role_name_allowlist(self) -> None:
         self.add_test(tool_name="delete_all")
-        self.assert_code("missing_reference")
+        validate_copilot_package(self.root)
 
     def test_test_server_must_exist_in_capability_root_descriptor(self) -> None:
         self.add_test()
@@ -356,6 +355,22 @@ display_name = "Map"
         self.assertEqual(
             caught.exception.relative_path,
             "agents/planner.toml.plugins.routes.mcp_servers.routing_api.omit_tools_from",
+        )
+
+    def test_rejects_role_tool_name_allowlist(self) -> None:
+        role = self.root / "agents" / "planner.toml"
+        role.write_text(
+            role.read_text(encoding="utf-8") + 'enabled_tools = ["health"]\n',
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(CopilotPackageError) as caught:
+            validate_copilot_package(self.root)
+
+        self.assertEqual(caught.exception.code, "invalid_field")
+        self.assertEqual(
+            caught.exception.relative_path,
+            "agents/planner.toml.plugins.routes.mcp_servers.routing_api.enabled_tools",
         )
 
     def test_rejects_missing_runtime_descriptor(self) -> None:

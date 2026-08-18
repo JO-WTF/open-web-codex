@@ -217,7 +217,7 @@ SHA 只用于字节完整性、ETag 或 provider 物理去重，不能替代授�
 - 根 Thread 与授权 Agent 树中的子 Thread 使用同一任务级审批投影；浏览器只接收平台
   审批 ID、安全动作摘要和 Agent 展示身份，不接收 Runtime request ID；
 - 只有全部 Tool 都是只读、有界或确定性计算的已评审 MCP Server，才可在 Plugin
-  合同中声明默认预批准，并仍受 Thread capability root 与 Agent Tool allowlist 限制；
+  合同中声明默认预批准，并仍受 Thread capability root、Role MCP server scope 与逐 Tool 审批策略限制；
   混合风险 Server、凭据、外部副作用、权限扩大和非幂等写入不得使用该默认值；
 - 并发决策只有一个成功；
 - 持久或 session 级“以后允许”只能响应同一未决 official approval 返回的
@@ -284,7 +284,7 @@ GeoJSON 字节。
 | --- | --- |
 | Supervisor 使用不存在或漂移的 Role | Role、Skill、MCP 和 Tool 必须来自当前 Profile 的 Runtime discovery；不能由数据库状态或路径扫描冒充 ready |
 | 浏览器扩大 Agent 权限 | 浏览器不能提交 Runtime Role、MCP、Tool 或 capability root；Workspace 相对路径仍需服务端边界检查 |
-| 子 Agent 继承全部权限 | 使用 Runtime Role 的精确 Tool/MCP 暴露和相同 Workspace 授权，不增加 Platform 资源裁剪协议 |
+| 子 Agent 继承全部权限 | Role 只启用精确 Capability Root/MCP server，与 Root 使用同一 Workspace 授权；server 内 Tool 由 Runtime deferred discovery 暴露，不增加 Platform 资源裁剪协议 |
 | 模型伪造 Task 或角色 | 身份由系统绑定，不接受模型提交的组织/Profile/Runtime Role |
 | Agent/Task 之间复制敏感数据 | child 协作使用 Runtime 消息；跨 Task 仅显式选择相同授权 Workspace 文件或带 exact Item provenance 的授权 MCP Resource ref；Artifact 不作输入 |
 | 不同 Agent 结论冲突 | Supervisor 负责补充调查和最终综合，保留各自产物与依据 |

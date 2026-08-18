@@ -13,13 +13,11 @@ use crate::delivery_contracts::{
     ContentVerifier, DeliveryContract, DeliveryKind, DeliveryRegistry,
 };
 
-const ROLE_MCP_SERVER_POLICY_KEYS: [&str; 7] = [
+const ROLE_MCP_SERVER_POLICY_KEYS: [&str; 5] = [
     "enabled",
     "required",
     "omit_tools_from",
     "default_tools_approval_mode",
-    "enabled_tools",
-    "disabled_tools",
     "tools",
 ];
 const ALLOWED_HOST_ENVIRONMENT_NAMES: [&str; 8] = [
@@ -1416,32 +1414,21 @@ fn validate_omitted_tool_surfaces(
             ),
         )
     })?;
-    if values.is_empty() || values.len() > 3 {
+    if values.len() != 1 {
         return Err(invalid_role(
             role_name,
             format!(
-                "plugins.{capability_root_id}.mcp_servers.{server_name}.omit_tools_from must contain one to three surfaces"
+                "plugins.{capability_root_id}.mcp_servers.{server_name}.omit_tools_from must be [\"direct\"]"
             ),
         ));
     }
-    let mut seen = BTreeSet::new();
-    for value in values {
-        let surface = value.as_str().ok_or_else(|| {
-            invalid_role(
-                role_name,
-                format!(
-                    "plugins.{capability_root_id}.mcp_servers.{server_name}.omit_tools_from values must be strings"
-                ),
-            )
-        })?;
-        if !matches!(surface, "direct" | "deferred" | "code_mode") || !seen.insert(surface) {
-            return Err(invalid_role(
-                role_name,
-                format!(
-                    "plugins.{capability_root_id}.mcp_servers.{server_name}.omit_tools_from contains an invalid or duplicate surface"
-                ),
-            ));
-        }
+    if values.iter().next().and_then(|value| value.as_str()) != Some("direct") {
+        return Err(invalid_role(
+            role_name,
+            format!(
+                "plugins.{capability_root_id}.mcp_servers.{server_name}.omit_tools_from must be [\"direct\"]"
+            ),
+        ));
     }
     Ok(())
 }
@@ -1845,21 +1832,17 @@ runtime = "tools/maps/runtime.toml"
             Some("approve")
         );
         assert_eq!(
-            data["mcp_servers"]["supply_chain_data"]["enabled_tools"]
+            data["mcp_servers"]["supply_chain_data"]["omit_tools_from"]
                 .as_array()
-                .expect("data tools")
+                .expect("deferred data-tool exposure")
                 .iter()
                 .filter_map(|item| item.as_str())
                 .collect::<Vec<_>>(),
-            vec![
-                "discover_workspace_sources",
-                "inspect_workspace_sources",
-                "normalize_network_input",
-                "normalize_candidate_delta",
-                "derive_normalized_network_input",
-                "prepare_network_geography",
-            ]
+            vec!["direct"]
         );
+        assert!(data["mcp_servers"]["supply_chain_data"]
+            .get("enabled_tools")
+            .is_none());
         assert_eq!(
             data["mcp_servers"]["supply_chain_data"]["env"]["CODEX_HOME"].as_str(),
             profile.to_str()
@@ -1898,36 +1881,27 @@ runtime = "tools/maps/runtime.toml"
                 .collect::<Vec<_>>(),
             vec!["-m", "prepared.network"]
         );
-        let supply_chain_tools = network["mcp_servers"]["supply_chain"]["enabled_tools"]
-            .as_array()
-            .expect("supply chain tools")
-            .iter()
-            .filter_map(|item| item.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            supply_chain_tools,
-            vec![
-                "prepare_route_matrix",
-                "register_navigation_route_matrix",
-                "plan_cost_matrix",
-                "prepare_network_distribution_map",
-                "prepare_network_comparison_map",
-                "prepare_network_coverage_map",
-                "evaluate_network_baseline",
-                "assess_facility_change",
-                "solve_p_median",
-                "compare_network_scenarios",
-                "render_network_comparison_map",
-                "publish_network_planning_report",
-            ]
-        );
+        assert!(network["mcp_servers"]["supply_chain"]
+            .get("enabled_tools")
+            .is_none());
         assert_eq!(
             network["mcp_servers"]["supply_chain"]["default_tools_approval_mode"].as_str(),
             Some("prompt")
         );
-        for tool in &supply_chain_tools[..10] {
+        for tool in [
+            "prepare_route_matrix",
+            "register_navigation_route_matrix",
+            "plan_cost_matrix",
+            "prepare_network_distribution_map",
+            "prepare_network_comparison_map",
+            "prepare_network_coverage_map",
+            "evaluate_network_baseline",
+            "assess_facility_change",
+            "solve_p_median",
+            "compare_network_scenarios",
+        ] {
             assert_eq!(
-                network["mcp_servers"]["supply_chain"]["tools"][*tool]["approval_mode"].as_str(),
+                network["mcp_servers"]["supply_chain"]["tools"][tool]["approval_mode"].as_str(),
                 Some("approve"),
                 "safe Network Tool {tool} must be preapproved",
             );
@@ -1987,21 +1961,18 @@ runtime = "tools/maps/runtime.toml"
             Some(true),
             "the Network Role's map capability must be ready before its tool catalog is exposed",
         );
-        let map_tools = network["mcp_servers"]["map_utils"]["enabled_tools"]
-            .as_array()
-            .expect("map tools")
-            .iter()
-            .filter_map(|item| item.as_str())
-            .collect::<Vec<_>>();
         assert_eq!(
-            map_tools,
-            vec![
-                "get_route",
-                "distance_matrix",
-                "create_map_card",
-                "revise_map_card",
-            ]
+            network["mcp_servers"]["map_utils"]["omit_tools_from"]
+                .as_array()
+                .expect("deferred map-tool exposure")
+                .iter()
+                .filter_map(|item| item.as_str())
+                .collect::<Vec<_>>(),
+            vec!["direct"]
         );
+        assert!(network["mcp_servers"]["map_utils"]
+            .get("enabled_tools")
+            .is_none());
         assert_eq!(
             network["mcp_servers"]["map_utils"]["default_tools_approval_mode"].as_str(),
             Some("prompt")
@@ -2122,6 +2093,19 @@ runtime = "tools/maps/runtime.toml"
             error,
             CopilotPackageError::InvalidRoleTemplate { message, .. }
                 if message.contains("plugins.supply_chain.mcp_servers.supply_chain_data.required must be a boolean")
+        ));
+
+        let mut role = parse_role_template("data", DATA_ROLE).expect("parse data Role");
+        let mut tool_names = Array::new();
+        tool_names.push("discover_workspace_sources");
+        role["plugins"]["supply_chain"]["mcp_servers"]["supply_chain_data"]["enabled_tools"] =
+            value(tool_names);
+        let error = project_role_mcp_servers(&mut role, "data", &assets.capability_roots, &profile)
+            .expect_err("Role tool-name allowlists must be rejected");
+        assert!(matches!(
+            error,
+            CopilotPackageError::InvalidRoleTemplate { message, .. }
+                if message.contains("plugins.supply_chain.mcp_servers.supply_chain_data.enabled_tools")
         ));
     }
 
