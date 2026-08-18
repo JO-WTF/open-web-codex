@@ -41,8 +41,25 @@ export type Task = {
   status: string;
   model_provider: string | null;
   model: string | null;
+  copilot_package_id: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type AvailableCopilotPackage = {
+  packageId: string;
+  available: boolean;
+  displayName?: string;
+};
+
+export type CopilotProfileStatus = {
+  packages: AvailableCopilotPackage[];
+  installations: Array<{
+    packageId: string;
+    active: boolean;
+    state: string;
+    restartRequired: boolean;
+  }>;
 };
 
 export type ExplicitResourceSelection = {

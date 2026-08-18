@@ -1,0 +1,109 @@
+name = "warehouse_single_agent"
+description = "Prepare warehouse data and perform end-to-end warehouse-network planning in one Root Agent."
+instructions = """
+You are one warehouse-network business Agent, not a software-development Agent. Complete data preparation and network analysis yourself in this Thread. Use only the enabled warehouse Skill and typed MCP Tools. Do not create or communicate with child Agents. Return concise business conclusions and explicit needs_context, needs_data, or failure outcomes. Never invent data, permission, cost assumptions, or delivery success.
+"""
+include_permissions_instructions = false
+include_apps_instructions = false
+include_collaboration_mode_instructions = false
+developer_instructions = """
+You are the Root execution Role `warehouse_single_agent`. Never act as a multi-Agent Supervisor and never spawn or communicate with another Agent. Follow the warehouse-single-agent Skill from source inspection through a ready normalized_network_input.v1 ResourceRef, then consume that exact ref for route, coverage, scenario, optimization, map, and report work. Use Workspace-relative paths only for user files and Tool-owned handoffs. Do not use shell, Git, jq, ad-hoc Python, Resource listings, old Artifacts, reports, or model text to reconstruct business data. Do not infer the business Workspace from the MCP process working directory or construct Resource URIs. Ask only for genuinely missing business choices or external-call permission; do not repeat choices already supplied by the user or this Thread.
+"""
+nickname_candidates = ["Atlas"]
+
+[features]
+multi_agent = false
+
+[skills.bundled]
+enabled = false
+
+[[skills.config]]
+name = "warehouse-single-agent"
+enabled = true
+
+[plugins.supply_chain]
+enabled = true
+
+[plugins.supply_chain.mcp_servers.supply_chain_data]
+enabled = true
+required = true
+default_tools_approval_mode = "approve"
+enabled_tools = [
+  "discover_workspace_sources",
+  "inspect_workspace_sources",
+  "normalize_network_input",
+  "normalize_candidate_delta",
+  "derive_normalized_network_input",
+  "prepare_network_geography",
+]
+
+[plugins.supply_chain.mcp_servers.supply_chain]
+enabled = true
+required = true
+default_tools_approval_mode = "prompt"
+enabled_tools = [
+  "prepare_route_matrix",
+  "register_navigation_route_matrix",
+  "plan_cost_matrix",
+  "prepare_network_distribution_map",
+  "prepare_network_comparison_map",
+  "prepare_network_coverage_map",
+  "evaluate_network_baseline",
+  "assess_facility_change",
+  "solve_p_median",
+  "compare_network_scenarios",
+  "render_network_comparison_map",
+  "publish_network_planning_report",
+]
+
+[plugins.supply_chain.mcp_servers.supply_chain.tools.prepare_route_matrix]
+approval_mode = "approve"
+
+[plugins.supply_chain.mcp_servers.supply_chain.tools.register_navigation_route_matrix]
+approval_mode = "approve"
+
+[plugins.supply_chain.mcp_servers.supply_chain.tools.plan_cost_matrix]
+approval_mode = "approve"
+
+[plugins.supply_chain.mcp_servers.supply_chain.tools.prepare_network_distribution_map]
+approval_mode = "approve"
+
+[plugins.supply_chain.mcp_servers.supply_chain.tools.prepare_network_comparison_map]
+approval_mode = "approve"
+
+[plugins.supply_chain.mcp_servers.supply_chain.tools.prepare_network_coverage_map]
+approval_mode = "approve"
+
+[plugins.supply_chain.mcp_servers.supply_chain.tools.evaluate_network_baseline]
+approval_mode = "approve"
+
+[plugins.supply_chain.mcp_servers.supply_chain.tools.assess_facility_change]
+approval_mode = "approve"
+
+[plugins.supply_chain.mcp_servers.supply_chain.tools.solve_p_median]
+approval_mode = "approve"
+
+[plugins.supply_chain.mcp_servers.supply_chain.tools.compare_network_scenarios]
+approval_mode = "approve"
+
+[plugins.supply_chain.mcp_servers.supply_chain.tools.publish_network_planning_report]
+approval_mode = "approve"
+
+[plugins.map_utils]
+enabled = true
+
+[plugins.map_utils.mcp_servers.map_utils]
+enabled = true
+default_tools_approval_mode = "prompt"
+enabled_tools = [
+  "get_route",
+  "distance_matrix",
+  "create_map_card",
+  "revise_map_card",
+]
+
+[plugins.map_utils.mcp_servers.map_utils.tools.create_map_card]
+approval_mode = "approve"
+
+[plugins.map_utils.mcp_servers.map_utils.tools.revise_map_card]
+approval_mode = "approve"

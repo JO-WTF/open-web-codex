@@ -402,7 +402,7 @@ impl RunOrchestrator {
         let mut transaction = self.db.begin().await?;
         let candidate = sqlx::query(
             "SELECT run.id, run.organization_id, run.requested_by, profile.id AS profile_id, \
-                    run.workspace_id, \
+                    run.workspace_id, task.copilot_package_id, \
                     run.fork_thread_id, run.fork_source_run_id, workspace.root_path \
              FROM runs run \
              JOIN tasks task ON task.id = run.task_id \
@@ -454,6 +454,7 @@ impl RunOrchestrator {
             profile_id: candidate.get("profile_id"),
             workspace_id: candidate.get("workspace_id"),
             workspace_root: candidate.get::<String, _>("root_path").into(),
+            copilot_package_id: candidate.get("copilot_package_id"),
             fork_thread_id: candidate.get("fork_thread_id"),
             fork_source_run_id: candidate.get("fork_source_run_id"),
             token,

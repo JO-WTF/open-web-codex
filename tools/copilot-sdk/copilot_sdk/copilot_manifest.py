@@ -85,7 +85,9 @@ class CopilotTestCase:
 
 
 def validate_copilot_package(
-    source_root: Path, manifest_path: Path | None = None
+    source_root: Path,
+    manifest_path: Path | None = None,
+    tool_registry_root: Path | None = None,
 ) -> CopilotPackageSummary:
     """Validate and summarize a composed Copilot package."""
 
@@ -112,23 +114,44 @@ def validate_copilot_package(
     display_name = _required_string(manifest, "display_name", "copilot.toml")
     skills = _component_entries(manifest, "skills", "path")
     agents = _component_entries(manifest, "agents", "role")
-    tools = _tool_entries(manifest)
+    tools = _tool_entries(
+        manifest,
+        source_root=root,
+        tool_registry_root=tool_registry_root,
+    )
 
     skill_ids = tuple(entry["id"] for entry in skills)
     agent_ids = tuple(entry["id"] for entry in agents)
     tool_ids = tuple(entry["id"] for entry in tools)
     tests = _test_entries(manifest, agent_ids=agent_ids, tool_ids=tool_ids)
 
-    supervisor = _required(manifest, "supervisor", "copilot.toml")
-    if not isinstance(supervisor, dict):
-        _fail("invalid_type", "supervisor", "must be a table")
-    supervisor_skill = _required_string(supervisor, "skill", "supervisor")
-    if supervisor_skill not in skill_ids:
+    root_config = _required(manifest, "root", "copilot.toml")
+    if not isinstance(root_config, dict):
+        _fail("invalid_type", "root", "must be a table")
+    unknown_root = sorted(set(root_config) - {"skill", "agent"})
+    if unknown_root:
+        _fail(
+            "invalid_field",
+            f"root.{unknown_root[0]}",
+            "field is not part of schema v1",
+        )
+    root_skill = _required_string(root_config, "skill", "root")
+    if root_skill not in skill_ids:
         _fail(
             "missing_reference",
-            "supervisor.skill",
-            f"references undeclared skill {supervisor_skill!r}",
+            "root.skill",
+            f"references undeclared skill {root_skill!r}",
         )
+    root_agent = root_config.get("agent")
+    if root_agent is not None:
+        if not isinstance(root_agent, str) or not root_agent.strip():
+            _fail("invalid_type", "root.agent", "must be a non-empty string")
+        if root_agent not in agent_ids:
+            _fail(
+                "missing_reference",
+                "root.agent",
+                f"references undeclared agent {root_agent!r}",
+            )
 
     author_files: dict[str, Path] = {
         manifest_relative.as_posix(): manifest_file,
@@ -195,15 +218,18 @@ def validate_copilot_package(
             )
 
     tool_server_ids: dict[str, set[str]] = {}
+    tool_sources: dict[str, dict[str, Any]] = {}
     server_owners: dict[str, str] = {}
     for index, entry in enumerate(tools):
+        owner_root = entry["owner_root"]
+        tool_sources[entry["id"]] = entry
         relative = _authored_relative_path(entry["root"], f"tools[{index}].root")
-        tool_root = _safe_package_path(root, relative, kind="directory")
+        tool_root = _safe_package_path(owner_root, relative, kind="directory")
         runtime_relative = _authored_relative_path(
             entry["runtime"], f"tools[{index}].runtime"
         )
         try:
-            runtime = load_tool_runtime_manifest(root, tool_root, runtime_relative)
+            runtime = load_tool_runtime_manifest(owner_root, tool_root, runtime_relative)
         except ToolRuntimeManifestError as error:
             _fail(error.code, error.relative_path, error.message)
         tool_server_ids[entry["id"]] = {server.id for server in runtime.servers}
@@ -217,11 +243,15 @@ def validate_copilot_package(
                     f"{previous!r} and {entry['id']!r}",
                 )
             server_owners[server_id] = entry["id"]
-        author_files[runtime_relative.as_posix()] = runtime.path
+        author_prefix = entry["author_prefix"]
+        author_files[f"{author_prefix}{runtime_relative.as_posix()}"] = runtime.path
+        owner_manifest = entry.get("owner_manifest")
+        if owner_manifest is not None:
+            author_files[f"{author_prefix}tool.toml"] = owner_manifest
         for dependency in runtime.dependencies:
             for dependency_file in (dependency.manifest, dependency.lock):
-                dependency_relative = dependency_file.relative_to(root).as_posix()
-                author_files[dependency_relative] = dependency_file
+                dependency_relative = dependency_file.relative_to(owner_root).as_posix()
+                author_files[f"{author_prefix}{dependency_relative}"] = dependency_file
 
     for index, test in enumerate(tests):
         if test.server not in tool_server_ids[test.tool]:
@@ -231,7 +261,13 @@ def validate_copilot_package(
                 f"capability root {test.tool!r} does not declare MCP server {test.server!r}",
             )
 
-    deliveries = _delivery_entries(manifest, root, server_owners, author_files)
+    deliveries = _delivery_entries(
+        manifest,
+        root,
+        server_owners,
+        author_files,
+        tool_sources,
+    )
 
     digest = hashlib.sha256()
     for relative_path in sorted(author_files):
@@ -255,11 +291,17 @@ def validate_copilot_package(
 
 
 def load_copilot_test_cases(
-    source_root: Path, manifest_path: Path = Path("copilot.toml")
+    source_root: Path,
+    manifest_path: Path = Path("copilot.toml"),
+    tool_registry_root: Path | None = None,
 ) -> tuple[CopilotTestCase, ...]:
     """Load tests only after the complete package passes static validation."""
 
-    summary = validate_copilot_package(source_root, manifest_path)
+    summary = validate_copilot_package(
+        source_root,
+        manifest_path,
+        tool_registry_root=tool_registry_root,
+    )
     root = Path(source_root).resolve(strict=True)
     manifest_relative = _manifest_relative_path(root, manifest_path)
     manifest = _load_toml(root / manifest_relative, manifest_relative.as_posix())
@@ -372,31 +414,131 @@ def _component_entries(
     return entries
 
 
-def _tool_entries(manifest: dict[str, Any]) -> list[dict[str, str]]:
+def _tool_entries(
+    manifest: dict[str, Any],
+    *,
+    source_root: Path,
+    tool_registry_root: Path | None,
+) -> list[dict[str, Any]]:
     raw_entries = _required(manifest, "tools", "copilot.toml")
     if not isinstance(raw_entries, list):
         _fail("invalid_type", "tools", "must be an array of tables")
-    entries: list[dict[str, str]] = []
+    entries: list[dict[str, Any]] = []
     seen: set[str] = set()
     for index, raw_entry in enumerate(raw_entries):
         location = f"tools[{index}]"
         if not isinstance(raw_entry, dict):
             _fail("invalid_type", location, "must be a table")
-        unknown = sorted(set(raw_entry) - {"id", "root", "runtime"})
+        local_fields = {"id", "root", "runtime"}
+        shared_fields = {"id", "package"}
+        fields = set(raw_entry)
+        if fields <= local_fields:
+            expected_fields = local_fields
+            shared = False
+        elif fields <= shared_fields:
+            expected_fields = shared_fields
+            shared = True
+        else:
+            expected_fields = local_fields | shared_fields
+            shared = "package" in fields
+        unknown = sorted(fields - expected_fields)
         if unknown:
             _fail("invalid_field", f"{location}.{unknown[0]}", "field is not part of schema v1")
         entry_id = _required_string(raw_entry, "id", location)
         if entry_id in seen:
             _fail("duplicate_id", f"{location}.id", f"duplicate id {entry_id!r}")
         seen.add(entry_id)
-        entries.append(
-            {
-                "id": entry_id,
-                "root": _required_string(raw_entry, "root", location),
-                "runtime": _required_string(raw_entry, "runtime", location),
-            }
-        )
+        if shared:
+            if fields != shared_fields:
+                _fail(
+                    "invalid_field",
+                    location,
+                    "shared Tool references require exactly id and package",
+                )
+            package = _required_string(raw_entry, "package", location)
+            resolved = _resolve_registered_tool(
+                tool_registry_root,
+                package,
+                location,
+            )
+            entries.append(
+                {
+                    "id": entry_id,
+                    "root": resolved[1],
+                    "runtime": resolved[2],
+                    "owner_root": resolved[0],
+                    "owner_manifest": resolved[3],
+                    "author_prefix": f"tools/{package}/",
+                }
+            )
+        else:
+            if fields != local_fields:
+                _fail(
+                    "invalid_field",
+                    location,
+                    "local Tool declarations require exactly id, root, and runtime",
+                )
+            entries.append(
+                {
+                    "id": entry_id,
+                    "root": _required_string(raw_entry, "root", location),
+                    "runtime": _required_string(raw_entry, "runtime", location),
+                    "owner_root": source_root,
+                    "owner_manifest": None,
+                    "author_prefix": "",
+                }
+            )
     return entries
+
+
+def _resolve_registered_tool(
+    tool_registry_root: Path | None,
+    package_id: str,
+    location: str,
+) -> tuple[Path, str, str, Path]:
+    if tool_registry_root is None:
+        _fail(
+            "missing_reference",
+            f"{location}.package",
+            "shared Tool references require an explicit Tool registry root",
+        )
+    registry = Path(tool_registry_root)
+    if not registry.exists() or registry.is_symlink() or not registry.is_dir():
+        _fail("source_root_invalid", "tool_registry_root", "must be a non-symlink directory")
+    registry = registry.resolve(strict=True)
+    matches: list[tuple[Path, Path, dict[str, Any]]] = []
+    for candidate in sorted(registry.iterdir(), key=lambda path: path.name):
+        if candidate.is_symlink() or not candidate.is_dir():
+            continue
+        manifest_path = candidate / "tool.toml"
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            continue
+        document = _load_toml(manifest_path, f"{candidate.name}/tool.toml")
+        if document.get("id") == package_id:
+            matches.append((candidate.resolve(strict=True), manifest_path, document))
+    if len(matches) != 1:
+        _fail(
+            "missing_reference",
+            f"{location}.package",
+            f"registered Tool package {package_id!r} was not found exactly once",
+        )
+    owner_root, owner_manifest, document = matches[0]
+    if set(document) != {"schema_version", "id", "runtime"}:
+        _fail(
+            "invalid_field",
+            f"{location}.package",
+            "Tool package manifest requires exactly schema_version, id, and runtime",
+        )
+    if document.get("schema_version") != 1:
+        _fail("schema_version", f"{location}.package", "Tool package schema_version must equal 1")
+    runtime = _required_string(document, "runtime", f"tool package {package_id}")
+    relative_root = owner_root.relative_to(registry).as_posix()
+    return (
+        registry,
+        relative_root,
+        (Path(relative_root) / runtime).as_posix(),
+        owner_manifest,
+    )
 
 
 def _delivery_entries(
@@ -404,6 +546,7 @@ def _delivery_entries(
     root: Path,
     server_owners: dict[str, str],
     author_files: dict[str, Path],
+    tool_sources: dict[str, dict[str, Any]],
 ) -> list[CopilotDelivery]:
     raw_entries = manifest.get("deliveries", [])
     if not isinstance(raw_entries, list):
@@ -454,18 +597,39 @@ def _delivery_entries(
         if kind == "workspace_artifact":
             if not isinstance(verifier, dict):
                 _fail("required_field", f"{location}.content_verifier", "workspace_artifact requires a content verifier table")
-            verifier_unknown = sorted(set(verifier) - {"kind", "schema_path", "marker"})
+            verifier_unknown = sorted(
+                set(verifier) - {"kind", "schema_path", "marker", "tool"}
+            )
             if verifier_unknown:
                 _fail("invalid_field", f"{location}.content_verifier.{verifier_unknown[0]}", "field is not part of schema v1")
             verifier_kind = _required_string(verifier, "kind", f"{location}.content_verifier")
             if verifier_kind == "json_schema":
-                if set(verifier) != {"kind", "schema_path"}:
-                    _fail("invalid_field", f"{location}.content_verifier", "json_schema requires only kind and schema_path")
-                relative = _authored_relative_path(
+                expected = {"kind", "schema_path"}
+                verifier_tool = verifier.get("tool")
+                if verifier_tool is not None:
+                    expected.add("tool")
+                if set(verifier) != expected:
+                    _fail("invalid_field", f"{location}.content_verifier", "json_schema requires kind, schema_path, and optional tool")
+                schema_relative = _authored_relative_path(
                     _required_string(verifier, "schema_path", f"{location}.content_verifier"),
                     f"{location}.content_verifier.schema_path",
                 )
-                schema_file = _safe_package_path(root, relative, kind="file")
+                if verifier_tool is None:
+                    schema_root = root
+                    relative = schema_relative
+                    author_path = relative.as_posix()
+                else:
+                    if not isinstance(verifier_tool, str) or verifier_tool not in tool_sources:
+                        _fail(
+                            "missing_reference",
+                            f"{location}.content_verifier.tool",
+                            "must reference a declared Tool",
+                        )
+                    source = tool_sources[verifier_tool]
+                    schema_root = source["owner_root"]
+                    relative = Path(source["root"]) / schema_relative
+                    author_path = f"{source['author_prefix']}{relative.as_posix()}"
+                schema_file = _safe_package_path(schema_root, relative, kind="file")
                 if schema_file.stat().st_size > MAX_DELIVERY_SCHEMA_BYTES:
                     _fail("invalid_type", relative.as_posix(), "delivery JSON Schema must not exceed 1 MiB")
                 schema_document = _load_json(schema_file, relative.as_posix())
@@ -473,7 +637,7 @@ def _delivery_entries(
                 if schema_document.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
                     _fail("invalid_type", relative.as_posix(), "must declare JSON Schema draft 2020-12")
                 verifier_value = schema_document
-                author_files[relative.as_posix()] = schema_file
+                author_files[author_path] = schema_file
             elif verifier_kind == "markdown_marker":
                 if set(verifier) != {"kind", "marker"}:
                     _fail("invalid_field", f"{location}.content_verifier", "markdown_marker requires only kind and marker")

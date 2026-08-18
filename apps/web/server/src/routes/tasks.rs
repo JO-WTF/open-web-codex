@@ -22,6 +22,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::copilot_installation::{CopilotInstallationError, CopilotInstallationService};
 use crate::middleware::auth::{require_runtime_profile, AuthenticatedUser};
 use crate::routes::RuntimeProfileBinding;
 
@@ -39,7 +40,8 @@ pub async fn list_tasks(
     Query(params): Query<ListTasksParams>,
 ) -> ApiResult<Vec<Task>> {
     let rows = sqlx::query(
-        "SELECT id, project_id, workspace_id, title, status, model_provider, model, created_at, updated_at \
+        "SELECT id, project_id, workspace_id, title, status, model_provider, model, \
+                copilot_package_id, created_at, updated_at \
          FROM tasks WHERE project_id = $1 AND organization_id = $2 ORDER BY created_at DESC",
     )
     .bind(params.project_id)
@@ -63,6 +65,7 @@ pub async fn list_tasks(
             status: row.get("status"),
             model_provider: row.get("model_provider"),
             model: row.get("model"),
+            copilot_package_id: row.get("copilot_package_id"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         })
@@ -76,6 +79,7 @@ pub async fn create_task(
     auth: AuthenticatedUser,
     State(state): State<AppState>,
     Extension(profile): Extension<RuntimeProfileBinding>,
+    Extension(copilots): Extension<Arc<CopilotInstallationService>>,
     Json(req): Json<CreateTaskRequest>,
 ) -> ApiResult<Task> {
     if req.title.trim().is_empty() {
@@ -91,14 +95,19 @@ pub async fn create_task(
     };
 
     require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
+    let copilot_selection = copilots
+        .task_selection(req.copilot_package_id.as_deref())
+        .await
+        .map_err(copilot_selection_error)?;
 
     let row = sqlx::query(
         "INSERT INTO tasks \
-         (organization_id, project_id, workspace_id, created_by, title, model_provider, model) \
-         SELECT project.organization_id, project.id, workspace.id, $4, $2, $5, $6 \
+         (organization_id, project_id, workspace_id, created_by, title, model_provider, model, \
+          copilot_package_id) \
+         SELECT project.organization_id, project.id, workspace.id, $4, $2, $5, $6, $7 \
          FROM projects project \
          JOIN profiles runtime_profile ON runtime_profile.organization_id = project.organization_id \
-           AND runtime_profile.owner_user_id = $4 AND runtime_profile.runtime_key = $7 \
+           AND runtime_profile.owner_user_id = $4 AND runtime_profile.runtime_key = $8 \
            AND runtime_profile.status = 'active' \
          JOIN workspaces workspace ON workspace.id = $3 \
            AND workspace.organization_id = project.organization_id \
@@ -111,8 +120,9 @@ pub async fn create_task(
           AND workspace_grant.user_id = $4 \
           AND workspace_grant.profile_id = runtime_profile.id \
           AND workspace_grant.role IN ('owner', 'write') \
-         WHERE project.id = $1 AND project.organization_id = $8 \
-         RETURNING id, project_id, workspace_id, title, status, model_provider, model, created_at, updated_at",
+         WHERE project.id = $1 AND project.organization_id = $9 \
+         RETURNING id, project_id, workspace_id, title, status, model_provider, model, \
+                   copilot_package_id, created_at, updated_at",
     )
     .bind(req.project_id)
     .bind(&req.title)
@@ -120,6 +130,7 @@ pub async fn create_task(
     .bind(auth.user_id)
     .bind(selection.as_ref().map(|value| value.provider_id.as_str()))
     .bind(selection.as_ref().map(|value| value.model_id.as_str()))
+    .bind(copilot_selection.as_ref().map(|value| value.package_id.as_str()))
     .bind(&profile.runtime_key)
     .bind(auth.organization_id)
     .fetch_optional(&state.db)
@@ -147,6 +158,7 @@ pub async fn create_task(
         status: row.get("status"),
         model_provider: row.get("model_provider"),
         model: row.get("model"),
+        copilot_package_id: row.get("copilot_package_id"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }))
@@ -371,7 +383,7 @@ pub async fn send_message(
     // Resolve the server-owned workspace; the browser never supplies a path.
     let active_run = sqlx::query(
         "SELECT r.id, r.status, r.codex_thread_id, r.workspace_id, w.profile_id, w.root_path, \
-                t.title, t.model_provider, t.model \
+                t.title, t.model_provider, t.model, t.copilot_package_id \
          FROM runs r JOIN tasks t ON t.id = r.task_id \
            AND t.organization_id = r.organization_id \
            AND t.workspace_id = r.workspace_id \
@@ -485,6 +497,7 @@ pub async fn send_message(
                 access_mode: req.access_mode,
                 images: req.images,
                 collaboration_mode: req.collaboration_mode,
+                copilot_package_id: active_run.get("copilot_package_id"),
             },
         )
         .await
@@ -715,7 +728,8 @@ pub async fn get_task(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Task> {
     let row = sqlx::query(
-        "SELECT id, project_id, workspace_id, title, status, model_provider, model, created_at, updated_at \
+        "SELECT id, project_id, workspace_id, title, status, model_provider, model, \
+                copilot_package_id, created_at, updated_at \
          FROM tasks WHERE id = $1 AND organization_id = $2",
     )
     .bind(id)
@@ -743,9 +757,32 @@ pub async fn get_task(
         status: row.get("status"),
         model_provider: row.get("model_provider"),
         model: row.get("model"),
+        copilot_package_id: row.get("copilot_package_id"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }))
+}
+
+fn copilot_selection_error(error: CopilotInstallationError) -> (StatusCode, Json<PlatformError>) {
+    match error {
+        CopilotInstallationError::InvalidSelection
+        | CopilotInstallationError::InvalidSource(_)
+        | CopilotInstallationError::NotFound => (
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "a selected Copilot package is required and must be available",
+            )),
+        ),
+        CopilotInstallationError::Unavailable
+        | CopilotInstallationError::Database(_)
+        | CopilotInstallationError::Package(_)
+        | CopilotInstallationError::StartupFile(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(PlatformError::internal(
+                "Copilot selection is temporarily unavailable",
+            )),
+        ),
+    }
 }
 
 fn normalize_model_selection(

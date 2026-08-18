@@ -64,6 +64,10 @@ export type AcceptedThreadStart = {
   runId: string;
 };
 
+export type CopilotTaskSelection = {
+  packageId: string;
+};
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -502,6 +506,7 @@ export class CodexMonitorWebClient {
       operationId: string;
       providerId: string;
       modelId: string;
+      copilot?: CopilotTaskSelection | null;
       onRunAccepted?: (accepted: AcceptedThreadStart) => void;
     },
   ) {
@@ -534,6 +539,7 @@ export class CodexMonitorWebClient {
           providerId: options.providerId,
           modelId: options.modelId,
         },
+        options.copilot,
       );
       try {
         task = await draft.taskPromise;
@@ -557,6 +563,12 @@ export class CodexMonitorWebClient {
         options.providerId,
         options.modelId,
       );
+    }
+    if (
+      options.copilot &&
+      task.copilot_package_id !== options.copilot.packageId
+    ) {
+      throw new Error("Thread start operation was already bound to another Copilot package.");
     }
     const run = draft.acceptedRunId
       ? await this.platform.getRun(draft.acceptedRunId)
@@ -590,6 +602,10 @@ export class CodexMonitorWebClient {
       }
       throw error;
     }
+  }
+
+  copilotProfileStatus() {
+    return this.platform.copilotProfileStatus();
   }
 
   async getSupervisorOverview(

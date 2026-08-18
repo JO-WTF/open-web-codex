@@ -6,7 +6,7 @@ import Sun from "lucide-react/dist/esm/icons/sun";
 import X from "lucide-react/dist/esm/icons/x";
 import type { WorkspaceInfo } from "../../types";
 import Brand from "./Brand";
-import Workspaces from "./Workspaces";
+import Workspaces, { type CopilotOption } from "./Workspaces";
 import McpStatus from "./McpStatus";
 import RateLimitCard from "./RateLimitCard";
 
@@ -31,7 +31,11 @@ type Props = {
   threadsByWorkspace: Record<string, ThreadInfo[]>;
   activeThreadId: string | null;
   onSelectThread: (id: string) => void;
-  onNewThread: (workspaceId: string) => void;
+  copilots: CopilotOption[];
+  onNewThread: (
+    workspaceId: string,
+    copilot: { packageId: string } | null,
+  ) => void;
   onArchiveThread: (workspaceId: string, threadId: string) => void;
   onRemoveWorkspace: (workspaceId: string) => void;
   baseUrl: string;
@@ -59,6 +63,7 @@ export default function Sidebar({
   threadsByWorkspace,
   activeThreadId,
   onSelectThread,
+  copilots,
   onNewThread,
   onArchiveThread,
   onRemoveWorkspace,
@@ -101,6 +106,7 @@ export default function Sidebar({
           threadsByWorkspace={threadsByWorkspace}
           activeThreadId={activeThreadId}
           onSelectThread={onSelectThread}
+          copilots={copilots}
           onStartTask={onNewThread}
           onArchiveThread={onArchiveThread}
           onRemoveWorkspace={onRemoveWorkspace}

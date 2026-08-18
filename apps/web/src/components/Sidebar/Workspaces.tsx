@@ -18,6 +18,11 @@ type ThreadInfo = {
   creationStatus?: "creating" | "failed";
 };
 
+export type CopilotOption = {
+  packageId: string;
+  displayName: string;
+};
+
 type Props = {
   workspaces: WorkspaceInfo[];
   activeId: string | null;
@@ -29,7 +34,11 @@ type Props = {
   threadsByWorkspace: Record<string, ThreadInfo[]>;
   activeThreadId: string | null;
   onSelectThread: (id: string) => void;
-  onStartTask: (workspaceId: string) => void;
+  copilots: CopilotOption[];
+  onStartTask: (
+    workspaceId: string,
+    copilot: { packageId: string } | null,
+  ) => void;
   onArchiveThread: (workspaceId: string, threadId: string) => void;
   onRemoveWorkspace: (workspaceId: string) => void;
 };
@@ -44,6 +53,7 @@ export default function Workspaces({
   threadsByWorkspace,
   activeThreadId,
   onSelectThread,
+  copilots,
   onStartTask,
   onArchiveThread,
   onRemoveWorkspace,
@@ -55,15 +65,37 @@ export default function Workspaces({
     threadId: string;
     label: string;
   } | null>(null);
+  const [pendingTaskWorkspace, setPendingTaskWorkspace] = useState<WorkspaceInfo | null>(null);
+  const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
   useEffect(() => {
-    if (!pendingArchive) return;
+    if (!pendingArchive && !pendingTaskWorkspace) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setPendingArchive(null);
+      setPendingTaskWorkspace(null);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [pendingArchive]);
+  }, [pendingArchive, pendingTaskWorkspace]);
+
+  const openCopilotPicker = (workspace: WorkspaceInfo) => {
+    if (copilots.length === 0) {
+      onStartTask(workspace.id, null);
+      return;
+    }
+    setSelectedPackageId(copilots[0]?.packageId ?? null);
+    setPendingTaskWorkspace(workspace);
+  };
+
+  const createTask = () => {
+    if (!pendingTaskWorkspace || !selectedPackageId) return;
+    const copilot = copilots.find((candidate) => candidate.packageId === selectedPackageId);
+    if (!copilot) return;
+    onStartTask(pendingTaskWorkspace.id, {
+      packageId: copilot.packageId,
+    });
+    setPendingTaskWorkspace(null);
+  };
 
   const toggleExpand = (wsId: string) => {
     setExpandedId(prev => (prev === wsId ? null : wsId));
@@ -157,7 +189,7 @@ export default function Workspaces({
                   onClick={(event) => {
                     event.stopPropagation();
                     setExpandedId(ws.id);
-                    onStartTask(ws.id);
+                    openCopilotPicker(ws);
                   }}
                   disabled={busy}
                   aria-label={`New task in ${ws.name}`}
@@ -225,6 +257,56 @@ export default function Workspaces({
           );
         })}
       </div>
+      {pendingTaskWorkspace && createPortal(
+        <div
+          className="web-settings-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setPendingTaskWorkspace(null);
+          }}
+        >
+          <section
+            className="web-copilot-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="web-copilot-title"
+            aria-describedby="web-copilot-description"
+          >
+            <div className="web-copilot-modal-copy">
+              <h2 id="web-copilot-title">Choose a Copilot</h2>
+              <p id="web-copilot-description">
+                Select the Copilot for the new Thread in {pendingTaskWorkspace.name}.
+              </p>
+            </div>
+            <div className="web-copilot-options" role="radiogroup" aria-label="Available Copilots">
+              {copilots.map((copilot) => {
+                const selected = copilot.packageId === selectedPackageId;
+                return (
+                  <button
+                    key={copilot.packageId}
+                    type="button"
+                    className={`web-copilot-option${selected ? " is-selected" : ""}`}
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => setSelectedPackageId(copilot.packageId)}
+                  >
+                    <strong>{copilot.displayName}</strong>
+                    <span>{copilot.packageId}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="web-copilot-actions">
+              <button type="button" onClick={() => setPendingTaskWorkspace(null)}>
+                Cancel
+              </button>
+              <button type="button" className="is-primary" onClick={createTask}>
+                Create Thread
+              </button>
+            </div>
+          </section>
+        </div>,
+        document.body,
+      )}
       {pendingArchive && createPortal(
         <div
           className="web-settings-backdrop"

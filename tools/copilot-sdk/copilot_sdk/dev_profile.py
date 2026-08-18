@@ -67,6 +67,7 @@ class DeclaredAgent:
 @dataclass(frozen=True)
 class DeclaredTool:
     id: str
+    owner_root: Path
     source: Path
     runtime: Path
 
@@ -76,7 +77,8 @@ class DevComposition:
     source_root: Path
     manifest_path: Path
     summary: CopilotPackageSummary
-    supervisor_skill: str
+    root_skill: str
+    root_agent: str | None
     skills: tuple[DeclaredSkill, ...]
     agents: tuple[DeclaredAgent, ...]
     tools: tuple[DeclaredTool, ...]
@@ -101,11 +103,17 @@ class PreparedDevProfile:
 
 
 def load_dev_composition(
-    source_root: Path, manifest_path: Path = Path("copilot.toml")
+    source_root: Path,
+    manifest_path: Path = Path("copilot.toml"),
+    tool_registry_root: Path | None = None,
 ) -> DevComposition:
     """Validate first, then load only the bounded fields needed by a dev probe."""
 
-    summary = validate_copilot_package(source_root, manifest_path)
+    summary = validate_copilot_package(
+        source_root,
+        manifest_path,
+        tool_registry_root=tool_registry_root,
+    )
     root = Path(source_root).resolve(strict=True)
     manifest = root / manifest_path
     with manifest.open("rb") as handle:
@@ -114,19 +122,29 @@ def load_dev_composition(
         DeclaredAgent(entry["id"], _validated_source(root, entry["role"]))
         for entry in data["agents"]
     )
+    from .copilot_manifest import _tool_entries
+
+    resolved_tools = _tool_entries(
+        data,
+        source_root=root,
+        tool_registry_root=tool_registry_root,
+    )
     tools = tuple(
         DeclaredTool(
             entry["id"],
-            _validated_source(root, entry["root"]),
+            entry["owner_root"],
+            _validated_source(entry["owner_root"], entry["root"]),
             Path(entry["runtime"]),
         )
-        for entry in data["tools"]
+        for entry in resolved_tools
     )
+    root_config = data["root"]
     return DevComposition(
         source_root=root,
         manifest_path=manifest_path,
         summary=summary,
-        supervisor_skill=data["supervisor"]["skill"],
+        root_skill=root_config["skill"],
+        root_agent=root_config.get("agent"),
         skills=tuple(
             DeclaredSkill(entry["id"], _validated_source(root, entry["path"]))
             for entry in data["skills"]
@@ -154,7 +172,7 @@ def _declared_mcp_server_ids(
             policies = plugin_policy.get("mcp_servers", {})
             assert isinstance(policies, dict)
             tool = tools_by_id[tool_id]
-            runtime = load_tool_runtime_manifest(root, tool.source, tool.runtime)
+            runtime = load_tool_runtime_manifest(tool.owner_root, tool.source, tool.runtime)
             transports = {server.id for server in runtime.servers}
             for server_id in policies:
                 if server_id not in transports:
@@ -312,6 +330,13 @@ def prepare_dev_tool_composition(
             source_root=composition.source_root,
             tools=tuple(
                 ToolRuntimeSource(tool.id, tool.source, tool.runtime)
+                if tool.owner_root == composition.source_root
+                else ToolRuntimeSource(
+                    tool.id,
+                    tool.source,
+                    tool.runtime,
+                    source_root=tool.owner_root,
+                )
                 for tool in composition.tools
             ),
             output_root=environment_root,

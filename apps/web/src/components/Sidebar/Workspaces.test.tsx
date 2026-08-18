@@ -7,7 +7,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import Workspaces from "./Workspaces";
+import Workspaces, { type CopilotOption } from "./Workspaces";
 
 const workspace = {
   id: "ws-1",
@@ -29,6 +29,7 @@ function baseProps() {
     threadsByWorkspace: { "ws-1": [] },
     activeThreadId: null,
     onSelectThread: vi.fn(),
+    copilots: [] as CopilotOption[],
     onStartTask: vi.fn(),
     onArchiveThread: vi.fn(),
     onRemoveWorkspace: vi.fn(),
@@ -52,13 +53,34 @@ describe("Web workspace actions", () => {
     expect(props.onRemoveWorkspace).toHaveBeenCalledWith("ws-1");
   });
 
-  it("starts a Standard task directly in the selected Workspace", () => {
+  it("starts a plain task directly when no Copilot is configured", () => {
     const props = baseProps();
     render(<Workspaces {...props} />);
 
     fireEvent.click(screen.getByRole("button", { name: "New task in Demo" }));
-    expect(props.onStartTask).toHaveBeenCalledWith("ws-1");
-    expect(screen.queryByRole("dialog", { name: "Create Thread" })).toBeNull();
+    expect(props.onStartTask).toHaveBeenCalledWith("ws-1", null);
+    expect(screen.queryByRole("dialog", { name: "Choose a Copilot" })).toBeNull();
+  });
+
+  it("lists independent Copilot packages and starts the selected package", () => {
+    const props = baseProps();
+    props.copilots = [
+      { packageId: "warehouse-network", displayName: "Warehouse Network · Multi-Agent" },
+      {
+        packageId: "warehouse-network-single-agent",
+        displayName: "Warehouse Network · Single Agent",
+      },
+    ];
+    render(<Workspaces {...props} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "New task in Demo" }));
+    expect(screen.getByRole("dialog", { name: "Choose a Copilot" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: /Warehouse Network · Single Agent/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Thread" }));
+
+    expect(props.onStartTask).toHaveBeenCalledWith("ws-1", {
+      packageId: "warehouse-network-single-agent",
+    });
   });
 
   it("shows running state and confirms before archiving a thread", () => {

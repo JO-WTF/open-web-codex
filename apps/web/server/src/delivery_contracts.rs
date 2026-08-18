@@ -2,19 +2,19 @@ use jsonschema::{Draft, JSONSchema};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ContentVerifier {
     JsonSchema { document: Value },
     MarkdownMarker { marker: String },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum DeliveryKind {
     WorkspaceArtifact { verifier: ContentVerifier },
     InlineGeoJsonMapCard,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DeliveryContract {
     pub id: String,
     pub server: String,
@@ -46,6 +46,24 @@ impl DeliveryRegistry {
         let server = item.get("server")?.as_str()?;
         let tool = item.get("tool")?.as_str()?;
         self.producers.get(&(server.to_string(), tool.to_string()))
+    }
+
+    pub(crate) fn merge(registries: impl IntoIterator<Item = Self>) -> Result<Self, String> {
+        let mut producers = BTreeMap::new();
+        for registry in registries {
+            for (key, contract) in registry.producers {
+                if let Some(existing) = producers.get(&key) {
+                    if existing != &contract {
+                        return Err(format!("conflicting delivery producer {}/{}", key.0, key.1));
+                    }
+                    continue;
+                }
+                producers.insert(key, contract);
+            }
+        }
+        let merged = Self { producers };
+        merged.validate()?;
+        Ok(merged)
     }
 
     pub(crate) fn workspace_by_schema_mime(
@@ -158,7 +176,7 @@ impl ContentVerifier {
 #[cfg(test)]
 pub(crate) fn warehouse_test_registry() -> DeliveryRegistry {
     let schema = serde_json::from_str(include_str!(
-        "../../../../copilots/warehouse-network/tools/planner/contracts/schemas/network_comparison_map_bundle.v1.schema.json"
+        "../../../../tools/warehouse-network-planner/contracts/schemas/network_comparison_map_bundle.v1.schema.json"
     ))
     .expect("warehouse map delivery schema");
     DeliveryRegistry::new(vec![
@@ -246,5 +264,31 @@ mod tests {
             .expect("delivery")
             .clone();
         assert!(DeliveryRegistry::new(vec![first.clone(), first]).is_err());
+    }
+
+    #[test]
+    fn package_registries_share_identical_producers_but_reject_contract_drift() {
+        let first = warehouse_test_registry();
+        let second = warehouse_test_registry();
+        let merged = DeliveryRegistry::merge([first, second]).expect("merge shared deliveries");
+        assert!(merged
+            .for_item(
+                serde_json::json!({"server":"supply_chain","tool":"publish_network_planning_report"})
+                    .as_object()
+                    .expect("item"),
+            )
+            .is_some());
+
+        let mut drifted = warehouse_test_registry()
+            .for_item(
+                serde_json::json!({"server":"supply_chain","tool":"publish_network_planning_report"})
+                    .as_object()
+                    .expect("item"),
+            )
+            .expect("delivery")
+            .clone();
+        drifted.display_name = "Drifted report".to_string();
+        let conflict = DeliveryRegistry::new(vec![drifted]).expect("drifted registry");
+        assert!(DeliveryRegistry::merge([warehouse_test_registry(), conflict]).is_err());
     }
 }

@@ -49,7 +49,7 @@ describe("PlatformClient", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("binds a new Task to one Workspace UUID", async () => {
+  it("binds a new Task to one Workspace and one selected Copilot package", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ id: "task-1", workspace_id: "workspace-1" }), {
         status: 200,
@@ -61,7 +61,13 @@ describe("PlatformClient", () => {
       token: "session-token",
     });
 
-    await client.createTask("project-1", "workspace-1", "Plan the network");
+    await client.createTask(
+      "project-1",
+      "workspace-1",
+      "Plan the network",
+      null,
+      { packageId: "warehouse-network-single-agent" },
+    );
 
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
       project_id: "project-1",
@@ -69,6 +75,7 @@ describe("PlatformClient", () => {
       title: "Plan the network",
       model_provider: null,
       model: null,
+      copilot_package_id: "warehouse-network-single-agent",
     });
   });
 

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use open_web_codex_adapter::real::ThreadSkillConfig;
+use open_web_codex_adapter::real::{RootExecutionConfig, ThreadSkillConfig};
 use open_web_codex_profile_host::{CodexFeature, ProfileStartupFile};
 use serde::Deserialize;
 use serde_json::Value;
@@ -57,8 +57,10 @@ pub(crate) const fn enabled_codex_features() -> [CodexFeature; 1] {
 #[derive(Clone, Debug)]
 pub(crate) struct CopilotPackageAssets {
     id: String,
+    display_name: String,
     source_revision: String,
-    supervisor_skill: String,
+    root_skill: String,
+    root_agent: Option<String>,
     skills: Vec<PackageSkill>,
     roles: Vec<PackageRole>,
     capability_roots: BTreeMap<String, PreparedCapabilityRoot>,
@@ -157,6 +159,10 @@ struct PreparedDescriptorEnvironmentBinding {
 }
 
 impl CopilotPackageAssets {
+    pub(crate) fn manifest_id(package_root: &Path) -> Result<String, CopilotPackageError> {
+        Ok(load_copilot_package(package_root)?.id)
+    }
+
     pub(crate) fn resolve(
         package_root: &Path,
         descriptor_path: &Path,
@@ -176,8 +182,10 @@ impl CopilotPackageAssets {
         }
         Ok(Self {
             id: package.id,
+            display_name: package.display_name,
             source_revision,
-            supervisor_skill: package.supervisor_skill,
+            root_skill: package.root_skill,
+            root_agent: package.root_agent,
             skills: package.skills,
             roles: package.roles,
             capability_roots,
@@ -193,12 +201,20 @@ impl CopilotPackageAssets {
         &self.source_revision
     }
 
+    pub(crate) fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
     pub(crate) fn skill_ids(&self) -> Vec<String> {
         self.skills.iter().map(|skill| skill.id.clone()).collect()
     }
 
     pub(crate) fn agent_role_ids(&self) -> Vec<String> {
-        self.roles.iter().map(|role| role.id.clone()).collect()
+        self.roles
+            .iter()
+            .filter(|role| Some(role.id.as_str()) != self.root_agent.as_deref())
+            .map(|role| role.id.clone())
+            .collect()
     }
 
     pub(crate) fn mcp_server_ids(&self) -> Vec<String> {
@@ -219,11 +235,74 @@ impl CopilotPackageAssets {
             .iter()
             .map(|skill| ThreadSkillConfig {
                 name: skill.id.clone(),
-                enabled: skill.id == self.supervisor_skill,
-                main_prompt: (skill.id == self.supervisor_skill)
+                enabled: skill.id == self.root_skill,
+                main_prompt: (skill.id == self.root_skill)
                     .then(|| profile_home.join("skills").join(&skill.id).join("SKILL.md")),
             })
             .collect()
+    }
+
+    pub(crate) fn root_execution_config(
+        &self,
+        profile_home: &Path,
+    ) -> Result<RootExecutionConfig, CopilotPackageError> {
+        let runtime_config = if let Some(agent) = self.root_agent.as_deref() {
+            let rendered = self.render_role(agent, profile_home)?;
+            let mut role = parse_role_template(agent, &rendered)?;
+            role.remove("name");
+            role.remove("description");
+            role.remove("nickname_candidates");
+            let config = toml_edit::de::from_str::<serde_json::Value>(&role.to_string()).map_err(
+                |error| {
+                    invalid_role(
+                        agent,
+                        format!("Root Agent config could not be encoded: {error}"),
+                    )
+                },
+            )?;
+            Self::flatten_runtime_config(config).map_err(|message| invalid_role(agent, message))?
+        } else {
+            serde_json::json!({})
+        };
+        Ok(RootExecutionConfig {
+            id: self.id.clone(),
+            skill_config: self.root_skill_config(profile_home),
+            runtime_config,
+        })
+    }
+
+    fn flatten_runtime_config(value: Value) -> Result<Value, String> {
+        fn visit(
+            prefix: Option<&str>,
+            value: Value,
+            output: &mut serde_json::Map<String, Value>,
+        ) -> Result<(), String> {
+            match value {
+                Value::Object(object) => {
+                    for (key, child) in object {
+                        let path = match prefix {
+                            Some(prefix) => format!("{prefix}.{key}"),
+                            None => key,
+                        };
+                        visit(Some(&path), child, output)?;
+                    }
+                    Ok(())
+                }
+                leaf => {
+                    let Some(path) = prefix else {
+                        return Err("Root Agent config must be a TOML table".to_string());
+                    };
+                    if output.insert(path.to_string(), leaf).is_some() {
+                        return Err(format!("Root Agent config contains duplicate path {path}"));
+                    }
+                    Ok(())
+                }
+            }
+        }
+
+        let mut output = serde_json::Map::new();
+        visit(None, value, &mut output)?;
+        Ok(Value::Object(output))
     }
 
     pub(crate) fn startup_files(
@@ -239,6 +318,9 @@ impl CopilotPackageAssets {
             )?);
         }
         for source in &self.roles {
+            if Some(source.id.as_str()) == self.root_agent.as_deref() {
+                continue;
+            }
             files.push(ProfileStartupFile::package_agent_role(
                 source.id.clone(),
                 self.render_role(&source.id, &profile_home)?.into_bytes(),
@@ -308,7 +390,9 @@ fn parse_role_template(role: &str, template: &str) -> Result<DocumentMut, Copilo
 
 struct LoadedCopilotPackage {
     id: String,
-    supervisor_skill: String,
+    display_name: String,
+    root_skill: String,
+    root_agent: Option<String>,
     skills: Vec<PackageSkill>,
     roles: Vec<PackageRole>,
     tool_ids: BTreeSet<String>,
@@ -338,7 +422,7 @@ fn load_copilot_package(package_root: &Path) -> Result<LoadedCopilotPackage, Cop
             "schema_version",
             "id",
             "display_name",
-            "supervisor",
+            "root",
             "skills",
             "agents",
             "tools",
@@ -354,9 +438,10 @@ fn load_copilot_package(package_root: &Path) -> Result<LoadedCopilotPackage, Cop
     }
     let id = required_string(COMPONENT, manifest.as_table(), "id")?.to_string();
     require_stable_identifier(COMPONENT, "Copilot id", &id)?;
-    let supervisor = required_table(COMPONENT, manifest.as_table(), "supervisor")?;
-    reject_unknown_keys(COMPONENT, "supervisor", supervisor, &["skill"])?;
-    let supervisor_skill = required_string(COMPONENT, supervisor, "skill")?.to_string();
+    let display_name = required_string(COMPONENT, manifest.as_table(), "display_name")?.to_string();
+    let root_config = required_table(COMPONENT, manifest.as_table(), "root")?;
+    reject_unknown_keys(COMPONENT, "root", root_config, &["skill", "agent"])?;
+    let root_skill = required_string(COMPONENT, root_config, "skill")?.to_string();
 
     let skill_entries = manifest
         .get("skills")
@@ -390,10 +475,10 @@ fn load_copilot_package(package_root: &Path) -> Result<LoadedCopilotPackage, Cop
             contents,
         });
     }
-    if !skill_ids.contains(&supervisor_skill) {
+    if !skill_ids.contains(&root_skill) {
         return Err(unavailable_message(
             COMPONENT,
-            format!("supervisor Skill {supervisor_skill} is not declared"),
+            format!("Root Skill {root_skill} is not declared"),
         ));
     }
 
@@ -437,6 +522,23 @@ fn load_copilot_package(package_root: &Path) -> Result<LoadedCopilotPackage, Cop
         });
     }
 
+    let root_agent = root_config
+        .get("agent")
+        .map(|item| {
+            item.as_str().map(str::to_string).ok_or_else(|| {
+                unavailable_message(COMPONENT, "root.agent must be a string".to_string())
+            })
+        })
+        .transpose()?;
+    if let Some(agent) = root_agent.as_deref() {
+        if !role_ids.contains(agent) {
+            return Err(unavailable_message(
+                COMPONENT,
+                format!("Root references undeclared Agent Role {agent}"),
+            ));
+        }
+    }
+
     let tool_entries = manifest
         .get("tools")
         .and_then(Item::as_array_of_tables)
@@ -449,7 +551,12 @@ fn load_copilot_package(package_root: &Path) -> Result<LoadedCopilotPackage, Cop
     }
     let mut tool_ids = BTreeSet::new();
     for entry in tool_entries {
-        reject_unknown_keys(COMPONENT, "tools[]", entry, &["id", "root", "runtime"])?;
+        reject_unknown_keys(
+            COMPONENT,
+            "tools[]",
+            entry,
+            &["id", "root", "runtime", "package"],
+        )?;
         let tool_id = required_string(COMPONENT, entry, "id")?.to_string();
         require_stable_identifier(COMPONENT, "Tool id", &tool_id)?;
         if !tool_ids.insert(tool_id.clone()) {
@@ -458,24 +565,47 @@ fn load_copilot_package(package_root: &Path) -> Result<LoadedCopilotPackage, Cop
                 format!("duplicate Tool id {tool_id}"),
             ));
         }
-        let root = package_directory(
-            &package_root,
-            Path::new(required_string(COMPONENT, entry, "root")?),
-            COMPONENT,
-        )?;
-        let runtime = Path::new(required_string(COMPONENT, entry, "runtime")?);
-        let runtime_file = package_regular_file(&package_root, runtime, COMPONENT)?;
-        if !runtime_file.starts_with(&root) {
-            return Err(unavailable_message(
-                COMPONENT,
-                format!("Tool {tool_id} runtime must be inside its Tool root"),
-            ));
+        match (
+            entry.get("root"),
+            entry.get("runtime"),
+            entry.get("package"),
+        ) {
+            (Some(_), Some(_), None) => {
+                let root = package_directory(
+                    &package_root,
+                    Path::new(required_string(COMPONENT, entry, "root")?),
+                    COMPONENT,
+                )?;
+                let runtime = Path::new(required_string(COMPONENT, entry, "runtime")?);
+                let runtime_file = package_regular_file(&package_root, runtime, COMPONENT)?;
+                if !runtime_file.starts_with(&root) {
+                    return Err(unavailable_message(
+                        COMPONENT,
+                        format!("Tool {tool_id} runtime must be inside its Tool root"),
+                    ));
+                }
+            }
+            (None, None, Some(_)) => {
+                require_stable_identifier(
+                    COMPONENT,
+                    "shared Tool package id",
+                    required_string(COMPONENT, entry, "package")?,
+                )?;
+            }
+            _ => {
+                return Err(unavailable_message(
+                    COMPONENT,
+                    format!("Tool {tool_id} must declare either root/runtime or package"),
+                ));
+            }
         }
     }
 
     Ok(LoadedCopilotPackage {
         id,
-        supervisor_skill,
+        display_name,
+        root_skill,
+        root_agent,
         skills,
         roles,
         tool_ids,
@@ -1310,6 +1440,22 @@ mod tests {
         include_str!("../../../../copilots/warehouse-network/agents/network_agent.toml");
 
     #[test]
+    fn root_agent_toml_becomes_flat_app_server_config_overrides() {
+        let config = CopilotPackageAssets::flatten_runtime_config(serde_json::json!({
+            "features": {"multi_agent": false},
+            "plugins": {"supply_chain": {"enabled": true}},
+            "skills": {"config": [{"name": "warehouse-single-agent", "enabled": true}]},
+        }))
+        .expect("flatten Root Agent config");
+
+        assert_eq!(config["features.multi_agent"], false);
+        assert_eq!(config["plugins.supply_chain.enabled"], true);
+        assert_eq!(config["skills.config"][0]["name"], "warehouse-single-agent");
+        assert!(config.get("features").is_none());
+        assert!(config.get("plugins").is_none());
+    }
+
+    #[test]
     fn warehouse_network_skill_preserves_default_map_visual_hierarchy() {
         assert!(
             NETWORK_SKILL.contains("中心仓（`warehouse_type=center`） | 深蓝 `#1D4ED8`，半径 `12`")
@@ -1380,7 +1526,7 @@ mod tests {
 id = "warehouse-network"
 display_name = "Warehouse network"
 
-[supervisor]
+[root]
 skill = "warehouse-supervisor"
 
 [[skills]]
@@ -1869,6 +2015,24 @@ runtime = "tools/maps/runtime.toml"
             5
         );
         assert!(!profile.join("config.toml").exists());
+    }
+
+    #[test]
+    fn root_agent_config_is_not_installed_as_a_child_role() {
+        let (_temp, mut assets, profile, _descriptor) = fixture();
+        assets.root_agent = Some("data_agent".to_string());
+
+        assert_eq!(assets.agent_role_ids(), vec!["network_agent"]);
+        assert_eq!(
+            assets.startup_files(&profile).expect("startup files").len(),
+            4
+        );
+        assert!(assets
+            .root_execution_config(&profile)
+            .expect("Root execution config")
+            .runtime_config
+            .get("mcp_servers.supply_chain_data.command")
+            .is_some());
     }
 
     #[test]

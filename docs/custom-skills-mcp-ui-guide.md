@@ -1,7 +1,7 @@
 # Skills、MCP 与定制交互扩展指南
 
 本文说明如何在 open-web-codex 中创建和维护定制 Skill，以及何时需要同时增加
-MCP Server、Secret 配置、审批适配或专用 Web 面板。`copilots/warehouse-network/tools/maps` 中的
+MCP Server、Secret 配置、审批适配或专用 Web 面板。`tools/warehouse-network-maps` 中的
 `map-utils` 是本文的完整参考实现。
 
 本文描述当前仓库的实现边界。Runtime 能力状态仍以
@@ -53,7 +53,7 @@ Skill、MCP 和界面不是同一种能力：
 `map-utils` 的组成如下：
 
 ```text
-copilots/warehouse-network/tools/maps/
+tools/warehouse-network-maps/
 ├── runtime.toml                    typed dependency/server/env 合同
 ├── pyproject.toml                  Python 项目与直接依赖
 ├── requirements.lock               带 SHA-256 的 Python lock
@@ -362,7 +362,7 @@ Accept 再尝试投递，否则 MCP 会继续等待、前端显示 Invalid，工
 
 ### 5.2 MCP 侧
 
-参考 `copilots/warehouse-network/tools/maps/src/credential_prompt.py` 和 `server.py`：
+参考 `tools/warehouse-network-maps/src/credential_prompt.py` 和 `server.py`：
 
 - 只监听 `127.0.0.1`。
 - 每次请求生成高熵、单次使用的随机路径。
@@ -654,7 +654,7 @@ python3 codex/codex-rs/skills/src/assets/samples/skill-creator/scripts/quick_val
 地图参考命令：
 
 ```bash
-cd copilots/warehouse-network/tools/maps
+cd tools/warehouse-network-maps
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 
 cd ../..

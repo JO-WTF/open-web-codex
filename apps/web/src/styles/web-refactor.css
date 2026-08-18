@@ -634,6 +634,43 @@ body:has(.web-app-shell) {
 .web-archive-modal-actions button.is-primary:hover { background: #3e70ae; }
 .web-archive-modal-actions button:disabled { opacity: .5; cursor: wait; }
 
+.web-copilot-modal {
+  display: grid;
+  width: min(520px, 100%);
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid var(--web-border-strong);
+  border-radius: 14px;
+  color: var(--web-text);
+  background: #151a25;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 56%);
+}
+
+.web-copilot-modal-copy h2 { color: var(--web-text); font-size: 16px; }
+.web-copilot-modal-copy p { margin-top: 5px; color: var(--web-muted); font-size: 12px; line-height: 1.5; }
+.web-copilot-options { display: grid; gap: 8px; }
+.web-copilot-option {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--web-border-strong);
+  border-radius: 10px;
+  color: var(--web-text);
+  text-align: left;
+  background: var(--web-surface);
+  cursor: pointer;
+}
+.web-copilot-option:hover { background: var(--web-surface-hover); }
+.web-copilot-option.is-selected { border-color: #5d91d6; background: rgb(79 121 185 / 18%); }
+.web-copilot-option strong { font-size: 13px; font-weight: 650; }
+.web-copilot-option span { color: var(--web-muted); font-family: var(--web-font-mono); font-size: 11px; }
+.web-copilot-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.web-copilot-actions button { min-height: 34px; padding: 0 14px; border: 1px solid var(--web-border-strong); border-radius: 8px; color: var(--web-text); background: var(--web-surface); cursor: pointer; }
+.web-copilot-actions button:hover { background: var(--web-surface-hover); }
+.web-copilot-actions button.is-primary { border-color: #4779b9; color: #f4f8ff; background: #35649f; }
+.web-copilot-actions button.is-primary:hover { background: #3e70ae; }
+
 .web-settings-close:hover {
   border-color: rgb(148 163 184 / 58%);
   color: #fff;
@@ -5267,6 +5304,12 @@ body:has(.web-app-shell[data-theme="light"]) .web-settings-modal {
 }
 
 body:has(.web-app-shell[data-theme="light"]) .web-archive-modal {
+  color: var(--web-text);
+  background: #ffffff;
+  box-shadow: 0 24px 72px rgb(63 76 98 / 26%);
+}
+
+body:has(.web-app-shell[data-theme="light"]) .web-copilot-modal {
   color: var(--web-text);
   background: #ffffff;
   box-shadow: 0 24px 72px rgb(63 76 98 / 26%);

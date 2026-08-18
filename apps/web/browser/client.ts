@@ -44,6 +44,7 @@ import type {
   ArtifactContent,
   ExplicitResourceSelection,
   ResourceReferenceSummary,
+  CopilotProfileStatus,
 } from "./types";
 
 type ClientOptions = {
@@ -408,6 +409,7 @@ export class PlatformClient {
     workspaceId: string,
     title: string,
     selection?: { providerId: string; modelId: string } | null,
+    copilot?: { packageId: string } | null,
   ) {
     return this.request<Task>("/api/tasks", {
       method: "POST",
@@ -417,8 +419,13 @@ export class PlatformClient {
         title,
         model_provider: selection?.providerId ?? null,
         model: selection?.modelId ?? null,
+        copilot_package_id: copilot?.packageId ?? null,
       }),
     });
+  }
+
+  copilotProfileStatus() {
+    return this.request<CopilotProfileStatus>("/api/profile/copilots");
   }
 
   updateTaskModelSelection(taskId: string, providerId: string, modelId: string) {

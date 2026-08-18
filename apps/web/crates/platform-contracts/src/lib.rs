@@ -81,6 +81,9 @@ pub struct Task {
     pub status: String,
     pub model_provider: Option<String>,
     pub model: Option<String>,
+    /// Immutable application-discovered Copilot package selected for this
+    /// Task. The browser never submits a package path or Runtime config.
+    pub copilot_package_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -97,6 +100,8 @@ pub struct CreateTaskRequest {
     pub model_provider: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub copilot_package_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1756,14 +1761,16 @@ pub struct ActivateCopilotRequest {
 pub struct AvailableCopilotPackage {
     pub package_id: String,
     pub available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CopilotProfileStatus {
     pub packages: Vec<AvailableCopilotPackage>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub installation: Option<CopilotInstallationSummary>,
+    #[serde(default)]
+    pub installations: Vec<CopilotInstallationSummary>,
 }
 
 #[cfg(test)]

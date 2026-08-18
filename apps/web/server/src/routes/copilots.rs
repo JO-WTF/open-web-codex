@@ -41,9 +41,14 @@ pub async fn deactivate(
     auth: AuthenticatedUser,
     Extension(profile): Extension<RuntimeProfileBinding>,
     Extension(copilots): Extension<Arc<CopilotInstallationService>>,
+    Json(request): Json<ActivateCopilotRequest>,
 ) -> ApiResult<CopilotProfileStatus> {
     require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
-    copilots.deactivate().await.map(Json).map_err(api_error)
+    copilots
+        .deactivate(&request.package_id)
+        .await
+        .map(Json)
+        .map_err(api_error)
 }
 
 fn api_error(error: CopilotInstallationError) -> (StatusCode, Json<PlatformError>) {
@@ -55,6 +60,12 @@ fn api_error(error: CopilotInstallationError) -> (StatusCode, Json<PlatformError
         CopilotInstallationError::Unavailable => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(PlatformError::internal("Copilot package is unavailable")),
+        ),
+        CopilotInstallationError::InvalidSelection => (
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "Copilot package selection is required and must be available",
+            )),
         ),
         CopilotInstallationError::Database(_)
         | CopilotInstallationError::Package(_)

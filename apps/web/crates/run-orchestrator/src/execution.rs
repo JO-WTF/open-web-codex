@@ -65,7 +65,11 @@ impl RunOrchestrator {
                     .fork_thread(&source_workspace, &workspace, source_thread_id)
                     .await?
             }
-            (None, None) => self.adapter.start_thread(&workspace).await?,
+            (None, None) => {
+                self.adapter
+                    .start_thread(&workspace, lease.copilot_package_id.as_deref())
+                    .await?
+            }
             _ => {
                 return Err(RunOrchestratorError::Conflict(
                     "fork source workspace did not match the leased Run".to_string(),

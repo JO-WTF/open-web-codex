@@ -291,6 +291,7 @@ impl CodexAdapter for FakeCodexAdapter {
     async fn start_thread(
         &self,
         workspace: &AuthorizedWorkspace,
+        _copilot_package_id: Option<&str>,
     ) -> Result<StartedThread, AdapterError> {
         {
             let mut state = self.state.lock().await;
@@ -331,7 +332,7 @@ impl CodexAdapter for FakeCodexAdapter {
                 "fork source Thread is required".to_string(),
             ));
         }
-        self.start_thread(target_workspace).await
+        self.start_thread(target_workspace, None).await
     }
 
     async fn read_thread(

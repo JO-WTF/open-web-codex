@@ -1,0 +1,73 @@
+schema_version = 1
+id = "warehouse-network-single-agent"
+display_name = "Warehouse Network · Single Agent"
+
+[root]
+skill = "warehouse-single-agent"
+agent = "warehouse_single_agent"
+
+[[skills]]
+id = "warehouse-single-agent"
+path = "skills/warehouse-single-agent"
+
+[[agents]]
+id = "warehouse_single_agent"
+role = "agents/warehouse_single_agent.toml"
+
+[[tools]]
+id = "supply_chain"
+package = "warehouse-network-planner"
+
+[[tools]]
+id = "map_utils"
+package = "warehouse-network-maps"
+
+[[deliveries]]
+id = "network-comparison-map"
+server = "supply_chain"
+tool = "render_network_comparison_map"
+kind = "workspace_artifact"
+schema = "network_comparison_map_bundle.v1"
+mime_type = "application/json"
+display_name = "Warehouse network: baseline vs selected facilities"
+content_verifier = { kind = "json_schema", tool = "supply_chain", schema_path = "contracts/schemas/network_comparison_map_bundle.v1.schema.json" }
+
+[[deliveries]]
+id = "network-planning-report"
+server = "supply_chain"
+tool = "publish_network_planning_report"
+kind = "workspace_artifact"
+schema = "network_planning_report_markdown.v1"
+mime_type = "text/markdown"
+display_name = "Warehouse network planning report"
+content_verifier = { kind = "markdown_marker", marker = "<!-- network_planning_report_markdown.v1 -->" }
+
+[[deliveries]]
+id = "network-map-card"
+server = "map_utils"
+tool = "create_map_card"
+kind = "inline_geojson_map_card"
+schema = "map.v3"
+mime_type = "application/vnd.open-web-codex.map-card+json"
+display_name = "Interactive map"
+
+[[deliveries]]
+id = "network-map-card-revision"
+server = "map_utils"
+tool = "revise_map_card"
+kind = "inline_geojson_map_card"
+schema = "map.v3"
+mime_type = "application/vnd.open-web-codex.map-card+json"
+display_name = "Revised interactive map"
+
+[[tests]]
+id = "single-agent-data-health"
+prompt = "Inspect the authorized Workspace sources with the declared warehouse Tool and return its typed result."
+agent = "warehouse_single_agent"
+tool = "supply_chain"
+server = "supply_chain_data"
+tool_name = "discover_workspace_sources"
+arguments = {}
+
+[tests.expect]
+structured_content = { schema = "workspace_source_catalog.v1", workspace_scope = "authorized_workspace", sources = [], truncated = false, dataClassification = "workspace_data" }

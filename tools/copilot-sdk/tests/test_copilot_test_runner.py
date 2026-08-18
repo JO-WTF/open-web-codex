@@ -37,7 +37,15 @@ class CopilotTestRunnerTests(unittest.TestCase):
                 ("health",), "a" * 64,
             )
             composition = DevComposition(
-                root, Path("copilot.toml"), summary, "supervisor", (), (), (), ("routing",)
+                root,
+                Path("copilot.toml"),
+                summary,
+                "supervisor",
+                None,
+                (),
+                (),
+                (),
+                ("routing",),
             )
             prepared = PreparedDevProfile(
                 composition, profile, root, root / "home", root / "cwd", root / "data",

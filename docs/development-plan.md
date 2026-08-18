@@ -3,10 +3,10 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前与下一里程碑的执行计划 |
-| 更新日期 | 2026-08-17 |
+| 更新日期 | 2026-08-18 |
 | 当前阶段 | 阶段二：公开 SDK 与 Web 创作体验 |
-| 当前状态 | 阶段一正常业务主链完成；Copilot SDK、单 Profile local/private 安装正常链与第二领域参考包已落地 |
-| 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018 已接受并作为当前基线 |
+| 当前状态 | 多 Agent 仓网正常业务主链完成；目录发现、Task 显式选包、独立单 Agent 仓网包与根级共享 Tool 已落地 focused gate |
+| 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018 + ADR-019 为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
 | 阶段二后续 | Web Studio、Marketplace、生产模型质量与真实产品 E2E；多用户产品流程属于阶段三 |
 
@@ -19,7 +19,7 @@ Workspace 下的 Task 可按用户意图复用普通文件，也可通过同一�
 Resource ref 复用中间数据。保存什么、读取什么、怎样复用、裁剪、合并或覆盖，由用户
 要求、Skill 和 Tool 决定，Platform 不理解仓网数据语义。
 
-## 0. 阶段二当前切片：Copilot SDK 与单 Profile 安装正常链
+## 0. 阶段二当前切片：Copilot SDK、Task 选包与单 Profile 多包组合
 
 Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码入口：
 
@@ -27,11 +27,12 @@ Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码�
 2. `copilot validate` 以调用者给出的显式 source root 为边界，静态验证 manifest、Skill、
    Runtime Role identity/reference 与 Tool package 引用，并输出有界摘要或 typed failure；
    它不证明完整 Role 可被 Runtime 加载，该 Runtime 门属于 Atom 2。
-3. 所有 manifest 组件路径都相对于显式 source root；仓网参考工程以
-   `copilots/warehouse-network` 为唯一 source root，静态声明三项 Skill、两项 Role 和
-   `supply_chain`/`map_utils` Tool。
-4. Atom 2a 的 `copilot dev` 在隔离 Profile 中复制完整 Skill 树和 Role TOML；Tool 保持 source
-   owner，并在 `copilot.toml` 显式引用 `runtime.toml`。Tool 只声明直接项目 manifest、hash lock、
+3. Copilot-owned Skill/Role 路径都相对于显式 package root；一个 package 只有一个 `[root]`。
+   `copilots/warehouse-network` 与 `copilots/warehouse-network-single-agent` 是两个独立 package，
+   分别拥有多 Agent Supervisor 和关闭 multi-agent 的单 Root Agent。
+4. Atom 2a 的 `copilot dev` 在隔离 Profile 中复制完整 Skill 树和 child Role TOML；Tool 保持独立
+   source owner。Copilot 可用 `{id, package}` 引用显式根级 Tool registry 的严格 `tool.toml`；
+   仓网 Planner/Maps 当前位于根 `tools/`，不通过另一个 Copilot 引用。Tool 只声明直接项目 manifest、hash lock、
    Python module server、参数与 typed env binding；SDK generic provisioner 在 Profile、Tool source
    和 Workspace 外执行 bounded Python/Node build/install，缺声明、锁、宿主 adapter 或准备失败
    返回 typed `EnvironmentUnavailable`。SDK 不扫描文件猜语言或 server，不调用 Tool setup，也不
@@ -45,9 +46,10 @@ Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码�
    fixture 驱动真实 app-server，按 canonical 事件验证 Supervisor Skill→声明 Role→精确 MCP
    Tool→child terminal→Root final/turn complete；最终文本不能作为 PASS 依据。公开结果不含
    Runtime ID、绝对路径或原始请求。
-7. Atom 2b 增加单 Profile local/private package 安装正常链。应用启动配置显式注册一个或多个
-   `{package id, source root, prepared descriptor}`；Browser 只能请求已注册 id。Platform 持久
-   desired active、source/configured revision、managed Skill/Role IDs 与 safe failure；冷启动在
+7. Atom 2b 增加单 Profile local/private package 安装正常链。应用启动配置只给可信 Copilot 根
+   与 prepared 根，Server 从一级子目录的严格 manifest 发现所有包；Browser 只能请求已发现 ID。
+   Platform 按 `(Profile, package)` 持久 desired active、source/configured revision、managed
+   Skill/child Role IDs 与 safe failure；冷启动在
    app-server 前预检/stage/publish或精确清理 managed destinations。运行中变更返回
    `restartRequired`，不伪造热切换。
 8. `ready` 不进入数据库；GET 状态只在当前 Runtime instance 对 trusted authorized Workspace
@@ -55,21 +57,26 @@ Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码�
    真实执行仍由 native spawn/MCP acceptance 证明。
 9. 当前仍不建立真实生产模型质量验收、Web Builder、Catalog、Release 或 Marketplace，也不把
    Settings Agents 误写成 Copilot 创作入口。
+10. 存在可用包时，新建 Thread 列出全部 configured package 并要求用户显式选择；Task 固定
+    `copilot_package_id`，Run/Thread/Turn 复用它。平台不提供单/多 Agent 模式开关，不按 Prompt
+    或默认包自动加载仓网能力。
 
 当前验证 reference 是：
 
 ```bash
-copilot validate copilots/warehouse-network
+copilot validate copilots/warehouse-network --tool-registry-root tools
+copilot validate copilots/warehouse-network-single-agent --tool-registry-root tools
 ```
 
-退出：新源码目录可由 `init` 生成并由 `validate` 静态通过；仓网参考工程从其单一 source root
-静态通过；runtime parser、hash lock、Python/Node provisioner、prepared descriptor 与
+退出：新源码目录可由 `init` 生成并由 `validate` 静态通过；两个独立仓网包从各自 source root
+并通过同一根级 Tool registry 静态通过；runtime parser、hash lock、Python/Node provisioner、prepared descriptor 与
 临时 Plugin projection 有 focused tests；fake transcript 覆盖 official RPC 顺序、参数、inventory
 与 cleanup，真实 app-server fresh init→dev gate 证明 SDK-managed preparation 与同一 discovery 链；fresh init→test gate
 证明本地确定性 Provider 下的原生 Role/MCP 正常链。仓网参考工程与 generated package 使用
 同一个 generic prepare owner；`dev`/`test` 默认复用稳定 Tool 环境缓存，Skill/Role/提示词变化
-不会重装未变化依赖。平台 real 启动只调用一次
-`copilot prepare` 并把内部 descriptor 交给 Server，不再按 supply/maps 分叉安装。能力基线和教程明确本地 E2 gate 与未实现边界；生产
+不会重装未变化依赖。平台 real 启动遍历可信 Copilot 根，并为每个包调用同一个
+`copilot prepare`，再把按 package ID 分区的内部 descriptor 交给 Server；不再按 supply/maps
+或具体 Copilot 名称分叉安装。能力基线和教程明确本地 E2 gate 与未实现边界；生产
 模型质量、Web 创作和 Marketplace 只有在各自 owner 的后续 Atom 具备真实证据后才能更新；
 Runtime ready 刻意保持 instance-scoped observation，不建设持久 readiness truth。
 

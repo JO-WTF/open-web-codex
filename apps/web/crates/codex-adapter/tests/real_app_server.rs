@@ -158,7 +158,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     };
     let mut events = host.subscribe();
     let started = adapter
-        .start_thread(&workspace)
+        .start_thread(&workspace, None)
         .await
         .expect("start Thread");
     let first_runtime_instance = host.runtime_instance_id().await;
@@ -260,7 +260,7 @@ async fn archive_explicitly_abandons_an_unmaterialized_thread() {
     };
 
     let started = adapter
-        .start_thread(&workspace)
+        .start_thread(&workspace, None)
         .await
         .expect("start unmaterialized Thread");
     host.schedule_restart(config)

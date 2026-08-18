@@ -3,10 +3,10 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前事实与证据 |
-| 观察日期 | 2026-08-17 |
+| 观察日期 | 2026-08-18 |
 | 代码快照 | 阶段二 Copilot 平台工作树（基于 `9530e5e54b`） |
 | 当前阶段 | 阶段二已进入；阶段一仓网 Copilot 正常业务闭环作为已通过基线 |
-| 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
+| 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) + [ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) |
 
 本文回答“当前构建能证明什么”。源码存在、局部测试通过、真实 Runtime 运行和从阶段一
 业务 Task/Web 开始的产品 E2E 是不同证据，不能互相替代。
@@ -14,9 +14,10 @@
 ## 1. 结论
 
 当前 checkout 已从 clean DB/Profile、真实 Web Task 入口、真实 Codex Runtime 和真实 Provider
-完成阶段一仓网正常业务闭环。这个结论只覆盖仓网参考 Copilot，不代表 Web Studio、
-Marketplace、多用户产品或完整 hardening 矩阵已经完成。第二领域参考包已进入应用可信 source
-注册和 Profile desired 安装合同，但尚未完成真实数据库生命周期或生产模型质量验收。
+完成多 Agent 仓网 Copilot 的阶段一正常业务闭环。这个结论不自动覆盖新加入的单 Agent 仓网
+Copilot，也不代表 Web Studio、Marketplace、多用户产品或完整 hardening 矩阵已经完成。单 Agent
+包当前已有静态组合、共享 Tool、package-keyed Root config 和 Web 显式选择的 E1/E2 证据；完整
+真实业务 E4 尚未运行。
 
 阶段二 Copilot SDK 已提供 `copilot init` 源码脚手架和 `copilot validate` 静态组合
 验证；`copilot dev` 提供隔离 discovery probe：通过官方 app-server 握手、
@@ -24,11 +25,12 @@ Marketplace、多用户产品或完整 hardening 矩阵已经完成。第二领�
 `mcpServerStatus/list` 验证声明能力可被 Runtime 发现。`copilot test` 另以本地确定性 Responses
 fixture 驱动真实 app-server，已从 fresh init 通过 Supervisor Skill、声明 Role、精确 MCP Tool
 参数/结构化结果、child terminal 和 Root terminal 的单条 normal case；PASS 不读取最终文本。
-它没有生产模型质量验收、Web 创作链、Catalog 或 Marketplace。Platform 现在已有单 Profile
-local/private package 安装正常链：应用显式注册 source，DB 持久 desired/configured/failure，
-Profile Host 在 Runtime 启动前收敛 Skill/Role，当前 Runtime 用官方 `skills/list` 即时证明 Skill
-discovery。`ready` 不持久；Role 静态 configured 与 native spawn acceptance 分开报告。
-当前 Tool 环境合同已收敛到通用 SDK owner：每个 `[[tools]]` 显式引用 `runtime.toml`，Tool
+它没有生产模型质量验收、Web 创作链、Catalog 或 Marketplace。Platform 现在从显式可信
+Copilot 根发现所有一级 package，并以 `(profile, package)` 持久 desired/configured/failure；
+Browser 创建 Thread 时列出可用 package 并只提交所选 ID。Profile Host 在 Runtime 启动前收敛
+全部 active 包的 Skill/child Role，每个包生成一个 package-keyed Root execution config；`ready`
+不持久。当前 Tool 环境合同已收敛到根级共享 registry：`[[tools]]` 可按 package 引用严格
+`tool.toml`，Tool 的 `runtime.toml`
 source 只保留 Python/Node 项目 manifest、hash lock、server entry/env binding 声明与领域代码。
 SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，生成内部
 `prepared-tools.v1.json` 与 dev/test 使用的一次性 Plugin 投影；Tool 不再提供 setup、launcher
@@ -56,11 +58,12 @@ SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，�
 
 | 维度 | 当前等级 |
 | --- | --- |
-| 真实多 Agent 运行 | 阶段一 normal path 已通过真实 Web E2E |
+| 真实多 Agent 运行 | 多 Agent 仓网包的阶段一 normal path 已通过真实 Web E2E |
+| 单 Agent 仓网运行 | 独立 package、Root config、共享 Tool 与 Web 选择合同已通过静态/focused gate；真实业务 E4 未运行 |
 | Root 用户输入与 execution projection | 阶段一 normal path 可用；pending approval 刷新恢复已通过 |
 | Tool/Skill SDK 与 Studio | Copilot 源码 `init`/`validate`、通用环境 `prepare`、隔离 `dev` 与本地 fixture `test` 存在；旧 Web Studio 已删除 |
 | Agent/Supervisor 创作 | 旧 Web authoring 已删除；阶段一仅直接编辑 Profile Skill/Role |
-| Copilot 编译、Profile 安装和通用 Runtime discovery | 单 Profile local/private source 的持久安装、停用与冷启动收敛已实现；当前 Runtime Skill discovery 即时验证，Role spawn 仍由独立真实 gate 证明 |
+| Copilot 编译、Profile 安装和通用 Runtime discovery | 可信根一级目录发现、多 package 持久安装、停用与冷启动收敛已实现；当前 Runtime Skill discovery 即时验证，child Role spawn 仍由独立真实 gate 证明 |
 | 算法工程师自助扩展 | 未实现 |
 | 第二领域与多用户隔离 | `meeting-action-review` 已通过本地第二领域组合验证并加入应用 trusted source；通用单 Profile 安装的真实 PostgreSQL lifecycle 已通过，多用户隔离未验证 |
 
@@ -74,7 +77,7 @@ SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，�
 | E3 | 真实 Provider + 真实 Codex Runtime 的受控纵向运行 |
 | E4 | 从 clean DB/Profile 的真实业务 Task 入口完成阶段一 normal path，并通过一次关键 pending approval 刷新恢复 |
 
-当前仓网 Copilot 的阶段一 normal path 达到 E4；多用户、完整失败/竞态矩阵、a11y 和视觉细节
+当前多 Agent 仓网 Copilot 的阶段一 normal path 达到 E4；单 Agent 包尚未达到 E4。多用户、完整失败/竞态矩阵、a11y 和视觉细节
 属于后续 hardening，不反向扩大本阶段定义。
 
 ## 3. 2026-08-12 clean real Web E4
@@ -225,17 +228,22 @@ Profile seed 与显式应用资产 composition：
 
 - checked-in `copilots/warehouse-network` 提供 Root Supervisor、Data、Network
   三项 Skill 默认内容和 `data_agent`、`network_agent` 两项原生 Role 默认配置；
+- checked-in `copilots/warehouse-network-single-agent` 是不同 package ID 的独立 Copilot；它用
+  一个 Root Agent 直接启用相同仓网 Tool policy 并关闭 multi-agent。该 Root Agent 配置不会作为
+  child Role 安装；当前证据为 package validate、Root config projection 和 focused contract；
 - Profile Host 只接受 native Skill/Role 两种 typed startup destination，并显式区分普通
   `Seed` 与 package-managed `Managed`。普通 seed 仍只在缺失时 create-new 并保留已存在内容；
-  当前显式选择的仓网包使用其三项 Skill 和两项 Role 声明 ID，部署升级在 Runtime 启动前只在
+  多 Agent 仓网包使用其三项 Skill 和两项 Role 声明 ID，部署升级在 Runtime 启动前只在
   内容漂移时原子更新。duplicate spec 在任何写入前拒绝；symlink、目录、逃逸和非法输入失败；
   `config.toml`、用户其他 Skill/Role 与 Workspace 不受影响。6 项单测通过；
 - 仓网验收 Profile 通过 Codex 官方进程级 feature override，在首次请求前关闭
   `plugins`、`remote_plugin`、`apps` 与 `tool_suggest`；CLI feature discovery 精确报告四项
   均为 disabled，real clean-Profile Runtime gate 仍能发现三项 package Skill、两项 Role 与
   role-local MCP。平台没有复制 Plugin/App/Tool Suggest discovery，也没有改写 `config.toml`；
-- real mode 在 Server 启动前只执行一次 generic `copilot prepare`。SDK 从显式选择的开发者包
-  manifest、Tool runtime、direct manifest/hash lock 生成外置依赖环境和
+- real mode 在 Server 启动前枚举显式可信 Copilot 根，并对每个包执行 generic
+  `copilot prepare`。两个仓网包只按 package ID 引用根级
+  `tools/warehouse-network-planner`/`tools/warehouse-network-maps`；SDK 从 Tool package manifest、
+  runtime、direct manifest/hash lock 生成外置依赖环境和
   `prepared-tools.v1.json`；Server typed 校验 capability root、server、stdio transport 和 env
   binding，不从 cwd、Workspace、`CARGO_MANIFEST_DIR` 或源码树扫描 fallback；
 - Profile 不复制 Tool、venv、Node dependency、Mock、cache 或 test。Data/Network Role source
@@ -304,9 +312,9 @@ malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除�
 | Root coordination | Platform 第二控制面、Supervisor continuation 与主动 Root Turn 已删除；Runtime 原生 wait/mailbox/steer 是唯一协作路径 | E2 原生 runtime/projection gate；完整业务 E2E 未完成 |
 | Capability Catalog | 无生产 crate、API、Browser DTO/client、UI 或当前 schema 对象 | 不再是阶段一能力 |
 | Package Compiler | 无当前生产 owner；阶段二目标文档保留设计输入 | 不再是阶段一能力 |
-| Profile Installation | Platform 按 Profile 持久 local/private package desired state、configured revision、managed Skill/Role IDs 与安全 failure；应用 source 是显式可信启动配置，Browser activate/deactivate 只传 package id；冷启动在 app-server 前收敛或清理精确 native destinations | E2 focused + 真实 PostgreSQL lifecycle；revision refresh、失败保留删除权与 deactivate 清理均已通过。没有 Catalog/Release/Marketplace、多用户产品流或动态热切换 |
+| Profile Installation | Platform 从显式可信应用根发现一级 Copilot 目录，按 `(Profile, package)` 持久 desired state、configured revision、managed Skill/child Role IDs 与安全 failure；Browser 只传 package ID；冷启动在 app-server 前合并收敛或清理精确 native destinations | E2 focused + 既有真实 PostgreSQL lifecycle；新的多 package schema/compile gate 已通过，完整双包 PostgreSQL/Runtime restart gate 待补。没有 Catalog/Release/Marketplace、多用户产品流或动态热切换 |
 | Runtime discovery/readiness | 当前 instance 用官方 `skills/list` + trusted authorized Workspace 即时验证声明 Skill；DB 不存 ready。Role 无官方静态 list，只报告 configured；可执行性由 native Role spawn/MCP acceptance gate 证明 | built-in native gate E2；ready 不跨 instance/revision复用 |
-| Copilot / Tool SDK | Copilot `init` 生成以 `runtime.toml`、直接项目 manifest/hash lock 声明 Tool 运行需求的最小组合源码；`validate` 执行静态组合校验，`prepare` 在 Tool/Profile/Workspace 外准备依赖并生成 typed descriptor，`dev` 通过 official selected roots 与 Skill/MCP inventory 输出 `discovery_ready`，`test` 用本地确定性 Responses fixture 和真实 app-server canonical events 验证 Supervisor→Role→MCP→Root 单条正常链；checked-in `meeting-action-review` 以会议行动项领域复用同一合同，声明一项 Supervisor Skill、一项 Role/Skill、一项 Python Tool 和一项 Markdown Workspace Artifact delivery | E2 本地 discovery/normal-case gate；fresh generated init→dev/test 与第二领域 validate/prepare/dev/test 已验证；第二领域 native test 956 ms。应用已将它注册为 trusted source，可经 activate API 持久 desired；通用安装的真实 PostgreSQL lifecycle 已通过。没有生产模型质量验收、Web Studio 或 Marketplace |
+| Copilot / Tool SDK | Copilot `init` 生成最小组合源码；一个 package 只声明一个 `[root]`。`validate` 支持 package-local Tool 或根级 `tool.toml` 引用，shared Tool 必须经显式 registry；`prepare` 在 Tool/Profile/Workspace 外准备依赖并生成 typed descriptor，`dev`/`test` 保留 official Runtime normal-case gate。checked-in meeting 与单/多 Agent 仓网包复用同一合同 | E2 既有本地 discovery/normal-case gate；92 项 SDK 单测和三个 checked-in package 的共享 registry validate 已通过。没有生产模型质量验收、Web Studio 或 Marketplace |
 | Skill 创作 | 阶段一仅支持直接编辑 Profile Skill；公开 SDK/Web 创作后移 | 无阶段一产品流 |
 | Agent/Supervisor Studio | 旧 Settings/Sidebar Studio 已删除；原生 Profile Agent 配置保留 | 无阶段一 authoring 产品流 |
 | Copilot Builder | 没有 Web 创作入口；现有 Profile 安装状态 API 不是 Builder、Catalog 或 Marketplace | E0 |

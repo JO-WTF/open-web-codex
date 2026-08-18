@@ -67,12 +67,21 @@ def run_copilot_tests(
     *,
     timeout_seconds: float = 45.0,
     tool_environment_root: Path | None = None,
+    tool_registry_root: Path | None = None,
 ) -> dict[str, Any]:
     try:
-        composition = load_dev_composition(source_root, manifest_path)
+        composition = load_dev_composition(
+            source_root,
+            manifest_path,
+            tool_registry_root=tool_registry_root,
+        )
     except CopilotDevError as error:
         raise _test_error_from_dev(error) from error
-    tests = load_copilot_test_cases(source_root, manifest_path)
+    tests = load_copilot_test_cases(
+        source_root,
+        manifest_path,
+        tool_registry_root=tool_registry_root,
+    )
     if not tests:
         raise CopilotTestError(
             "TestDefinitionInvalid", "manifest", "manifest must declare at least one [[tests]] case"
@@ -122,7 +131,7 @@ def _run_case(
     environment: dict[str, str] = {}
 
     supervisor_path = (
-        prepared.profile_root / "skills" / composition.supervisor_skill / "SKILL.md"
+        prepared.profile_root / "skills" / composition.root_skill / "SKILL.md"
     ).resolve(strict=True)
     supervisor_marker = supervisor_path.read_text(encoding="utf-8")
     child_prompt = "Run the declared MCP tool once and return its exact structured result."
@@ -150,7 +159,7 @@ def _run_case(
             )
             client.initialize()
             skills = client.request("skills/list", {"cwds": [str(workspace)], "forceReload": True})
-            _require_skill(skills, composition.supervisor_skill)
+            _require_skill(skills, composition.root_skill)
             selected_roots = [
                 {
                     "id": tool.id,
@@ -196,7 +205,7 @@ def _run_case(
                         {"type": "text", "text": case.prompt, "textElements": []},
                         {
                             "type": "skill",
-                            "name": composition.supervisor_skill,
+                            "name": composition.root_skill,
                             "path": str(supervisor_path),
                         },
                     ],
@@ -213,7 +222,7 @@ def _run_case(
                     mock,
                     root_thread_id=root_thread_id,
                     root_turn_id=root_turn_id,
-                    supervisor_skill=composition.supervisor_skill,
+                    supervisor_skill=composition.root_skill,
                     deadline=runtime_deadline,
                 )
             except CopilotTestError as error:

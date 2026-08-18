@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppServerEvent, ThreadTokenUsage, WorkspaceInfo } from "./types";
 import {
   CodexMonitorWebClient,
+  type CopilotTaskSelection,
   type SupervisorOverviewData,
 } from "./services/webClient";
 import type {
@@ -16,6 +17,7 @@ import {
 } from "../browser/client";
 import Layout from "./components/Layout";
 import Sidebar from "./components/Sidebar";
+import type { CopilotOption } from "./components/Sidebar/Workspaces";
 import Conversation from "./components/Conversation";
 import FileManager from "./components/FileManager";
 import RightSidebar, { type RightSidebarTab } from "./components/RightSidebar";
@@ -478,6 +480,7 @@ export default function WebApp() {
   const [providerCatalogOpenRequest, setProviderCatalogOpenRequest] = useState(0);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [copilots, setCopilots] = useState<CopilotOption[]>([]);
   const activeThreadModelSelectionRef = useRef<{
     threadId: string;
     providerId: string;
@@ -2035,6 +2038,28 @@ export default function WebApp() {
     }
   }, [appendLog, client]);
 
+  const refreshCopilots = useCallback(async () => {
+    try {
+      const status = await client.copilotProfileStatus();
+      const activePackageIds = new Set(
+        status.installations
+          .filter((installation) => installation.active && !installation.restartRequired)
+          .map((installation) => installation.packageId),
+      );
+      setCopilots(
+        status.packages
+          .filter((candidate) => candidate.available && activePackageIds.has(candidate.packageId))
+          .map((candidate) => ({
+            packageId: candidate.packageId,
+            displayName: candidate.displayName ?? candidate.packageId,
+          })),
+      );
+    } catch (error) {
+      setCopilots([]);
+      appendLog("error", error instanceof Error ? error.message : String(error));
+    }
+  }, [appendLog, client]);
+
   const refreshThreads = useCallback(async (forWorkspaceId?: string) => {
     const wid = forWorkspaceId ?? activeWorkspaceId;
     if (!wid) return;
@@ -2110,6 +2135,7 @@ export default function WebApp() {
  useEffect(() => {
    void checkGateway();
     void refreshWorkspaces();
+    void refreshCopilots();
    const unsub = client.subscribeAppServerEvents(
       (event) => {
         if (!rememberAppServerEvent(recentAppServerEvents.current, event)) return;
@@ -2125,7 +2151,7 @@ export default function WebApp() {
       { onOpen: () => setGatewayState("online"), onError: () => setGatewayState("offline") },
     );
     return unsub;
-  }, [appendLog, checkGateway, client]);
+  }, [appendLog, checkGateway, client, refreshCopilots, refreshWorkspaces]);
 
   // Auto-refresh threads when workspace changes
   useEffect(() => {
@@ -2186,6 +2212,7 @@ export default function WebApp() {
  const startThread = useCallback(async (
    workspaceId?: string,
    retryTemporaryId?: string,
+   copilot?: CopilotTaskSelection | null,
  ): Promise<string | null> => {
    const wid = workspaceId ?? activeWorkspaceId;
    if (!wid) return null;
@@ -2244,6 +2271,7 @@ export default function WebApp() {
        operationId: temporaryId,
        providerId,
        modelId,
+       copilot,
        onRunAccepted: showAcceptedStart,
      });
      // Handle Codex CLI JSON-RPC error embedded in result
@@ -2952,7 +2980,10 @@ export default function WebApp() {
           onCreateWorkspace={createWorkspace}
 
           onSelectThread={selectThread}
-          onNewThread={startThread}
+          copilots={copilots}
+          onNewThread={(workspaceId, copilot) => {
+            void startThread(workspaceId, undefined, copilot);
+          }}
           onArchiveThread={archiveThread}
           onRemoveWorkspace={removeWorkspace}
           baseUrl={baseUrl}

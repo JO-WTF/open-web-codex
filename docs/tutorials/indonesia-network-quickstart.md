@@ -11,7 +11,7 @@
 
 ## 2. 准备文件
 
-从 [base fixture](../../copilots/warehouse-network/tools/planner/examples/indonesia-network/base/) 上传：
+从 [base fixture](../../tools/warehouse-network-planner/examples/indonesia-network/base/) 上传：
 
 ```text
 demand-cities.csv

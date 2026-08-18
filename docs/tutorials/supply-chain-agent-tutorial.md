@@ -10,7 +10,7 @@
 
 ## 数据与来源
 
-fixture 位于 [indonesia-network/base](../../copilots/warehouse-network/tools/planner/examples/indonesia-network/base/)，包括：
+fixture 位于 [indonesia-network/base](../../tools/warehouse-network-planner/examples/indonesia-network/base/)，包括：
 
 - `demand-cities.csv`：50 个需求城市、人口、需求量、省份和坐标。
 - `existing-warehouses.csv`：11 个已有仓及 center/cross-docking 类型和上游中心仓关系。

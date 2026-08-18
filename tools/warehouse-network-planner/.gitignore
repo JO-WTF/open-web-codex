@@ -1,0 +1,10 @@
+.codex/
+.pytest_cache/
+.ruff_cache/
+.venv/
+build/
+__pycache__/
+*.egg-info/
+examples/indonesia-network/source/
+examples/indonesia-tutorial/releases/
+examples/indonesia-tutorial/sources/

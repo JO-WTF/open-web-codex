@@ -90,7 +90,7 @@ Agent Definition、Runtime Role 等核心术语。现有 Web 教程记录旧仓�
   保存公开 SDK/Studio/Catalog 的阶段二研究输入；其中 Work State、Data Intake、
   Resource Broker、Run Completion 和 Root-only 输入设计已被 ADR-018 否决。
 
-这三篇不再拥有当前阶段标记、实施顺序或验收门。阶段一只以 ADR-018 和开发计划为准；
+这三篇不再拥有当前阶段标记、实施顺序或验收门。阶段一只以 ADR-018、ADR-019 和开发计划为准；
 “是否已经实现”只以能力基线和代码验证为准。
 
 ### 架构决策
@@ -101,7 +101,9 @@ Agent Definition、Runtime Role 等核心术语。现有 Web 教程记录旧仓�
 
 ADR-008 与 ADR-011 保存旧教程/仓网原型的历史决定，其具体 Workspace 安装、扫描和
 发现路径已被后续 ADR 替代。ADR-017 的 Clean Spine A/B 已被替代；当前阶段一的接受
-基线是 [ADR-018：Codex 原生机制驱动的内置仓网 Copilot](adr/018-built-in-network-copilot-runtime-closure.md)。
+基线是 [ADR-018：Codex 原生机制驱动的内置仓网 Copilot](adr/018-built-in-network-copilot-runtime-closure.md)
+与局部替代单包/default 假设的
+[ADR-019：Task 显式选择独立 Copilot 包，Tool 使用根级共享注册表](adr/019-task-selected-copilot-packages-and-shared-tools.md)。
 
 ## 事实与冲突处理
 
@@ -111,7 +113,7 @@ ADR-008 与 ADR-011 保存旧教程/仓网原型的历史决定，其具体 Work
 2. “V1 要交付什么”以产品设计为准。
 3. “当前代码由谁拥有、如何连接”以系统架构和代码为准。
 4. “当前能力能否对外声称可用”以能力基线及其验证证据为准。
-5. “接下来先做什么”以路线图和开发计划为准；当前阶段一以 ADR-018 和开发计划为准，
+5. “接下来先做什么”以路线图和开发计划为准；当前阶段一以 ADR-018、ADR-019 和开发计划为准，
    公开 Copilot 平台的 owner、合同与删除门留待阶段二重新裁决。
 6. “为什么接受某个长期技术决定”以 ADR 为准。
 
@@ -125,10 +127,10 @@ ADR-008 与 ADR-011 保存旧教程/仓网原型的历史决定，其具体 Work
 | 目标用户、产品边界或长期价值变化 | 产品愿景、产品设计、路线图 |
 | 所有权、组件关系或持久化边界变化 | 系统架构、安全模型、相关 ADR |
 | Runtime、Web 或平台能力新增或降级 | 能力基线、开发计划 |
-| 阶段一工作切片、功能验收或可信风险变化 | ADR-018、开发计划；仓网冻结迁移输入变化另复审 Enterprise Supervisor 文档；形成证据后再更新能力基线 |
+| 阶段一工作切片、功能验收或可信风险变化 | ADR-018/019、开发计划；仓网冻结迁移输入变化另复审 Enterprise Supervisor 文档；形成证据后再更新能力基线 |
 | 多 Agent 协同方式、Agent 责任或异常收敛规则变化 | 多 Agent 协同演进、能力基线、相关计划 |
-| 阶段一上下文、Workspace 文件、MCP Resource、Artifact 或 Agent 交换边界变化 | ADR-018、开发计划、系统架构、能力基线；历史信息交换文档不拥有当前合同 |
-| 阶段一 Supervisor、Agent、Skill、MCP 关系变化 | ADR-018、开发计划、系统架构；阶段二研究文档不拥有当前合同 |
+| 阶段一上下文、Workspace 文件、MCP Resource、Artifact 或 Agent 交换边界变化 | ADR-018/019、开发计划、系统架构、能力基线；历史信息交换文档不拥有当前合同 |
+| 阶段一 Supervisor、Agent、Skill、MCP、Copilot package 或共享 Tool 关系变化 | ADR-018/019、开发计划、系统架构；阶段二研究文档不拥有当前合同 |
 | 阶段顺序或进入条件变化 | 路线图、开发计划 |
 | 启动参数、部署拓扑或故障处理变化 | 运行手册 |
 | `codex/` 非生成差异变化 | Patch Map、相关测试、必要 ADR |

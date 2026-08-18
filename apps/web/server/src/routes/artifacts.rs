@@ -766,7 +766,7 @@ mod tests {
     #[test]
     fn rejects_downloaded_artifact_size_and_contract_drift() {
         let valid = include_bytes!(
-            "../../../../../copilots/warehouse-network/tools/planner/contracts/fixtures/\
+            "../../../../../tools/warehouse-network-planner/contracts/fixtures/\
 network_planning_report_markdown.v1.md"
         );
         assert_eq!(
@@ -941,7 +941,7 @@ network_planning_report_markdown.v1.md"
             .unwrap();
         std::fs::create_dir(checkout.root.join("deliverables")).unwrap();
         let valid = include_bytes!(
-            "../../../../../copilots/warehouse-network/tools/planner/contracts/fixtures/\
+            "../../../../../tools/warehouse-network-planner/contracts/fixtures/\
 network_planning_report_markdown.v1.md"
         );
         std::fs::write(checkout.root.join("deliverables/report.md"), valid).unwrap();

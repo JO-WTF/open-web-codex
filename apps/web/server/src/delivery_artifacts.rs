@@ -512,11 +512,11 @@ mod tests {
     #[test]
     fn validates_materialized_bundle_schema_and_kind() {
         let report_fixture = include_bytes!(
-            "../../../../copilots/warehouse-network/tools/planner/contracts/fixtures/\
+            "../../../../tools/warehouse-network-planner/contracts/fixtures/\
 network_planning_report_markdown.v1.md"
         );
         let map_fixture = include_bytes!(
-            "../../../../copilots/warehouse-network/tools/planner/contracts/fixtures/\
+            "../../../../tools/warehouse-network-planner/contracts/fixtures/\
 network_comparison_map_bundle.v1.json"
         );
         validate_materialized_bundle("network_planning_report_markdown.v1", report_fixture)

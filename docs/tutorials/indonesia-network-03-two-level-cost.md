@@ -4,7 +4,7 @@
 
 ## 新增数据
 
-从 [current coverage extension](../../copilots/warehouse-network/tools/planner/examples/indonesia-network/current-coverage-extension/current-coverage.csv) 上传 `current-coverage.csv`。它包含：
+从 [current coverage extension](../../tools/warehouse-network-planner/examples/indonesia-network/current-coverage-extension/current-coverage.csv) 上传 `current-coverage.csv`。它包含：
 
 ```text
 demand_city_id,serving_warehouse_id,upstream_center_id

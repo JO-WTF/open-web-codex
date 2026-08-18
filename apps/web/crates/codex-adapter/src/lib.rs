@@ -110,6 +110,9 @@ pub struct TurnOptions {
     pub access_mode: Option<String>,
     pub images: Vec<String>,
     pub collaboration_mode: Option<Value>,
+    /// Server-resolved package persisted by the owning Task. This is never
+    /// accepted as a Runtime path or arbitrary configuration value.
+    pub copilot_package_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -210,6 +213,7 @@ pub trait CodexAdapter: Send + Sync {
     async fn start_thread(
         &self,
         workspace: &AuthorizedWorkspace,
+        copilot_package_id: Option<&str>,
     ) -> Result<StartedThread, AdapterError>;
 
     async fn fork_thread(

@@ -77,7 +77,7 @@ Root 创建 Case 后，所有 assignment 只传同一个 `case_id`。完整业�
 
 ## 印尼教程数据
 
-`copilots/warehouse-network/tools/planner/examples/indonesia-network/base/` 是明确标记的教程 fixture：
+`tools/warehouse-network-planner/examples/indonesia-network/base/` 是明确标记的教程 fixture：
 
 - 50 个需求城市，需求量 `ceil(population / 1000)`；
 - 5 个中心仓：Jakarta、Palembang、Medan、Surabaya、Makassar；
@@ -85,7 +85,8 @@ Root 创建 Case 后，所有 assignment 只传同一个 `case_id`。完整业�
 - 550 条末端报价和 30 条干线报价；
 - 城市点位经过 geoBoundaries ADM2 边界检查；
 - 报价和距离的 Spearman 相关系数不低于 0.85；
-- `current-coverage-extension` 和 `candidate-extension` 单独提供，可按教程逐篇加入。
+- `current-coverage-extension` 单独提供，可按教程逐篇加入；候选仓文件只保留在 `base` 中，
+  避免维护两份完全相同的数据。
 
 Fixture 不得自动回退。只有用户明确说 mock/demo/tutorial，Demo Server 才能复制它；真实用户文件优先走 Data Server。
 

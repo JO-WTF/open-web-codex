@@ -54,7 +54,7 @@ ring = "0.17"
 rand_core = { version = "0.6", features = ["getrandom"] }
 zeroize = "1"
 tempfile = "3"
-toml_edit = "0.23"
+toml_edit = { version = "0.23", features = ["serde"] }
 
 [profile.dev-small]
 inherits = "dev"

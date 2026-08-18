@@ -86,7 +86,7 @@ struct PreparedEnvironmentBinding {
 
 fn prepared_descriptor_path() -> PathBuf {
     repository_root().join(
-        ".local/open-web-codex/tool-environments/warehouse-network/copilot-sdk/prepared-tools.v1.json",
+        ".local/open-web-codex/tool-environments/warehouse-network-copilot/copilot-sdk/prepared-tools.v1.json",
     )
 }
 
@@ -551,7 +551,7 @@ async fn run_probe(
 ) {
     let mut events = host.subscribe();
     let root = adapter
-        .start_thread(workspace)
+        .start_thread(workspace, None)
         .await
         .expect("start Standard Root Workspace Probe");
     let turn = adapter

@@ -2,7 +2,7 @@ schema_version = 1
 id = "__ID__"
 display_name = "__DISPLAY_NAME__"
 
-[supervisor]
+[root]
 skill = "__SUPERVISOR_SKILL__"
 
 [[skills]]

@@ -3,10 +3,10 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前事实 |
-| 快照日期 | 2026-08-17 |
+| 快照日期 | 2026-08-18 |
 | 代码快照 | 阶段二 Copilot 平台工作树（基于 `9530e5e54b`） |
-| 当前阶段边界 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 与 [开发计划](development-plan.md) |
-| 接受决策 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) |
+| 当前阶段边界 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md)、[ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) 与 [开发计划](development-plan.md) |
+| 接受决策 | ADR-018；ADR-019 局部替代其单包/default 假设 |
 
 本文只描述当前代码怎样组成、事实由谁保存以及已经存在的边界偏离。目标方案不在这里
 冒充现状；验证强度以 [能力基线](capability-baseline.md) 为准。
@@ -21,7 +21,7 @@ Browser WebApp
   -> one Codex app-server process for the current Profile
   -> Codex Runtime
   -> authorized Workspace / managed Runner
-  -> Profile-native Skill/Role plus role-local MCP over explicit application assets
+  -> Task-selected Copilot Root config + Profile-native Skill/Role + declared MCP Tools
 ```
 
 当前交付仍是单用户、单 Profile，但 User、Organization、Profile、Workspace、Task、Run
@@ -33,14 +33,14 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | 事实 | 当前 owner | 当前实现状态 |
 | --- | --- | --- |
 | Thread、Turn、Item、上下文、Agent 调度 | Codex Runtime | Runtime 是权威 owner；已物化 Thread 的实际 Provider/model 属于 official Thread settings，不由 Profile 默认值或 Task 字段覆盖。当前 Adapter/Server/Browser 仍叠加本地 history mode、approval overlay 和 live/history merge，其中 Browser 会按相同用户文本去重，尚未收敛为 official Item/client identity 的纯投影 |
-| Skill、Plugin、MCP、Tool 执行 | Codex Runtime | Runtime 执行；开发者 Copilot 包使用原生 Profile Skill/Role 与 Role-local MCP。Tool source 用 `runtime.toml`、直接项目 manifest/hash lock 与领域代码声明运行需要；SDK generic provisioner 在 Runtime 启动前于 Profile/Tool/Workspace 外准备环境，并产出内部 prepared descriptor；Runtime 启动与用户对话期间不安装依赖。Standard/fork 产品路径不扫描 cwd、Workspace 或源码树猜 Copilot 包 |
-| Profile 进程与 `CODEX_HOME` | Profile Host | 单 Profile 进程已存在；普通 startup file 仍只对 clean Profile 做 create-new seed，并保留已存在的用户文件。启动时显式选择的 Copilot 包拥有其声明的 Skill/Role 源码；Profile Host 用 managed package destination 收敛这些声明 ID，其他 Skill、Role 和 `config.toml` 不覆盖。进程 `HOME`/`USERPROFILE` 与 neutral cwd 均按 Profile Host 隔离；Server 仍有显式宿主认证导入路径 |
+| Skill、Plugin、MCP、Tool 执行 | Codex Runtime | Runtime 执行；每个 Copilot 包声明一个 Root Skill、可选 Root Agent config、原生 child Role 与 MCP policy。根级 Tool 包用 `tool.toml`/`runtime.toml` 声明运行需要；多个独立 Copilot 可引用同一个 Tool package，但彼此没有引用或通信。SDK generic provisioner 在 Runtime 启动前于 Profile/Tool/Workspace 外准备环境并产出内部 descriptor；Runtime 启动与用户对话期间不安装依赖。产品路径不扫描 cwd/Workspace 或按 Prompt 猜 Copilot |
+| Profile 进程与 `CODEX_HOME` | Profile Host | 单 Profile 进程已存在；应用发现的 active Copilot 包在冷启动前共同收敛各自 managed Skill 与 child Role destination。Root Agent source 只生成 package-keyed Thread config，不安装成 child Role。其他 Skill、Role 和 `config.toml` 不覆盖；进程 `HOME`/`USERPROFILE` 与 neutral cwd 均按 Profile Host 隔离；Server 仍有显式宿主认证导入路径 |
 | Provider 定义、模型目录与 Profile 的未来 Thread 默认选择 | Codex Profile config + Runtime；Platform 保存 Browser catalog 投影 | `config/batchWrite` 持久化 Runtime 配置；Platform 的 Profile catalog 保存 Web 配置入口所需的 provider/model 投影和非敏感 credential env-key 名称。真实 fresh Profile 已通过 provider-scoped Fetch、选择、重启恢复和新 Thread 创建，不再把空 model pair 发给 Server |
 | Provider Secret | Platform encrypted Secret store 或显式环境凭据 | Direct credential 只进入 Profile/provider scoped Secret store；环境凭据只持久化变量名称并由 owned Profile process 注入。Codex config、Browser DTO、日志和文档不保存明文 |
 | Workspace 授权、执行根与普通文件 | Platform + Runner | Workspace 独立于 Thread/Run；Task 已固定唯一授权 Workspace，Run/fork/recovery 受数据库和服务端不变量约束；真实 Runtime Probe 已证明 Root/child 使用同一 native `sandboxCwd`，同时观察到 macOS `/var` 与 `/private/var` 的同 inode 词法差异；physical-path join 的通用收敛进入后续 backlog，当前仓网链继续以既有 Workspace denial gate 为边界；通用文件 Web 产品流已统一到 `/workspaces/{id}/files` 与 `GitRuntime` |
 | MCP Resource 内容与生命周期 | 各个 MCP provider | Codex 按 Thread/Turn 当前 server inventory 执行 list/read，official Tool Item 保存 ResourceLink/structuredContent；供应链 Data/Network 是同一 `supply_chain` provider Resource 域的两个 Tool，字节保存在 Profile 私有、按 canonical Workspace 隔离且内容寻址的 `ResourceStore`。Resource 只表示可复用的确切处理结果，不表示来源可信、业务准入或“最新”。Platform 不复制内容或提供通用 Resource API；只从完成 Tool Item 的 ResourceLink 投影 exact identity/provenance，供同 Profile+Workspace 的用户显式选择，并逐字段复验。地图卡片另保存 bounded renderer、exact `map_card_spec` ref 及父卡片 ref；浏览器按组织与 Run 授权通过 producing Thread 的 official `mcpServer/resource/read` 即时取得 GeoJSON |
 | 通用 Copilot Resource/Workspace 基础合同 | Platform/Workspace authority 与 `tools/copilot-provider-sdk` 分工拥有 | Workspace 授权与 Artifact 物化属于 Platform/Runner；独立、领域无关的 provider SDK 提供 `ResourceRef` envelope、expected-schema 校验、canonical codec、payload bounds、typed errors、Workspace canonical/no-follow writer 与 provider load/publish primitives。Tool 用 `runtime.toml.platform_packages` 声明受 SDK registry 管理的平台包；generic provisioner 从已安装 SDK distribution 构建并注入 Tool 环境，不读取仓网路径或在 Runtime 启动时安装 |
-| Task、Run、Approval、Artifact、Audit | Platform | 持久 Artifact 只接受 active Copilot `[[deliveries]]` 声明的 exact producer、固定 typed kind/schema/MIME/verifier 和 Workspace-relative descriptor，并按 producing Item provenance 物化；中间 Resource 永不注册 Artifact。仓网包当前声明 Markdown 报告、地图文件和 inline map card，meeting 包声明 Markdown 报告；Platform 不理解其业务字段。producer-time verifier snapshot 随 Artifact 持久化，恢复和下载不依赖届时 active package registry，切换 Copilot 不会使既有交付失效。Browser 依据 MIME 安全预览、授权下载；当前 Thread 的正文只把 durable `ArtifactSummary.download_url` 锚定到 exact producing Item 所在 Turn，跨 Thread 交付留在 Agent History 的交付区，不依赖 Assistant 复述路径、简报正文或“最新 Turn”位置 |
+| Task、Run、Approval、Artifact、Audit | Platform | Task 固定一个显式选择的 `copilot_package_id`；Run、Thread 创建与后续 Turn 沿用该 ID，Task 不保存路径或运行配置。持久 Artifact 只接受 active package registries 合并后的 exact producer、固定 typed kind/schema/MIME/verifier 和 Workspace-relative descriptor，并按 producing Item provenance 物化；中间 Resource 永不注册 Artifact。两个仓网包声明相同地图/报告交付，meeting 包声明 Markdown 报告；Platform 不理解业务字段。producer-time verifier snapshot 随 Artifact 持久化，恢复和下载不依赖届时 active registry |
 | Codex Inline Visualization | Codex Runtime + Platform 授权投影 | Runtime 仍生成原生 `visualize`/`file` 引用和 Thread-scoped 文件；Platform 将执行器绝对路径投影为 basename，并只允许当前授权 Profile/Thread 读取。Web 直接支持原生 HTML 与静态 PNG/JPEG/GIF/WebP；HTML 复用 Codex viewer assets 并运行在无 same-origin 权限的脚本沙箱/CSP 中，图片验证扩展名、大小与文件签名。SVG、Markdown 和任意 Artifact 脚本不进入该表面；额外 typed 卡片只来自 active Copilot 声明的固定 delivery kind，当前实例是仓网 `map.v3` |
 | 用户输入 | Runtime 请求，Platform Approval 投影 | Root 官方输入路径已在真实 E2E 中通过 |
 | Agent execution | Runtime 事件，Platform projection | 有等待、输入、完整终态和有界、裁剪后的 reasoning 文本投影；属于可重建视图，不暴露 encrypted reasoning |
@@ -61,29 +61,34 @@ capability package publisher，以及对应 Rust/Browser DTO、client、Settings
 
 当前 schema 已删除 Capability Catalog Draft/Release/Installation、Agent definition/release/
 run binding、Workspace package release 与 Supervisor instruction policy release 等无 owner
-对象。产品启动只走 Standard Thread；它只读取当前单 Profile local/private package desired
-installation，不读取旧 Catalog Release、Agent/Supervisor binding 或 governed execution
-selection。Slice 4B.2-A 已由 migration 55 删除 Supervisor policy
+对象。产品启动只走 Standard Thread；Task 只读取当前单 Profile local/private package desired
+installation 和自身固定的 package ID，不读取旧 Catalog Release、Agent/Supervisor binding 或
+governed execution selection。Slice 4B.2-A 已由 migration 55 删除 Supervisor policy
 snapshot/binding、definition/revision/release 和 continuation 六表；它们不再构成 Catalog、
 发布或协作表面。Runtime agent projection 是现役 Platform 可重建投影。Slice 4B.2-B 已删除
 本地 capability manifest、`profile_capabilities` 和 Web contract bundle；Profile Host 只
 typed 校验官方 `initialize` 的四字段，并只对 `codexHome` 执行 Profile owner 安全校验。
 
-当前开发者 Copilot 包不经过旧 Catalog/Draft/Release 路径。应用通过可重复的
-`--copilot-package-source <id> <package-root> <prepared-descriptor>` 注册可信 local/private
-source；Browser 只能按 package id 激活或停用，不能提交服务器路径。单 Profile 安装表只持久
-`desired_active`、source/configured revision、精确 managed Skill/Role ID 与安全 failure code，
-不持久或伪造 Runtime ready。clean Profile 可用 `--default-copilot-package` 建立一次默认安装，
-之后数据库 desired state 在冷启动时权威收敛；active local source 更新时下一次冷启动跟随应用
-注册修订。Server 从已注册 source 读取 `copilot.toml`、Skill 和 Role，不编译进任何仓网源码。
-`scripts/run-local.sh` 在 real Server 启动前只调用一次 SDK `copilot prepare`；SDK
-严格读取 manifest 中每个 Tool 的 `runtime.toml`、直接项目 manifest 与 hash lock，在平台 data
-root 下准备 Python/Node 环境，并写入内部 `prepared-tools.v1.json`。Server 只消费该 typed
-descriptor，按当前 Profile 解析 `profile_home`、`tool_state_root`、`dependency_root` 与声明的
-host 绑定，再把 transport 与 Role policy 合成原生 Role-local MCP。描述符、运行时文件或依赖
-缺失时 real mode 明确 unavailable；平台不扫描目录猜语言或 server。开发期 `dev`/`test`
-默认复用 SDK 的本机 Tool 环境缓存；Skill、Role 或提示词变化只更新组合描述，不重装 Tool
-依赖。
+当前开发者 Copilot 包不经过旧 Catalog/Draft/Release 路径。部署者显式配置可信
+`--copilots-root` 与 `--copilot-prepared-root`；Server 只枚举 Copilot 根的一级子目录和其中严格的
+`copilot.toml`，package ID 来自 manifest，descriptor 只按该 ID 从 prepared root 解析。Browser
+只接收/提交 package ID，不能提交服务器路径。存在可用包时，新建 Thread 必须显式选择一个包；
+没有默认包、Prompt 分类或显示名推断。Task 持久该选择，Run 与 Turn 复用它。
+
+安装表以 `(profile_id, package_id)` 为主键，只持久 `desired_active`、source/configured revision、
+精确 managed Skill/child Role ID 与安全 failure code，不持久或伪造 Runtime ready。所有 available
+包在 clean Profile 建立 desired 安装，数据库 desired state 在冷启动时权威收敛。每个包只有一个
+`[root]`；可选 Root Agent TOML 只投影成以 package ID 为键的官方 Thread config overrides，不
+安装成 child Role。Server 不编译任何仓网源码。
+
+`scripts/run-local.sh` 在 real Server 启动前遍历同一 Copilot 根，对每个包调用 generic SDK
+`copilot prepare`。Copilot 的 `[[tools]]` 可用 `{id, package}` 引用根级 `tools/` 注册表中的严格
+`tool.toml`；仓网共享实现当前位于 `tools/warehouse-network-planner` 和
+`tools/warehouse-network-maps`。SDK 读取其 `runtime.toml`、直接项目 manifest 与 hash lock，
+在平台 data root 下准备 Python/Node 环境并写入内部 `prepared-tools.v1.json`。Server 只消费该
+typed descriptor，按当前 Profile 解析 typed binding，再把 transport 与 Root/child Role policy
+合成官方 config。缺失或冲突明确 unavailable/failed；平台不扫描 Workspace、猜语言、server 或
+Prompt。开发期 `dev`/`test` 默认复用 SDK 本机 Tool 环境缓存。
 普通 `run-local` 启动与重启始终无损，不自动删除数据库或 prepared Tool 环境。开发 checkout
 发生不兼容的数据库或 prepared composition 变化时，操作者可显式使用
 `--rebuild-development-database`：该入口只接受仓库默认 data directory 与固定 loopback
@@ -94,12 +99,13 @@ host 绑定，再把 transport 与 Role policy 合成原生 Role-local MCP。描
 外部 `CODEX_BIN` 或 `--codex-bin`。这是因为当前平台依赖 Patch Map 中保留的 Runtime seam，
 通用 Codex binary 即使能够启动，也不能被当作具备相同的 child Role/MCP 冷恢复能力。
 
-Profile Host
-只允许 `$CODEX_HOME/skills/<id>/SKILL.md` 和 `$CODEX_HOME/agents/<role>.toml` 两种
+Profile Host 只允许 `$CODEX_HOME/skills/<id>/SKILL.md` 和
+`$CODEX_HOME/agents/<role>.toml` 两种
 typed destination，不写 `config.toml`，不复制工具代码、venv、Node 依赖、Mock 或缓存。
 普通 startup file 在 clean Profile 缺失时使用 create-new 原子落盘，已存在文件继续保留。
-当前 active Copilot 包把声明的 Skill ID 与 Role name 作为 package-managed destination：
-Profile Host 在 app-server 启动前先预检所有目标并 stage 全部写入，再批量 publish；失败时回滚
+所有 active Copilot 包把声明的 Skill ID 与非 Root child Role name 作为 package-managed
+destination；不同包目标冲突时整个 composition 明确失败。Profile Host
+在 app-server 启动前先预检所有目标并 stage 全部写入，再批量 publish；失败时回滚
 本批已发布变更。停用只删除持久安装事实记录的精确 managed destinations，用户使用其他 ID
 创建的 Skill、Role 和 `config.toml` 不受影响。运行中 activate/deactivate 只保存 desired state
 并返回 `restartRequired`，下一次冷启动完成文件与 Runtime 收敛。当前 Runtime instance 的 GET
@@ -110,8 +116,11 @@ list endpoint，因此单独报告 configured，真实可执行性仍由 native 
 `plugins`、`remote_plugin`、`apps` 与 `tool_suggest`；不改写持久 Profile 配置，也不在
 Platform 侧过滤 Runtime discovery 或 Tool。
 
-Data/Network Role TOML 只持有 `plugins.<tool>.mcp_servers.<server>` 下的精确 allowlist 与 Tool 级审批策略；
-Root 没有全局仓网 MCP。Data 的六个有界本地 Tool（含 candidate delta/derive）统一预批准；Network 以 `prompt` 为默认，
+多 Agent 仓网包的 Data/Network Role TOML 只持有
+`plugins.<tool>.mcp_servers.<server>` 下的精确 allowlist 与 Tool 级审批策略；其 Root 没有全局
+仓网 MCP。独立的单 Agent 仓网包由一个 Root Agent 直接启用同一 Data/Network/Maps Tool policy，
+并以 `features.multi_agent=false` 禁止 child Agent。两者只共享根级 Tool package，不互相引用或
+通信。Data 的六个有界本地 Tool（含 candidate delta/derive）统一预批准；Network 以 `prompt` 为默认，
 预批准路线/成本/验证/分析/选址/比较、coverage GeoJSON 等本地 Tool 与最终 Markdown 报告 `publish_network_planning_report`；`map_utils` 预批准 `create_map_card` 与 `revise_map_card`。
 外部导航、距离矩阵和 final Workspace 地图导出继续保留 official approval。MCP provider
 将 Data→Network 输入声明为严格的 `normalized_input_ref`：必须是 `supply_chain_data` 发布的
@@ -132,6 +141,8 @@ SDK/Server/run-local gate 证明。
 各自 Role Skill 与精确 MCP/tool inventory。平台在每个 Standard Root Turn 通过官方 typed Skill
 input 显式选择 Supervisor 正文，并关闭 Root 的通用 Skill 目录，因此 Root 不再通过 shell 读取
 `SKILL.md`；child 仍由 Role 将目录收窄为唯一业务 Skill。native wait/mailbox、同 child follow-up 和终态正常。
+这是多 Agent 包的既有真实证据；新单 Agent 包当前只有静态组合、Root config 和本地 Tool 合同
+证据，不把它宣称为新的真实业务 E4。
 修改 Profile Skill 会发出 `skills/changed`，force reload 读取新内容；修改 Profile Role 只影响
 下一次 spawn，既有 child 不变。既有 child 对无配置 delta 的官方 MCP reload 是 safe-boundary
 no-op，status 仍返回同一 inventory，不伪造 startup transition。单独的 malformed Role gate
@@ -290,12 +301,14 @@ Role/任意模型质量矩阵。
 这些都是当前事实，不是应继续兼容的接口，也不是已经完成的阶段一正常链前置。后续按 owner
 处理 Browser legacy、完整 Thread/history/lease、approval replay、event retention 和多用户隔离；
 不再把它们插回已经通过的仓网正常路径。
-阶段一边界由 [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 约束；具体顺序只进入
+阶段一边界由 [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 与
+[ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) 约束；具体顺序只进入
 [开发计划](development-plan.md)。
 
 ## 9. 证据入口
 
 - 当前能力和真实 E2E 范围：[能力基线](capability-baseline.md)
 - 本轮源码与失败链审计：[临时审计](temporary-copilot-platform-refactor-audit-2026-08-08.md)
-- 当前阶段所有权与协同合同：[ADR-018](adr/018-built-in-network-copilot-runtime-closure.md)
+- 当前阶段所有权与协同合同：[ADR-018](adr/018-built-in-network-copilot-runtime-closure.md)、
+  [ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md)
 - 当前下一步：[开发计划](development-plan.md)

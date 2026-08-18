@@ -2,7 +2,7 @@ schema_version = 1
 id = "meeting-action-review"
 display_name = "Meeting Action Review"
 
-[supervisor]
+[root]
 skill = "meeting-action-supervisor"
 
 [[skills]]

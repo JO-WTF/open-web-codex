@@ -129,6 +129,7 @@ pub struct RunLease {
     pub profile_id: Uuid,
     pub workspace_id: Uuid,
     pub workspace_root: PathBuf,
+    pub copilot_package_id: Option<String>,
     pub fork_thread_id: Option<String>,
     pub fork_source_run_id: Option<Uuid>,
     pub token: String,

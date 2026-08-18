@@ -58,6 +58,7 @@ class ToolRuntimeSource:
     id: str
     root: Path
     runtime: Path
+    source_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -152,7 +153,14 @@ def prepare_tool_composition(
         else platform_package_resolver
     )
     declared = [
-        (tool, load_tool_runtime_manifest(source_root, tool.root, tool.runtime))
+        (
+            tool,
+            load_tool_runtime_manifest(
+                source_root if tool.source_root is None else tool.source_root,
+                tool.root,
+                tool.runtime,
+            ),
+        )
         for tool in tools
     ]
     executable_names = {

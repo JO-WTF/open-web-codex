@@ -65,7 +65,7 @@ class CopilotManifestTests(unittest.TestCase):
 id = "network-copilot"
 display_name = "Network Copilot"
 
-[supervisor]
+[root]
 skill = "supervisor"
 
 [[skills]]
@@ -116,6 +116,31 @@ structured_content = {{ status = "ok" }}
         self.assertEqual(first.agent_ids, ("planner",))
         self.assertEqual(first.tool_ids, ("routes",))
         self.assertRegex(first.composition_descriptor_sha256, r"^[0-9a-f]{64}$")
+
+    def test_shared_tool_resolves_only_from_explicit_root_registry(self) -> None:
+        registry = self.root / "registry"
+        package = registry / "shared-routes"
+        registry.mkdir()
+        (self.root / "tools" / "routes").rename(package)
+        (package / "tool.toml").write_text(
+            'schema_version = 1\nid = "shared-routes"\nruntime = "runtime.toml"\n',
+            encoding="utf-8",
+        )
+        manifest = (self.root / "copilot.toml").read_text(encoding="utf-8")
+        self.write_manifest(
+            manifest.replace(
+                'id = "routes"\nroot = "tools/routes"\nruntime = "tools/routes/runtime.toml"',
+                'id = "routes"\npackage = "shared-routes"',
+            )
+        )
+
+        with self.assertRaises(CopilotPackageError) as caught:
+            validate_copilot_package(self.root)
+        self.assertEqual(caught.exception.code, "missing_reference")
+
+        summary = validate_copilot_package(self.root, tool_registry_root=registry)
+        self.assertEqual(summary.tool_ids, ("routes",))
+        self.assertRegex(summary.composition_descriptor_sha256, r"^[0-9a-f]{64}$")
 
     def test_test_server_is_distinct_from_capability_root(self) -> None:
         self.add_test()
@@ -226,9 +251,9 @@ display_name = "Map"
         self.write_manifest(manifest.replace('id = "worker"', 'id = "supervisor"'))
         self.assert_code("duplicate_id")
 
-    def test_requires_supervisor(self) -> None:
+    def test_requires_root(self) -> None:
         manifest = (self.root / "copilot.toml").read_text(encoding="utf-8")
-        self.write_manifest(manifest.replace('[supervisor]\nskill = "supervisor"\n\n', ""))
+        self.write_manifest(manifest.replace('[root]\nskill = "supervisor"\n\n', ""))
         self.assert_code("required_field")
 
     def test_rejects_skill_frontmatter_mismatch(self) -> None:

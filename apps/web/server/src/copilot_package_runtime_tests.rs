@@ -247,7 +247,7 @@ fn repository_root() -> PathBuf {
 
 fn prepared_network_copilot_descriptor(repository: &Path) -> PathBuf {
     repository.join(
-        ".local/open-web-codex/tool-environments/warehouse-network/copilot-sdk/prepared-tools.v1.json",
+        ".local/open-web-codex/tool-environments/warehouse-network-copilot/copilot-sdk/prepared-tools.v1.json",
     )
 }
 
@@ -1361,7 +1361,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     );
 
     let root = adapter
-        .start_thread(&workspace)
+        .start_thread(&workspace, None)
         .await
         .expect("start Standard Root Thread");
     let root_mcp = adapter
@@ -1754,7 +1754,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         root: workspace_root.canonicalize().expect("canonical Workspace"),
     };
     let root = adapter
-        .start_thread(&workspace)
+        .start_thread(&workspace, None)
         .await
         .expect("start Standard Root Thread");
     let store = seed_form_gate_store(&database_url, &workspace.root, &root.thread_id).await;
@@ -2095,7 +2095,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         root: workspace_root.canonicalize().expect("canonical Workspace"),
     };
     let root = adapter
-        .start_thread(&workspace)
+        .start_thread(&workspace, None)
         .await
         .expect("start Standard Root Thread");
     let mut runtime_events = host.subscribe();

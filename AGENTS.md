@@ -132,13 +132,16 @@ composition, authentication entry and milestone status are current-state facts
 owned by `docs/architecture.md`, `docs/capability-baseline.md` and
 `docs/development-plan.md`; do not duplicate them here.
 
-For current Copilot-platform work, ADR-018 is the normative design and
-development baseline. The current stage is the built-in network-planning
+For current Copilot-platform work, ADR-018 plus the package-selection and
+shared-Tool decisions in ADR-019 are the normative design and development
+baseline. The current stage is the built-in network-planning
 Copilot's architecture correction and complete runtime closure; public SDK,
 Studio, five-object publishing, Marketplace, a domain-free demo, a second domain
 and multi-user product flows are later-stage work. Treat the warehouse Supervisor
-path as migration input and regression evidence, not as a platform contract. Do
-not extend it with Prompt wiring, aliases, path-scanned discovery, false
+path as migration input and regression evidence, not as a platform contract. A
+typed scan of the explicitly configured trusted application Copilot root is the
+only current package discovery path; do not extend it with Prompt wiring,
+aliases, Workspace/cwd/source-tree discovery, false
 installation/readiness, model-visible transaction protocols or projection-owned
 workflow behavior.
 
@@ -308,6 +311,8 @@ seams.
 - Current and next milestone execution: `docs/development-plan.md`
 - Accepted phase-one Copilot design and development baseline:
   `docs/adr/018-built-in-network-copilot-runtime-closure.md`
+- Accepted Task-selected package and shared-Tool baseline:
+  `docs/adr/019-task-selected-copilot-packages-and-shared-tools.md`
 - Deferred phase-two public Copilot platform implementation input:
   `docs/agent-capability-lifecycle-plan.md`
 - Frozen warehouse Supervisor prototype migration input:

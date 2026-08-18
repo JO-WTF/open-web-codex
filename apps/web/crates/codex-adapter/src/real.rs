@@ -3,7 +3,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig, ProfileHostState};
 use serde_json::{json, Map, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
@@ -29,25 +29,50 @@ pub struct ThreadSkillConfig {
     pub main_prompt: Option<PathBuf>,
 }
 
-fn thread_start_params(workspace_root: &str, skill_config: &[ThreadSkillConfig]) -> Value {
+/// One trusted package-owned Root execution configuration. The Platform
+/// selects only its package `id`; paths and Runtime config remain server-owned.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RootExecutionConfig {
+    pub id: String,
+    pub skill_config: Vec<ThreadSkillConfig>,
+    pub runtime_config: Value,
+}
+
+fn thread_start_params(
+    workspace_root: &str,
+    execution: Option<&RootExecutionConfig>,
+) -> Result<Value, AdapterError> {
     let mut params = json!({
         "cwd": workspace_root,
         "approvalPolicy": "on-request",
         "historyMode": "paginated",
     });
-    if !skill_config.is_empty() {
-        params["config"] = json!({
-            "skills.include_instructions": false,
-            "skills.config": skill_config
+    if let Some(execution) = execution {
+        let mut config = execution.runtime_config.clone();
+        let object = config.as_object_mut().ok_or_else(|| {
+            AdapterError::Internal(format!(
+                "Copilot package '{}' Runtime config is not an object",
+                execution.id
+            ))
+        })?;
+        object.insert("skills.include_instructions".to_string(), json!(false));
+        object.insert(
+            "skills.config".to_string(),
+            execution
+                .skill_config
                 .iter()
-                .map(|entry| json!({
-                    "name": entry.name.as_str(),
-                    "enabled": entry.enabled,
-                }))
-                .collect::<Vec<_>>(),
-        });
+                .map(|entry| {
+                    json!({
+                        "name": entry.name.as_str(),
+                        "enabled": entry.enabled,
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into(),
+        );
+        params["config"] = config;
     }
-    params
+    Ok(params)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,43 +81,46 @@ struct RootSkillSelection {
     main_prompt: String,
 }
 
-fn resolve_root_skill_selection(
+fn resolve_root_skill_selections(
     skill_config: &[ThreadSkillConfig],
-) -> Result<Option<RootSkillSelection>, AdapterError> {
+) -> Result<Vec<RootSkillSelection>, AdapterError> {
     let enabled = skill_config
         .iter()
         .filter(|entry| entry.enabled)
         .collect::<Vec<_>>();
-    let Some(entry) = enabled.first() else {
-        return Ok(None);
-    };
-    if enabled.len() != 1 {
-        return Err(AdapterError::Internal(
-            "a fixed Copilot Root requires exactly one enabled Supervisor Skill".to_string(),
-        ));
-    }
-    let main_prompt = entry.main_prompt.as_ref().ok_or_else(|| {
-        AdapterError::Internal(format!(
-            "enabled Supervisor Skill '{}' omitted its Profile main prompt",
-            entry.name
-        ))
-    })?;
-    let main_prompt = main_prompt.canonicalize().map_err(|error| {
-        AdapterError::Internal(format!(
-            "failed to resolve enabled Supervisor Skill '{}': {error}",
-            entry.name
-        ))
-    })?;
-    if !main_prompt.is_file() {
-        return Err(AdapterError::Internal(format!(
-            "enabled Supervisor Skill '{}' is not a regular file",
-            entry.name
-        )));
-    }
-    Ok(Some(RootSkillSelection {
-        name: entry.name.clone(),
-        main_prompt: main_prompt.to_string_lossy().into_owned(),
-    }))
+    enabled
+        .into_iter()
+        .map(|entry| {
+            let main_prompt = entry.main_prompt.as_ref().ok_or_else(|| {
+                AdapterError::Internal(format!(
+                    "enabled Copilot Root Skill '{}' omitted its Profile main prompt",
+                    entry.name
+                ))
+            })?;
+            let main_prompt = main_prompt.canonicalize().map_err(|error| {
+                AdapterError::Internal(format!(
+                    "failed to resolve enabled Copilot Root Skill '{}': {error}",
+                    entry.name
+                ))
+            })?;
+            if !main_prompt.is_file() {
+                return Err(AdapterError::Internal(format!(
+                    "enabled Copilot Root Skill '{}' is not a regular file",
+                    entry.name
+                )));
+            }
+            Ok(RootSkillSelection {
+                name: entry.name.clone(),
+                main_prompt: main_prompt.to_string_lossy().into_owned(),
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedRootExecution {
+    config: RootExecutionConfig,
+    skill_selections: Vec<RootSkillSelection>,
 }
 
 fn thread_fork_params(thread_id: &str, target_root: &str) -> Value {
@@ -135,8 +163,8 @@ pub struct RealCodexAdapter {
     terminal_workspaces: Arc<RwLock<HashMap<String, AuthorizedWorkspace>>>,
     runtime_instance: Arc<Mutex<Option<uuid::Uuid>>>,
     local_events: broadcast::Sender<Value>,
-    root_skill_config: Vec<ThreadSkillConfig>,
-    root_skill_selection: Option<RootSkillSelection>,
+    root_executions: BTreeMap<String, ResolvedRootExecution>,
+    default_root_execution_id: Option<String>,
 }
 
 impl RealCodexAdapter {
@@ -163,10 +191,67 @@ impl RealCodexAdapter {
         workspace_root: PathBuf,
         root_skill_config: Vec<ThreadSkillConfig>,
     ) -> Result<Self, AdapterError> {
+        let root_executions = if root_skill_config.is_empty() {
+            Vec::new()
+        } else {
+            vec![RootExecutionConfig {
+                id: "default".to_string(),
+                skill_config: root_skill_config,
+                runtime_config: json!({}),
+            }]
+        };
+        let default_root_execution_id =
+            (!root_executions.is_empty()).then(|| "default".to_string());
+        Self::from_host_with_root_executions(
+            host,
+            workspace_id,
+            workspace_root,
+            root_executions,
+            default_root_execution_id,
+        )
+    }
+
+    pub fn from_host_with_root_executions(
+        host: ProfileHost,
+        workspace_id: impl Into<String>,
+        workspace_root: PathBuf,
+        root_executions: Vec<RootExecutionConfig>,
+        default_root_execution_id: Option<String>,
+    ) -> Result<Self, AdapterError> {
         let workspace_root = workspace_root.canonicalize().map_err(|error| {
             AdapterError::Internal(format!("failed to resolve workspace root: {error}"))
         })?;
-        let root_skill_selection = resolve_root_skill_selection(&root_skill_config)?;
+        let mut resolved_executions = BTreeMap::new();
+        for execution in root_executions {
+            if execution.id.trim().is_empty() {
+                return Err(AdapterError::Internal(
+                    "Copilot package id is empty".to_string(),
+                ));
+            }
+            let skill_selections = resolve_root_skill_selections(&execution.skill_config)?;
+            let id = execution.id.clone();
+            if resolved_executions
+                .insert(
+                    id.clone(),
+                    ResolvedRootExecution {
+                        config: execution,
+                        skill_selections,
+                    },
+                )
+                .is_some()
+            {
+                return Err(AdapterError::Internal(format!(
+                    "duplicate Copilot package '{id}'"
+                )));
+            }
+        }
+        if let Some(default_id) = default_root_execution_id.as_deref() {
+            if !resolved_executions.contains_key(default_id) {
+                return Err(AdapterError::Internal(format!(
+                    "default Copilot package '{default_id}' is not configured"
+                )));
+            }
+        }
         let (local_events, _) = broadcast::channel(256);
         Ok(Self {
             host,
@@ -181,8 +266,23 @@ impl RealCodexAdapter {
             terminal_workspaces: Arc::new(RwLock::new(HashMap::new())),
             runtime_instance: Arc::new(Mutex::new(None)),
             local_events,
-            root_skill_config,
-            root_skill_selection,
+            root_executions: resolved_executions,
+            default_root_execution_id,
+        })
+    }
+
+    fn root_execution(
+        &self,
+        package_id: Option<&str>,
+    ) -> Result<Option<&ResolvedRootExecution>, AdapterError> {
+        let selected = package_id.or(self.default_root_execution_id.as_deref());
+        let Some(selected) = selected else {
+            return Ok(None);
+        };
+        self.root_executions.get(selected).map(Some).ok_or_else(|| {
+            AdapterError::Internal(format!(
+                "Copilot package '{selected}' is not configured in this Runtime"
+            ))
         })
     }
 
@@ -250,7 +350,7 @@ impl RealCodexAdapter {
     async fn start_thread_in_workspace(
         &self,
         workspace: &AuthorizedWorkspace,
-        skill_config: &[ThreadSkillConfig],
+        execution: Option<&ResolvedRootExecution>,
     ) -> Result<StartedThread, AdapterError> {
         let _runtime = self.prepare_runtime().await?;
         let workspace_root = self.authorized_root(workspace)?;
@@ -258,7 +358,7 @@ impl RealCodexAdapter {
             .host
             .request(
                 "thread/start",
-                thread_start_params(&workspace_root, skill_config),
+                thread_start_params(&workspace_root, execution.map(|value| &value.config))?,
             )
             .await?;
         let thread_id = result
@@ -512,7 +612,11 @@ impl RealCodexAdapter {
             .await
             .contains_key(thread_id);
         if !is_child_thread {
-            if let Some(skill) = &self.root_skill_selection {
+            let execution = self.root_execution(options.copilot_package_id.as_deref())?;
+            for skill in execution
+                .into_iter()
+                .flat_map(|execution| execution.skill_selections.iter())
+            {
                 input.push(json!({
                     "type": "skill",
                     "name": skill.name.as_str(),
@@ -689,7 +793,7 @@ impl CodexAdapter for RealCodexAdapter {
                     id: self.workspace_id.clone(),
                     root: self.workspace_root.clone(),
                 };
-                let started = self.start_thread_in_workspace(&workspace, &[]).await?;
+                let started = self.start_thread_in_workspace(&workspace, None).await?;
                 Ok(json!({ "threadId": started.thread_id }))
             }
             "send_user_message" => {
@@ -717,9 +821,10 @@ impl CodexAdapter for RealCodexAdapter {
     async fn start_thread(
         &self,
         workspace: &AuthorizedWorkspace,
+        copilot_package_id: Option<&str>,
     ) -> Result<StartedThread, AdapterError> {
-        self.start_thread_in_workspace(workspace, &self.root_skill_config)
-            .await
+        let execution = self.root_execution(copilot_package_id)?;
+        self.start_thread_in_workspace(workspace, execution).await
     }
 
     async fn fork_thread(
@@ -1198,7 +1303,7 @@ impl CodexAdapter for RealCodexAdapter {
             ));
         }
         let mut events = self.host.subscribe();
-        let started = self.start_thread_in_workspace(workspace, &[]).await?;
+        let started = self.start_thread_in_workspace(workspace, None).await?;
         self.suppressed_threads
             .write()
             .await
@@ -1993,9 +2098,9 @@ mod tests {
         app_server_event_frame_with_identity, cached_thread_identity_sidecar,
         codex_bubblewrap_is_unavailable, codex_sandbox_disabled_by_environment,
         is_authorized_workspace_root, login_completion, message_parent_thread_id,
-        message_thread_id, parse_runtime_thread_identity, resolve_root_skill_selection,
+        message_thread_id, parse_runtime_thread_identity, resolve_root_skill_selections,
         thread_spawn_parent_thread_id, thread_start_params, turn_sandbox_policy, RealCodexAdapter,
-        ThreadSkillConfig,
+        RootExecutionConfig, ThreadSkillConfig,
     };
     use crate::{RuntimeThreadIdentity, RuntimeThreadIdentitySidecar};
     use serde_json::{json, Value};
@@ -2004,7 +2109,7 @@ mod tests {
 
     #[test]
     fn thread_start_params_omit_skill_config_by_default() {
-        let params = thread_start_params("/runner/workspace", &[]);
+        let params = thread_start_params("/runner/workspace", None).expect("start params");
 
         assert_eq!(
             params,
@@ -2019,9 +2124,9 @@ mod tests {
 
     #[test]
     fn thread_start_params_project_typed_skill_config_in_order() {
-        let params = thread_start_params(
-            "/runner/workspace",
-            &[
+        let execution = RootExecutionConfig {
+            id: "multi-agent".to_string(),
+            skill_config: vec![
                 ThreadSkillConfig {
                     name: "warehouse-supervisor".to_string(),
                     enabled: true,
@@ -2038,7 +2143,10 @@ mod tests {
                     main_prompt: None,
                 },
             ],
-        );
+            runtime_config: json!({}),
+        };
+        let params =
+            thread_start_params("/runner/workspace", Some(&execution)).expect("start params");
 
         assert_eq!(
             params,
@@ -2059,7 +2167,7 @@ mod tests {
     }
 
     #[test]
-    fn root_skill_selection_requires_one_existing_profile_prompt() {
+    fn root_skill_selections_require_existing_profile_prompts() {
         let profile = tempfile::tempdir().expect("Profile root");
         let prompt = profile.path().join("skills/supervisor/SKILL.md");
         std::fs::create_dir_all(prompt.parent().expect("Skill directory"))
@@ -2070,23 +2178,23 @@ mod tests {
         )
         .expect("write Skill prompt");
 
-        let selected = resolve_root_skill_selection(&[ThreadSkillConfig {
+        let selected = resolve_root_skill_selections(&[ThreadSkillConfig {
             name: "supervisor".to_string(),
             enabled: true,
             main_prompt: Some(prompt.clone()),
         }])
-        .expect("resolve fixed Root Skill")
-        .expect("selected Root Skill");
-        assert_eq!(selected.name, "supervisor");
+        .expect("resolve fixed Root Skill");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "supervisor");
         assert_eq!(
-            selected.main_prompt,
+            selected[0].main_prompt,
             prompt
                 .canonicalize()
                 .expect("canonical Skill prompt")
                 .to_string_lossy()
         );
 
-        let error = resolve_root_skill_selection(&[
+        let selected = resolve_root_skill_selections(&[
             ThreadSkillConfig {
                 name: "first".to_string(),
                 enabled: true,
@@ -2098,10 +2206,14 @@ mod tests {
                 main_prompt: Some(prompt),
             },
         ])
-        .expect_err("multiple enabled Root Skills must fail");
-        assert!(error
-            .to_string()
-            .contains("exactly one enabled Supervisor Skill"));
+        .expect("multiple explicit Root Skills are supported");
+        assert_eq!(
+            selected
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
     }
 
     #[test]

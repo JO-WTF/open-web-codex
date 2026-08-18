@@ -1,8 +1,8 @@
 schema_version = 1
 id = "warehouse-network-copilot"
-display_name = "Warehouse Network Copilot"
+display_name = "Warehouse Network · Multi-Agent"
 
-[supervisor]
+[root]
 skill = "warehouse-supervisor"
 
 [[skills]]
@@ -25,19 +25,13 @@ role = "agents/data_agent.toml"
 id = "network_agent"
 role = "agents/network_agent.toml"
 
-[[agents]]
-id = "warehouse_agent"
-role = "agents/warehouse_agent.toml"
-
 [[tools]]
 id = "supply_chain"
-root = "tools/planner"
-runtime = "tools/planner/runtime.toml"
+package = "warehouse-network-planner"
 
 [[tools]]
 id = "map_utils"
-root = "tools/maps"
-runtime = "tools/maps/runtime.toml"
+package = "warehouse-network-maps"
 
 [[deliveries]]
 id = "network-comparison-map"
@@ -47,7 +41,7 @@ kind = "workspace_artifact"
 schema = "network_comparison_map_bundle.v1"
 mime_type = "application/json"
 display_name = "Warehouse network: baseline vs selected facilities"
-content_verifier = { kind = "json_schema", schema_path = "tools/planner/contracts/schemas/network_comparison_map_bundle.v1.schema.json" }
+content_verifier = { kind = "json_schema", tool = "supply_chain", schema_path = "contracts/schemas/network_comparison_map_bundle.v1.schema.json" }
 
 [[deliveries]]
 id = "network-planning-report"

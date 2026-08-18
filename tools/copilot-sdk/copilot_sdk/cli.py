@@ -167,7 +167,11 @@ def _run_dev_probe(args: argparse.Namespace) -> dict[str, object]:
             "timeout-seconds",
             "must be greater than 0 and at most 300",
         )
-    composition = load_dev_composition(args.source_root, args.manifest)
+    composition = load_dev_composition(
+        args.source_root,
+        args.manifest,
+        tool_registry_root=args.tool_registry_root,
+    )
     workspace = validate_workspace(args.workspace)
     codex_bin = _resolve_codex_bin(args.codex_bin)
     prepared = prepare_dev_profile(
@@ -348,12 +352,25 @@ def _print_test_result(payload: dict[str, object], *, as_json: bool) -> None:
 
 
 def _run_prepare(args: argparse.Namespace) -> dict[str, object]:
-    composition = load_dev_composition(args.source_root, args.manifest)
+    composition = load_dev_composition(
+        args.source_root,
+        args.manifest,
+        tool_registry_root=args.tool_registry_root,
+    )
     try:
         prepared = prepare_tool_composition(
             source_root=composition.source_root,
             tools=tuple(
-                ToolRuntimeSource(tool.id, tool.source, tool.runtime)
+                ToolRuntimeSource(
+                    tool.id,
+                    tool.source,
+                    tool.runtime,
+                    source_root=(
+                        None
+                        if tool.owner_root == composition.source_root
+                        else tool.owner_root
+                    ),
+                )
                 for tool in composition.tools
             ),
             output_root=args.output_root,
@@ -425,12 +442,14 @@ def main(argv: list[str] | None = None) -> int:
     validate_copilot = subparsers.add_parser("validate")
     validate_copilot.add_argument("source_root", type=Path)
     validate_copilot.add_argument("--manifest", type=Path, default=Path("copilot.toml"))
+    validate_copilot.add_argument("--tool-registry-root", type=Path)
     validate_copilot.add_argument("--json", action="store_true")
 
     dev_copilot = subparsers.add_parser("dev")
     dev_copilot.add_argument("source_root", type=Path)
     dev_copilot.add_argument("--workspace", type=Path, required=True)
     dev_copilot.add_argument("--manifest", type=Path, default=Path("copilot.toml"))
+    dev_copilot.add_argument("--tool-registry-root", type=Path)
     dev_copilot.add_argument("--profile", type=Path)
     dev_copilot.add_argument("--keep-profile", action="store_true")
     dev_copilot.add_argument("--codex-bin", type=Path)
@@ -442,6 +461,7 @@ def main(argv: list[str] | None = None) -> int:
     test_copilot.add_argument("source_root", type=Path)
     test_copilot.add_argument("--workspace", type=Path, required=True)
     test_copilot.add_argument("--manifest", type=Path, default=Path("copilot.toml"))
+    test_copilot.add_argument("--tool-registry-root", type=Path)
     test_copilot.add_argument("--codex-bin", type=Path)
     test_copilot.add_argument("--tool-environment-root", type=Path)
     test_copilot.add_argument("--timeout-seconds", type=float, default=45.0)
@@ -450,6 +470,7 @@ def main(argv: list[str] | None = None) -> int:
     prepare_copilot = subparsers.add_parser("prepare")
     prepare_copilot.add_argument("source_root", type=Path)
     prepare_copilot.add_argument("--manifest", type=Path, default=Path("copilot.toml"))
+    prepare_copilot.add_argument("--tool-registry-root", type=Path)
     prepare_copilot.add_argument("--output-root", type=Path, required=True)
     prepare_copilot.add_argument("--json", action="store_true")
 
@@ -462,7 +483,11 @@ def main(argv: list[str] | None = None) -> int:
             _print_copilot_summary(summary, manifest=manifest, as_json=args.json)
             return 0
         if args.resource == "validate":
-            summary = validate_copilot_package(args.source_root, args.manifest)
+            summary = validate_copilot_package(
+                args.source_root,
+                args.manifest,
+                tool_registry_root=args.tool_registry_root,
+            )
             _print_copilot_summary(summary, manifest=args.manifest, as_json=args.json)
             return 0
         if args.resource == "dev":
@@ -476,6 +501,7 @@ def main(argv: list[str] | None = None) -> int:
                 _resolve_codex_bin(args.codex_bin),
                 timeout_seconds=args.timeout_seconds,
                 tool_environment_root=args.tool_environment_root,
+                tool_registry_root=args.tool_registry_root,
             )
             _print_test_result(payload, as_json=args.json)
             return 0

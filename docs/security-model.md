@@ -67,6 +67,7 @@ Platform
 
 - 服务器本地路径或 `CODEX_HOME`；
 - Copilot package root、prepared descriptor 路径或其他应用 source 注册参数；
+- Copilot Root Skill/Agent、Tool package 路径或运行配置；Browser 只能提交列表中稳定的 package ID；
 - `organization_id`、`profile_id`、AgentPath 或 Runtime Role 身份；
 - app-server request ID 或原始 JSON-RPC；
 - Secret 明文或配置文件路径；
@@ -125,10 +126,16 @@ session
 ## Profile 与 Runtime 隔离
 
 - 每个用户的 Profile 拥有独立、持久 `CODEX_HOME`；
-- 单 Profile Copilot activate/deactivate 路由只接受应用已注册的 package id，并先执行
-  Session → Organization → owner Profile 授权；可信 source 路径只来自 Server 启动配置。
+- 单 Profile Copilot status/activate/deactivate 与 Task create 只接受应用已发现的 package id，并先
+  执行 Session → Organization → owner Profile 授权；可信 Copilot/prepared/Tool registry 根只来自
+  Server 启动配置。Server 只枚举可信 Copilot 根的一级 manifest，不扫描 Workspace、cwd 或用户路径。
+- 当部署存在 available Copilot 时，Task 必须显式固定一个 package ID；Server 不接受 Prompt、
+  display name、目录名或缺省值作为选择，不把 Root Agent 配置暴露给 Browser。
 - 安装表的 desired/configured/failure 是 Platform 持久事实；`ready` 只能来自当前 Runtime
   instance 的官方 discovery，不能由数据库行、文件存在或路径扫描推断。
+- 根级共享 Tool 只由 SDK 通过显式 registry 和严格 `tool.toml` 解析；Copilot 之间不存在隐式
+  路径引用或通信。Root Agent source 只生成该 package 的 Thread config，不安装成可被其他包 spawn
+  的 child Role。
 - 同一 Profile 同时最多有一个主 app-server 进程；
 - Profile 只能从平台显式授权的 Provider/Secret 与能力配置初始化；不得默认复制、
   挂载或读取服务器操作者的 `$HOME/.codex/auth.json`、Skills、Plugins、MCP 或 Memory；

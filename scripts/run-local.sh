@@ -484,12 +484,9 @@ fi
 case "$database_url" in postgres://*|postgresql://*) ;; *) error "database URL must use postgres:// or postgresql://"; exit 2 ;; esac
 
 mkdir -p "$run_dir" "$log_dir" "$profile_home" "$runner_root"
-warehouse_copilot_package_root="$repo_root/copilots/warehouse-network"
-warehouse_copilot_environment_root="$data_dir/tool-environments/warehouse-network-copilot"
-warehouse_copilot_prepared_descriptor="$warehouse_copilot_environment_root/copilot-sdk/prepared-tools.v1.json"
-meeting_copilot_package_root="$repo_root/copilots/meeting-action-review"
-meeting_copilot_environment_root="$data_dir/tool-environments/meeting-action-review"
-meeting_copilot_prepared_descriptor="$meeting_copilot_environment_root/copilot-sdk/prepared-tools.v1.json"
+copilots_root="$repo_root/copilots"
+copilot_tool_registry_root="$repo_root/tools"
+copilot_prepared_root="$data_dir/tool-environments"
 copilot_sdk_environment_root="$data_dir/sdk-environments/copilot"
 copilot_sdk_python="$copilot_sdk_environment_root/bin/python"
 copilot_sdk_source_marker="$copilot_sdk_environment_root/source-fingerprint"
@@ -740,15 +737,36 @@ prepare_copilot_environment() {
   "$copilot_sdk_python" -c \
     'import importlib.metadata as m; assert m.version("open-web-codex-provider-sdk").startswith("0.1."); assert m.version("open-web-codex-copilot-sdk").startswith("0.1.")'
   "$copilot_sdk_python" -m copilot_sdk prepare "$package_root" \
+    --tool-registry-root "$copilot_tool_registry_root" \
     --output-root "$environment_root" \
     --json
 }
 
 prepare_copilot_environments() {
-  prepare_copilot_environment \
-    "$warehouse_copilot_package_root" "$warehouse_copilot_environment_root"
-  prepare_copilot_environment \
-    "$meeting_copilot_package_root" "$meeting_copilot_environment_root"
+  local manifest package_root package_id environment_root prepared_count=0
+  while IFS= read -r -d '' manifest; do
+    package_root="$(dirname "$manifest")"
+    package_id="$(
+      "$copilot_sdk_python" -c \
+        'import pathlib, sys, tomllib; print(tomllib.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["id"])' \
+        "$manifest"
+    )"
+    [[ "$package_id" =~ ^[a-z0-9]([a-z0-9_-]{0,94}[a-z0-9])?$ ]] || {
+      error "invalid Copilot package id in $manifest"
+      return 1
+    }
+    environment_root="$copilot_prepared_root/$package_id"
+    prepare_copilot_environment "$package_root" "$environment_root"
+    [[ -f "$environment_root/copilot-sdk/prepared-tools.v1.json" ]] || {
+      error "Copilot prepared descriptor is missing for $package_id"
+      return 1
+    }
+    prepared_count=$((prepared_count + 1))
+  done < <(find "$copilots_root" -mindepth 2 -maxdepth 2 -type f -name copilot.toml -print0 | sort -z)
+  ((prepared_count > 0)) || {
+    error "no Copilot packages were discovered under $copilots_root"
+    return 1
+  }
 }
 
 rebuild_development_database() {
@@ -796,14 +814,6 @@ if [[ "$codex_mode" == "real" ]]; then
     export CODEX_CODE_MODE_HOST_PATH="$code_mode_host_bin"
   fi
   run_step "Copilot environments" prepare_copilot_environments
-  [[ -f "$warehouse_copilot_prepared_descriptor" ]] || {
-    error "Copilot prepared descriptor is missing: $warehouse_copilot_prepared_descriptor"
-    exit 1
-  }
-  [[ -f "$meeting_copilot_prepared_descriptor" ]] || {
-    error "Copilot prepared descriptor is missing: $meeting_copilot_prepared_descriptor"
-    exit 1
-  }
 fi
 
 if [[ "$rebuild_development_database_requested" == "1" ]]; then
@@ -823,9 +833,8 @@ if [[ "$codex_mode" == "real" ]]; then
   server_command+=(
     --codex-home "$profile_home"
     --codex-bin "$codex_bin"
-    --copilot-package-source "warehouse-network-copilot" "$warehouse_copilot_package_root" "$warehouse_copilot_prepared_descriptor"
-    --copilot-package-source "meeting-action-review" "$meeting_copilot_package_root" "$meeting_copilot_prepared_descriptor"
-    --default-copilot-package "warehouse-network-copilot"
+    --copilots-root "$copilots_root"
+    --copilot-prepared-root "$copilot_prepared_root"
   )
 fi
 
@@ -849,9 +858,8 @@ export OPEN_WEB_CODEX_WEB_DIST="$web_dist"
 if [[ "$codex_mode" == "real" ]]; then
   export CODEX_HOME="$profile_home"
   export CODEX_BIN="$codex_bin"
-  export OPEN_WEB_CODEX_DEFAULT_COPILOT_PACKAGE="warehouse-network-copilot"
 else
-  unset CODEX_HOME CODEX_BIN OPEN_WEB_CODEX_DEFAULT_COPILOT_PACKAGE
+  unset CODEX_HOME CODEX_BIN
 fi
 
 start_background_server() {

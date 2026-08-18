@@ -90,7 +90,7 @@ class CopilotDevProfileTests(unittest.TestCase):
         )
         (root / "copilot.toml").write_text(
             'schema_version = 1\nid = "sample"\ndisplay_name = "Sample"\n'
-            '[supervisor]\nskill = "supervisor"\n'
+            '[root]\nskill = "supervisor"\n'
             '[[skills]]\nid = "supervisor"\npath = "skills/supervisor"\n'
             '[[agents]]\nid = "worker"\nrole = "agents/worker.toml"\n'
             '[[tools]]\nid = "native"\nroot = "tools/native"\n'
