@@ -1484,6 +1484,9 @@ mod tests {
     const MAP_DELIVERY_SKILL: &str = include_str!(
         "../../../../copilots/warehouse-network/skills/warehouse-map-delivery/SKILL.md"
     );
+    const SINGLE_AGENT_MAP_DELIVERY_SKILL: &str = include_str!(
+        "../../../../copilots/warehouse-network-single-agent/skills/warehouse-single-map-delivery/SKILL.md"
+    );
     const DATA_ROLE: &str =
         include_str!("../../../../copilots/warehouse-network/agents/data_agent.toml");
     const NETWORK_ROLE: &str =
@@ -1519,6 +1522,45 @@ mod tests {
             "child 的 Tool 终态失败、拒绝、取消、超时或输入缺失必须如实报告并停止当前请求"
         ));
         assert!(ANALYSIS_SKILL.contains("缺少输入或 Tool 终态失败时返回 typed 结果并停止"));
+    }
+
+    #[test]
+    fn warehouse_supervisor_skill_selects_the_native_child_continuation_mode() {
+        assert!(SUPERVISOR_SKILL.contains("统一使用原生 Multi-Agent V1"));
+        assert!(
+            SUPERVISOR_SKILL.contains("先 `resume_agent(id)`，再用 `send_input(target, message)`")
+        );
+        assert!(SUPERVISOR_SKILL.contains("`fork_turns=\"none\"`"));
+        assert!(SUPERVISOR_SKILL.contains("不得省略后退回默认 `all`"));
+        assert!(!SUPERVISOR_SKILL.contains("`list_agents`"));
+        assert!(!SUPERVISOR_SKILL.contains("`followup_task`"));
+    }
+
+    #[test]
+    fn warehouse_map_delivery_skills_require_an_explicit_map_spec_selection() {
+        for skill in [MAP_DELIVERY_SKILL, SINGLE_AGENT_MAP_DELIVERY_SKILL] {
+            assert!(skill.contains("当前 Turn 由 Platform 注入的精确 `map_spec_ref`"));
+            assert!(skill.contains("`resource_schema=\"map_card_spec.v1\"`"));
+            assert!(skill
+                .contains("artifact ID、GeoJSON ref、地图标题、模型文本或“上一张地图”不是 spec"));
+            assert!(skill.contains("`map_card_spec_ref_invalid` 或 `map_card_spec_unavailable` 是当前请求的 typed 终态"));
+        }
+        assert!(SUPERVISOR_SKILL.contains(
+            "只有当前 Turn 含 Platform 注入的显式用户选择 `map_spec_ref` 才派发地图修订 child"
+        ));
+    }
+
+    #[test]
+    fn warehouse_map_delivery_skills_style_warehouse_states_from_exact_properties() {
+        for skill in [MAP_DELIVERY_SKILL, SINGLE_AGENT_MAP_DELIVERY_SKILL] {
+            assert!(skill
+                .contains("`kind=\"warehouse\"`、`warehouse_type`、`is_existing` 三个正交字段"));
+            assert!(skill.contains("`is_existing=true AND warehouse_type=center`"));
+            assert!(skill.contains("`is_existing=true AND warehouse_type=cross_docking`"));
+            assert!(skill.contains("`opened_candidate=true` 和 `closed_existing=true`"));
+            assert!(skill.contains("候选 feature 已实际发布时才创建对应候选层和图例"));
+        }
+        assert!(SUPERVISOR_SKILL.contains("`existing_only` 只限制 baseline 的计算范围"));
     }
 
     fn write_file(path: &Path, contents: &str, executable: bool) {

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import hashlib
 import os
 import subprocess
 import sys
@@ -28,8 +29,9 @@ class CodexCargoAdapterTests(unittest.TestCase):
         target = "aarch64-apple-darwin"
         resolver_input: dict[str, str] = {}
 
-        def fake_resolver(spec, *, environ):
+        def fake_resolver(spec, *, environ, cache_root):
             resolver_input.update(environ)
+            self.assertEqual(cache_root, adapter.codex_v8_cache_root(environ))
             return {
                 "RUSTY_V8_ARCHIVE": "/tmp/v8/archive.a.gz",
                 "RUSTY_V8_SRC_BINDING_PATH": "/tmp/v8/binding.rs",
@@ -38,6 +40,7 @@ class CodexCargoAdapterTests(unittest.TestCase):
         with (
             patch.object(adapter, "default_target", return_value=target),
             patch.object(adapter, "configure_native_certificate_store") as configure_trust,
+            patch.object(adapter, "cached_codex_v8_artifacts", return_value=None),
             patch.object(
                 adapter,
                 "resolve_codex_v8_cargo_env",
@@ -60,6 +63,51 @@ class CodexCargoAdapterTests(unittest.TestCase):
         self.assertEqual(environment["ADAPTER_TEST_SENTINEL"], "preserve")
         self.assertEqual(environment["RUSTY_V8_ARCHIVE"], "/tmp/v8/archive.a.gz")
         self.assertEqual(environment["RUSTY_V8_SRC_BINDING_PATH"], "/tmp/v8/binding.rs")
+
+    def test_verified_persistent_cache_skips_the_official_resolver(self) -> None:
+        target = "aarch64-apple-darwin"
+        spec = adapter.TARGET_SPECS[target]
+        version = "150.4.0"
+        archive_name = (
+            f"librusty_v8_{adapter.V8_ARTIFACT_PROFILE}_{target}.a.gz"
+        )
+        binding_name = f"src_binding_{adapter.V8_ARTIFACT_PROFILE}_{target}.rs"
+        with tempfile.TemporaryDirectory() as directory:
+            cache_root = Path(directory)
+            cache_dir = cache_root / f"rusty-v8-{version}-{target}"
+            cache_dir.mkdir()
+            archive = cache_dir / archive_name
+            binding = cache_dir / binding_name
+            archive.write_bytes(b"verified archive")
+            binding.write_bytes(b"verified binding")
+            checksums = cache_dir / (
+                f"rusty_v8_{adapter.V8_ARTIFACT_PROFILE}_{target}.sha256"
+            )
+            checksums.write_text(
+                "\n".join(
+                    [
+                        f"{hashlib.sha256(archive.read_bytes()).hexdigest()} {archive_name}",
+                        f"{hashlib.sha256(binding.read_bytes()).hexdigest()} {binding_name}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(
+                    adapter, "resolved_v8_crate_version", return_value=version
+                ),
+                patch.object(adapter, "resolve_codex_v8_cargo_env") as resolver,
+            ):
+                environment = adapter.resolve_cached_v8_cargo_env(
+                    spec,
+                    environ={"OPEN_WEB_CODEX_V8_CACHE_DIR": str(cache_root)},
+                )
+
+        self.assertEqual(environment["RUSTY_V8_ARCHIVE"], str(archive))
+        self.assertEqual(environment["RUSTY_V8_SRC_BINDING_PATH"], str(binding))
+        resolver.assert_not_called()
 
     def test_macos_uses_pip_vendored_native_trust_store(self) -> None:
         vendored_truststore = Mock()
@@ -103,6 +151,7 @@ class CodexCargoAdapterTests(unittest.TestCase):
                 "resolve_codex_v8_cargo_env",
                 side_effect=RuntimeError("resolver failed"),
             ),
+            patch.object(adapter, "cached_codex_v8_artifacts", return_value=None),
             patch.object(adapter.os, "execvpe") as execvpe,
         ):
             result = adapter.main(["cargo", "build"])

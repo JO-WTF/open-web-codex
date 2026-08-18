@@ -10,4 +10,5 @@ source "$script_dir/cargo-build-cache.sh"
 cargo_build_cache_configure "$repo_root"
 cargo_build_cache_describe
 
-(cd "$repo_root/codex" && just test --cargo-profile ci-test "$@")
+python_cmd="${PYTHON:-python3}"
+(cd "$repo_root/codex" && "$python_cmd" "$repo_root/scripts/run-codex-cargo-with-v8.py" just test --cargo-profile ci-test "$@")

@@ -376,6 +376,39 @@ def test_coverage_map_reuses_exact_normalized_input_without_workspace_parsing(
     assert kinds.count("warehouse") == 3
     assert kinds.count("last_mile_assignment") == 2
     assert kinds.count("linehaul_connection") == 1
+    warehouse_features = [
+        feature["properties"]
+        for feature in payload["features"]
+        if feature["properties"]["kind"] == "warehouse"
+    ]
+    candidate_features = [
+        properties for properties in warehouse_features if not properties["is_existing"]
+    ]
+    assert len(candidate_features) == 1
+    assert candidate_features[0] == {
+        "kind": "warehouse",
+        "warehouse_id": "candidate-c",
+        "warehouse_name": "Candidate C",
+        "warehouse_type": "cross_docking",
+        "city_id": "city-b",
+        "city_name": "City B",
+        "province_id": None,
+        "province_name": None,
+        "is_existing": False,
+        "baseline_active": False,
+        "facility_active": False,
+        "opened_candidate": False,
+        "closed_existing": False,
+    }
+    warehouse_profile = next(
+        feature_type
+        for feature_type in data_ref.profile.feature_types
+        if feature_type.value == "warehouse"
+    )
+    assert warehouse_profile.properties["warehouse_type"] == "string"
+    assert warehouse_profile.properties["is_existing"] == "boolean"
+    assert warehouse_profile.properties["opened_candidate"] == "boolean"
+    assert warehouse_profile.properties["closed_existing"] == "boolean"
     demand_features = [
         feature["properties"]
         for feature in payload["features"]

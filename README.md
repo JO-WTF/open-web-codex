@@ -116,6 +116,12 @@ Set `OPEN_WEB_CODEX_SCCACHE_MODE=required` to fail when sccache is unavailable,
 and `SCCACHE_CACHE_SIZE` to change its hard cache limit. The wrappers disable
 rustc incremental output because it cannot be cached by sccache.
 
+Codex Cargo builds also use a separate checksum-verified V8 artifact cache. It
+defaults to `~/Library/Caches/open-web-codex/codex-v8` on macOS and can be moved
+with `OPEN_WEB_CODEX_V8_CACHE_DIR`. A valid cached archive and binding are used
+without contacting GitHub; only a missing or failed-integrity cache entry invokes
+the official one-time artifact resolver.
+
 Inspect the official Codex upstream status:
 
 ```bash

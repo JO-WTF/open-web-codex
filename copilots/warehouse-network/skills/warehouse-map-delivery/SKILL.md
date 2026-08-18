@@ -15,8 +15,12 @@ metadata:
 
 默认完整样式为：中心仓白色描边 `2.5`；XD 白色描边 `2`；候选仓按仓型用半径 `12` 或 `9`、白色描边 `2`、不透明度 `0.9`；新增启用仓白色描边 `2.5`；没有时效结果的需求城市蓝色 `#2563EB`、半径 `4`、白色描边 `1.25`；时效达标城市半径 `5`、白色描边 `1.5`；未达标城市半径 `6`、白色描边 `1.75`；Last mile 覆盖线蓝色 `#2563EB`、宽度 `1.5`、不透明度 `0.5`；干线覆盖线深蓝 `#1E3A8A`、宽度 `2.5`、不透明度 `0.65`。图例仅列出实际展示对象，并分别保留中心仓、XD、候选仓、新增启用仓、时效达标、时效未达标、Last mile 和干线名称。
 
+仓库点必须以 `kind="warehouse"`、`warehouse_type`、`is_existing` 三个正交字段建立图层，不能只用一个 `kind="warehouse"` 图层：现有中心仓筛选 `is_existing=true AND warehouse_type=center`，现有 XD 筛选 `is_existing=true AND warehouse_type=cross_docking`；候选中心仓/XD 分别筛选 `is_existing=false` 与各自仓型；`opened_candidate=true` 和 `closed_existing=true` 再以独立、高优先级状态层覆盖。只有 profile 中存在这些字段且候选 feature 已实际发布时才创建对应候选层和图例；字段或 feature 缺失时如实省略，不猜测。
+
 `data_ref.profile` 是筛选、表达式、标签和 tooltip 的唯一模型可见真相。按 `discriminator_property` 与 `feature_types` 建立图层，只使用相应 feature type 中具有所需非空类型的字段。为仓库、需求城市和干线配置 hover，选择可读标题及业务标识、仓型、需求量、服务关系、运输时长、距离、成本和方案状态；缺失字段直接省略。
 
-按 `profile.discriminator_property`、`feature_types` 和实际非空字段构造筛选、标签与 hover；不要从业务名称或历史地图猜字段。单一结果可使用 `assigned_warehouse_id`、`distance_km`、`duration_hours`、`unit_cost`；comparison 才可使用 `baseline_*` 与 `facility_*`。缺失字段直接省略，不制作通用替代字段。用户要求修订已有地图时，纯标题、图层、颜色、图例、hover 或视角只调用 `revise_map_card`；需要新覆盖线时先从精确分配结果生成新 GeoJSON。
+按 `profile.discriminator_property`、`feature_types` 和实际非空字段构造筛选、标签与 hover；不要从业务名称或历史地图猜字段。单一结果可使用 `assigned_warehouse_id`、`distance_km`、`duration_hours`、`unit_cost`；comparison 才可使用 `baseline_*` 与 `facility_*`。缺失字段直接省略，不制作通用替代字段。
+
+用户要求修订已有地图时，纯标题、图层、颜色、图例、hover 或视角只调用 `revise_map_card`，且只接受当前 Turn 由 Platform 注入的精确 `map_spec_ref`：它必须是 `server="map_utils"`、`resource_schema="map_card_spec.v1"`、`uri` 以 `maps-data://map-card-spec/` 开头的 ResourceRef。artifact ID、GeoJSON ref、地图标题、模型文本或“上一张地图”不是 spec；缺少精确选择时返回 `needs_context`，请用户在卡片上选择「基于此图修改」。`map_card_spec_ref_invalid` 或 `map_card_spec_unavailable` 是当前请求的 typed 终态，不构造变体、不重试。需要新覆盖线时先从精确分配结果生成新 GeoJSON。
 
 只在用户明确请求最终报告时调用一次 `publish_network_planning_report`，明确请求导出时才调用地图文件渲染。中间 Resource、导航请求和地图数据不是 Artifact。不要为地图或报告重新求解路线、成本或方案。
