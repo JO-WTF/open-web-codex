@@ -20,6 +20,7 @@ ROLE_MCP_SERVER_POLICY_FIELDS = frozenset(
     {
         "enabled",
         "required",
+        "omit_tools_from",
         "default_tools_approval_mode",
         "enabled_tools",
         "disabled_tools",
@@ -933,6 +934,23 @@ def _role_tool_policies(
                     "invalid_type",
                     f"{server_location}.enabled_tools",
                     "must be a non-empty string array",
+                )
+            omitted = server.get("omit_tools_from")
+            if omitted is not None and (
+                not isinstance(omitted, list)
+                or not omitted
+                or len(omitted) > 3
+                or any(
+                    not isinstance(surface, str)
+                    or surface not in {"direct", "deferred", "code_mode"}
+                    for surface in omitted
+                )
+                or len(set(omitted)) != len(omitted)
+            ):
+                _fail(
+                    "invalid_type",
+                    f"{server_location}.omit_tools_from",
+                    "must be a one-to-three item unique array of direct, deferred, or code_mode",
                 )
             server_policies[server_id] = set(enabled) if enabled is not None else None
         policies[plugin_id] = server_policies

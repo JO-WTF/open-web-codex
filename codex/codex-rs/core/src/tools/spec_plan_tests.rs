@@ -1165,6 +1165,20 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     .await;
     missing_model_capability.assert_visible_lacks(&["tool_search"]);
 
+    let chat_bridge_capability = probe_with(
+        |turn| {
+            turn.model_info.supports_search_tool = false;
+            use_chat_provider(turn);
+        },
+        searchable_mcp(),
+    )
+    .await;
+    chat_bridge_capability.assert_visible_contains(&["tool_search"]);
+    chat_bridge_capability.assert_registered_contains(&[
+        "tool_search",
+        &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
+    ]);
+
     let missing_deferred_tools = probe(|turn| {
         set_feature(turn, Feature::Collab, /*enabled*/ false);
         turn.model_info.supports_search_tool = true;

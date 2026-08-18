@@ -40,6 +40,7 @@ enabled_tools = [
 [plugins.supply_chain.mcp_servers.supply_chain]
 enabled = true
 required = true
+omit_tools_from = ["direct"]
 default_tools_approval_mode = "prompt"
 enabled_tools = [
   "prepare_route_matrix",

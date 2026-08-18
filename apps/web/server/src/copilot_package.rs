@@ -13,9 +13,10 @@ use crate::delivery_contracts::{
     ContentVerifier, DeliveryContract, DeliveryKind, DeliveryRegistry,
 };
 
-const ROLE_MCP_SERVER_POLICY_KEYS: [&str; 6] = [
+const ROLE_MCP_SERVER_POLICY_KEYS: [&str; 7] = [
     "enabled",
     "required",
+    "omit_tools_from",
     "default_tools_approval_mode",
     "enabled_tools",
     "disabled_tools",
@@ -1342,6 +1343,14 @@ fn project_role_mcp_servers(
                         ),
                     ));
                 }
+                if key == "omit_tools_from" {
+                    validate_omitted_tool_surfaces(
+                        role_name,
+                        capability_root_id,
+                        server_name,
+                        item,
+                    )?;
+                }
             }
             let mut runtime = Table::new();
             for key in ROLE_MCP_SERVER_POLICY_KEYS {
@@ -1390,6 +1399,50 @@ fn project_role_mcp_servers(
     }
     role.remove("plugins");
     role["mcp_servers"] = Item::Table(runtime_servers);
+    Ok(())
+}
+
+fn validate_omitted_tool_surfaces(
+    role_name: &str,
+    capability_root_id: &str,
+    server_name: &str,
+    item: &Item,
+) -> Result<(), CopilotPackageError> {
+    let values = item.as_array().ok_or_else(|| {
+        invalid_role(
+            role_name,
+            format!(
+                "plugins.{capability_root_id}.mcp_servers.{server_name}.omit_tools_from must be an array"
+            ),
+        )
+    })?;
+    if values.is_empty() || values.len() > 3 {
+        return Err(invalid_role(
+            role_name,
+            format!(
+                "plugins.{capability_root_id}.mcp_servers.{server_name}.omit_tools_from must contain one to three surfaces"
+            ),
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for value in values {
+        let surface = value.as_str().ok_or_else(|| {
+            invalid_role(
+                role_name,
+                format!(
+                    "plugins.{capability_root_id}.mcp_servers.{server_name}.omit_tools_from values must be strings"
+                ),
+            )
+        })?;
+        if !matches!(surface, "direct" | "deferred" | "code_mode") || !seen.insert(surface) {
+            return Err(invalid_role(
+                role_name,
+                format!(
+                    "plugins.{capability_root_id}.mcp_servers.{server_name}.omit_tools_from contains an invalid or duplicate surface"
+                ),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -1826,6 +1879,15 @@ runtime = "tools/maps/runtime.toml"
         assert_eq!(
             network["mcp_servers"]["supply_chain"]["required"].as_bool(),
             Some(true)
+        );
+        assert_eq!(
+            network["mcp_servers"]["supply_chain"]["omit_tools_from"]
+                .as_array()
+                .expect("deferred supply-chain exposure")
+                .iter()
+                .filter_map(|item| item.as_str())
+                .collect::<Vec<_>>(),
+            vec!["direct"]
         );
         assert_eq!(
             network["mcp_servers"]["supply_chain"]["args"]

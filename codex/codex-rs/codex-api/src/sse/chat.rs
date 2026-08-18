@@ -324,16 +324,35 @@ async fn finish_chat_stream(
                 tool_call.function.name
             ))
         })?;
-        let item = ResponseItem::FunctionCall {
-            id: Some(codex_protocol::ResponseItemId::from_server(
-                tool_call.id.clone(),
-            )),
-            name: target.name.clone(),
-            namespace: target.namespace.clone(),
-            arguments: tool_call.function.arguments,
-            encrypted_function_args: collaboration_plaintext_marker(target),
-            call_id: tool_call.id,
-            internal_chat_message_metadata_passthrough: None,
+        let item = if target.name == "tool_search" && target.namespace.is_none() {
+            ResponseItem::ToolSearchCall {
+                id: Some(codex_protocol::ResponseItemId::from_server(
+                    tool_call.id.clone(),
+                )),
+                call_id: Some(tool_call.id),
+                status: None,
+                execution: "client".to_string(),
+                arguments: serde_json::from_str(&tool_call.function.arguments).map_err(
+                    |error| {
+                        ApiError::Stream(format!(
+                            "chat completion returned invalid tool_search arguments: {error}"
+                        ))
+                    },
+                )?,
+                internal_chat_message_metadata_passthrough: None,
+            }
+        } else {
+            ResponseItem::FunctionCall {
+                id: Some(codex_protocol::ResponseItemId::from_server(
+                    tool_call.id.clone(),
+                )),
+                name: target.name.clone(),
+                namespace: target.namespace.clone(),
+                arguments: tool_call.function.arguments,
+                encrypted_function_args: collaboration_plaintext_marker(target),
+                call_id: tool_call.id,
+                internal_chat_message_metadata_passthrough: None,
+            }
         };
         if tx_event
             .send(Ok(ResponseEvent::OutputItemAdded(item.clone())))

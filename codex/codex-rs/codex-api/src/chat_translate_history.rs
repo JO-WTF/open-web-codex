@@ -26,7 +26,10 @@ pub(crate) fn responses_input_to_chat_messages(
     let mut index = 0;
     while let Some(item) = input.get(index) {
         if !expected_tool_outputs.is_empty()
-            && !matches!(item, ResponseItem::FunctionCallOutput { .. })
+            && !matches!(
+                item,
+                ResponseItem::FunctionCallOutput { .. } | ResponseItem::ToolSearchOutput { .. }
+            )
         {
             return Err(unsupported(
                 "history with a tool-call group not followed by its tool results",
@@ -38,7 +41,7 @@ pub(crate) fn responses_input_to_chat_messages(
                 let text = response_message_text(&role, content)?;
                 if role == "assistant" {
                     index += 1;
-                    let tool_calls = take_function_calls(input, &mut index);
+                    let tool_calls = take_function_calls(input, &mut index)?;
                     if tool_calls.is_empty() {
                         push_assistant(&mut messages, text, None, None);
                     } else {
@@ -85,7 +88,7 @@ pub(crate) fn responses_input_to_chat_messages(
                     // loop iteration preserves the mailbox message as its own Chat item.
                     _ => String::new(),
                 };
-                let tool_calls = take_function_calls(input, &mut index);
+                let tool_calls = take_function_calls(input, &mut index)?;
                 if tool_calls.is_empty() {
                     push_assistant(
                         &mut messages,
@@ -104,8 +107,8 @@ pub(crate) fn responses_input_to_chat_messages(
                 }
                 continue;
             }
-            ResponseItem::FunctionCall { .. } => {
-                let tool_calls = take_function_calls(input, &mut index);
+            ResponseItem::FunctionCall { .. } | ResponseItem::ToolSearchCall { .. } => {
+                let tool_calls = take_function_calls(input, &mut index)?;
                 push_chat_tool_calls(
                     &mut messages,
                     String::new(),
@@ -133,9 +136,33 @@ pub(crate) fn responses_input_to_chat_messages(
                     function_output_to_chat_text(output)?,
                 );
             }
+            ResponseItem::ToolSearchOutput {
+                call_id: Some(call_id),
+                status,
+                execution,
+                tools,
+                ..
+            } => {
+                if status != "completed" || execution != "client" {
+                    return Err(unsupported("non-client completed tool_search output"));
+                }
+                let Some(position) = expected_tool_outputs
+                    .iter()
+                    .position(|expected| expected == call_id)
+                else {
+                    return Err(unsupported(
+                        "history tool_search result without its preceding tool-call group",
+                    ));
+                };
+                expected_tool_outputs.remove(position);
+                let tools =
+                    serde_json::to_string(tools).map_err(|error| ApiError::InvalidRequest {
+                        message: format!("failed to serialize tool_search result: {error}"),
+                    })?;
+                push_tool_result(&mut messages, call_id.clone(), tools);
+            }
             ResponseItem::AdditionalTools { .. }
             | ResponseItem::LocalShellCall { .. }
-            | ResponseItem::ToolSearchCall { .. }
             | ResponseItem::CustomToolCall { .. }
             | ResponseItem::CustomToolCallOutput { .. }
             | ResponseItem::ToolSearchOutput { .. }
@@ -180,30 +207,61 @@ fn raw_chat_reasoning_content(
     }
 }
 
-fn take_function_calls(input: &[ResponseItem], index: &mut usize) -> Vec<ChatToolCall> {
+fn take_function_calls(
+    input: &[ResponseItem],
+    index: &mut usize,
+) -> Result<Vec<ChatToolCall>, ApiError> {
     let mut tool_calls = Vec::new();
-    while let Some(ResponseItem::FunctionCall {
-        name,
-        namespace,
-        arguments,
-        call_id,
-        ..
-    }) = input.get(*index)
-    {
-        tool_calls.push(ChatToolCall {
-            id: call_id.clone(),
-            r#type: "function".to_string(),
-            function: ChatToolCallFunction {
-                name: namespace
-                    .as_deref()
-                    .map(|namespace| format!("{namespace}__{name}"))
-                    .unwrap_or_else(|| name.clone()),
-                arguments: arguments.clone(),
-            },
-        });
+    while let Some(item) = input.get(*index) {
+        match item {
+            ResponseItem::FunctionCall {
+                name,
+                namespace,
+                arguments,
+                call_id,
+                ..
+            } => {
+                tool_calls.push(ChatToolCall {
+                    id: call_id.clone(),
+                    r#type: "function".to_string(),
+                    function: ChatToolCallFunction {
+                        name: namespace
+                            .as_deref()
+                            .map(|namespace| format!("{namespace}__{name}"))
+                            .unwrap_or_else(|| name.clone()),
+                        arguments: arguments.clone(),
+                    },
+                });
+            }
+            ResponseItem::ToolSearchCall {
+                call_id: Some(call_id),
+                execution,
+                arguments,
+                ..
+            } if execution == "client" => {
+                tool_calls.push(ChatToolCall {
+                    id: call_id.clone(),
+                    r#type: "function".to_string(),
+                    function: ChatToolCallFunction {
+                        name: "tool_search".to_string(),
+                        arguments: serde_json::to_string(arguments).map_err(|error| {
+                            ApiError::InvalidRequest {
+                                message: format!(
+                                    "failed to serialize tool_search arguments: {error}"
+                                ),
+                            }
+                        })?,
+                    },
+                });
+            }
+            ResponseItem::ToolSearchCall { .. } => {
+                return Err(unsupported("non-client tool_search call"));
+            }
+            _ => break,
+        }
         *index += 1;
     }
-    tool_calls
+    Ok(tool_calls)
 }
 
 fn push_chat_tool_calls(

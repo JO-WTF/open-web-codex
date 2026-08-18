@@ -955,6 +955,9 @@ fn apply_plugin_mcp_server_policy(config: &mut McpServerConfig, policy: &PluginM
     if let Some(enabled_tools) = &policy.enabled_tools {
         config.enabled_tools = Some(enabled_tools.clone());
     }
+    if let Some(omit_tools_from) = &policy.omit_tools_from {
+        config.omit_tools_from = Some(omit_tools_from.clone());
+    }
     if let Some(disabled_tools) = &policy.disabled_tools {
         config.disabled_tools = Some(disabled_tools.clone());
     }

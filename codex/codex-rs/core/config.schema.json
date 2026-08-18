@@ -2614,6 +2614,13 @@
           },
           "type": "array"
         },
+        "omit_tools_from": {
+          "description": "Model-facing surfaces from which this server's tools must be omitted.",
+          "items": {
+            "$ref": "#/definitions/ToolExposureSurface"
+          },
+          "type": "array"
+        },
         "tools": {
           "additionalProperties": {
             "$ref": "#/definitions/McpServerToolConfig"

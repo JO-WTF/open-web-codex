@@ -126,6 +126,43 @@ async fn chat_sse_closes_reasoning_and_message_before_namespaced_tool() {
 }
 
 #[tokio::test]
+async fn chat_sse_maps_tool_search_function_to_a_native_tool_search_item() {
+    let events = collect(
+        concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"search-1\",\"function\":{\"name\":\"tool_search\",\"arguments\":\"{\\\"query\\\":\\\"network coverage\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n"
+        ),
+        HashMap::from([(
+            "tool_search".to_string(),
+            ChatToolTarget {
+                name: "tool_search".to_string(),
+                namespace: None,
+            },
+        )]),
+    )
+    .await;
+
+    assert!(matches!(
+        &events[0],
+        Ok(ResponseEvent::OutputItemAdded(ResponseItem::ToolSearchCall {
+            call_id: Some(call_id),
+            execution,
+            arguments,
+            ..
+        })) if call_id == "search-1"
+            && execution == "client"
+            && arguments == &serde_json::json!({"query": "network coverage"})
+    ));
+    assert!(matches!(
+        &events[1],
+        Ok(ResponseEvent::OutputItemDone(
+            ResponseItem::ToolSearchCall { .. }
+        ))
+    ));
+    assert!(matches!(&events[2], Ok(ResponseEvent::Completed { .. })));
+}
+
+#[tokio::test]
 async fn chat_sse_rejects_invalid_wire_and_terminal_shapes() {
     let cases = [
         (

@@ -42,6 +42,7 @@ use codex_config::McpServerToolConfig;
 use codex_config::RequirementSource;
 use codex_config::RequirementsLayerEntry;
 use codex_config::SkillConfigRules;
+use codex_config::ToolExposureSurface;
 use codex_config::compose_requirements;
 use codex_config::types::McpServerTransportConfig;
 use codex_login::CodexAuth;
@@ -1108,6 +1109,7 @@ enabled = true
 enabled = false
 default_tools_approval_mode = "approve"
 enabled_tools = ["search"]
+omit_tools_from = ["direct"]
 disabled_tools = ["delete"]
 
 [plugins."sample@test".mcp_servers.sample.tools.search]
@@ -1127,6 +1129,10 @@ approval_mode = "approve"
         Some(AppToolApproval::Approve)
     );
     assert_eq!(server.enabled_tools, Some(vec!["search".to_string()]));
+    assert_eq!(
+        server.omit_tools_from,
+        Some(vec![ToolExposureSurface::Direct])
+    );
     assert_eq!(server.disabled_tools, Some(vec!["delete".to_string()]));
     assert_eq!(
         server.tools.get("search"),

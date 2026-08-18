@@ -33,6 +33,7 @@ class CopilotManifestTests(unittest.TestCase):
             "[plugins.routes]\nenabled = true\n"
             "[plugins.routes.mcp_servers.routing_api]\n"
             "required = true\n"
+            "omit_tools_from = [\"direct\"]\n"
             "enabled_tools = [\"health\"]\n",
             encoding="utf-8",
         )
@@ -336,6 +337,25 @@ display_name = "Map"
         self.assertEqual(
             caught.exception.relative_path,
             "agents/planner.toml.plugins.routes.mcp_servers.routing_api.required",
+        )
+
+    def test_rejects_invalid_deferred_role_mcp_policy_surface(self) -> None:
+        role = self.root / "agents" / "planner.toml"
+        role.write_text(
+            role.read_text(encoding="utf-8").replace(
+                'omit_tools_from = ["direct"]',
+                'omit_tools_from = ["untrusted"]',
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(CopilotPackageError) as caught:
+            validate_copilot_package(self.root)
+
+        self.assertEqual(caught.exception.code, "invalid_type")
+        self.assertEqual(
+            caught.exception.relative_path,
+            "agents/planner.toml.plugins.routes.mcp_servers.routing_api.omit_tools_from",
         )
 
     def test_rejects_missing_runtime_descriptor(self) -> None:

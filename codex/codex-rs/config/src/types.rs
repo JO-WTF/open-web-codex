@@ -18,6 +18,7 @@ pub use codex_protocol::config_types::ApprovalsReviewer;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::ServiceTier;
+pub use codex_protocol::config_types::ToolExposureSurface;
 pub use codex_protocol::config_types::WebSearchMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
@@ -869,6 +870,10 @@ pub struct PluginMcpServerConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_tools: Option<Vec<String>>,
 
+    /// Model-facing surfaces from which this server's tools must be omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omit_tools_from: Option<Vec<ToolExposureSurface>>,
+
     /// Explicit deny-list of tools. These tools are removed after applying `enabled_tools`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_tools: Option<Vec<String>>,
@@ -884,6 +889,7 @@ impl Default for PluginMcpServerConfig {
             enabled: true,
             default_tools_approval_mode: None,
             enabled_tools: None,
+            omit_tools_from: None,
             disabled_tools: None,
             tools: HashMap::new(),
         }

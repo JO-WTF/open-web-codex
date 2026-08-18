@@ -193,6 +193,147 @@ fn flattens_function_and_namespace_tools_with_reversible_targets() {
 }
 
 #[test]
+fn translates_tool_search_and_replays_loaded_tools_as_chat_functions() {
+    let mut request = request(Some(vec![serde_json::json!({
+        "type": "tool_search",
+        "execution": "client",
+        "description": "Search available tools.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}
+    })]));
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: None,
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "network coverage"}),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::ToolSearchOutput {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: vec![serde_json::json!({
+                "type": "function",
+                "name": "evaluate_network_baseline",
+                "description": "Evaluate a network baseline.",
+                "parameters": {"type": "object", "properties": {}}
+            })],
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    let translated = responses_request_to_chat_completions_request(request).unwrap();
+    assert_eq!(
+        translated
+            .tools
+            .iter()
+            .map(|tool| tool.function.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["tool_search", "evaluate_network_baseline"]
+    );
+    assert_eq!(
+        translated.messages,
+        vec![
+            ChatMessage::Assistant {
+                role: "assistant".to_string(),
+                content: String::new(),
+                reasoning_content: None,
+                tool_calls: Some(vec![ChatToolCall {
+                    id: "search-1".to_string(),
+                    r#type: "function".to_string(),
+                    function: ChatToolCallFunction {
+                        name: "tool_search".to_string(),
+                        arguments: "{\"query\":\"network coverage\"}".to_string(),
+                    },
+                }]),
+            },
+            ChatMessage::ToolResult {
+                role: "tool".to_string(),
+                tool_call_id: "search-1".to_string(),
+                content: "[{\"description\":\"Evaluate a network baseline.\",\"name\":\"evaluate_network_baseline\",\"parameters\":{\"properties\":{},\"type\":\"object\"},\"type\":\"function\"}]".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn deduplicates_identical_loaded_namespace_tools_before_chat_replay() {
+    let mut request = request(Some(vec![serde_json::json!({
+        "type": "tool_search",
+        "execution": "client",
+        "description": "Search available tools.",
+        "parameters": {"type": "object"}
+    })]));
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: None,
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "compare network"}),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::ToolSearchOutput {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: vec![serde_json::json!({
+                "type": "namespace",
+                "name": "mcp__supply_chain",
+                "description": "Warehouse network tools.",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "compare_network_scenarios",
+                        "description": "Compare network scenarios.",
+                        "parameters": {"type": "object", "properties": {}}
+                    },
+                    {
+                        "type": "function",
+                        "name": "compare_network_scenarios",
+                        "description": "Compare network scenarios.",
+                        "parameters": {"type": "object", "properties": {}}
+                    }
+                ]
+            })],
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    let translated = responses_request_to_chat_completions_request(request).unwrap();
+    assert_eq!(
+        translated
+            .tools
+            .iter()
+            .map(|tool| tool.function.name.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "tool_search",
+            "mcp__supply_chain__compare_network_scenarios"
+        ]
+    );
+}
+
+#[test]
+fn rejects_an_unnamespaced_function_that_collides_with_native_tool_search() {
+    let request = request(Some(vec![serde_json::json!({
+        "type": "function",
+        "name": "tool_search",
+        "parameters": {"type": "object"}
+    })]));
+
+    assert!(matches!(
+        responses_request_to_chat_completions_request(request),
+        Err(ApiError::InvalidRequest { .. })
+    ));
+}
+
+#[test]
 fn groups_raw_reasoning_assistant_text_and_tool_calls() {
     let mut request = request(None);
     request.instructions.clear();

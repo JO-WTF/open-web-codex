@@ -4,11 +4,11 @@
 use crate::common::ResponsesApiRequest;
 use crate::error::ApiError;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -184,10 +184,12 @@ pub fn responses_request_to_chat_completions_request(
             })
         })
         .transpose()?;
-    let tools = decoded_tools
+    let mut tools = decoded_tools
         .map(|tools| responses_tools_to_chat_tools(&tools))
         .transpose()?
         .unwrap_or_default();
+    let deferred_tools = tool_search_output_tools(&input)?;
+    append_chat_tools(&mut tools, responses_tools_to_chat_tools(&deferred_tools)?)?;
     let tool_choice = chat_tool_choice(&tool_choice, !tools.is_empty())?;
     // `include`, `prompt_cache_key`, and `client_metadata` are Responses
     // metadata. The known encrypted-reasoning include is omitted as a
@@ -259,13 +261,20 @@ pub fn responses_tools_to_chat_tools(tools: &[Value]) -> Result<Vec<ChatTool>, A
         match tool.get("type").and_then(Value::as_str) {
             Some("function") => out.push(convert_function_tool(tool, None, None)?),
             Some("namespace") => convert_namespace_tool(tool, &mut out)?,
+            Some("tool_search") => out.push(convert_tool_search_tool(tool)?),
             Some(kind) => return Err(unsupported(&format!("{kind} tools"))),
             None => return Err(unsupported("untyped tools")),
         }
     }
-    let mut seen_names = HashSet::new();
-    for tool in &out {
-        if !seen_names.insert(&tool.function.name) {
+    let mut deduplicated = Vec::with_capacity(out.len());
+    for tool in out {
+        if let Some(existing) = deduplicated
+            .iter()
+            .find(|existing: &&ChatTool| existing.function.name == tool.function.name)
+        {
+            if existing == &tool {
+                continue;
+            }
             return Err(ApiError::InvalidRequest {
                 message: format!(
                     "wire_api = \"chat\" cannot encode colliding flattened tool name `{}`",
@@ -273,8 +282,82 @@ pub fn responses_tools_to_chat_tools(tools: &[Value]) -> Result<Vec<ChatTool>, A
                 ),
             });
         }
+        deduplicated.push(tool);
     }
-    Ok(out)
+    Ok(deduplicated)
+}
+
+fn append_chat_tools(tools: &mut Vec<ChatTool>, additions: Vec<ChatTool>) -> Result<(), ApiError> {
+    for addition in additions {
+        if let Some(existing) = tools
+            .iter()
+            .find(|tool| tool.function.name == addition.function.name)
+        {
+            if existing != &addition {
+                return Err(ApiError::InvalidRequest {
+                    message: format!(
+                        "wire_api = \"chat\" cannot encode conflicting loaded tool `{}`",
+                        addition.function.name
+                    ),
+                });
+            }
+            continue;
+        }
+        tools.push(addition);
+    }
+    Ok(())
+}
+
+fn tool_search_output_tools(input: &[ResponseItem]) -> Result<Vec<Value>, ApiError> {
+    let mut tools = Vec::new();
+    for item in input {
+        let ResponseItem::ToolSearchOutput {
+            status,
+            execution,
+            tools: output_tools,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        if status != "completed" || execution != "client" {
+            return Err(unsupported("non-client completed tool_search output"));
+        }
+        tools.extend(output_tools.iter().cloned());
+    }
+    Ok(tools)
+}
+
+fn convert_tool_search_tool(tool: &Value) -> Result<ChatTool, ApiError> {
+    let execution = tool
+        .get("execution")
+        .and_then(Value::as_str)
+        .ok_or_else(|| unsupported("tool_search without execution"))?;
+    if execution != "client" {
+        return Err(unsupported("non-client tool_search"));
+    }
+    let description = tool
+        .get("description")
+        .and_then(Value::as_str)
+        .ok_or_else(|| unsupported("tool_search without description"))?
+        .to_string();
+    let parameters = tool
+        .get("parameters")
+        .cloned()
+        .ok_or_else(|| unsupported("tool_search without parameters"))?;
+    Ok(ChatTool {
+        r#type: "function".to_string(),
+        function: ChatToolFunction {
+            name: "tool_search".to_string(),
+            description,
+            strict: false,
+            parameters,
+        },
+        target: ChatToolTarget {
+            name: "tool_search".to_string(),
+            namespace: None,
+        },
+    })
 }
 
 fn convert_namespace_tool(tool: &Value, out: &mut Vec<ChatTool>) -> Result<(), ApiError> {
@@ -313,6 +396,11 @@ fn convert_function_tool(
         .and_then(Value::as_str)
         .ok_or_else(|| unsupported("unnamed function tools"))?
         .to_string();
+    if namespace.is_none() && name == "tool_search" {
+        return Err(ApiError::InvalidRequest {
+            message: "wire_api = \"chat\" reserves the unnamespaced tool_search function for native ToolSearch".to_string(),
+        });
+    }
     let tool_description = tool
         .get("description")
         .and_then(Value::as_str)
