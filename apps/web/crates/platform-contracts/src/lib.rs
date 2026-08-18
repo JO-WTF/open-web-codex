@@ -997,13 +997,19 @@ pub struct MapsConfiguration {
 pub struct UpdateMapsConfigurationRequest {
     pub provider: MapsProvider,
     pub api_key: String,
-    pub elicitation_url: Option<String>,
+    /// An authorized pending Platform approval. The server resolves the
+    /// credential handoff URL from this record; the browser never receives or
+    /// submits that URL.
+    pub approval_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UseMapsConfigurationRequest {
-    pub elicitation_url: String,
+    /// An authorized pending Platform approval. The server resolves the
+    /// credential handoff URL from this record; the browser never receives or
+    /// submits that URL.
+    pub approval_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1433,7 +1439,6 @@ pub enum PendingApprovalSubject {
         capabilities: Vec<PendingApprovalCapability>,
     },
     Url {
-        url: Option<String>,
         server: Option<String>,
         available: bool,
     },

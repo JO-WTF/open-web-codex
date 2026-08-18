@@ -145,7 +145,6 @@ fn project_pending_subject(
                 .map(str::to_string);
             if payload.get("mode").and_then(Value::as_str) == Some("url") {
                 PendingApprovalSubject::Url {
-                    url: safe_url.clone(),
                     server: bounded_identifier(payload.get("serverName"), 128),
                     available: safe_url.is_some(),
                 }
@@ -452,7 +451,6 @@ mod tests {
         assert_eq!(
             subject,
             PendingApprovalSubject::Url {
-                url: None,
                 server: Some("maps".to_string()),
                 available: false,
             }

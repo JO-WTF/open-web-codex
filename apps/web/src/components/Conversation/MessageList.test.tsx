@@ -148,7 +148,6 @@ describe("MessageList", () => {
             kind: "approval",
             text: "Allow the map_utils MCP server to run tool \"batch_geocode\"?",
             approvalStatus: "accepted",
-            approvalServerName: "map_utils",
             approvalTool: "batch_geocode",
           },
           {
@@ -205,7 +204,6 @@ describe("MessageList", () => {
         kind: "approval" as const,
         text: "Allow the map_utils MCP server to run tool \"batch_geocode\"?",
         approvalStatus: "pending" as const,
-        approvalServerName: "map_utils",
         approvalTool: "batch_geocode",
       },
     ];
@@ -653,8 +651,7 @@ describe("MessageList", () => {
             approvalRequestId: "approval-url-1",
             approvalStatus: "pending",
             approvalMode: "url",
-            approvalUrl: "http://127.0.0.1:43123/one-time-token",
-            approvalServerName: "workspace_maps",
+            approvalCredentialKind: "maps",
           },
         ]}
       />,
@@ -686,8 +683,7 @@ describe("MessageList", () => {
             approvalRequestId: "approval-mapbox-url-1",
             approvalStatus: "accepted",
             approvalMode: "url",
-            approvalUrl: "http://127.0.0.1:43123/one-time-token",
-            approvalServerName: "workspace_maps",
+            approvalCredentialKind: "maps",
           },
           {
             id: "approval-next-tool",

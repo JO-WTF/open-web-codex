@@ -313,18 +313,18 @@ export class PlatformClient {
   updateMapsConfiguration(
     provider: MapsProvider,
     apiKey: string,
-    elicitationUrl?: string,
+    approvalId?: string,
   ) {
     return this.request<MapsConfiguration>("/api/configuration/maps", {
       method: "PUT",
-      body: JSON.stringify({ provider, apiKey, elicitationUrl }),
+      body: JSON.stringify({ provider, apiKey, approvalId }),
     });
   }
 
-  useMapsConfiguration(elicitationUrl: string) {
+  useMapsConfiguration(approvalId: string) {
     return this.request<MapsConfiguration>("/api/configuration/maps/use", {
       method: "POST",
-      body: JSON.stringify({ elicitationUrl }),
+      body: JSON.stringify({ approvalId }),
     });
   }
 

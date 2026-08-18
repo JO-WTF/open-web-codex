@@ -197,7 +197,6 @@ describe("buildWebThreadHistory", () => {
             text: "Allow batch_geocode?",
             approvalRequestId: "request-1",
             approvalStatus: "resolved",
-            approvalServerName: "map_utils",
             approvalTool: "batch_geocode",
           },
           {

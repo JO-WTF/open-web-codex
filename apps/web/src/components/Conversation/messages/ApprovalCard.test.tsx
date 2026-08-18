@@ -15,8 +15,7 @@ describe("ApprovalCard", () => {
         workspaceId="workspace-1"
         requestId="approval-1"
         mode="url"
-        url="http://127.0.0.1:43123/one-time-token"
-        serverName="map_utils"
+        credentialKind="maps"
         onResolve={onResolve}
       />,
     );
@@ -33,30 +32,7 @@ describe("ApprovalCard", () => {
     expect(onResolve).not.toHaveBeenCalled();
   });
 
-  it("keeps legacy workspace_maps requests compatible", () => {
-    render(
-      <ApprovalCard
-        command="Mapbox access token is not configured. Configure it in this app to save it globally and reuse it automatically."
-        workspaceId="workspace-1"
-        requestId="approval-mapbox"
-        mode="url"
-        url="http://127.0.0.1:43123/mapbox-token"
-        serverName="workspace_maps"
-        onResolve={vi.fn()}
-      />,
-    );
-
-    expect(screen.queryByRole("link", { name: "Configure key" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "配置 Key" }));
-    expect(
-      screen.getByRole("dialog", { name: "配置地图服务 Key" }),
-    ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Mapbox" }).getAttribute("aria-pressed"))
-      .toBe("true");
-    expect(screen.getByRole("button", { name: "Google" })).toBeTruthy();
-  });
-
-  it("does not expose an external URL as an MCP credential link", () => {
+  it("keeps unsupported MCP credential requests unavailable", () => {
     const onResolve = vi.fn();
     render(
       <ApprovalCard
@@ -64,13 +40,11 @@ describe("ApprovalCard", () => {
         workspaceId="workspace-1"
         requestId="approval-2"
         mode="url"
-        url="https://example.com/credential"
         onResolve={onResolve}
       />,
     );
 
-    expect(screen.queryByRole("link", { name: "Configure key" })).toBeNull();
-    expect(screen.getByText(/secure configuration link is unavailable/i)).toBeTruthy();
+    expect(screen.getByText(/not supported by the secure browser configuration flow/i)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onResolve).toHaveBeenCalledWith("workspace-1", "approval-2", "decline");
   });

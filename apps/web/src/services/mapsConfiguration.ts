@@ -73,19 +73,19 @@ export function loadMapsConfiguration(force = false) {
 export async function saveMapsConfiguration(
   provider: MapsProvider,
   apiKey: string,
-  elicitationUrl?: string,
+  approvalId?: string,
 ) {
   const configuration = await platformClient.updateMapsConfiguration(
     provider,
     apiKey,
-    elicitationUrl,
+    approvalId,
   );
   loaded = true;
   return publish(serverState(configuration));
 }
 
-export async function applySavedMapsConfiguration(elicitationUrl: string) {
-  const configuration = await platformClient.useMapsConfiguration(elicitationUrl);
+export async function applySavedMapsConfiguration(approvalId: string) {
+  const configuration = await platformClient.useMapsConfiguration(approvalId);
   loaded = true;
   return publish(serverState(configuration));
 }

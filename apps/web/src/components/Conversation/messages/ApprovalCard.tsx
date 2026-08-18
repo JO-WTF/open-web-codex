@@ -16,33 +16,10 @@ type Props = {
   requestId?: number | string;
   status?: ApprovalStatus;
   mode?: string;
-  url?: string;
-  serverName?: string;
+  credentialKind?: "maps";
   submitting?: boolean;
   onResolve?: (workspaceId: string, requestId: number | string, decision: "accept" | "decline") => void;
 };
-
-function safeLoopbackUrl(value?: string) {
-  if (!value) return null;
-  try {
-    const parsed = new URL(value);
-    if (
-      parsed.protocol !== "http:"
-      || parsed.hostname !== "127.0.0.1"
-      || !parsed.port
-      || parsed.username
-      || parsed.password
-      || parsed.search
-      || parsed.hash
-      || parsed.pathname === "/"
-    ) {
-      return null;
-    }
-    return parsed.href;
-  } catch {
-    return null;
-  }
-}
 
 export default function ApprovalCard({
   command,
@@ -50,27 +27,20 @@ export default function ApprovalCard({
   requestId,
   status = "pending",
   mode,
-  url,
-  serverName,
+  credentialKind,
   submitting = false,
   onResolve,
 }: Props) {
   const [configurationOpen, setConfigurationOpen] = useState(false);
   const [configurationError, setConfigurationError] = useState("");
   const [usingSavedConfiguration, setUsingSavedConfiguration] = useState(false);
-  const attemptedSavedUrl = useRef<string | null>(null);
+  const attemptedSavedApprovalId = useRef<string | null>(null);
   const mapsConfiguration = useMapsConfiguration();
   const shortCmd = command.replace(/^\/bin\/zsh -lc '/, "").replace(/'$/, "").slice(0, 120);
   const pending = status === "pending";
-  const credentialUrl = mode === "url" ? safeLoopbackUrl(url) : null;
   const credentialRequest = mode === "url";
-  const mapsCredentialRequest = credentialRequest
-    && (serverName === "map_utils" || serverName === "workspace_maps")
-    && (
-      /maps provider and api key/i.test(command)
-      || /google maps api key/i.test(command)
-      || /mapbox (?:maps )?(?:api key|access token)/i.test(command)
-    );
+  const mapsCredentialRequest = credentialRequest && credentialKind === "maps";
+  const approvalId = typeof requestId === "string" ? requestId : null;
   const resolvedLabel = status === "accepted"
     ? (mapsCredentialRequest ? "Configured" : credentialRequest ? "Configuration opened" : "Accepted")
     : status === "declined"
@@ -97,20 +67,20 @@ export default function ApprovalCard({
     if (
       !pending
       || !mapsCredentialRequest
-      || !credentialUrl
+      || !approvalId
       || mapsConfiguration.loading
       || !mapsConfiguration.configured
-      || attemptedSavedUrl.current === credentialUrl
+      || attemptedSavedApprovalId.current === approvalId
     ) {
       return;
     }
-    attemptedSavedUrl.current = credentialUrl;
+    attemptedSavedApprovalId.current = approvalId;
     setUsingSavedConfiguration(true);
     setConfigurationError("");
-    void applySavedMapsConfiguration(credentialUrl)
+    void applySavedMapsConfiguration(approvalId)
       .then(handleAccept)
       .catch((error: unknown) => {
-        attemptedSavedUrl.current = null;
+        attemptedSavedApprovalId.current = null;
         setConfigurationError(
           error instanceof Error
             ? error.message
@@ -119,12 +89,12 @@ export default function ApprovalCard({
       })
       .finally(() => setUsingSavedConfiguration(false));
   }, [
-    credentialUrl,
     handleAccept,
     mapsConfiguration.configured,
     mapsConfiguration.loading,
     mapsCredentialRequest,
     pending,
+    approvalId,
   ]);
 
   const openConfiguration = () => {
@@ -134,7 +104,7 @@ export default function ApprovalCard({
 
   const configuredProvider = () => {
     setConfigurationOpen(false);
-    attemptedSavedUrl.current = credentialUrl;
+    attemptedSavedApprovalId.current = approvalId;
     handleAccept();
   };
 
@@ -154,7 +124,7 @@ export default function ApprovalCard({
             ? mapsCredentialRequest
               ? "Map provider and API key required"
               : credentialRequest
-                ? `${serverName || "Maps"} API key required`
+                ? "MCP credential configuration required"
               : "Approval required"
             : "Approval resolved"}
         </span>
@@ -182,30 +152,18 @@ export default function ApprovalCard({
                     className="web-approval-accept"
                     type="button"
                     onClick={openConfiguration}
-                    disabled={!credentialUrl || !mapsConfiguration.canConfigure}
+                    disabled={!approvalId || !mapsConfiguration.canConfigure}
                   >
                     配置 Key
                   </button>
                 </>
                 )
             : credentialRequest
-            ? credentialUrl
-              ? (
-                  <a
-                    className="web-approval-accept"
-                    href={credentialUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={handleAccept}
-                  >
-                    Configure key
-                  </a>
-                )
-              : (
-                  <span className="web-approval-hint">
-                    The secure configuration link is unavailable. Cancel this request and retry.
-                  </span>
-                )
+            ? (
+                <span className="web-approval-hint">
+                  This MCP credential request is not supported by the secure browser configuration flow.
+                </span>
+              )
             : (
                 <button
                   className="web-approval-accept"
@@ -225,10 +183,10 @@ export default function ApprovalCard({
         </div>
       )}
       </div>
-      {configurationOpen && mapsCredentialRequest && credentialUrl ? (
+      {configurationOpen && mapsCredentialRequest && approvalId ? (
         <MapsConfigurationModal
           initialProvider={mapsConfiguration.provider ?? "mapbox"}
-          elicitationUrl={credentialUrl}
+          approvalId={approvalId}
           onClose={() => setConfigurationOpen(false)}
           onSaved={configuredProvider}
         />

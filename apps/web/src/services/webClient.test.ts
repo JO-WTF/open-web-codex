@@ -1085,10 +1085,8 @@ describe("WebApp direct Server client", () => {
       approvalId: "approval-mcp-url-1",
       requestMethod: "mcpServer/elicitation/request",
       requestParams: {
-        serverName: "workspace_maps",
         mode: "url",
-        message: "No google maps API key is stored for this workspace.",
-        url: "http://127.0.0.1:43123/one-time-token",
+        credentialKind: "maps",
       },
     });
     liveEvent(7, "codex.item.completed", "assistant-1", {
@@ -1152,11 +1150,9 @@ describe("WebApp direct Server client", () => {
         params: {
           threadId: "thread-1",
           turnId: "turn-1",
-          serverName: "workspace_maps",
           mode: "url",
-          message: "No google maps API key is stored for this workspace.",
-          url: "http://127.0.0.1:43123/one-time-token",
-          command: "No google maps API key is stored for this workspace.",
+          credentialKind: "maps",
+          command: "Map provider and API key required",
         },
       },
       {

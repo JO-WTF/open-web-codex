@@ -36,7 +36,7 @@ describe("MapsConfigurationModal", () => {
     render(
       <MapsConfigurationModal
         initialProvider="mapbox"
-        elicitationUrl="http://127.0.0.1:43123/one-time-token"
+        approvalId="018f-id"
         onClose={vi.fn()}
         onSaved={onSaved}
       />,
@@ -51,7 +51,7 @@ describe("MapsConfigurationModal", () => {
     await waitFor(() => expect(saveMaps).toHaveBeenCalledWith(
       "google",
       "google-secret",
-      "http://127.0.0.1:43123/one-time-token",
+      "018f-id",
     ));
     expect(onSaved).toHaveBeenCalledWith("google");
   });

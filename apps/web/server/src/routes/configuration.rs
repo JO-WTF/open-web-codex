@@ -2,7 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{extract::State, http::StatusCode, Extension, Json};
-use open_web_codex_approval_service::safe_maps_credential_url;
+use open_web_codex_adapter::CodexAdapter;
+use open_web_codex_approval_service::{
+    safe_maps_credential_url, ApprovalActor, ApprovalService, ApprovalServiceError,
+};
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
     MapsConfiguration, MapsProvider, UpdateMapsConfigurationRequest, UseMapsConfigurationRequest,
@@ -49,6 +52,8 @@ pub async fn get_maps(
 pub async fn update_maps(
     State(state): State<AppState>,
     Extension(secrets): Extension<Arc<PostgresSecretStore>>,
+    Extension(approvals): Extension<Arc<ApprovalService>>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
     auth: AuthenticatedUser,
     Json(request): Json<UpdateMapsConfigurationRequest>,
 ) -> ApiResult<MapsConfiguration> {
@@ -61,6 +66,19 @@ pub async fn update_maps(
         ));
     }
     let api_key = validate_maps_key(request.provider, &request.api_key)?;
+    let elicitation_url = match request.approval_id {
+        Some(approval_id) => Some(
+            approvals
+                .pending_maps_credential_url(
+                    approval_actor(&auth),
+                    adapter.runtime_instance_id().await,
+                    approval_id,
+                )
+                .await
+                .map_err(maps_approval_error)?,
+        ),
+        None => None,
+    };
     let credential = StoredMapsCredential {
         provider: request.provider,
         api_key,
@@ -76,7 +94,7 @@ pub async fn update_maps(
     // rows after a successful replacement so later reads cannot revive them.
     cleanup_legacy_maps_configuration(&state).await;
 
-    if let Some(url) = request.elicitation_url.as_deref() {
+    if let Some(url) = elicitation_url.as_deref() {
         submit_key_to_elicitation(url, request.provider, &credential.api_key).await?;
     }
     audit_configuration_update(&state, &auth).await;
@@ -95,6 +113,8 @@ pub async fn update_maps(
 pub async fn use_maps(
     State(state): State<AppState>,
     Extension(secrets): Extension<Arc<PostgresSecretStore>>,
+    Extension(approvals): Extension<Arc<ApprovalService>>,
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
     auth: AuthenticatedUser,
     Json(request): Json<UseMapsConfigurationRequest>,
 ) -> ApiResult<MapsConfiguration> {
@@ -108,8 +128,16 @@ pub async fn use_maps(
                 )),
             )
         })?;
+    let elicitation_url = approvals
+        .pending_maps_credential_url(
+            approval_actor(&auth),
+            adapter.runtime_instance_id().await,
+            request.approval_id,
+        )
+        .await
+        .map_err(maps_approval_error)?;
     submit_key_to_elicitation(
-        &request.elicitation_url,
+        &elicitation_url,
         loaded.credential.provider,
         &loaded.credential.api_key,
     )
@@ -312,6 +340,42 @@ async fn audit_configuration_update(state: &AppState, auth: &AuthenticatedUser) 
 
 fn can_configure(auth: &AuthenticatedUser) -> bool {
     matches!(auth.organization_role.as_str(), "owner" | "admin")
+}
+
+fn approval_actor(auth: &AuthenticatedUser) -> ApprovalActor {
+    ApprovalActor {
+        user_id: auth.user_id,
+        organization_id: auth.organization_id,
+    }
+}
+
+fn maps_approval_error(error: ApprovalServiceError) -> (StatusCode, Json<PlatformError>) {
+    match error {
+        ApprovalServiceError::NotFound => (
+            StatusCode::NOT_FOUND,
+            Json(PlatformError::not_found(
+                "Maps credential request was not found",
+            )),
+        ),
+        ApprovalServiceError::Conflict => (
+            StatusCode::CONFLICT,
+            Json(PlatformError::conflict(
+                "Maps credential request is no longer pending",
+            )),
+        ),
+        ApprovalServiceError::Invalid => (
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "Approval is not a valid Maps credential request",
+            )),
+        ),
+        ApprovalServiceError::Database(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(PlatformError::internal(
+                "Maps credential request is temporarily unavailable",
+            )),
+        ),
+    }
 }
 
 fn configuration_database_error(_error: sqlx::Error) -> (StatusCode, Json<PlatformError>) {

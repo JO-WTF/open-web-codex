@@ -21,6 +21,7 @@ use uuid::Uuid;
 const COMMAND_APPROVAL: &str = "item/commandExecution/requestApproval";
 const FILE_APPROVAL: &str = "item/fileChange/requestApproval";
 const MCP_ELICITATION_REQUEST: &str = "mcpServer/elicitation/request";
+const MAPS_CREDENTIAL_MCP_SERVER: &str = "map_utils";
 const PERMISSIONS_APPROVAL: &str = "item/permissions/requestApproval";
 const USER_INPUT_REQUEST: &str = "item/tool/requestUserInput";
 const MAX_MCP_FORM_FIELDS: usize = 32;
@@ -381,6 +382,50 @@ impl ApprovalService {
             });
         }
         Ok(records)
+    }
+
+    /// Resolve the one-time Maps credential target for an authorized pending
+    /// approval. This remains in the approval owner because the Runtime
+    /// payload and credential-bearing URL never cross the browser boundary.
+    pub async fn pending_maps_credential_url(
+        &self,
+        actor: ApprovalActor,
+        runtime_instance_id: Uuid,
+        approval_id: Uuid,
+    ) -> Result<String, ApprovalServiceError> {
+        let row = sqlx::query(
+            "SELECT a.request_type, a.request_payload, a.state \
+             FROM approvals a JOIN profiles p ON p.id = a.profile_id \
+             WHERE a.id = $1 AND a.organization_id = $2 AND p.owner_user_id = $3 \
+               AND p.runtime_key = $4 AND a.runtime_instance_id = $5",
+        )
+        .bind(approval_id)
+        .bind(actor.organization_id)
+        .bind(actor.user_id)
+        .bind(&self.runtime_key)
+        .bind(runtime_instance_id)
+        .fetch_optional(&self.db)
+        .await?
+        .ok_or(ApprovalServiceError::NotFound)?;
+
+        let state: String = row.get("state");
+        if state != "pending" {
+            return Err(ApprovalServiceError::Conflict);
+        }
+        let request_type: String = row.get("request_type");
+        let payload: Value = row.get("request_payload");
+        if request_type != MCP_ELICITATION_REQUEST
+            || payload.get("mode").and_then(Value::as_str) != Some("url")
+            || payload.get("serverName").and_then(Value::as_str) != Some(MAPS_CREDENTIAL_MCP_SERVER)
+        {
+            return Err(ApprovalServiceError::Invalid);
+        }
+        payload
+            .get("url")
+            .and_then(Value::as_str)
+            .and_then(safe_maps_credential_url)
+            .map(str::to_string)
+            .ok_or(ApprovalServiceError::Invalid)
     }
 
     pub async fn list_pending_user_inputs(

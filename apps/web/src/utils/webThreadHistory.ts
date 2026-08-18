@@ -261,8 +261,7 @@ export function webLogEntryFromThreadItem(
       approvalRequestId: asText(item.approvalRequestId) || undefined,
       approvalStatus: approvalStatus ?? "resolved",
       approvalMode: asText(item.approvalMode) || undefined,
-      approvalUrl: asText(item.approvalUrl) || undefined,
-      approvalServerName: asText(item.approvalServerName) || undefined,
+      approvalCredentialKind: item.approvalCredentialKind === "maps" ? "maps" : undefined,
       approvalTool: asText(item.approvalTool) || undefined,
     };
   }

@@ -164,7 +164,6 @@ describe("SupervisorOverview", () => {
           requestId: "approval-1",
           command: "Allow supply chain data · list planning sources?",
           status: "pending",
-          serverName: "supply_chain_data",
         }]}
         onResolveApproval={onResolveApproval}
         artifacts={[]}

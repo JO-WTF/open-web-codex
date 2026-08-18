@@ -66,8 +66,7 @@ export type LogEntry = {
   approvalRequestId?: number | string;
   approvalStatus?: ApprovalStatus;
   approvalMode?: string;
-  approvalUrl?: string;
-  approvalServerName?: string;
+  approvalCredentialKind?: "maps";
   approvalTool?: string;
   kind?: "reasoning" | "tool" | "diff" | "approval" | "command_exec" | "connection";
   toolType?: string;
@@ -1836,10 +1835,7 @@ export default function WebApp() {
           const requestId = message.id;
           const approvalId = typeof params.itemId === "string" ? params.itemId : undefined;
           const approvalMode = typeof params.mode === "string" ? params.mode : undefined;
-          const approvalUrl = typeof params.url === "string" ? params.url : undefined;
-          const approvalServerName = typeof params.serverName === "string"
-            ? params.serverName
-            : undefined;
+          const approvalCredentialKind = params.credentialKind === "maps" ? "maps" : undefined;
           const approvalTool = typeof params.tool === "string"
             ? params.tool
             : typeof params.toolName === "string"
@@ -1858,8 +1854,7 @@ export default function WebApp() {
               approvalRequestId: requestId,
               approvalStatus: "pending",
               approvalMode,
-              approvalUrl,
-              approvalServerName,
+              approvalCredentialKind,
               approvalTool,
             };
             const current = pendingApprovalsByThread.current.get(approvalThreadId) ?? [];
@@ -1888,8 +1883,7 @@ export default function WebApp() {
                 : undefined,
             approvalStatus: "pending" as const,
             approvalMode,
-            approvalUrl,
-            approvalServerName,
+            approvalCredentialKind,
             approvalTool,
           };
         }
@@ -2852,8 +2846,7 @@ export default function WebApp() {
           command: approval.text,
           status: approval.approvalStatus,
           mode: approval.approvalMode,
-          url: approval.approvalUrl,
-          serverName: approval.approvalServerName,
+          credentialKind: approval.approvalCredentialKind,
           submitting: submittingApprovalIds.has(submissionId),
         });
       }

@@ -168,7 +168,9 @@ function runtimeMessage(event: RunEvent): JsonRecord | null {
     const params = needsGenericApprovalCard
       ? {
           ...requestParams,
-          command: requestMethod === "mcpServer/elicitation/request"
+          command: requestParams.credentialKind === "maps"
+            ? "Map provider and API key required"
+            : requestMethod === "mcpServer/elicitation/request"
             && typeof requestParams.message === "string"
             && requestParams.message.trim()
             ? requestParams.message

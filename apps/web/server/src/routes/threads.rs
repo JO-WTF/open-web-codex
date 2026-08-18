@@ -893,15 +893,10 @@ async fn load_history_overlay(
         }
         for (source, target) in [
             ("mode", "approvalMode"),
-            ("serverName", "approvalServerName"),
+            ("credentialKind", "approvalCredentialKind"),
         ] {
             if let Some(value) = request.and_then(|request| request.get(source)) {
                 approval.insert(target.to_string(), value.clone());
-            }
-        }
-        if approval_status == "pending" {
-            if let Some(value) = request.and_then(|request| request.get("url")) {
-                approval.insert("approvalUrl".to_string(), value.clone());
             }
         }
         overlay

@@ -1499,7 +1499,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         .expect("unsafe URL approval projection");
     assert_eq!(unsafe_url["subject"]["kind"], "url");
     assert_eq!(unsafe_url["subject"]["available"], false);
-    assert!(unsafe_url["subject"]["url"].is_null());
+    assert!(unsafe_url["subject"].get("url").is_none());
     assert!(!unsafe_url.to_string().contains("credential?token=redacted"));
     let unsafe_url_accept = call(
         &app,

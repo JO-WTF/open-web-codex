@@ -8,14 +8,14 @@ import type { MapsProvider } from "../../../../browser/types";
 
 type Props = {
   initialProvider: MapsProvider;
-  elicitationUrl?: string;
+  approvalId?: string;
   onClose: () => void;
   onSaved: (provider: MapsProvider) => void;
 };
 
 export default function MapsConfigurationModal({
   initialProvider,
-  elicitationUrl,
+  approvalId,
   onClose,
   onSaved,
 }: Props) {
@@ -52,7 +52,7 @@ export default function MapsConfigurationModal({
     setSaving(true);
     setError("");
     try {
-      await saveMapsConfiguration(provider, key, elicitationUrl);
+      await saveMapsConfiguration(provider, key, approvalId);
       onSaved(provider);
     } catch (saveError) {
       setError(
@@ -157,7 +157,7 @@ export default function MapsConfigurationModal({
           >
             {saving
               ? "保存中…"
-              : elicitationUrl ? "保存并继续" : "保存配置"}
+              : approvalId ? "保存并继续" : "保存配置"}
           </button>
         </div>
       </form>

@@ -140,7 +140,7 @@ export function foldTerminalApprovals(items: MessageEntry[]) {
     if (!isTerminalApproval(approval)) return;
 
     const approvalTool = parsedApprovalTool(approval);
-    const approvalServer = approval.approvalServerName?.trim() ?? "";
+    const approvalServer = "";
     const exactCandidates: number[] = [];
     const mcpCandidates: number[] = [];
 
@@ -234,8 +234,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
               requestId={entry.approvalRequestId}
               status={entry.approvalStatus}
               mode={entry.approvalMode}
-              url={entry.approvalUrl}
-              serverName={entry.approvalServerName}
+              credentialKind={entry.approvalCredentialKind}
               onResolve={onResolveApproval}
             />
           );
@@ -373,14 +372,7 @@ export default function MessageList({ items, thinking = false, turnStartedAt, on
       if (item.kind !== "approval") return false;
       if (item.approvalStatus === "pending") return true;
       const mapsCredentialWasDelivered = item.approvalMode === "url"
-        && (
-          item.approvalServerName === "map_utils"
-          || item.approvalServerName === "workspace_maps"
-        )
-        && (
-          /maps provider and api key/i.test(item.text)
-          || /(?:google maps|mapbox(?: maps)?)\s+(?:api key|access token)/i.test(item.text)
-        );
+        && item.approvalCredentialKind === "maps";
       return item.approvalMode === "url"
         && item.approvalStatus === "accepted"
         && !mapsCredentialWasDelivered;

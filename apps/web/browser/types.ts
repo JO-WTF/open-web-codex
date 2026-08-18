@@ -275,7 +275,6 @@ export type PendingApprovalSubject =
   | { kind: "permissions"; capabilities: PendingApprovalCapability[] }
   | {
       kind: "url";
-      url: string | null;
       server: string | null;
       available: boolean;
     }

@@ -674,6 +674,14 @@ fn public_approval_frame(frame: &[u8], approval_id: uuid::Uuid) -> anyhow::Resul
                 serde_json::Value::String(mode.to_string()),
             );
         }
+        if params.get("mode").and_then(serde_json::Value::as_str) == Some("url")
+            && params.get("serverName").and_then(serde_json::Value::as_str) == Some("map_utils")
+        {
+            request_params.insert(
+                "credentialKind".to_string(),
+                serde_json::Value::String("maps".to_string()),
+            );
+        }
     }
     let turn_id = request_params.get("turnId").cloned();
     let item_id = request_params.get("itemId").cloned();
@@ -1033,6 +1041,12 @@ mod tests {
                 .pointer("/params/message/params/requestParams/mode")
                 .unwrap(),
             "url"
+        );
+        assert_eq!(
+            value
+                .pointer("/params/message/params/requestParams/credentialKind")
+                .unwrap(),
+            "maps"
         );
         assert!(value
             .pointer("/params/message/params/requestParams/serverName")

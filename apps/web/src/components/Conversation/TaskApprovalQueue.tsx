@@ -10,8 +10,7 @@ export type TaskApprovalRequest = {
   command: string;
   status?: ApprovalStatus;
   mode?: string;
-  url?: string;
-  serverName?: string;
+  credentialKind?: "maps";
   submitting?: boolean;
 };
 
@@ -57,10 +56,9 @@ export default function TaskApprovalQueue({
               command={approval.command}
               workspaceId={approval.workspaceId}
               requestId={approval.requestId}
-              status={approval.status}
-              mode={approval.mode}
-              url={approval.url}
-              serverName={approval.serverName}
+            status={approval.status}
+            mode={approval.mode}
+            credentialKind={approval.credentialKind}
               submitting={approval.submitting}
               onResolve={onResolve}
             />

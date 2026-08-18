@@ -596,7 +596,7 @@ describe("PlatformClient", () => {
     ).resolves.toEqual(configuration);
     await expect(
       client.useMapsConfiguration(
-        "http://127.0.0.1:43123/one-time-token",
+        "018f-id",
       ),
     ).resolves.toEqual(configuration);
 
@@ -615,7 +615,7 @@ describe("PlatformClient", () => {
       "https://platform.test/api/configuration/maps/use",
     );
     expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual({
-      elicitationUrl: "http://127.0.0.1:43123/one-time-token",
+      approvalId: "018f-id",
     });
   });
 
@@ -641,12 +641,12 @@ describe("PlatformClient", () => {
     await client.updateMapsConfiguration(
       "google",
       "google-secret",
-      "http://127.0.0.1:43123/one-time-token",
+      "018f-id",
     );
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
       provider: "google",
       apiKey: "google-secret",
-      elicitationUrl: "http://127.0.0.1:43123/one-time-token",
+      approvalId: "018f-id",
     });
     expect(configuration).not.toHaveProperty("apiKey");
   });
