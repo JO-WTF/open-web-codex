@@ -20,11 +20,11 @@ class CopilotManifestTests(unittest.TestCase):
         (self.root / "agents").mkdir()
         (self.root / "tools" / "routes").mkdir(parents=True)
         (self.root / "skills" / "supervisor" / "SKILL.md").write_text(
-            "---\nname: supervisor\ndescription: Coordinate work.\n---\n# Supervisor\n",
+            "---\nname: supervisor\ndescription: Coordinate work.\nmetadata:\n  short-description: Coordinate tasks.\n---\n# Supervisor\n",
             encoding="utf-8",
         )
         (self.root / "skills" / "worker" / "SKILL.md").write_text(
-            "---\nname: worker\ndescription: Perform work.\n---\n# Worker\n",
+            "---\nname: worker\ndescription: Perform work.\nmetadata:\n  short-description: Perform focused work.\n---\n# Worker\n",
             encoding="utf-8",
         )
         (self.root / "agents" / "planner.toml").write_text(
@@ -116,6 +116,10 @@ structured_content = {{ status = "ok" }}
         self.assertEqual(first.agent_ids, ("planner",))
         self.assertEqual(first.tool_ids, ("routes",))
         self.assertRegex(first.composition_descriptor_sha256, r"^[0-9a-f]{64}$")
+
+    def test_accepts_runtime_short_description_metadata(self) -> None:
+        summary = validate_copilot_package(self.root)
+        self.assertEqual(summary.skill_ids, ("supervisor", "worker"))
 
     def test_shared_tool_resolves_only_from_explicit_root_registry(self) -> None:
         registry = self.root / "registry"

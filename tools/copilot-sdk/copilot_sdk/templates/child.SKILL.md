@@ -1,6 +1,8 @@
 ---
 name: __CHILD_SKILL__
 description: Execute the focused __DISPLAY_NAME__ worker task with the declared typed tool and return a concise verified result.
+metadata:
+  short-description: Execute __DISPLAY_NAME__ work
 ---
 
 # __DISPLAY_NAME__ Worker

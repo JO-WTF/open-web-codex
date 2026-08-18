@@ -246,9 +246,9 @@ Profile seed 与显式应用资产 composition：
   runtime、direct manifest/hash lock 生成外置依赖环境和
   `prepared-tools.v1.json`；Server typed 校验 capability root、server、stdio transport 和 env
   binding，不从 cwd、Workspace、`CARGO_MANIFEST_DIR` 或源码树扫描 fallback；
-- Profile 不复制 Tool、venv、Node dependency、Mock、cache 或 test。Data/Network Role source
-  持有精确 MCP server scope 与 Tool 级 approval policy；server 内 Tool 通过 Runtime deferred discovery
-  暴露，Server 从 prepared descriptor 投影
+- Profile 不复制 Tool、venv、Node dependency、Mock、cache 或 test。Copilot Root 只显式加载小型常驻 Skill；
+  Data/Network 任务 Skill 通过 Runtime Catalog 渐进发现并按原生选择读取。Role source 持有精确 MCP server scope
+  与 Tool 级 approval policy；server 内 Tool 通过 Runtime deferred discovery 暴露，Server 从 prepared descriptor 投影
   role-local MCP transport，Root 没有全局仓网
   MCP；Data4 全部是有界本地预批准，Network 预批准本地计算/验证与 `publish_network_planning_report`，maps 只预批准
   `create_map_card`，外部地图调用和 final Workspace 地图导出保持 `prompt`。prepared transport

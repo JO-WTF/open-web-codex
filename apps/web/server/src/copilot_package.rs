@@ -234,7 +234,7 @@ impl CopilotPackageAssets {
             .iter()
             .map(|skill| ThreadSkillConfig {
                 name: skill.id.clone(),
-                enabled: skill.id == self.root_skill,
+                enabled: true,
                 main_prompt: (skill.id == self.root_skill)
                     .then(|| profile_home.join("skills").join(&skill.id).join("SKILL.md")),
             })
@@ -1472,8 +1472,18 @@ mod tests {
         include_str!("../../../../copilots/warehouse-network/skills/warehouse-supervisor/SKILL.md");
     const DATA_SKILL: &str =
         include_str!("../../../../copilots/warehouse-network/skills/warehouse-data/SKILL.md");
-    const NETWORK_SKILL: &str =
-        include_str!("../../../../copilots/warehouse-network/skills/warehouse-network/SKILL.md");
+    const ROUTE_SKILL: &str = include_str!(
+        "../../../../copilots/warehouse-network/skills/warehouse-route-planning/SKILL.md"
+    );
+    const ANALYSIS_SKILL: &str = include_str!(
+        "../../../../copilots/warehouse-network/skills/warehouse-network-analysis/SKILL.md"
+    );
+    const OPTIMIZATION_SKILL: &str = include_str!(
+        "../../../../copilots/warehouse-network/skills/warehouse-network-optimization/SKILL.md"
+    );
+    const MAP_DELIVERY_SKILL: &str = include_str!(
+        "../../../../copilots/warehouse-network/skills/warehouse-map-delivery/SKILL.md"
+    );
     const DATA_ROLE: &str =
         include_str!("../../../../copilots/warehouse-network/agents/data_agent.toml");
     const NETWORK_ROLE: &str =
@@ -1496,45 +1506,19 @@ mod tests {
     }
 
     #[test]
-    fn warehouse_network_skill_preserves_default_map_visual_hierarchy() {
-        assert!(
-            NETWORK_SKILL.contains("中心仓（`warehouse_type=center`） | 深蓝 `#1D4ED8`，半径 `12`")
-        );
-        assert!(NETWORK_SKILL
-            .contains("XD 前置仓（`warehouse_type=cross_docking`） | 橙色 `#F97316`，半径 `9`"));
-        assert!(NETWORK_SKILL.contains("中心仓半径 `12` 或 XD 半径 `9`"));
-        assert!(NETWORK_SKILL.contains("需求城市（没有时效结果） | 蓝色 `#2563EB`，半径 `4`"));
-        assert!(NETWORK_SKILL.contains("时效达标城市 | 绿色 `#16A34A`，半径 `5`"));
-        assert!(NETWORK_SKILL.contains("时效未达标城市 | 红色 `#DC2626`，半径 `6`"));
-        assert!(NETWORK_SKILL.contains("不透明度 `0.5`"));
-        assert!(NETWORK_SKILL.contains("不透明度 `0.65`"));
-        assert!(NETWORK_SKILL.contains(
-            "点图层必须依次传入需求城市、全部 XD 前置仓、全部中心仓，使中心仓始终位于最上层",
-        ));
-        assert!(NETWORK_SKILL.contains(
-            "中心仓和 XD 前置仓必须是两个独立图层，使用表中不同的颜色，不能合并为同色仓库图层",
-        ));
-        assert!(NETWORK_SKILL.contains(
-            "必须分别传入 Last mile 和干线两个覆盖线图层，不能省略、合并或以其中一类替代另一类",
-        ));
+    fn warehouse_map_delivery_skill_preserves_default_map_visual_hierarchy() {
+        assert!(MAP_DELIVERY_SKILL.contains("中心仓深蓝 `#1D4ED8`、半径 `12`"));
+        assert!(MAP_DELIVERY_SKILL.contains("XD 橙色 `#F97316`、半径 `9`"));
+        assert!(MAP_DELIVERY_SKILL.contains("Last mile 与干线必须使用独立图层和图例"));
+        assert!(MAP_DELIVERY_SKILL.contains("中心仓与 XD 必须是独立图层"));
     }
 
     #[test]
     fn warehouse_supervisor_skill_does_not_retry_terminal_child_failures() {
         assert!(SUPERVISOR_SKILL.contains(
-            "任一 child 报告 `failed`、`errored`、`cancelled`、`interrupted`、`rejected` 或 `timeout`",
+            "child 的 Tool 终态失败、拒绝、取消、超时或输入缺失必须如实报告并停止当前请求"
         ));
-        assert!(SUPERVISOR_SKILL.contains("即使错误文本看似瞬时传输或 JSON 问题"));
-        assert!(SUPERVISOR_SKILL.contains(
-            "不得把该终态解释为可自行重试，不得用 follow-up、resume、同一或另一 Role、新 child 来补跑、替代或继续这一个请求",
-        ));
-        assert!(NETWORK_SKILL.contains(
-            "MCP Tool 返回失败、拒绝、超时、能力不可用或输入无效时，返回该 Tool 的 typed failure 并停止当前任务",
-        ));
-        assert!(
-            SUPERVISOR_SKILL.contains("只有用户在该终态之后明确发起新的“重试”或“重新运行”请求",)
-        );
-        assert!(!SUPERVISOR_SKILL.contains("原 child 已失败/取消/不可用，或用户明确要求独立上下文"));
+        assert!(ANALYSIS_SKILL.contains("缺少输入或 Tool 终态失败时返回 typed 结果并停止"));
     }
 
     fn write_file(path: &Path, contents: &str, executable: bool) {
@@ -1578,8 +1562,20 @@ id = "warehouse-data"
 path = "skills/warehouse-data"
 
 [[skills]]
-id = "warehouse-network"
-path = "skills/warehouse-network"
+id = "warehouse-route-planning"
+path = "skills/warehouse-route-planning"
+
+[[skills]]
+id = "warehouse-network-analysis"
+path = "skills/warehouse-network-analysis"
+
+[[skills]]
+id = "warehouse-network-optimization"
+path = "skills/warehouse-network-optimization"
+
+[[skills]]
+id = "warehouse-map-delivery"
+path = "skills/warehouse-map-delivery"
 
 [[agents]]
 id = "data_agent"
@@ -1612,8 +1608,23 @@ runtime = "tools/maps/runtime.toml"
             false,
         );
         write_file(
-            &package.join("skills/warehouse-network/SKILL.md"),
-            NETWORK_SKILL,
+            &package.join("skills/warehouse-route-planning/SKILL.md"),
+            ROUTE_SKILL,
+            false,
+        );
+        write_file(
+            &package.join("skills/warehouse-network-analysis/SKILL.md"),
+            ANALYSIS_SKILL,
+            false,
+        );
+        write_file(
+            &package.join("skills/warehouse-network-optimization/SKILL.md"),
+            OPTIMIZATION_SKILL,
+            false,
+        );
+        write_file(
+            &package.join("skills/warehouse-map-delivery/SKILL.md"),
+            MAP_DELIVERY_SKILL,
             false,
         );
         write_file(&package.join("agents/data_agent.toml"), DATA_ROLE, false);
@@ -1762,12 +1773,27 @@ runtime = "tools/maps/runtime.toml"
                 },
                 ThreadSkillConfig {
                     name: "warehouse-data".to_string(),
-                    enabled: false,
+                    enabled: true,
                     main_prompt: None,
                 },
                 ThreadSkillConfig {
-                    name: "warehouse-network".to_string(),
-                    enabled: false,
+                    name: "warehouse-route-planning".to_string(),
+                    enabled: true,
+                    main_prompt: None,
+                },
+                ThreadSkillConfig {
+                    name: "warehouse-network-analysis".to_string(),
+                    enabled: true,
+                    main_prompt: None,
+                },
+                ThreadSkillConfig {
+                    name: "warehouse-network-optimization".to_string(),
+                    enabled: true,
+                    main_prompt: None,
+                },
+                ThreadSkillConfig {
+                    name: "warehouse-map-delivery".to_string(),
+                    enabled: true,
                     main_prompt: None,
                 },
             ]
@@ -1998,7 +2024,7 @@ runtime = "tools/maps/runtime.toml"
         assert!(network["developer_instructions"]
             .as_str()
             .expect("network instructions")
-            .contains("Follow the warehouse-network Skill as the workflow authority"));
+            .contains("Use Codex's native Skill catalog"));
         assert!(network["developer_instructions"]
             .as_str()
             .expect("network instructions")
@@ -2031,21 +2057,29 @@ runtime = "tools/maps/runtime.toml"
             network["skills"]["bundled"]["enabled"].as_bool(),
             Some(false)
         );
-        assert!(network["skills"]["config"]
+        let network_skill_names = network["skills"]["config"]
             .as_array_of_tables()
             .expect("network Skill policy")
             .iter()
-            .any(|skill| {
-                skill["name"].as_str() == Some("warehouse-network")
-                    && skill["enabled"].as_bool() == Some(true)
-            }));
+            .filter(|skill| skill["enabled"].as_bool() == Some(true))
+            .filter_map(|skill| skill["name"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            network_skill_names,
+            vec![
+                "warehouse-route-planning",
+                "warehouse-network-analysis",
+                "warehouse-network-optimization",
+                "warehouse-map-delivery",
+            ]
+        );
         assert!(!data.to_string().contains("__OPEN_WEB_CODEX_"));
         assert!(!network.to_string().contains("__OPEN_WEB_CODEX_"));
         assert!(data.get("plugins").is_none());
         assert!(network.get("plugins").is_none());
         assert_eq!(
             assets.startup_files(&profile).expect("startup files").len(),
-            5
+            8
         );
         assert!(!profile.join("config.toml").exists());
     }
@@ -2058,7 +2092,7 @@ runtime = "tools/maps/runtime.toml"
         assert_eq!(assets.agent_role_ids(), vec!["network_agent"]);
         assert_eq!(
             assets.startup_files(&profile).expect("startup files").len(),
-            4
+            7
         );
         assert!(assets
             .root_execution_config(&profile)

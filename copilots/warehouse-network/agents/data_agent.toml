@@ -16,10 +16,6 @@ enabled = false
 name = "warehouse-data"
 enabled = true
 
-[[skills.config]]
-name = "warehouse-network"
-enabled = false
-
 [plugins.supply_chain]
 enabled = true
 

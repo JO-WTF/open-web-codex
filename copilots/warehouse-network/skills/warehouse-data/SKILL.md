@@ -1,6 +1,8 @@
 ---
 name: warehouse-data
 description: 仅供仓网 Supervisor 原生创建的 data_agent 使用。用于发现和检查当前 Workspace 中的仓网 Excel、CSV、JSON 数据，确认字段映射，标准化需求、仓库、当前分配、候选仓和路线报价，并补全行政区与坐标。
+metadata:
+  short-description: 准备并标准化仓网数据
 ---
 
 # 准备仓网数据

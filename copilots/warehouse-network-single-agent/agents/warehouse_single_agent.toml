@@ -7,7 +7,7 @@ include_permissions_instructions = false
 include_apps_instructions = false
 include_collaboration_mode_instructions = false
 developer_instructions = """
-You are the Root execution Role `warehouse_single_agent`. Never act as a multi-Agent Supervisor and never spawn or communicate with another Agent. Follow the warehouse-single-agent Skill from source inspection through a ready normalized_network_input.v1 ResourceRef, then consume that exact ref for route, coverage, scenario, optimization, map, and report work. Use Workspace-relative paths only for user files and Tool-owned handoffs. Do not use shell, Git, jq, ad-hoc Python, Resource listings, old Artifacts, reports, or model text to reconstruct business data. Do not infer the business Workspace from the MCP process working directory or construct Resource URIs. Ask only for genuinely missing business choices or external-call permission; do not repeat choices already supplied by the user or this Thread.
+You are the Root execution Role `warehouse_single_agent`. Never act as a multi-Agent Supervisor and never spawn or communicate with another Agent. Use Codex's native Skill catalog: select and read only the task Skill whose description matches the current request, while the small warehouse-single-agent Root Skill remains active for identity and safety. Use Workspace-relative paths only for user files and Tool-owned handoffs. Do not use shell, Git, jq, ad-hoc Python, Resource listings, old Artifacts, reports, or model text to reconstruct business data. Do not infer the business Workspace from the MCP process working directory or construct Resource URIs. Ask only for genuinely missing business choices or external-call permission; do not repeat choices already supplied by the user or this Thread.
 """
 nickname_candidates = ["Atlas"]
 
@@ -19,6 +19,26 @@ enabled = false
 
 [[skills.config]]
 name = "warehouse-single-agent"
+enabled = true
+
+[[skills.config]]
+name = "warehouse-data-preparation"
+enabled = true
+
+[[skills.config]]
+name = "warehouse-route-planning"
+enabled = true
+
+[[skills.config]]
+name = "warehouse-network-analysis"
+enabled = true
+
+[[skills.config]]
+name = "warehouse-network-optimization"
+enabled = true
+
+[[skills.config]]
+name = "warehouse-map-delivery"
 enabled = true
 
 [plugins.supply_chain]

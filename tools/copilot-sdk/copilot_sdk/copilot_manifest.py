@@ -162,14 +162,14 @@ def validate_copilot_package(
         skill_root = _safe_package_path(root, relative, kind="directory")
         skill_file_relative = relative / "SKILL.md"
         skill_file = _safe_package_path(root, skill_file_relative, kind="file")
-        frontmatter_name = _skill_frontmatter_name(
+        frontmatter = _skill_frontmatter(
             skill_file, skill_file_relative.as_posix()
         )
-        if frontmatter_name != skill_id:
+        if frontmatter.name != skill_id:
             _fail(
                 "frontmatter_mismatch",
                 skill_file_relative.as_posix(),
-                f"frontmatter name {frontmatter_name!r} does not match {skill_id!r}",
+                f"frontmatter name {frontmatter.name!r} does not match {skill_id!r}",
             )
         # Retain the directory check as part of the explicit package contract.
         del skill_root
@@ -777,7 +777,14 @@ def _validate_bounded_json(value: Any, location: str, *, depth: int = 0) -> None
     _fail("invalid_type", location, "must contain only JSON-compatible values")
 
 
-def _skill_frontmatter_name(path: Path, relative_path: str) -> str:
+@dataclass(frozen=True)
+class _SkillFrontmatter:
+    name: str
+    description: str
+    short_description: str | None
+
+
+def _skill_frontmatter(path: Path, relative_path: str) -> _SkillFrontmatter:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
@@ -790,34 +797,38 @@ def _skill_frontmatter_name(path: Path, relative_path: str) -> str:
     except StopIteration:
         _fail("frontmatter_mismatch", relative_path, "unterminated YAML frontmatter")
     fields: dict[str, str] = {}
+    metadata: dict[str, str] = {}
+    in_metadata = False
     for line in lines[1:end]:
-        if not line or line[0].isspace() or line.startswith(("-", "[", "{", ">", "|")):
+        if not line.strip():
+            continue
+        if line[0].isspace():
+            if not in_metadata or not line.startswith("  ") or line.startswith("   "):
+                _fail(
+                    "frontmatter_mismatch",
+                    relative_path,
+                    "metadata fields must use one two-space indentation level",
+                )
+            key, value = _skill_frontmatter_scalar(
+                line[2:], relative_path, "metadata.short-description"
+            )
+            if key != "short-description" or key in metadata:
+                _fail("frontmatter_mismatch", relative_path, "unknown or duplicate metadata field")
+            metadata[key] = value
+            continue
+        in_metadata = False
+        if line.startswith(("-", "[", "{", ">", "|")):
             _fail(
                 "frontmatter_mismatch",
                 relative_path,
                 "frontmatter must contain only top-level single-line scalars",
             )
-        if ":" not in line:
-            _fail("frontmatter_mismatch", relative_path, "invalid frontmatter field")
-        key, raw_value = line.split(":", 1)
+        if line == "metadata:":
+            in_metadata = True
+            continue
+        key, value = _skill_frontmatter_scalar(line, relative_path, "frontmatter")
         if key not in ("name", "description") or key in fields:
             _fail("frontmatter_mismatch", relative_path, "unknown or duplicate field")
-        raw_value = raw_value.strip()
-        if not raw_value or raw_value[0] in ("[", "{", ">", "|", "&", "*"):
-            _fail("frontmatter_mismatch", relative_path, f"{key} must be a scalar")
-        if raw_value[0] in "\"'":
-            if len(raw_value) < 2 or raw_value[-1] != raw_value[0]:
-                _fail("frontmatter_mismatch", relative_path, f"{key} has invalid quotes")
-            value = raw_value[1:-1]
-        else:
-            if " #" in raw_value:
-                value = raw_value.split(" #", 1)[0].rstrip()
-            else:
-                value = raw_value
-            if value.startswith(("!", "?")):
-                _fail("frontmatter_mismatch", relative_path, f"{key} must be plain text")
-        if not value.strip():
-            _fail("frontmatter_mismatch", relative_path, f"{key} must not be empty")
         fields[key] = value
     if set(fields) != {"name", "description"}:
         _fail(
@@ -834,9 +845,37 @@ def _skill_frontmatter_name(path: Path, relative_path: str) -> str:
             relative_path,
             "name must be 1-64 lowercase letters, digits, or hyphens",
         )
-    return name
+    return _SkillFrontmatter(
+        name=name,
+        description=fields["description"],
+        short_description=metadata.get("short-description"),
+    )
 
 
+def _skill_frontmatter_scalar(
+    line: str,
+    relative_path: str,
+    field: str,
+) -> tuple[str, str]:
+    if ":" not in line:
+        _fail("frontmatter_mismatch", relative_path, "invalid frontmatter field")
+    key, raw_value = line.split(":", 1)
+    if not key or key.strip() != key:
+        _fail("frontmatter_mismatch", relative_path, "invalid frontmatter field")
+    raw_value = raw_value.strip()
+    if not raw_value or raw_value[0] in ("[", "{", ">", "|", "&", "*"):
+        _fail("frontmatter_mismatch", relative_path, f"{field} must be a scalar")
+    if raw_value[0] in "\"'":
+        if len(raw_value) < 2 or raw_value[-1] != raw_value[0]:
+            _fail("frontmatter_mismatch", relative_path, f"{field} has invalid quotes")
+        value = raw_value[1:-1]
+    else:
+        value = raw_value.split(" #", 1)[0].rstrip()
+        if value.startswith(("!", "?")):
+            _fail("frontmatter_mismatch", relative_path, f"{field} must be plain text")
+    if not value.strip():
+        _fail("frontmatter_mismatch", relative_path, f"{field} must not be empty")
+    return key, value
 def _validate_role_references(
     role: dict[str, Any],
     relative_path: str,

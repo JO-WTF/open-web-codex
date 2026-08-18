@@ -1,6 +1,8 @@
 ---
 name: __SUPERVISOR_SKILL__
 description: Coordinate __DISPLAY_NAME__ work by delegating one bounded task to the worker and returning its verified result.
+metadata:
+  short-description: Coordinate __DISPLAY_NAME__ work
 ---
 
 # __DISPLAY_NAME__ Supervisor

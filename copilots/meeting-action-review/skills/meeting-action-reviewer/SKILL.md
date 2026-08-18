@@ -1,6 +1,8 @@
 ---
 name: meeting-action-reviewer
 description: Extract and verify owners and due dates from bounded meeting action-item Markdown.
+metadata:
+  short-description: 审查会议行动项
 ---
 # Meeting Action Reviewer
 

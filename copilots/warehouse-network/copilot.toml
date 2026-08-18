@@ -14,8 +14,20 @@ id = "warehouse-data"
 path = "skills/warehouse-data"
 
 [[skills]]
-id = "warehouse-network"
-path = "skills/warehouse-network"
+id = "warehouse-route-planning"
+path = "skills/warehouse-route-planning"
+
+[[skills]]
+id = "warehouse-network-analysis"
+path = "skills/warehouse-network-analysis"
+
+[[skills]]
+id = "warehouse-network-optimization"
+path = "skills/warehouse-network-optimization"
+
+[[skills]]
+id = "warehouse-map-delivery"
+path = "skills/warehouse-map-delivery"
 
 [[agents]]
 id = "data_agent"

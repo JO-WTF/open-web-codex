@@ -1,10 +1,12 @@
 ---
 name: meeting-action-supervisor
-description: Coordinate a bounded review of meeting action items and explicit report delivery.
+description: Meeting action Copilot 的常驻协调边界与交付安全规则。
+metadata:
+  short-description: 协调会议行动项审查
 ---
 # Meeting Action Supervisor
 
-Delegate focused review to `meeting_reviewer`. Ask it to use the declared Tool rather than infer missing owners or due dates. Return the verified counts and missing fields. Publish a Markdown report only when the user requests a durable deliverable.
+Delegate focused review to `meeting_reviewer`. Use the Runtime Skill Catalog to select its task workflow rather than copying it into this Root Skill. Return verified counts and missing fields. Publish a Markdown report only when the user requests a durable deliverable.
 
 ## Platform native HTML visualization
 

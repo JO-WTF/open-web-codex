@@ -23,9 +23,8 @@ use crate::{
 pub struct ThreadSkillConfig {
     pub name: String,
     pub enabled: bool,
-    /// Trusted Profile-owned main prompt used to explicitly select the fixed
-    /// Copilot Skill for every Root Turn. This path never crosses the browser
-    /// contract and is omitted for disabled catalog entries.
+    /// The one small, always-loaded Root Skill. Other enabled skills remain in
+    /// Codex's native catalog and load their body only after native selection.
     pub main_prompt: Option<PathBuf>,
 }
 
@@ -55,7 +54,7 @@ fn thread_start_params(
                 execution.id
             ))
         })?;
-        object.insert("skills.include_instructions".to_string(), json!(false));
+        object.insert("skills.include_instructions".to_string(), json!(true));
         object.insert(
             "skills.config".to_string(),
             execution
@@ -84,28 +83,39 @@ struct RootSkillSelection {
 fn resolve_root_skill_selections(
     skill_config: &[ThreadSkillConfig],
 ) -> Result<Vec<RootSkillSelection>, AdapterError> {
-    let enabled = skill_config
+    let roots = skill_config
         .iter()
-        .filter(|entry| entry.enabled)
+        .filter(|entry| entry.main_prompt.is_some())
         .collect::<Vec<_>>();
-    enabled
+    if roots.len() != 1 {
+        return Err(AdapterError::Internal(
+            "Copilot package must declare exactly one always-loaded Root Skill".to_string(),
+        ));
+    }
+    roots
         .into_iter()
         .map(|entry| {
+            if !entry.enabled {
+                return Err(AdapterError::Internal(format!(
+                    "Copilot Root Skill '{}' must remain enabled in the native catalog",
+                    entry.name
+                )));
+            }
             let main_prompt = entry.main_prompt.as_ref().ok_or_else(|| {
                 AdapterError::Internal(format!(
-                    "enabled Copilot Root Skill '{}' omitted its Profile main prompt",
+                    "Copilot Root Skill '{}' omitted its Profile main prompt",
                     entry.name
                 ))
             })?;
             let main_prompt = main_prompt.canonicalize().map_err(|error| {
                 AdapterError::Internal(format!(
-                    "failed to resolve enabled Copilot Root Skill '{}': {error}",
+                    "failed to resolve Copilot Root Skill '{}': {error}",
                     entry.name
                 ))
             })?;
             if !main_prompt.is_file() {
                 return Err(AdapterError::Internal(format!(
-                    "enabled Copilot Root Skill '{}' is not a regular file",
+                    "Copilot Root Skill '{}' is not a regular file",
                     entry.name
                 )));
             }
@@ -2102,7 +2112,7 @@ mod tests {
         thread_spawn_parent_thread_id, thread_start_params, turn_sandbox_policy, RealCodexAdapter,
         RootExecutionConfig, ThreadSkillConfig,
     };
-    use crate::{RuntimeThreadIdentity, RuntimeThreadIdentitySidecar};
+    use crate::{AdapterError, RuntimeThreadIdentity, RuntimeThreadIdentitySidecar};
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::path::Path;
@@ -2134,12 +2144,12 @@ mod tests {
                 },
                 ThreadSkillConfig {
                     name: "warehouse-data".to_string(),
-                    enabled: false,
+                    enabled: true,
                     main_prompt: None,
                 },
                 ThreadSkillConfig {
-                    name: "warehouse-network".to_string(),
-                    enabled: false,
+                    name: "warehouse-route-planning".to_string(),
+                    enabled: true,
                     main_prompt: None,
                 },
             ],
@@ -2155,11 +2165,11 @@ mod tests {
                 "approvalPolicy": "on-request",
                 "historyMode": "paginated",
                 "config": {
-                    "skills.include_instructions": false,
+                    "skills.include_instructions": true,
                     "skills.config": [
                         { "name": "warehouse-supervisor", "enabled": true },
-                        { "name": "warehouse-data", "enabled": false },
-                        { "name": "warehouse-network", "enabled": false },
+                        { "name": "warehouse-data", "enabled": true },
+                        { "name": "warehouse-route-planning", "enabled": true },
                     ],
                 },
             })
@@ -2194,7 +2204,7 @@ mod tests {
                 .to_string_lossy()
         );
 
-        let selected = resolve_root_skill_selections(&[
+        let error = resolve_root_skill_selections(&[
             ThreadSkillConfig {
                 name: "first".to_string(),
                 enabled: true,
@@ -2203,16 +2213,22 @@ mod tests {
             ThreadSkillConfig {
                 name: "second".to_string(),
                 enabled: true,
-                main_prompt: Some(prompt),
+                main_prompt: Some(prompt.clone()),
             },
         ])
-        .expect("multiple explicit Root Skills are supported");
-        assert_eq!(
-            selected
-                .iter()
-                .map(|skill| skill.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["first", "second"]
+        .expect_err("multiple always-loaded Root Skills must be rejected");
+        assert!(
+            matches!(error, AdapterError::Internal(message) if message.contains("exactly one always-loaded Root Skill"))
+        );
+
+        let error = resolve_root_skill_selections(&[ThreadSkillConfig {
+            name: "disabled".to_string(),
+            enabled: false,
+            main_prompt: Some(prompt),
+        }])
+        .expect_err("the always-loaded Root Skill must remain catalog-enabled");
+        assert!(
+            matches!(error, AdapterError::Internal(message) if message.contains("must remain enabled"))
         );
     }
 

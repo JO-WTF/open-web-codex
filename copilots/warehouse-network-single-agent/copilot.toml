@@ -10,6 +10,26 @@ agent = "warehouse_single_agent"
 id = "warehouse-single-agent"
 path = "skills/warehouse-single-agent"
 
+[[skills]]
+id = "warehouse-data-preparation"
+path = "skills/warehouse-data-preparation"
+
+[[skills]]
+id = "warehouse-route-planning"
+path = "skills/warehouse-route-planning"
+
+[[skills]]
+id = "warehouse-network-analysis"
+path = "skills/warehouse-network-analysis"
+
+[[skills]]
+id = "warehouse-network-optimization"
+path = "skills/warehouse-network-optimization"
+
+[[skills]]
+id = "warehouse-map-delivery"
+path = "skills/warehouse-map-delivery"
+
 [[agents]]
 id = "warehouse_single_agent"
 role = "agents/warehouse_single_agent.toml"
