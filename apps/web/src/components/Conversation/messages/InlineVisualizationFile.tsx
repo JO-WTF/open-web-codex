@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Expand from "lucide-react/dist/esm/icons/expand";
 import { platformClient } from "../../../../browser/session";
 
 type Props = {
@@ -14,6 +15,7 @@ type State =
 
 export default function InlineVisualizationFile({ threadId, file, media }: Props) {
   const [state, setState] = useState<State>({ status: "loading" });
+  const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -56,13 +58,63 @@ export default function InlineVisualizationFile({ threadId, file, media }: Props
       </figure>
     );
   }
-  return (
-    <iframe
+
+  const htmlCard = (fullscreenCard = false) => (
+    <section
       className="web-inline-visualization-file is-html"
-      src={state.url}
-      title={`${file} visualization`}
-      sandbox="allow-scripts"
-      referrerPolicy="no-referrer"
-    />
+      role="group"
+      aria-label={`HTML visualization: ${file}`}
+    >
+      <div className="web-inline-visualization-header">
+        <span className="web-inline-visualization-title">{file}</span>
+        {!fullscreenCard ? (
+          <button
+            type="button"
+            className="web-inline-visualization-fullscreen"
+            onClick={() => setFullscreen(true)}
+            aria-label="Open HTML visualization fullscreen"
+          >
+            <Expand size={16} aria-hidden="true" />
+            <span>全屏</span>
+          </button>
+        ) : null}
+      </div>
+      <iframe
+        className="web-inline-visualization-frame"
+        src={state.url}
+        title={`${file} visualization`}
+        sandbox="allow-scripts"
+        referrerPolicy="no-referrer"
+      />
+    </section>
+  );
+
+  return (
+    <>
+      {htmlCard()}
+      {fullscreen ? (
+        <div
+          className="web-inline-visualization-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Fullscreen HTML visualization: ${file}`}
+        >
+          <div
+            className="web-inline-visualization-modal-backdrop"
+            onClick={() => setFullscreen(false)}
+          />
+          <div className="web-inline-visualization-modal-panel">
+            <button
+              type="button"
+              className="web-inline-visualization-modal-close"
+              onClick={() => setFullscreen(false)}
+            >
+              Close
+            </button>
+            {htmlCard(true)}
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }

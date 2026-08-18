@@ -9,6 +9,12 @@ Root 只负责理解目标、拆分任务、传递上下文、请用户决策和
 
 本 Skill 已由 Copilot 在每个 Root Turn 开始时显式选择并注入。Root 直接按这里的内容调度，不用 shell、命令或文件读取再次打开任何 `SKILL.md`。child 的 Role 只展示各自启用的业务 Skill；Root 只传业务任务和 typed handoff，不复制 Skill 正文。
 
+## 平台原生 HTML 可视化
+
+- 用户要求编写并在对话中展示交互 HTML 时，先在当前授权 Workspace 写入一个安全的相对 `.html` 文件，再在最终 Assistant Message 需要展示的位置原样输出一个独立段落：`::codex-inline-vis{workspace_file="相对路径.html"}`。
+- 这是 Platform 的显式快照合同：Platform 只在该 Agent Message 完成时，以当前 Run/Thread/Workspace 授权读取该文件，存入当前 Thread 的原生可视化目录，并把它改写为 Codex 官方 `file` 引用。不要自行写入 `CODEX_HOME`、绝对路径或 Thread 可视化目录。
+- 不要把 HTML 截图、转换为图片、放进代码块或用普通 Markdown 链接代替该引用；地图继续只使用 Tool 返回的 `artifact` embed，不能把普通 HTML 伪装成地图 Artifact。
+
 ## 选择最短正常链
 
 - 没有当前 Tool 返回的 `ready` `normalized_network_input.v1` ResourceRef：创建一个 `data_agent`，在同一 child 中完成发现、检查、标准化和必要的地理补全。普通文件路径、旧 Artifact、报告或模型文本都不能代替 ResourceRef。

@@ -482,8 +482,10 @@ Resource 字节、不登记 durable Artifact。文件交付同样由 exact produ
 `workspace_artifact` envelope 与 content verifier 声明；不得借展示卡片冒充文件交付。
 
 Web 同时保留 Codex 原生 inline visualization 语义：仅从当前授权 Profile/Thread 读取原生 HTML
-和签名验证后的 PNG/JPEG/GIF/WebP；不引入 SVG/Markdown renderer，也不把临时可视化登记为
-Artifact。仓网 `map.v3` 是当前声明的额外 renderer 实例；旧 `report.v1` inline 卡片已删除。
+和签名验证后的 PNG/JPEG/GIF/WebP；Platform 可在完成的 Agent Message 对严格、Workspace-relative
+`workspace_file` HTML 指令执行一次 no-follow 快照并改写为官方 `file` 引用，不引入 SVG/Markdown
+renderer，也不把临时可视化登记为 Artifact。仓网 `map.v3` 是当前声明的额外 renderer 实例；旧
+`report.v1` inline 卡片已删除。
 仓网 Markdown 报告/地图文件和 meeting Markdown 报告是当前文件 delivery 实例。Artifact 保存
 producer-time verifier snapshot，恢复不依赖届时 active package registry，切包不会使既有交付失效。
 

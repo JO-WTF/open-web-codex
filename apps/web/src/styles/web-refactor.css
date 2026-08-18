@@ -2377,7 +2377,66 @@ body:has(.web-app-shell) {
 
 .web-inline-visualization-file.is-html {
   display: block;
+  overflow: hidden;
+}
+
+.web-inline-visualization-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--web-border-strong);
+  background: color-mix(in srgb, var(--web-panel) 86%, var(--web-surface));
+}
+
+.web-inline-visualization-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--web-text);
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-inline-visualization-fullscreen,
+.web-inline-visualization-modal-close {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--web-border-strong);
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--web-text);
+  background: var(--web-surface);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.web-inline-visualization-fullscreen:hover,
+.web-inline-visualization-modal-close:hover {
+  border-color: #2563a6;
+  background: #2563a6;
+  color: #fff;
+}
+
+.web-inline-visualization-fullscreen:focus-visible,
+.web-inline-visualization-modal-close:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.web-inline-visualization-frame {
+  display: block;
+  width: 100%;
+  height: min(64vh, 560px);
   min-height: 460px;
+  border: 0;
+  background: #fff;
 }
 
 .web-inline-visualization-file.is-image {
@@ -2408,6 +2467,43 @@ body:has(.web-app-shell) {
   color: var(--web-muted);
   background: var(--web-surface);
   font-size: 12px;
+}
+
+.web-inline-visualization-modal {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.web-inline-visualization-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 62%);
+}
+
+.web-inline-visualization-modal-panel {
+  position: relative;
+  width: min(1280px, 96vw);
+  max-height: 92vh;
+  overflow: auto;
+}
+
+.web-inline-visualization-modal-panel .web-inline-visualization-file {
+  width: 100%;
+  margin: 0;
+}
+
+.web-inline-visualization-modal-panel .web-inline-visualization-frame {
+  height: min(78vh, 900px);
+}
+
+.web-inline-visualization-modal-close {
+  float: right;
+  margin: 0 0 10px 10px;
+  padding: 6px 12px;
 }
 
 .web-msg-assistant-body code {

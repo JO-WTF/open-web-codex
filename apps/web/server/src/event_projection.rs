@@ -1,8 +1,11 @@
 use open_web_codex_adapter::RuntimeThreadIdentitySidecar;
+use open_web_codex_git_runtime::GitRuntime;
 use open_web_codex_platform_contracts::{RunEvent, RuntimeAgentActivitySubject};
 use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 use sqlx::Row;
+use std::path::PathBuf;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::delivery_artifacts::{
@@ -66,10 +69,69 @@ pub struct LiveProjection {
     pub pending_artifact_ids: Vec<Uuid>,
 }
 
+/// Platform-owned bridge from an explicit Workspace HTML reference to Codex's
+/// native Thread-scoped inline visualization storage. It never accepts a
+/// browser path or an absolute Runtime path.
+#[derive(Clone)]
+pub(crate) struct NativeVisualizationMaterializer {
+    git: Arc<GitRuntime>,
+    codex_home: Arc<PathBuf>,
+}
+
+impl NativeVisualizationMaterializer {
+    pub(crate) fn new(git: Arc<GitRuntime>, codex_home: Arc<PathBuf>) -> Self {
+        Self { git, codex_home }
+    }
+
+    async fn materialize(&self, event: &mut ProjectedEvent, workspace_id: Uuid) {
+        if event.event_type != "codex.item.completed"
+            || event.payload.pointer("/itemType").and_then(Value::as_str) != Some("agentMessage")
+        {
+            return;
+        }
+        let Some(item_id) = event.item_id.as_deref() else {
+            return;
+        };
+        let Some(text) = event
+            .payload
+            .pointer("/data/text")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        else {
+            return;
+        };
+        match crate::inline_visualizations::materialize_workspace_html_references(
+            &text,
+            self.git.as_ref(),
+            workspace_id,
+            self.codex_home.as_ref(),
+            &event.thread_id,
+            item_id,
+        )
+        .await
+        {
+            Ok(materialized) => {
+                if materialized != text {
+                    if let Some(target) = event.payload.pointer_mut("/data/text") {
+                        *target = Value::String(materialized);
+                    }
+                }
+            }
+            Err(error) => tracing::warn!(
+                error = %error,
+                thread_id = %event.thread_id,
+                item_id,
+                "platform native HTML visualization materialization failed"
+            ),
+        }
+    }
+}
+
 pub async fn persist_frame_with_deliveries(
     data: &[u8],
     db: &PgPool,
     deliveries: &DeliveryRegistry,
+    native_visualizations: Option<&NativeVisualizationMaterializer>,
 ) -> Result<Option<LiveProjection>, String> {
     if let Some(projection) = persist_terminal_frame(data, db).await? {
         return Ok(Some(projection));
@@ -88,6 +150,11 @@ pub async fn persist_frame_with_deliveries(
     let run_id = context.run_id;
     let organization_id = context.organization_id;
     let is_root_thread = event.thread_id == context.root_thread_id;
+    if let Some(native_visualizations) = native_visualizations {
+        native_visualizations
+            .materialize(&mut event, context.workspace_id)
+            .await;
+    }
     update_runtime_agent_projection(&mut transaction, &context, &event).await?;
 
     sqlx::query("SAVEPOINT artifact_projection")
@@ -667,6 +734,7 @@ pub async fn persist_frame(data: &[u8], db: &PgPool) -> Result<Option<LiveProjec
         data,
         db,
         &crate::delivery_contracts::warehouse_test_registry(),
+        None,
     )
     .await
 }

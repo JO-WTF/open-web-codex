@@ -1,12 +1,16 @@
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, File, OpenOptions};
 use chrono::DateTime;
-use tokio::fs;
+use open_web_codex_git_runtime::GitRuntime;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
+
+#[cfg(test)]
+use tokio::fs;
 
 const MAX_HTML_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
@@ -15,9 +19,9 @@ const VIEWER_STYLESHEET: &str =
 const VIEWER_RUNTIME: &str =
     include_str!("../../../../codex/codex-rs/tui/src/inline_visualization/assets/visualize.html");
 const FRAGMENT_PLACEHOLDER: &str = "<!--__INLINE_VISUALIZATION_FRAGMENT__-->";
+const WORKSPACE_FILE_DIRECTIVE_PREFIX: &str = "::codex-inline-vis{workspace_file=\"";
 
 pub(crate) const FRAME_CSP: &str = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data:; worker-src blob:; connect-src blob: data:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
-const SHELL_STYLE: &str = ":root{color-scheme:light dark;background:light-dark(rgb(255 255 255),rgb(24 24 24))}html,body{margin:0;min-height:100%}body{box-sizing:border-box;padding:0;background:inherit}iframe{display:block;width:100%;height:100vh;border:0}";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InlineVisualizationKind {
@@ -98,6 +102,168 @@ pub(crate) async fn read(
         bytes,
         content_type: kind.content_type(),
     })
+}
+
+/// Convert the explicit Platform workspace-file directive into Codex's native
+/// file directive. The model can name only a validated Workspace-relative HTML
+/// file; the Platform snapshots it under the authoritative Profile/Thread
+/// visualization root before the browser sees a native reference.
+pub(crate) async fn materialize_workspace_html_references(
+    markdown: &str,
+    git: &GitRuntime,
+    workspace_id: Uuid,
+    codex_home: &Path,
+    thread_id: &str,
+    item_id: &str,
+) -> Result<String, InlineVisualizationError> {
+    if !markdown.contains(WORKSPACE_FILE_DIRECTIVE_PREFIX) {
+        return Ok(markdown.to_string());
+    }
+
+    let mut output = String::with_capacity(markdown.len());
+    let mut fence: Option<(u8, usize)> = None;
+    let mut directive_index = 0usize;
+    for line in markdown.split_inclusive('\n') {
+        let (content, newline) = line
+            .strip_suffix('\n')
+            .map_or((line, ""), |content| (content, "\n"));
+        let content = content.strip_suffix('\r').unwrap_or(content);
+        if let Some(marker) = markdown_fence_marker(content) {
+            match fence {
+                None => fence = Some(marker),
+                Some((character, length)) if character == marker.0 && marker.1 >= length => {
+                    fence = None;
+                }
+                _ => {}
+            }
+            output.push_str(content);
+            output.push_str(newline);
+            continue;
+        }
+
+        let leading = content.len() - content.trim_start_matches(' ').len();
+        let indented = leading >= 4 || content.starts_with('\t');
+        let directive = content.trim();
+        if fence.is_none() && !indented && directive.starts_with(WORKSPACE_FILE_DIRECTIVE_PREFIX) {
+            let source = workspace_html_source(directive)
+                .ok_or(InlineVisualizationError::InvalidReference)?;
+            let source_file = git
+                .read_file(workspace_id, source)
+                .await
+                .map_err(|_| InlineVisualizationError::Unavailable)?;
+            if source_file.truncated || source_file.content.len() as u64 > MAX_HTML_BYTES {
+                return Err(InlineVisualizationError::InvalidContent);
+            }
+            let file = workspace_snapshot_file_name(item_id, directive_index, source);
+            write_html_snapshot(codex_home, thread_id, &file, source_file.content.as_bytes())?;
+            output.push_str(&content[..leading]);
+            output.push_str("::codex-inline-vis{file=\"");
+            output.push_str(&file);
+            output.push_str("\"}");
+            output.push_str(newline);
+            directive_index += 1;
+            continue;
+        }
+        output.push_str(content);
+        output.push_str(newline);
+    }
+    Ok(output)
+}
+
+fn workspace_html_source(directive: &str) -> Option<&str> {
+    let source = directive
+        .strip_prefix(WORKSPACE_FILE_DIRECTIVE_PREFIX)?
+        .strip_suffix("\"}")?;
+    if source.is_empty()
+        || source.len() > 512
+        || !source.ends_with(".html")
+        || !source
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/'))
+        || source
+            .split('/')
+            .any(|part| part.is_empty() || matches!(part, "." | ".." | ".git"))
+    {
+        return None;
+    }
+    Some(source)
+}
+
+fn workspace_snapshot_file_name(item_id: &str, directive_index: usize, source: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(item_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(directive_index.to_le_bytes());
+    hasher.update([0]);
+    hasher.update(source.as_bytes());
+    format!("workspace-{}.html", hex::encode(hasher.finalize()))
+}
+
+fn write_html_snapshot(
+    codex_home: &Path,
+    thread_id: &str,
+    file: &str,
+    bytes: &[u8],
+) -> Result<(), InlineVisualizationError> {
+    if file_kind(file) != Some(InlineVisualizationKind::Html)
+        || bytes.len() as u64 > MAX_HTML_BYTES
+        || std::str::from_utf8(bytes).is_err()
+    {
+        return Err(InlineVisualizationError::InvalidContent);
+    }
+    let profile = Dir::open_ambient_dir(codex_home, ambient_authority())
+        .map_err(|_| InlineVisualizationError::Unavailable)?;
+    let visualizations = open_or_create_dir_nofollow(&profile, "visualizations")?;
+    let components = visualization_components(thread_id)?;
+    let year = open_or_create_dir_nofollow(&visualizations, &components[0])?;
+    let month = open_or_create_dir_nofollow(&year, &components[1])?;
+    let day = open_or_create_dir_nofollow(&month, &components[2])?;
+    let thread = open_or_create_dir_nofollow(&day, &components[3])?;
+
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .follow(FollowSymlinks::No);
+    let mut output = match thread.open_with(file, &options) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(error) => return Err(map_no_follow_error(error)),
+    };
+    if let Err(error) = output.write_all(bytes).and_then(|_| output.sync_all()) {
+        let _ = thread.remove_file(file);
+        return Err(map_no_follow_error(error));
+    }
+    Ok(())
+}
+
+fn open_or_create_dir_nofollow(parent: &Dir, name: &str) -> Result<Dir, InlineVisualizationError> {
+    match parent.open_dir_nofollow(name) {
+        Ok(directory) => Ok(directory),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match parent.create_dir(name) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(map_no_follow_error(error)),
+            }
+            parent.open_dir_nofollow(name).map_err(map_no_follow_error)
+        }
+        Err(error) => Err(map_no_follow_error(error)),
+    }
+}
+
+fn markdown_fence_marker(line: &str) -> Option<(u8, usize)> {
+    let leading = line.len() - line.trim_start_matches(' ').len();
+    if leading > 3 {
+        return None;
+    }
+    let bytes = line[leading..].as_bytes();
+    let character = *bytes.first()?;
+    if !matches!(character, b'`' | b'~') {
+        return None;
+    }
+    let length = bytes.iter().take_while(|byte| **byte == character).count();
+    (length >= 3).then_some((character, length))
 }
 
 fn open_visualizations_dir(codex_home: &Path) -> Result<Dir, InlineVisualizationError> {
@@ -190,6 +356,7 @@ fn visualization_components(thread_id: &str) -> Result<[String; 4], InlineVisual
     ])
 }
 
+#[cfg(test)]
 fn visualization_thread_dir(
     codex_home: &Path,
     thread_id: &str,
@@ -250,13 +417,8 @@ fn render_html_fragment(fragment: &str, file: &str) -> String {
         .unwrap_or("Visualization")
         .replace('-', " ");
     let escaped_title = escape_html(&title);
-    let frame = format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"referrer\" content=\"no-referrer\"><meta http-equiv=\"Content-Security-Policy\" content=\"{FRAME_CSP}\"><title>{escaped_title}</title><style>{VIEWER_STYLESHEET}\nhtml>body{{padding:0}}</style></head><body>{runtime}</body></html>"
-    );
-    let shell_csp = FRAME_CSP.replace("frame-src 'none'", "frame-src 'self'");
     format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"referrer\" content=\"no-referrer\"><meta http-equiv=\"Content-Security-Policy\" content=\"{shell_csp}\"><title>{escaped_title}</title><style>{SHELL_STYLE}</style></head><body><iframe sandbox=\"allow-scripts\" referrerpolicy=\"no-referrer\" title=\"{escaped_title}\" srcdoc=\"{}\"></iframe></body></html>",
-        escape_html(&frame)
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta name=\"referrer\" content=\"no-referrer\"><meta http-equiv=\"Content-Security-Policy\" content=\"{FRAME_CSP}\"><title>{escaped_title}</title><style>{VIEWER_STYLESHEET}\nhtml>body{{padding:0}}</style></head><body>{runtime}</body></html>"
     )
 }
 
@@ -290,6 +452,77 @@ mod tests {
         }
     }
 
+    #[test]
+    fn accepts_only_safe_workspace_html_directives() {
+        assert_eq!(
+            workspace_html_source("::codex-inline-vis{workspace_file=\"cards/test.html\"}"),
+            Some("cards/test.html")
+        );
+        for directive in [
+            "::codex-inline-vis{workspace_file=\"../test.html\"}",
+            "::codex-inline-vis{workspace_file=\"/tmp/test.html\"}",
+            "::codex-inline-vis{workspace_file=\"test.svg\"}",
+            "::codex-inline-vis{workspace_file=\"cards//test.html\"}",
+            "::codex-inline-vis{workspace_file=\".git/test.html\"}",
+        ] {
+            assert_eq!(workspace_html_source(directive), None, "{directive}");
+        }
+    }
+
+    #[test]
+    fn snapshots_workspace_html_under_the_thread_scoped_native_root() {
+        let home = tempfile::tempdir().unwrap();
+        let thread_id = Uuid::now_v7().to_string();
+        let file = workspace_snapshot_file_name("item-1", 0, "cards/test.html");
+        write_html_snapshot(home.path(), &thread_id, &file, b"<button>test</button>").unwrap();
+        write_html_snapshot(home.path(), &thread_id, &file, b"<button>changed</button>").unwrap();
+
+        let thread_dir = visualization_thread_dir(home.path(), &thread_id).unwrap();
+        assert_eq!(
+            std::fs::read(thread_dir.join(&file)).unwrap(),
+            b"<button>test</button>"
+        );
+    }
+
+    #[tokio::test]
+    async fn materializes_an_authorized_workspace_html_file_to_a_native_reference() {
+        let runner = tempfile::tempdir().unwrap();
+        let git = GitRuntime::new(open_web_codex_git_runtime::GitRuntimeConfig::new(
+            runner.path(),
+        ))
+        .unwrap();
+        let workspace_id = Uuid::now_v7();
+        let workspace = git.workspace_path(workspace_id);
+        std::fs::create_dir_all(workspace.join("cards")).unwrap();
+        std::fs::create_dir(workspace.join(".git")).unwrap();
+        std::fs::write(workspace.join("cards/test.html"), "<button>test</button>").unwrap();
+
+        let home = tempfile::tempdir().unwrap();
+        let thread_id = Uuid::now_v7().to_string();
+        let markdown = "Before\n\n::codex-inline-vis{workspace_file=\"cards/test.html\"}\n\nAfter";
+        let materialized = materialize_workspace_html_references(
+            markdown,
+            &git,
+            workspace_id,
+            home.path(),
+            &thread_id,
+            "agent-message-1",
+        )
+        .await
+        .unwrap();
+
+        assert!(!materialized.contains("workspace_file"));
+        let file = materialized
+            .strip_prefix("Before\n\n::codex-inline-vis{file=\"")
+            .and_then(|value| value.strip_suffix("\"}\n\nAfter"))
+            .unwrap();
+        assert!(file.starts_with("workspace-"));
+        let payload = read(home.path(), &thread_id, file).await.unwrap();
+        assert!(String::from_utf8(payload.bytes)
+            .unwrap()
+            .contains("<button>test</button>"));
+    }
+
     #[tokio::test]
     async fn reads_only_regular_thread_scoped_files_and_wraps_html() {
         let home = tempfile::tempdir().unwrap();
@@ -303,9 +536,9 @@ mod tests {
         let payload = read(home.path(), &thread_id, "chart.html").await.unwrap();
         let document = String::from_utf8(payload.bytes).unwrap();
         assert_eq!(payload.content_type, "text/html; charset=utf-8");
-        assert!(document.contains("sandbox=\"allow-scripts\""));
-        assert!(document.contains("&lt;div id=&quot;chart&quot;&gt;ok&lt;/div&gt;"));
+        assert!(document.contains("<div id=\"chart\">ok</div>"));
         assert!(document.contains("Content-Security-Policy"));
+        assert!(!document.contains("<iframe"));
     }
 
     #[tokio::test]

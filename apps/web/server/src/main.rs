@@ -297,6 +297,12 @@ async fn main() -> anyhow::Result<()> {
         runtime_host,
         runtime_workspace,
     ));
+    let native_visualizations = (cli.codex_mode == "real")
+        .then(|| profile_binding.codex_home.clone())
+        .flatten()
+        .map(|codex_home| {
+            event_projection::NativeVisualizationMaterializer::new(git.clone(), codex_home)
+        });
     let approvals = Arc::new(ApprovalService::new(
         state.db.clone(),
         profile_binding.runtime_key.clone(),
@@ -331,6 +337,7 @@ async fn main() -> anyhow::Result<()> {
         let approvals = approvals.clone();
         let projection_db = state.db.clone();
         let deliveries = deliveries.clone();
+        let native_visualizations = native_visualizations.clone();
         tokio::spawn(async move {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
 
@@ -405,6 +412,7 @@ async fn main() -> anyhow::Result<()> {
                         &event_bus,
                         &git,
                         &deliveries,
+                        native_visualizations.as_ref(),
                     )
                     .await;
                     continue;
@@ -426,8 +434,15 @@ async fn main() -> anyhow::Result<()> {
                     },
                     None => data,
                 };
-                persist_and_broadcast(&public_data, &projection_db, &event_bus, &git, &deliveries)
-                    .await;
+                persist_and_broadcast(
+                    &public_data,
+                    &projection_db,
+                    &event_bus,
+                    &git,
+                    &deliveries,
+                    native_visualizations.as_ref(),
+                )
+                .await;
             }
 
             let _ = sub.await;
@@ -481,8 +496,16 @@ async fn persist_and_broadcast(
     event_bus: &tokio::sync::broadcast::Sender<open_web_codex_platform_store::LiveEvent>,
     git: &Arc<GitRuntime>,
     deliveries: &Arc<delivery_contracts::DeliveryRegistry>,
+    native_visualizations: Option<&event_projection::NativeVisualizationMaterializer>,
 ) {
-    match event_projection::persist_frame_with_deliveries(data, projection_db, deliveries).await {
+    match event_projection::persist_frame_with_deliveries(
+        data,
+        projection_db,
+        deliveries,
+        native_visualizations,
+    )
+    .await
+    {
         Ok(Some(projected)) => {
             if !projected.pending_artifact_ids.is_empty() {
                 tokio::spawn(routes::artifacts::materialize_artifacts(

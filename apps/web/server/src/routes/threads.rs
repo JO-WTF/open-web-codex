@@ -588,6 +588,7 @@ async fn project_turn_with_refs(
         .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string))
         .collect::<Vec<_>>();
     let artifacts_by_item = persisted_artifacts_by_item(state, run_id, &item_ids).await?;
+    let agent_messages_by_item = persisted_agent_messages_by_item(state, run_id, &item_ids).await?;
     for item in &mut turn.items {
         if let Some(item_id) = item.get("id").and_then(Value::as_str) {
             if let Some(artifacts) = artifacts_by_item.get(item_id) {
@@ -605,6 +606,15 @@ async fn project_turn_with_refs(
         if item.get("type").and_then(Value::as_str) != Some("agentMessage") {
             continue;
         }
+        if let Some(text) = item
+            .get("id")
+            .and_then(Value::as_str)
+            .and_then(|item_id| agent_messages_by_item.get(item_id))
+        {
+            item.as_object_mut()
+                .expect("projected item must be an object")
+                .insert("text".to_string(), Value::String(text.to_string()));
+        }
         let Some(text) = item.get("text").and_then(Value::as_str) else {
             continue;
         };
@@ -618,6 +628,39 @@ async fn project_turn_with_refs(
         }
     }
     Ok(turn)
+}
+
+async fn persisted_agent_messages_by_item(
+    state: &AppState,
+    run_id: Uuid,
+    item_ids: &[String],
+) -> Result<HashMap<String, String>, ApiError> {
+    if item_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query(
+        "SELECT DISTINCT ON (item_id) item_id, payload #>> '{data,text}' AS text \
+         FROM run_events \
+         WHERE run_id = $1 \
+           AND event_type = 'codex.item.completed' \
+           AND item_id = ANY($2) \
+           AND payload #>> '{itemType}' = 'agentMessage' \
+         ORDER BY item_id, sequence DESC",
+    )
+    .bind(run_id)
+    .bind(item_ids)
+    .fetch_all(&state.db)
+    .await
+    .map_err(database_error)?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            Some((
+                row.get::<Option<String>, _>("item_id")?,
+                row.get::<Option<String>, _>("text")?,
+            ))
+        })
+        .collect())
 }
 
 async fn persisted_artifacts_by_item(

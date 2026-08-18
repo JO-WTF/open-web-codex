@@ -264,6 +264,12 @@ Root/child Thread provenance，再从该 Profile 的精确 Thread visualization 
 `allow-same-origin` 的脚本沙箱；静态图片只允许 PNG/JPEG/GIF/WebP 并校验文件签名；SVG、Markdown、
 任意路径、任意 Artifact HTML 和其它内容类型显式拒绝。
 
+Platform 可以在完成的 Agent Message 中处理严格的 `workspace_file` HTML 指令，但这不是浏览器
+文件 API 或模型对 Profile 的写授权：Platform 从已解析的 Run/Thread/Workspace context 取得 scope，
+通过 no-follow Workspace reader 读取安全相对 `.html` 文件并限制大小，再 create-new 快照到当前
+Thread 的原生目录，将持久化浏览器投影改写成官方 `file` 指令。失败保留不可用的原指令并记录安全
+诊断；不得改读绝对路径、生成截图、创建 Artifact 或把文件内容写入数据库。
+
 `map.v3` 卡片的“基于此图修改”也不是 Resource 内容读取：Platform 仅从同一授权 Run 的
 `inline_map_cards` 投影取得 exact `map_card_spec.v1` ref，并把该 ref 作为用户明确选择的 Turn 输入。
 Maps provider 保存 immutable spec 和 parent ref；纯样式 revision 复用原 GeoJSON ref，涉及覆盖线的
