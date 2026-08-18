@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
 import Brain from "lucide-react/dist/esm/icons/brain";
 
@@ -17,9 +17,10 @@ function previewLabel(text: string): string {
 }
 
 export default function ReasoningBlock({ text, summary, meta, streaming = false }: Props) {
-  // Reasoning is valuable execution context; show it on arrival instead of
-  // leaving a barely discoverable collapsed row between messages.
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(streaming);
+  useEffect(() => {
+    setOpen(streaming);
+  }, [streaming]);
   const trimmedText = text.trim();
   if (!trimmedText) return null;
 
@@ -33,7 +34,16 @@ export default function ReasoningBlock({ text, summary, meta, streaming = false 
 
   return (
     <div className="web-reasoning">
-      <div className="web-reasoning-header" onClick={() => setOpen(!open)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setOpen(!open); }}>
+      <div
+        className="web-reasoning-header"
+        onClick={() => setOpen(!open)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={open && hasDetails}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") setOpen(!open);
+        }}
+      >
         <span className={`web-reasoning-chevron${open ? " web-reasoning-chevron-open" : ""}`}>
           <ChevronRight size={12} />
         </span>
