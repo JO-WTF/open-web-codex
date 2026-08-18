@@ -5,6 +5,7 @@ use crate::common::ResponsesApiTools;
 use crate::common::TextControls;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;
 use std::sync::Arc;
 
@@ -39,6 +40,13 @@ fn text_message(role: &str, text: &str) -> ResponseItem {
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+fn turn_metadata(turn_id: &str) -> InternalChatMessageMetadataPassthrough {
+    InternalChatMessageMetadataPassthrough {
+        turn_id: Some(turn_id.to_string()),
+        ..Default::default()
     }
 }
 
@@ -256,6 +264,60 @@ fn translates_tool_search_and_replays_loaded_tools_as_chat_functions() {
                 content: "[{\"description\":\"Evaluate a network baseline.\",\"name\":\"evaluate_network_baseline\",\"parameters\":{\"properties\":{},\"type\":\"object\"},\"type\":\"function\"}]".to_string(),
             },
         ]
+    );
+}
+
+#[test]
+fn does_not_replay_a_previous_turns_loaded_tool_schema() {
+    let mut request = request(Some(vec![serde_json::json!({
+        "type": "tool_search",
+        "execution": "client",
+        "description": "Search available tools.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}
+    })]));
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-old".to_string()),
+            status: None,
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "network coverage"}),
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+        },
+        ResponseItem::ToolSearchOutput {
+            id: None,
+            call_id: Some("search-old".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: vec![serde_json::json!({
+                "type": "function",
+                "name": "evaluate_network_baseline",
+                "description": "Evaluate a network baseline.",
+                "parameters": {"type": "object", "properties": {}}
+            })],
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Use navigation distances now.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-new")),
+        },
+    ];
+
+    let translated = responses_request_to_chat_completions_request(request).unwrap();
+    assert_eq!(
+        translated
+            .tools
+            .iter()
+            .map(|tool| tool.function.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["tool_search"],
+        "a new Turn must search before a deferred Tool schema is callable"
     );
 }
 

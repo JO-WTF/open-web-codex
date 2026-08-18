@@ -276,7 +276,7 @@ Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。
 2. 使用 Codex 原生 `$CODEX_HOME/skills` 与 `$CODEX_HOME/agents/*.toml`。每个 Copilot 只有一个
    小型常驻 Root Skill；任务 Skill 通过 Runtime Catalog 的 name、description、short-description 和 locator
    渐进发现，只有原生选中后才加载完整正文。Role TOML 源码只持有 Plugin/server policy；选中的 server 内 Tool
-   一律通过 deferred `tool_search` 发现，不维护 `enabled_tools` 名称白名单。SDK prepared descriptor 提供 transport，Server
+   一律通过 deferred `tool_search` 发现，不维护 `enabled_tools` 名称白名单；命中 schema 只在同一 Turn 的下一次模型调用有效，新 Turn 重新搜索。SDK prepared descriptor 提供 transport，Server
    在当前 Profile 下解析 typed binding 后合成 Role-local MCP。不改 Profile `config.toml`、全局 role allowlist
    或 Codex built-in roles。Profile Host 的普通 startup file 只为 clean Profile seed 默认文件
    并保留已存在内容；仓网三项内置 Skill 与两项内置 Role 是显式 managed 保留 ID，部署升级

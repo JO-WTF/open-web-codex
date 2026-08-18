@@ -12,10 +12,10 @@ Role 的 `enabled_tools` 名称白名单会随着一个已授权 Platform MCP se
 
 1. Copilot 仍只能使用其 Task 选中的包、prepared Capability Root 和 Role 明确启用的 MCP server；不扫描或加载无关 Copilot、Workspace 或 Profile Tool。
 2. 已启用 MCP server 内的全部已声明 Tool 对该 Role 开放，不再使用 `enabled_tools` 名称白名单。Capability Root 与 server scope 仍是强制权限边界。
-3. Role 对每个已启用 server 设置 `omit_tools_from = ["direct"]`。Runtime 负责将其注册为 deferred Tool，`tool_search` 只搜索已授权 metadata，并只把命中 Tool 的 schema 加入下一轮上下文。
+3. Role 对每个已启用 server 设置 `omit_tools_from = ["direct"]`。Runtime 负责将其注册为 deferred Tool，`tool_search` 只搜索已授权 metadata，并只把命中 Tool 的 schema 加入同一 Turn 的下一次模型调用；新 Turn 必须重新搜索，不能因历史 Tool 名或 schema 直接调用。
 4. Server 默认审批与逐 Tool approval policy 不变；发现不等于预批准，也不改变 Workspace、Secret、Artifact 或 Resource 授权。
 5. Provider 是否支持 ToolSearch 继续由 Runtime typed capability 决定。Platform、Browser 和 Skill 不模拟搜索、不能在不支持时以完整 direct schema 作为替代。
 
 ## 后果与验证
 
-新增同一已授权 server 的 Tool 无需改动每个 Copilot Role 才能被发现；新增 server 或 Capability Root 仍需要显式 package/Role 合同和 prepared transport。验证覆盖所有 checked-in Role 不含 `enabled_tools`、每个启用 server 省略 `direct` surface、逐 Tool approval 保持，及 Runtime 的 deferred ToolSearch 回归。
+新增同一已授权 server 的 Tool 无需改动每个 Copilot Role 才能被发现；新增 server 或 Capability Root 仍需要显式 package/Role 合同和 prepared transport。验证覆盖所有 checked-in Role 不含 `enabled_tools`、每个启用 server 省略 `direct` surface、逐 Tool approval 保持，Runtime 的 deferred ToolSearch 回归，以及 Chat bridge 不向新 Turn 重放上一 Turn 的 loaded schema。

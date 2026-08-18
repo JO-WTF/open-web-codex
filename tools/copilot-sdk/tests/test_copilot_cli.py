@@ -34,6 +34,14 @@ class CopilotCliTests(unittest.TestCase):
             self.assertTrue(
                 (root / "skills/order-review-supervisor/SKILL.md").is_file()
             )
+            root_skill = (root / "skills/order-review-supervisor/SKILL.md").read_text(
+                encoding="utf-8"
+            )
+            child_skill = (root / "skills/order-review-worker/SKILL.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("native `tool_search`", root_skill)
+            self.assertIn("native `tool_search`", child_skill)
             self.assertTrue((root / "agents/order-review-worker.toml").is_file())
             manifest = (root / "copilot.toml").read_text(encoding="utf-8")
             self.assertIn("[[tests]]", manifest)

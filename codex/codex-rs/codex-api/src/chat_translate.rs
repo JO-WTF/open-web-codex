@@ -309,8 +309,18 @@ fn append_chat_tools(tools: &mut Vec<ChatTool>, additions: Vec<ChatTool>) -> Res
 }
 
 fn tool_search_output_tools(input: &[ResponseItem]) -> Result<Vec<Value>, ApiError> {
+    // A deferred schema is a one-Turn loading result. The Chat wire needs the
+    // schema alongside the tool-search result so the immediately following
+    // Chat request can call it, but an older Turn's result must not make that
+    // schema directly callable again in a new Turn. Runtime stamps emitted
+    // items with their Turn identity; retain the metadata-free behavior for
+    // synthetic/legacy inputs that have no usable identity at all.
+    let active_turn_id = input.iter().rev().find_map(ResponseItem::turn_id);
     let mut tools = Vec::new();
     for item in input {
+        if active_turn_id.is_some_and(|turn_id| item.turn_id() != Some(turn_id)) {
+            continue;
+        }
         let ResponseItem::ToolSearchOutput {
             status,
             execution,

@@ -11,6 +11,10 @@ Root 只负责理解目标、协调 child、向用户询问必要选择和整合
 
 数据发现、映射、标准化和地理补全由 `data_agent`（昵称 `Wanwan`）处理；路线、分析、选址、地图和报告由 `network_agent` 处理。Root 只传递精确 typed ResourceRef 与用户目标；child 的 Tool 终态失败、拒绝、取消、超时或输入缺失必须如实报告并停止当前请求。
 
+## 延迟 MCP Tool 发现
+
+Root 与 child 的 MCP Tool schema 都是 deferred。任何需要 Tool 的新 Turn 都先用 Runtime 原生 `tool_search` 按当前业务目标发现 Tool，且只调用本 Turn 命中的 schema；上一 Turn 的 Tool 名、参数或结果不表示本 Turn 仍已加载。不要由历史 Tool 名直接调用、让平台代为搜索，或用 Resource list 代替 `tool_search`。
+
 ## 平台原生 HTML 可视化
 
 - 用户要求编写并在对话中展示交互 HTML 时，先在当前授权 Workspace 写入一个安全的相对 `.html` 文件，再在最终 Assistant Message 需要展示的位置原样输出一个独立段落：`::codex-inline-vis{workspace_file="相对路径.html"}`。
