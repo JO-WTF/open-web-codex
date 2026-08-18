@@ -1,5 +1,5 @@
 ---
-name: warehouse-route-planning
+name: warehouse-single-route-planning
 description: 为精确仓网输入准备路线与成本矩阵；处理 provided、haversine 和经许可的导航路线。
 metadata:
   short-description: 准备路线与成本矩阵

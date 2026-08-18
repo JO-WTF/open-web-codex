@@ -1,5 +1,5 @@
 ---
-name: warehouse-network-optimization
+name: warehouse-single-network-optimization
 description: 在用户明确要求新增仓或 p-median 规划时，为精确路线和成本矩阵求解并比较仓网方案。
 metadata:
   short-description: 优化仓网选址方案

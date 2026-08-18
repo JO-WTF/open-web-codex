@@ -15,20 +15,20 @@ id = "warehouse-data-preparation"
 path = "skills/warehouse-data-preparation"
 
 [[skills]]
-id = "warehouse-route-planning"
-path = "skills/warehouse-route-planning"
+id = "warehouse-single-route-planning"
+path = "skills/warehouse-single-route-planning"
 
 [[skills]]
-id = "warehouse-network-analysis"
-path = "skills/warehouse-network-analysis"
+id = "warehouse-single-network-analysis"
+path = "skills/warehouse-single-network-analysis"
 
 [[skills]]
-id = "warehouse-network-optimization"
-path = "skills/warehouse-network-optimization"
+id = "warehouse-single-network-optimization"
+path = "skills/warehouse-single-network-optimization"
 
 [[skills]]
-id = "warehouse-map-delivery"
-path = "skills/warehouse-map-delivery"
+id = "warehouse-single-map-delivery"
+path = "skills/warehouse-single-map-delivery"
 
 [[agents]]
 id = "warehouse_single_agent"

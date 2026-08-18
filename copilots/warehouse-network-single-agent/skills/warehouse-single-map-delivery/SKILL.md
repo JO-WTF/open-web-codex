@@ -1,5 +1,5 @@
 ---
-name: warehouse-map-delivery
+name: warehouse-single-map-delivery
 description: 将精确仓网结果转换为对话内地图、HTML 可视化或明确请求的最终报告；不重新计算业务结果。
 metadata:
   short-description: 生成仓网地图与报告

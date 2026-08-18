@@ -1,5 +1,5 @@
 ---
-name: warehouse-network-analysis
+name: warehouse-single-network-analysis
 description: 评估当前仓网或一个明确仓库变动的时效、覆盖、成本与分配结果；不执行选址或交付渲染。
 metadata:
   short-description: 评估仓网覆盖与变动
