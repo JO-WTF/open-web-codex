@@ -7,7 +7,10 @@ Python MCP server that exposes paid Google Maps and Mapbox operations without mo
 - `batch_reverse_geocode`
 - `get_route`
 - `distance_matrix`
+- `execute_navigation_matrix`
+- `publish_workspace_geojson`
 - `create_map_card`
+- `create_network_map_card`
 - `revise_map_card`
 
 The geocoding and routing tools use one active provider/key pair selected in

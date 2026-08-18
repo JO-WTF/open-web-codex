@@ -47,6 +47,10 @@ class GeoJsonFeatureTypeProfile(BaseModel):
     # interpolation over a string field or a comparison against an all-null
     # field).
     properties: dict[str, GeoJsonPropertyKind] = Field(max_length=MAX_PROPERTIES_PER_TYPE)
+    boolean_property_counts: dict[str, "GeoJsonBooleanCounts"] = Field(
+        default_factory=dict,
+        max_length=MAX_PROPERTIES_PER_TYPE,
+    )
 
     @field_validator("properties")
     @classmethod
@@ -57,6 +61,15 @@ class GeoJsonFeatureTypeProfile(BaseModel):
         if any(not property_name or len(property_name) > 128 for property_name in properties):
             raise ValueError("GeoJSON feature profile property name is invalid")
         return properties
+
+
+class GeoJsonBooleanCounts(BaseModel):
+    """Bounded truth counts for a profiled boolean property, never raw values."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    true_count: int = Field(ge=0)
+    false_count: int = Field(ge=0)
 
 
 class GeoJsonProfile(BaseModel):
@@ -172,6 +185,15 @@ def _profile_group(
         properties={
             name: _property_kind([properties.get(name) for _, properties in rows])
             for name in sorted(property_names)
+        },
+        boolean_property_counts={
+            name: GeoJsonBooleanCounts(
+                true_count=sum(properties.get(name) is True for _, properties in rows),
+                false_count=sum(properties.get(name) is False for _, properties in rows),
+            )
+            for name in sorted(property_names)
+            if _property_kind([properties.get(name) for _, properties in rows])
+            in {"boolean", "boolean?"}
         },
     )
 

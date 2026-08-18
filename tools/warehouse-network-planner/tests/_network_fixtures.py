@@ -15,8 +15,12 @@ from supply_chain_planner.network.models import (
     CurrentAssignmentRecord,
     DemandCityRecord,
     ProvidedRouteFactRecord,
+    PlanningInputIdentity,
     WarehouseRecord,
 )
+
+
+TEST_INPUT_IDENTITY = PlanningInputIdentity(content_sha256="0" * 64)
 
 
 @dataclass(frozen=True)
@@ -194,6 +198,7 @@ def route_matrix(case: NetworkFixture):
         case.warehouses,
         detour_coefficient=1.2,
         average_speed_kph=40,
+        input_identity=TEST_INPUT_IDENTITY,
     )
 
 
@@ -247,4 +252,5 @@ def complete_cost_matrix(case: NetworkFixture) -> CostMatrix:
             stale_pair_count=0,
             complete=True,
         ),
+        input_identity=TEST_INPUT_IDENTITY,
     )

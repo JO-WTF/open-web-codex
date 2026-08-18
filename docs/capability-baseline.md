@@ -77,10 +77,12 @@ SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，�
 | E3 | 真实 Provider + 真实 Codex Runtime 的受控纵向运行 |
 | E4 | 从 clean DB/Profile 的真实业务 Task 入口完成阶段一 normal path，并通过一次关键 pending approval 刷新恢复 |
 
-当前多 Agent 仓网 Copilot 的阶段一 normal path 达到 E4；单 Agent 包尚未达到 E4。多用户、完整失败/竞态矩阵、a11y 和视觉细节
-属于后续 hardening，不反向扩大本阶段定义。
+ADR-023 已将 Data→Network 输入、导航执行和地图装配合同切换到新的 Tool 实现。该切换当前只有
+Tool 单元/合同证据（E1）；下方旧 E4 记录适用于被替代的 Data Resource/手工导航路径，不能作为当前
+合同的 E4 声明。单 Agent 与多 Agent 都必须按新的 Workspace 输入、导航确认、地图和报告路径重新通过
+clean Profile/Workspace 的真实验收。多用户、完整失败/竞态矩阵、a11y 和视觉细节仍属于后续 hardening。
 
-## 3. 2026-08-12 clean real Web E4
+## 3. 历史：2026-08-12 clean real Web E4（已被 ADR-023 合同替代）
 
 在当前 Server/Codex、clean DB/Profile、真实 Provider 和一个授权 Workspace 中，使用用户给出的
 三条自然语言请求，在同一 Task/Root Thread 依次完成：

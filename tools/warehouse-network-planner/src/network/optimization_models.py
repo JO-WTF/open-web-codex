@@ -7,6 +7,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from supply_chain_planner.network.models import PlanningInputIdentity
+
 
 class OptimizationModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -75,6 +77,7 @@ class BaselineResult(OptimizationModel):
     coverage: list[CoverageMetricSummary] = Field(default_factory=list)
     cost: CostSummary | None = None
     notice_code: str | None = None
+    input_identity: PlanningInputIdentity
 
 
 class WarehouseRelocation(OptimizationModel):
@@ -102,6 +105,7 @@ class ScenarioResult(OptimizationModel):
     cost: CostSummary | None = None
     service: list[ServiceMetric] = Field(default_factory=list)
     warehouse_changes: WarehouseChanges = Field(default_factory=WarehouseChanges)
+    input_identity: PlanningInputIdentity
 
 
 class CoverageMetricDelta(OptimizationModel):
@@ -192,6 +196,7 @@ class PMedianSolution(OptimizationModel):
     service: list[ServiceMetric] = Field(default_factory=list)
     optimality: Literal["proven", "feasible_only", "not_available"]
     message: str | None = None
+    input_identity: PlanningInputIdentity
 
 
 class ServiceConstrainedRequest(OptimizationModel):

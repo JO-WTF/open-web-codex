@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from _network_fixtures import (
+    TEST_INPUT_IDENTITY,
     complete_cost_matrix,
     indonesia_current_assignments,
     indonesia_network_fixture,
@@ -9,6 +10,7 @@ from _network_fixtures import (
     network_case,
     route_matrix,
 )
+
 from supply_chain_planner.network.matrix import build_cost_matrix, build_haversine_route_matrix
 from supply_chain_planner.network.matrix_models import (
     CostCalculationPolicy,
@@ -28,6 +30,18 @@ from supply_chain_planner.network.solver import (
     solve_current_assignment,
     summarize_assignment_cost,
 )
+
+
+def _with_identity(function):
+    def call(*args, **kwargs):
+        kwargs.setdefault("input_identity", TEST_INPUT_IDENTITY)
+        return function(*args, **kwargs)
+
+    return call
+
+
+build_cost_matrix = _with_identity(build_cost_matrix)
+build_haversine_route_matrix = _with_identity(build_haversine_route_matrix)
 
 
 def test_assignment_solver_selects_the_requested_objective() -> None:
@@ -87,6 +101,7 @@ def test_min_cost_includes_crossdock_upstream_linehaul() -> None:
             warehouse_scope="all_warehouses",
             rows=adjusted,
             stats=costs.stats,
+            input_identity=TEST_INPUT_IDENTITY,
         ),
         "min_cost",
         {"center-a", "cross-b"},
@@ -242,10 +257,12 @@ def test_real_indonesia_sample3_only_closes_bekasi_without_candidates() -> None:
         label="actual_current",
         active_warehouse_ids=sorted(before_active),
         assignment=before,
+        input_identity=TEST_INPUT_IDENTITY,
     )
     scenario = ScenarioResult(
         active_warehouse_ids=sorted(after_active),
         assignment=after,
+        input_identity=TEST_INPUT_IDENTITY,
         warehouse_changes={"added": [], "removed": [bekasi_id]},
     )
 

@@ -1551,14 +1551,11 @@ mod tests {
     }
 
     #[test]
-    fn warehouse_map_delivery_skills_style_warehouse_states_from_exact_properties() {
+    fn warehouse_map_delivery_skills_use_the_domain_map_builder() {
         for skill in [MAP_DELIVERY_SKILL, SINGLE_AGENT_MAP_DELIVERY_SKILL] {
-            assert!(skill
-                .contains("`kind=\"warehouse\"`、`warehouse_type`、`is_existing` 三个正交字段"));
-            assert!(skill.contains("`is_existing=true AND warehouse_type=center`"));
-            assert!(skill.contains("`is_existing=true AND warehouse_type=cross_docking`"));
-            assert!(skill.contains("`opened_candidate=true` 和 `closed_existing=true`"));
-            assert!(skill.contains("候选 feature 已实际发布时才创建对应候选层和图例"));
+            assert!(skill.contains("`create_network_map_card`"));
+            assert!(skill.contains("`publish_workspace_geojson(require_polygon=true)`"));
+            assert!(skill.contains("不要自行拼 `sources`、`layers` 或猜字段"));
         }
         assert!(SUPERVISOR_SKILL.contains("`existing_only` 只限制 baseline 的计算范围"));
     }
@@ -1958,7 +1955,8 @@ runtime = "tools/maps/runtime.toml"
         );
         for tool in [
             "prepare_route_matrix",
-            "register_navigation_route_matrix",
+            "create_navigation_matrix_request",
+            "import_navigation_matrix",
             "plan_cost_matrix",
             "prepare_network_distribution_map",
             "prepare_network_comparison_map",
@@ -2026,8 +2024,8 @@ runtime = "tools/maps/runtime.toml"
         );
         assert_eq!(
             network["mcp_servers"]["map_utils"]["required"].as_bool(),
-            Some(true),
-            "the Network Role's map capability must be ready before its tool catalog is exposed",
+            Some(false),
+            "map presentation must not block route, cost, analysis, or optimization Tools",
         );
         assert_eq!(
             network["mcp_servers"]["map_utils"]["omit_tools_from"]
@@ -2051,11 +2049,23 @@ runtime = "tools/maps/runtime.toml"
             Some("approve")
         );
         assert_eq!(
+            network["mcp_servers"]["map_utils"]["tools"]["create_network_map_card"]
+                ["approval_mode"]
+                .as_str(),
+            Some("approve")
+        );
+        assert_eq!(
+            network["mcp_servers"]["map_utils"]["tools"]["publish_workspace_geojson"]
+                ["approval_mode"]
+                .as_str(),
+            Some("approve")
+        );
+        assert_eq!(
             network["mcp_servers"]["map_utils"]["tools"]["revise_map_card"]["approval_mode"]
                 .as_str(),
             Some("approve")
         );
-        for tool in ["get_route", "distance_matrix"] {
+        for tool in ["get_route", "distance_matrix", "execute_navigation_matrix"] {
             assert!(
                 network["mcp_servers"]["map_utils"]["tools"]
                     .get(tool)
@@ -2070,7 +2080,7 @@ runtime = "tools/maps/runtime.toml"
         assert!(network["developer_instructions"]
             .as_str()
             .expect("network instructions")
-            .contains("server=supply_chain_data"));
+            .contains("prepared_input_relative_path"));
         for operation in [
             "list_mcp_resources",
             "list_mcp_resource_templates",

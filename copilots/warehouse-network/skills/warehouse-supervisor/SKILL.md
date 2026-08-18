@@ -9,14 +9,14 @@ metadata:
 
 Root 只负责理解目标、协调 child、向用户询问必要选择和整合结果；不读取业务文件、计算仓网结果或用 shell 代替业务 Tool。每个请求先依据 Runtime Skill Catalog 的 name、description 和 short-description 选择需要的任务 Skill，再完整读取其 `SKILL.md`；不要把任务工作流复制到 Root，也不要根据旧对话或 Tool 名猜流程。
 
-数据发现、映射、标准化和地理补全由 `data_agent`（昵称 `Wanwan`）处理；路线、分析、选址、地图和报告由 `network_agent` 处理。Root 只传递精确 typed ResourceRef 与用户目标；child 的 Tool 终态失败、拒绝、取消、超时或输入缺失必须如实报告并停止当前请求。
+数据发现、映射、标准化和地理补全由 `data_agent`（昵称 `Wanwan`）处理；路线、分析、选址、地图和报告由 `network_agent` 处理。Data→Network 的唯一业务数据交接是 Data Tool 返回的精确 `prepared_input_relative_path` 与 `input_identity`；路线、成本和方案仍以 Network Tool 的精确 ResourceRef 交接。Root 不读取或搬运业务内容；child 的 Tool 终态失败、拒绝、取消、超时或输入缺失必须如实报告并停止当前请求。
 
 ## Child 延续与上下文
 
 当前仓网 Copilot 统一使用原生 Multi-Agent V1。每个后续请求从当前 Thread 已可见的 spawn、wait、resume 与 child terminal Item 中确认相关 child 的稳定 target 与终态；没有可验证 target 时返回 `needs_context`，不猜测 child。
 
 - 前一 child 已完成，且正确性依赖它尚未结构化的判断、调查过程或上下文时，复用该非 Root child：对已关闭 child 先 `resume_agent(id)`，再用 `send_input(target, message)` 续派并 `wait_agent`；未关闭 child 直接 `send_input` 后 `wait_agent`。不得把消息发给 Root。
-- 当前请求已具备完整精确 ResourceRef、普通业务参数、用户许可和交付要求时，创建新的有界 child，并显式传 `fork_turns="none"`。只传当前目标和精确引用，不复制前一轮完整历史。
+- 当前请求已具备完整 `prepared_input_relative_path`、其 `input_identity`、必要的计算 ResourceRef、业务参数、用户许可和交付要求时，创建新的有界 child，并显式传 `fork_turns="none"`。只传当前目标和确切路径/引用，不复制前一轮完整历史。
 - 任何 `spawn_agent` 都必须显式声明 `fork_turns`；不得省略后退回默认 `all`。child 已失败、拒绝、取消、超时或中断时不自动重试或重派；仅在用户发起新的请求后，才按上述规则创建新的有界工作。
 
 ## 已有地图修订
@@ -25,7 +25,7 @@ Root 只负责理解目标、协调 child、向用户询问必要选择和整合
 
 ## 候选仓可视化
 
-用户要求地图展示候选仓时，先确认当前 `normalized_network_input.v1` 已包含用户确认的 candidate source。若没有，派发 Data child 完整纳入该 candidate source，再以新的 exact normalized ref 生成地图；`existing_only` 只限制 baseline 的计算范围，不能作为从 normalized input 或 GeoJSON 删除候选仓的理由。
+用户要求地图展示候选仓时，先确认当前 `prepared_network_input.v1` Workspace 文件已包含用户确认的 candidate source。若没有，派发 Data child 完整纳入该 candidate source，得到新的 `prepared_input_relative_path` 和 `input_identity` 后再生成地图；`existing_only` 只限制 baseline 的计算范围，不能作为从准备输入或 GeoJSON 删除候选仓的理由。
 
 ## 延迟 MCP Tool 发现
 

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import pytest
 from _network_fixtures import (
+    TEST_INPUT_IDENTITY,
     indonesia_network_fixture,
     indonesia_route_quotes,
     network_case,
     route_matrix,
 )
+
 from pydantic import ValidationError
 from supply_chain_planner.network.matrix import build_cost_matrix, build_haversine_route_matrix
 from supply_chain_planner.network.matrix_models import (
@@ -15,6 +17,18 @@ from supply_chain_planner.network.matrix_models import (
     DemandUnitCostRule,
     RouteCostQuote,
 )
+
+
+def _with_identity(function):
+    def call(*args, **kwargs):
+        kwargs.setdefault("input_identity", TEST_INPUT_IDENTITY)
+        return function(*args, **kwargs)
+
+    return call
+
+
+build_cost_matrix = _with_identity(build_cost_matrix)
+build_haversine_route_matrix = _with_identity(build_haversine_route_matrix)
 
 
 def _cost_policy(currency: str = "IDR") -> CostCalculationPolicy:

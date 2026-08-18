@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+
+from maps_mcp import server
+
+
+def _context(workspace) -> SimpleNamespace:
+    meta = SimpleNamespace(
+        model_extra={"codex/sandbox-state-meta": {"sandboxCwd": workspace.as_uri()}}
+    )
+    return SimpleNamespace(request_context=SimpleNamespace(meta=meta))
+
+
+def _request() -> dict[str, object]:
+    return {
+        "schema_version": "navigation_matrix_request.v1",
+        "input_identity": {
+            "schema_version": "prepared_network_input.v1",
+            "content_sha256": "0" * 64,
+        },
+        "warehouse_scope": "all_warehouses",
+        "estimated_billable_elements": 2,
+        "routes": [
+            {
+                "origin_id": "CENTER-1",
+                "destination_id": "CITY-1",
+                "layer": "last_mile",
+                "origin_longitude": 106.8,
+                "origin_latitude": -6.2,
+                "destination_longitude": 106.9,
+                "destination_latitude": -6.3,
+            },
+            {
+                "origin_id": "CENTER-1",
+                "destination_id": "CITY-2",
+                "layer": "last_mile",
+                "origin_longitude": 106.8,
+                "origin_latitude": -6.2,
+                "destination_longitude": 107.0,
+                "destination_latitude": -6.4,
+            },
+        ],
+    }
+
+
+def test_execute_navigation_matrix_writes_typed_workspace_facts(tmp_path, monkeypatch) -> None:
+    (tmp_path / "navigation-request.json").write_text(json.dumps(_request()), encoding="utf-8")
+
+    class FakeClient:
+        async def distance_matrix(self, origins, destinations, *, mode):
+            assert origins == [{"longitude": 106.8, "latitude": -6.2}]
+            assert len(destinations) == 2
+            assert mode == "driving"
+            return {
+                "provider": "mapbox",
+                "entries": [
+                    {"originIndex": 0, "destinationIndex": 0, "distanceMeters": 1_200, "durationSeconds": 300},
+                    {"originIndex": 0, "destinationIndex": 1, "distanceMeters": None, "durationSeconds": None},
+                ],
+            }
+
+    async def fake_client(_ctx):
+        return FakeClient()
+
+    monkeypatch.setattr(server, "_client", fake_client)
+    result = asyncio.run(
+        server.execute_navigation_matrix(
+            "navigation-request.json",
+            "navigation-result.json",
+            _context(tmp_path),
+        )
+    )
+    assert result.provider == "mapbox"
+    assert result.ready_pair_count == 1
+    assert result.unreachable_pair_count == 1
+    payload = json.loads((tmp_path / "navigation-result.json").read_text())
+    assert payload["schema_version"] == "navigation_matrix_result.v1"
+    assert payload["rows"][0]["distance_km"] == 1.2
+    assert payload["rows"][1]["status"] == "unreachable"
+
+
+def test_publish_workspace_geojson_publishes_validated_polygon_boundaries(tmp_path) -> None:
+    (tmp_path / "boundaries.geojson").write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"kind": "administrative_boundary"},
+                        "geometry": {
+                            "type": "Polygon",
+                            "coordinates": [
+                                [[106.0, -7.0], [107.0, -7.0], [107.0, -6.0], [106.0, -7.0]]
+                            ],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        original = server._resource_store
+        server._resource_store = server.GeoJsonResourceStore(Path(directory))
+        try:
+            result = asyncio.run(
+                server.publish_workspace_geojson(
+                    "boundaries.geojson",
+                    _context(tmp_path),
+                    require_polygon=True,
+                )
+            )
+            assert result.structuredContent is not None
+            assert result.structuredContent["data_ref"]["profile"]["feature_types"][0][
+                "geometry_types"
+            ] == ["Polygon"]
+        finally:
+            server._resource_store = original

@@ -70,22 +70,21 @@ REMOVED_CONTRACT_FILES = (
 DATA_TOOLS = {
     "discover_workspace_sources",
     "inspect_workspace_sources",
-    "normalize_network_input",
-    "normalize_candidate_delta",
-    "derive_normalized_network_input",
+    "prepare_network_input",
     "prepare_network_geography",
 }
 NETWORK_TOOLS = {
     "assess_facility_change",
     "compare_network_scenarios",
+    "create_navigation_matrix_request",
     "evaluate_network_baseline",
+    "import_navigation_matrix",
     "plan_cost_matrix",
     "prepare_route_matrix",
     "prepare_network_comparison_map",
     "prepare_network_coverage_map",
     "prepare_network_distribution_map",
     "publish_network_planning_report",
-    "register_navigation_route_matrix",
     "render_network_comparison_map",
     "solve_p_median",
 }

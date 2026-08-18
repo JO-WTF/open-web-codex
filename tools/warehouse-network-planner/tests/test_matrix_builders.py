@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from _network_fixtures import (
+    TEST_INPUT_IDENTITY,
     indonesia_network_fixture,
     indonesia_provided_route_facts,
     network_case,
@@ -15,6 +16,21 @@ from supply_chain_planner.network.matrix import (
     validate_route_matrix,
 )
 from supply_chain_planner.network.matrix_models import RouteMatrixRow
+
+
+def _with_identity(function):
+    def call(*args, **kwargs):
+        kwargs.setdefault("input_identity", TEST_INPUT_IDENTITY)
+        return function(*args, **kwargs)
+
+    return call
+
+
+build_haversine_route_matrix = _with_identity(build_haversine_route_matrix)
+build_provided_route_matrix = _with_identity(build_provided_route_matrix)
+build_route_matrix_with_reuse = _with_identity(build_route_matrix_with_reuse)
+plan_route_matrix = _with_identity(plan_route_matrix)
+register_navigation_route_matrix = _with_identity(register_navigation_route_matrix)
 
 
 def test_haversine_plan_and_matrix_use_explicit_parameters() -> None:

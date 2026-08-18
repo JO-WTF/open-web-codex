@@ -62,7 +62,7 @@ describe("latestAgentHistoryUpdates", () => {
       ],
       [
         activity("data-thread", 10, "Using inspect_network_sources", "item-data-1"),
-        activity("data-thread", 12, "Completed normalize_network_input", "item-data-2"),
+        activity("data-thread", 12, "Completed prepare_network_input", "item-data-2"),
         activity("data-thread", 13, "Finished this work cycle", null),
         activity("network-thread", 11, "Using evaluate_network_baseline", "item-network-1", "running"),
         activity("root-thread", 14, "Waiting for Agents", "item-root"),
@@ -73,7 +73,7 @@ describe("latestAgentHistoryUpdates", () => {
       {
         threadId: "data-thread",
         agentLabel: "Wanwan",
-        text: "Completed normalize_network_input",
+        text: "Completed prepare_network_input",
         status: "completed",
         kind: "tool_completed",
       },

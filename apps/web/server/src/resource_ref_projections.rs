@@ -194,23 +194,23 @@ mod tests {
     fn projects_only_completed_tool_resource_links_with_exact_identity() {
         let item = json!({
             "type": "mcpToolCall",
-            "server": "supply_chain_data",
-            "tool": "normalize_network_input",
+            "server": "supply_chain",
+            "tool": "prepare_route_matrix",
             "result": {"content": [{
                 "type": "resource_link",
-                "name": "normalized-network-input",
-                "title": "normalized_network_input.v1",
-                "uri": "supply-chain://resources/normalized-input"
+                "name": "route-matrix",
+                "title": "route_matrix.v2",
+                "uri": "supply-chain://resources/route-matrix"
             }]}
         });
         assert_eq!(
             candidates(item.as_object().expect("tool item")),
             vec![ResourceRefCandidate {
-                server: "supply_chain_data".to_string(),
-                uri: "supply-chain://resources/normalized-input".to_string(),
-                resource_schema: "normalized_network_input.v1".to_string(),
-                display_name: "normalized-network-input".to_string(),
-                producer_tool: "normalize_network_input".to_string(),
+                server: "supply_chain".to_string(),
+                uri: "supply-chain://resources/route-matrix".to_string(),
+                resource_schema: "route_matrix.v2".to_string(),
+                display_name: "route-matrix".to_string(),
+                producer_tool: "prepare_route_matrix".to_string(),
             }]
         );
     }

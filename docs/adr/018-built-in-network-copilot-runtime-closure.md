@@ -2,6 +2,10 @@
 
 状态：已接受（2026-08-08）
 
+Data→Network Workspace 准备输入、输入血缘与领域导航/地图执行由
+[ADR-023](023-workspace-prepared-inputs-and-domain-geospatial-execution.md) 补充并局部替代；其余
+Runtime、Workspace、MCP Resource 与 Artifact 所有权继续有效。
+
 替代：[ADR-017](017-clean-copilot-platform-spine.md) 的当前阶段主线，并替代 ADR-007、
 ADR-009、ADR-010、ADR-013、ADR-015、ADR-016 中与本阶段 Data Intake、Dataset、
 Work State、typed resource 和 Platform 协调有关的决定。被替代 ADR 只保存历史解释，

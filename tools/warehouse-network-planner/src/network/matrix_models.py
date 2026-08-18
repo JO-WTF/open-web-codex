@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from supply_chain_planner.network.models import PlanningInputIdentity
+
 
 class MatrixModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -25,6 +27,7 @@ class RouteMatrixPlan(MatrixModel):
     detour_coefficient: float | None = Field(default=None, gt=0)
     average_speed_kph: float | None = Field(default=None, gt=0)
     estimated_billable_calls: int = Field(ge=0)
+    input_identity: PlanningInputIdentity
 
 
 class RouteMatrixRow(MatrixModel):
@@ -80,6 +83,35 @@ class NavigationRouteMatrixStats(MatrixModel):
     complete: bool
 
 
+class NavigationRouteRequest(MatrixModel):
+    origin_id: str = Field(min_length=1, max_length=128)
+    destination_id: str = Field(min_length=1, max_length=128)
+    layer: NetworkLayer
+    origin_longitude: float = Field(ge=-180, le=180)
+    origin_latitude: float = Field(ge=-90, le=90)
+    destination_longitude: float = Field(ge=-180, le=180)
+    destination_latitude: float = Field(ge=-90, le=90)
+
+
+class NavigationMatrixRequest(MatrixModel):
+    """Exact lane set approved for one billable navigation execution."""
+
+    schema_version: Literal["navigation_matrix_request.v1"] = "navigation_matrix_request.v1"
+    input_identity: PlanningInputIdentity
+    warehouse_scope: WarehouseScope
+    routes: list[NavigationRouteRequest] = Field(default_factory=list)
+    estimated_billable_elements: int = Field(ge=0)
+
+
+class NavigationMatrixResult(MatrixModel):
+    """Provider-produced lane facts awaiting planner-side import and validation."""
+
+    schema_version: Literal["navigation_matrix_result.v1"] = "navigation_matrix_result.v1"
+    input_identity: PlanningInputIdentity
+    warehouse_scope: WarehouseScope
+    rows: list[RouteMatrixRow] = Field(min_length=1)
+
+
 RouteMatrixStats = Annotated[
     ProvidedRouteMatrixStats | HaversineRouteMatrixStats | NavigationRouteMatrixStats,
     Field(discriminator="kind"),
@@ -93,6 +125,7 @@ class RouteMatrix(MatrixModel):
     rows: list[RouteMatrixRow] = Field(default_factory=list)
     missing_routes: list[tuple[str, str, NetworkLayer]] = Field(default_factory=list)
     stats: RouteMatrixStats
+    input_identity: PlanningInputIdentity
 
 
 class RouteCostQuote(MatrixModel):
@@ -165,6 +198,7 @@ class CostMatrix(MatrixModel):
     missing_routes: list[tuple[str, str, NetworkLayer]] = Field(default_factory=list)
     calculation_rule: CostCalculationPolicy | None = None
     stats: CostMatrixStats
+    input_identity: PlanningInputIdentity
 
 
 class RouteMatrixValidation(MatrixModel):

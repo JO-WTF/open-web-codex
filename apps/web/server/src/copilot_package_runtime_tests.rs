@@ -44,35 +44,37 @@ const WAREHOUSE_SKILLS: [&str; 6] = [
     "warehouse-supervisor",
 ];
 const WAREHOUSE_MCP_SERVERS: [&str; 3] = ["map_utils", "supply_chain", "supply_chain_data"];
-const DATA_TOOLS: [&str; 6] = [
+const DATA_TOOLS: [&str; 4] = [
     "discover_workspace_sources",
     "inspect_workspace_sources",
-    "normalize_network_input",
-    "normalize_candidate_delta",
-    "derive_normalized_network_input",
+    "prepare_network_input",
     "prepare_network_geography",
 ];
-const NETWORK_TOOLS: [&str; 12] = [
+const NETWORK_TOOLS: [&str; 13] = [
     "assess_facility_change",
     "compare_network_scenarios",
     "evaluate_network_baseline",
     "plan_cost_matrix",
+    "create_navigation_matrix_request",
+    "import_navigation_matrix",
     "prepare_route_matrix",
     "prepare_network_comparison_map",
     "prepare_network_coverage_map",
     "prepare_network_distribution_map",
     "publish_network_planning_report",
-    "register_navigation_route_matrix",
     "render_network_comparison_map",
     "solve_p_median",
 ];
-const MAP_TOOLS: [&str; 6] = [
+const MAP_TOOLS: [&str; 9] = [
     "batch_geocode",
     "batch_reverse_geocode",
     "create_map_card",
+    "create_network_map_card",
     "distance_matrix",
+    "execute_navigation_matrix",
     "get_route",
     "revise_map_card",
+    "publish_workspace_geojson",
 ];
 const ROOT_PROMPT: &str = "runtime-gate-root-spawn-data-and-network";
 const DATA_CHILD_PROMPT: &str = "runtime-gate-data-child";

@@ -12,6 +12,18 @@ class NetworkRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class PlanningInputIdentity(NetworkRecord):
+    """Immutable identity of one prepared Workspace planning input.
+
+    This is a domain integrity guard, not a Platform dataset registry or a
+    whole-dataset cache key.  Domain tools use it only to reject accidentally
+    mixed matrices and solved results.
+    """
+
+    schema_version: Literal["prepared_network_input.v1"] = "prepared_network_input.v1"
+    content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class DemandCityRecord(NetworkRecord):
     city_id: str = Field(min_length=1, max_length=128)
     city_name: str = Field(min_length=1, max_length=256)

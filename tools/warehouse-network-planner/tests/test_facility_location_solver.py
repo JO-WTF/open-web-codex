@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import pytest
 from _network_fixtures import (
+    TEST_INPUT_IDENTITY,
     complete_cost_matrix,
     indonesia_network_fixture,
     network_case,
     route_matrix,
 )
+
 from pydantic import ValidationError
 from supply_chain_planner.network.matrix import build_cost_matrix, build_haversine_route_matrix
 from supply_chain_planner.network.matrix_models import CostCalculationPolicy, DemandUnitCostRule
@@ -20,6 +22,18 @@ from supply_chain_planner.network.solver import (
     service_metrics,
     summarize_assignment_cost,
 )
+
+
+def _with_identity(function):
+    def call(*args, **kwargs):
+        kwargs.setdefault("input_identity", TEST_INPUT_IDENTITY)
+        return function(*args, **kwargs)
+
+    return call
+
+
+build_cost_matrix = _with_identity(build_cost_matrix)
+build_haversine_route_matrix = _with_identity(build_haversine_route_matrix)
 
 
 def test_p_median_keeps_fixed_existing_warehouses_and_opens_requested_candidates() -> None:
@@ -108,6 +122,7 @@ def test_sample2_opens_exactly_two_candidates_with_existing_sites_explicitly_fix
         assignment=result.assignment,
         objective_value=result.objective_value,
         cost=summarize_assignment_cost(result.assignment, costs),
+        input_identity=TEST_INPUT_IDENTITY,
         service=service_metrics(result.assignment, [6, 12, 18]),
         optimality="proven",
     )

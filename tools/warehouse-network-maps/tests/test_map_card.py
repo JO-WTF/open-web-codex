@@ -9,6 +9,7 @@ from pathlib import Path
 import maps_mcp.server as server
 from maps_mcp.data_refs import GeoJsonResourceStore, MapCardSpecStore
 from maps_mcp.map_card import GeoJsonSource, MapCardPatch, MapCardSpec
+from open_web_codex_provider import GeoJsonResourceRef
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult
 from pydantic import ValidationError
@@ -140,6 +141,10 @@ def coverage_data_ref() -> dict[str, object]:
                         "warehouse_name": "string",
                         "warehouse_type": "string",
                     },
+                    "boolean_property_counts": {
+                        "is_existing": {"true_count": 11, "false_count": 12},
+                        "opened_candidate": {"true_count": 2, "false_count": 21},
+                    },
                 },
             ],
         },
@@ -147,6 +152,28 @@ def coverage_data_ref() -> dict[str, object]:
 
 
 class MapCardTests(unittest.IsolatedAsyncioTestCase):
+    async def test_network_map_card_owns_the_standard_warehouse_layer_recipe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            original = server._map_card_spec_store
+            server._map_card_spec_store = MapCardSpecStore(Path(directory))
+            try:
+                result = await server.create_network_map_card(
+                    "Coverage",
+                    GeoJsonResourceRef.model_validate(coverage_data_ref()),
+                )
+                self.assertIsNotNone(result.structuredContent)
+                spec_ref = result.structuredContent["map_spec_ref"]
+                resource_id = spec_ref["uri"].rsplit("/", 1)[-1]
+                spec = json.loads(server._map_card_spec_store.read(resource_id))
+                layer_ids = [layer["id"] for layer in spec["layers"]]
+                self.assertIn("existing-center", layer_ids)
+                self.assertIn("candidate-cross-docking", layer_ids)
+                self.assertIn("opened-candidates", layer_ids)
+                self.assertIn("last-mile-coverage", layer_ids)
+                self.assertIn("linehaul-coverage", layer_ids)
+            finally:
+                server._map_card_spec_store = original
+
     def test_provider_resources_are_content_addressed_and_immutable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

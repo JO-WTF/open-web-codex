@@ -45,7 +45,11 @@ def _load_cp_model():
 
 
 def _route_index(matrix: RouteMatrix):
-    return {(row.origin_id, row.destination_id, row.layer): row for row in matrix.rows}
+    return {
+        (row.origin_id, row.destination_id, row.layer): row
+        for row in matrix.rows
+        if row.status == "ready"
+    }
 
 
 def _cost_index(matrix: CostMatrix):

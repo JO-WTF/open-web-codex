@@ -59,7 +59,10 @@ default_tools_approval_mode = "prompt"
 [plugins.supply_chain.mcp_servers.supply_chain.tools.prepare_route_matrix]
 approval_mode = "approve"
 
-[plugins.supply_chain.mcp_servers.supply_chain.tools.register_navigation_route_matrix]
+[plugins.supply_chain.mcp_servers.supply_chain.tools.create_navigation_matrix_request]
+approval_mode = "approve"
+
+[plugins.supply_chain.mcp_servers.supply_chain.tools.import_navigation_matrix]
 approval_mode = "approve"
 
 [plugins.supply_chain.mcp_servers.supply_chain.tools.plan_cost_matrix]
@@ -98,6 +101,12 @@ omit_tools_from = ["direct"]
 default_tools_approval_mode = "prompt"
 
 [plugins.map_utils.mcp_servers.map_utils.tools.create_map_card]
+approval_mode = "approve"
+
+[plugins.map_utils.mcp_servers.map_utils.tools.create_network_map_card]
+approval_mode = "approve"
+
+[plugins.map_utils.mcp_servers.map_utils.tools.publish_workspace_geojson]
 approval_mode = "approve"
 
 [plugins.map_utils.mcp_servers.map_utils.tools.revise_map_card]

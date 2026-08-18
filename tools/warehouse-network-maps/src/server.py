@@ -4,15 +4,25 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import stat
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Annotated, Literal
 from uuid import uuid4
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
 from mcp.types import CallToolResult, ResourceLink, TextContent, ToolAnnotations
-from open_web_codex_provider import GeoJsonResourceRef, ResourceRef, derive_geojson_profile
+from open_web_codex_provider import (
+    MAX_WORKSPACE_FILE_BYTES,
+    GeoJsonResourceRef,
+    ResourceRef,
+    create_workspace_file,
+    derive_geojson_profile,
+    trusted_workspace_root,
+)
 from pydantic import BaseModel, ConfigDict, Field
 
 from .clients import GoogleMapsClient, MapboxMapsClient
@@ -47,6 +57,12 @@ LOCAL_PRESENTATION_TOOL = ToolAnnotations(
     idempotentHint=False,
     openWorldHint=False,
 )
+LOCAL_RESOURCE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
 EXTERNAL_BILLABLE_TOOL = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=False,
@@ -72,6 +88,74 @@ class GeoJsonToolResult(BaseModel):
             "Its server and uri are the canonical MCP Resource routing identity."
         ),
     )
+
+
+class NavigationInputIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["prepared_network_input.v1"]
+    content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class NavigationRouteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    origin_id: str = Field(min_length=1, max_length=128)
+    destination_id: str = Field(min_length=1, max_length=128)
+    layer: Literal["linehaul", "last_mile"]
+    origin_longitude: float = Field(ge=-180, le=180)
+    origin_latitude: float = Field(ge=-90, le=90)
+    destination_longitude: float = Field(ge=-180, le=180)
+    destination_latitude: float = Field(ge=-90, le=90)
+
+
+class NavigationMatrixRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["navigation_matrix_request.v1"]
+    input_identity: NavigationInputIdentity
+    warehouse_scope: Literal["existing_only", "all_warehouses"]
+    routes: list[NavigationRouteRequest] = Field(min_length=1, max_length=2_500)
+    estimated_billable_elements: int = Field(ge=0)
+
+
+class NavigationRouteRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    origin_id: str
+    destination_id: str
+    layer: Literal["linehaul", "last_mile"]
+    distance_km: float = Field(ge=0)
+    duration_hours: float = Field(ge=0)
+    method: Literal["navigation"] = "navigation"
+    tool_version: str = "maps-navigation.v1"
+    status: Literal["ready", "unreachable", "error"]
+    origin_longitude: float
+    origin_latitude: float
+    destination_longitude: float
+    destination_latitude: float
+    navigation_provider: str = Field(min_length=1, max_length=128)
+    navigation_profile: str = Field(min_length=1, max_length=128)
+
+
+class NavigationMatrixResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["navigation_matrix_result.v1"] = "navigation_matrix_result.v1"
+    input_identity: NavigationInputIdentity
+    warehouse_scope: Literal["existing_only", "all_warehouses"]
+    rows: list[NavigationRouteRow] = Field(min_length=1, max_length=2_500)
+
+
+class NavigationExecutionToolResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str
+    navigation_matrix_relative_path: str = Field(min_length=1, max_length=1024)
+    provider: Provider
+    ready_pair_count: int = Field(ge=0)
+    unreachable_pair_count: int = Field(ge=0)
+    error_pair_count: int = Field(ge=0)
 
 
 mcp = FastMCP(
@@ -180,6 +264,103 @@ async def _client(ctx: Context[ServerSession, None]):
     return MapboxMapsClient(credential.api_key)
 
 
+def _workspace_json_path(ctx: Context[ServerSession, None], relative_path: str) -> tuple[Path, Path]:
+    """Resolve one model-visible Workspace JSON path without symlink traversal."""
+    try:
+        workspace = trusted_workspace_root(ctx.request_context.meta)
+    except Exception as error:
+        raise ValueError("workspace_scope_invalid") from error
+    if not isinstance(relative_path, str) or not relative_path or "\\" in relative_path:
+        raise ValueError("workspace_path_invalid")
+    relative = PurePosixPath(relative_path)
+    if relative.is_absolute() or not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise ValueError("workspace_path_invalid")
+    path = workspace
+    for part in relative.parts:
+        path = path / part
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError as error:
+            raise ValueError("workspace_source_not_found") from error
+        if stat.S_ISLNK(mode):
+            raise ValueError("workspace_source_symlink_rejected")
+    if not stat.S_ISREG(path.lstat().st_mode) or path.suffix.lower() not in {".json", ".geojson"}:
+        raise ValueError("workspace_json_required")
+    try:
+        path.resolve(strict=True).relative_to(workspace.resolve(strict=True))
+    except ValueError as error:
+        raise ValueError("workspace_source_escape_rejected") from error
+    return workspace, path
+
+
+def _read_navigation_request(
+    ctx: Context[ServerSession, None],
+    navigation_request_relative_path: str,
+) -> tuple[Path, NavigationMatrixRequest]:
+    workspace, path = _workspace_json_path(ctx, navigation_request_relative_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return workspace, NavigationMatrixRequest.model_validate(payload)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError("navigation_request_invalid") from error
+
+
+def _duration_seconds(value: object) -> float | None:
+    if isinstance(value, (int, float)) and math.isfinite(float(value)) and float(value) >= 0:
+        return float(value)
+    if isinstance(value, str) and value.endswith("s"):
+        try:
+            seconds = float(value[:-1])
+        except ValueError:
+            return None
+        return seconds if math.isfinite(seconds) and seconds >= 0 else None
+    return None
+
+
+def _matrix_row(
+    request: NavigationRouteRequest,
+    entry: object,
+    *,
+    provider: Provider,
+    mode: TravelMode,
+) -> NavigationRouteRow:
+    item = entry if isinstance(entry, dict) else {}
+    distance = item.get("distanceMeters")
+    duration = _duration_seconds(item.get("durationSeconds") or item.get("duration"))
+    valid_distance = isinstance(distance, (int, float)) and math.isfinite(float(distance)) and float(distance) >= 0
+    condition = str(item.get("condition") or "").upper()
+    if valid_distance and duration is not None:
+        status: Literal["ready", "unreachable", "error"] = "ready"
+        distance_km = float(distance) / 1000
+        duration_hours = duration / 3600
+    elif (
+        condition in {"ROUTE_NOT_FOUND", "ROUTE_NOT_EXISTS", "NO_ROUTE"}
+        or not item
+        or (distance is None and duration is None and "status" not in item)
+    ):
+        status = "unreachable"
+        distance_km = 0
+        duration_hours = 0
+    else:
+        status = "error"
+        distance_km = 0
+        duration_hours = 0
+    return NavigationRouteRow(
+        origin_id=request.origin_id,
+        destination_id=request.destination_id,
+        layer=request.layer,
+        distance_km=distance_km,
+        duration_hours=duration_hours,
+        status=status,
+        origin_longitude=request.origin_longitude,
+        origin_latitude=request.origin_latitude,
+        destination_longitude=request.destination_longitude,
+        destination_latitude=request.destination_latitude,
+        navigation_provider=provider,
+        navigation_profile=mode,
+    )
+
+
 def _resource_result(
     provider: object,
     summary: str,
@@ -215,6 +396,32 @@ def _resource_link(published: PublishedGeoJson, description: str) -> ResourceLin
         description=description,
         mimeType="application/geo+json",
         size=published.size,
+    )
+
+
+@mcp.tool(structured_output=True, annotations=LOCAL_RESOURCE_TOOL)
+async def publish_workspace_geojson(
+    workspace_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    ctx: Context[ServerSession, None],
+    require_polygon: bool = False,
+) -> Annotated[CallToolResult, GeoJsonToolResult]:
+    """Publish one validated Workspace GeoJSON source for a map card."""
+    _workspace, path = _workspace_json_path(ctx, workspace_relative_path)
+    try:
+        geojson = json.loads(path.read_text(encoding="utf-8"))
+        profile = derive_geojson_profile(geojson)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError("workspace_geojson_invalid") from error
+    if require_polygon and not {
+        geometry
+        for feature_type in profile.feature_types
+        for geometry in feature_type.geometry_types
+    } & {"Polygon", "MultiPolygon"}:
+        raise ValueError("workspace_geojson_polygons_required")
+    return _resource_result(
+        "workspace",
+        f"Published {profile.feature_count} Workspace GeoJSON features from {workspace_relative_path}.",
+        geojson,
     )
 
 
@@ -316,6 +523,165 @@ def _route_geojson(
                 }
             )
     return {"type": "FeatureCollection", "features": features}
+
+
+def _network_feature_type(data_ref: GeoJsonResourceRef, value: str):
+    if data_ref.profile.discriminator_property != "kind":
+        raise ValueError("network_map_requires_kind_profile")
+    return next((item for item in data_ref.profile.feature_types if item.value == value), None)
+
+
+def _network_layers(
+    network_data_ref: GeoJsonResourceRef,
+    boundary_data_ref: GeoJsonResourceRef | None,
+) -> tuple[dict[str, GeoJsonSource], list[dict[str, object]], MapExtensions | None]:
+    """Build the fixed domain presentation from exact profiled map facts."""
+    sources: dict[str, GeoJsonSource] = {
+        "network": GeoJsonSource(type="geojson", data_ref=network_data_ref),
+    }
+    layers: list[dict[str, object]] = []
+    legend_items: list[dict[str, str]] = []
+    if boundary_data_ref is not None:
+        geometry_types = {
+            geometry
+            for feature_type in boundary_data_ref.profile.feature_types
+            for geometry in feature_type.geometry_types
+        }
+        if not geometry_types & {"Polygon", "MultiPolygon"}:
+            raise ValueError("network_map_boundary_polygons_required")
+        sources["boundaries"] = GeoJsonSource(type="geojson", data_ref=boundary_data_ref)
+        layers.extend(
+            [
+                {
+                    "id": "administrative-boundaries-fill",
+                    "type": "fill",
+                    "source": "boundaries",
+                    "paint": {"fill-color": "#94A3B8", "fill-opacity": 0.12},
+                },
+                {
+                    "id": "administrative-boundaries-line",
+                    "type": "line",
+                    "source": "boundaries",
+                    "paint": {"line-color": "#64748B", "line-width": 1, "line-opacity": 0.7},
+                },
+            ]
+        )
+        legend_items.append({"label": "行政区边界", "color": "#64748B", "type": "line"})
+    for kind, layer_id, color, width, label in (
+        ("last_mile_assignment", "last-mile-coverage", "#2563EB", 1.5, "末端覆盖"),
+        ("linehaul_connection", "linehaul-coverage", "#1E3A8A", 2.5, "干线连接"),
+    ):
+        if _network_feature_type(network_data_ref, kind) is None:
+            continue
+        layers.append(
+            {
+                "id": layer_id,
+                "type": "line",
+                "source": "network",
+                "filter": ["==", ["get", "kind"], kind],
+                "paint": {"line-color": color, "line-width": width, "line-opacity": 0.65},
+            }
+        )
+        legend_items.append({"label": label, "color": color, "type": "line"})
+    if _network_feature_type(network_data_ref, "demand") is not None:
+        layers.append(
+            {
+                "id": "demand-cities",
+                "type": "circle",
+                "source": "network",
+                "filter": ["==", ["get", "kind"], "demand"],
+                "paint": {
+                    "circle-color": "#16A34A",
+                    "circle-radius": 5,
+                    "circle-stroke-color": "#FFFFFF",
+                    "circle-stroke-width": 1.5,
+                },
+            }
+        )
+        legend_items.append({"label": "需求城市", "color": "#16A34A", "type": "circle"})
+    warehouse = _network_feature_type(network_data_ref, "warehouse")
+    if warehouse is not None:
+        properties = warehouse.properties
+        boolean_counts = warehouse.boolean_property_counts
+        definitions = (
+            ("existing-center", True, "center", "#1D4ED8", 12, "现有中心仓"),
+            ("existing-cross-docking", True, "cross_docking", "#F97316", 9, "现有 XD"),
+            ("candidate-center", False, "center", "#7C3AED", 12, "候选中心仓"),
+            ("candidate-cross-docking", False, "cross_docking", "#7C3AED", 9, "候选 XD"),
+        )
+        if {"warehouse_type", "is_existing"} <= set(properties):
+            for layer_id, is_existing, warehouse_type, color, radius, label in definitions:
+                counts = boolean_counts.get("is_existing")
+                if counts is None or (is_existing and counts.true_count == 0) or (
+                    not is_existing and counts.false_count == 0
+                ):
+                    continue
+                layers.append(
+                    {
+                        "id": layer_id,
+                        "type": "circle",
+                        "source": "network",
+                        "filter": [
+                            "all",
+                            ["==", ["get", "kind"], "warehouse"],
+                            ["==", ["get", "is_existing"], is_existing],
+                            ["==", ["get", "warehouse_type"], warehouse_type],
+                        ],
+                        "paint": {
+                            "circle-color": color,
+                            "circle-radius": radius,
+                            "circle-opacity": 0.9,
+                            "circle-stroke-color": "#FFFFFF",
+                            "circle-stroke-width": 2,
+                        },
+                    }
+                )
+                legend_items.append({"label": label, "color": color, "type": "circle"})
+            for field, layer_id, color, label in (
+                ("opened_candidate", "opened-candidates", "#C026D3", "新增启用仓"),
+                ("closed_existing", "closed-existing", "#64748B", "关闭现有仓"),
+            ):
+                counts = boolean_counts.get(field)
+                if properties.get(field) != "boolean" or counts is None or counts.true_count == 0:
+                    continue
+                layers.append(
+                    {
+                        "id": layer_id,
+                        "type": "circle",
+                        "source": "network",
+                        "filter": [
+                            "all",
+                            ["==", ["get", "kind"], "warehouse"],
+                            ["==", ["get", field], True],
+                        ],
+                        "paint": {
+                            "circle-color": color,
+                            "circle-radius": 13,
+                            "circle-stroke-color": "#FFFFFF",
+                            "circle-stroke-width": 2.5,
+                        },
+                    }
+                )
+                legend_items.append({"label": label, "color": color, "type": "circle"})
+        else:
+            layers.append(
+                {
+                    "id": "warehouses",
+                    "type": "circle",
+                    "source": "network",
+                    "filter": ["==", ["get", "kind"], "warehouse"],
+                    "paint": {"circle-color": "#1D4ED8", "circle-radius": 10},
+                }
+            )
+            legend_items.append({"label": "仓库", "color": "#1D4ED8", "type": "circle"})
+    if not layers:
+        raise ValueError("network_map_features_unavailable")
+    extensions = (
+        MapExtensions.model_validate({"legend": {"title": "仓网图例", "items": legend_items}})
+        if legend_items
+        else None
+    )
+    return sources, layers, extensions
 
 
 @mcp.tool(structured_output=True, annotations=LOCAL_PRESENTATION_TOOL)
@@ -473,6 +839,24 @@ async def create_map_card(
 
 
 @mcp.tool(structured_output=True, annotations=LOCAL_PRESENTATION_TOOL)
+async def create_network_map_card(
+    title: str,
+    network_data_ref: GeoJsonResourceRef,
+    boundary_data_ref: GeoJsonResourceRef | None = None,
+) -> Annotated[CallToolResult, ToolResult]:
+    """Create a validated point-line-polygon warehouse map from exact domain GeoJSON."""
+    sources, layers, extensions = _network_layers(network_data_ref, boundary_data_ref)
+    return await create_map_card(
+        title=title,
+        sources=sources,
+        layers=layers,
+        intent="warehouse_network",
+        summary="已按仓网语义生成点、覆盖线和可选行政区边界图层。",
+        extensions=extensions,
+    )
+
+
+@mcp.tool(structured_output=True, annotations=LOCAL_PRESENTATION_TOOL)
 async def revise_map_card(
     map_spec_ref: ResourceRef,
     patch: MapCardPatch,
@@ -593,6 +977,84 @@ async def get_route(
             "for map cards and Resource reads."
         ),
         geojson,
+    )
+
+
+@mcp.tool(structured_output=True, annotations=EXTERNAL_BILLABLE_TOOL)
+async def execute_navigation_matrix(
+    navigation_request_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    ctx: Context[ServerSession, None],
+    mode: TravelMode = "driving",
+) -> NavigationExecutionToolResult:
+    """Execute one approved Workspace navigation request and write exact lane facts."""
+    workspace, request = _read_navigation_request(ctx, navigation_request_relative_path)
+    client = await _client(ctx)
+    grouped: dict[tuple[float, float], list[NavigationRouteRequest]] = {}
+    for route in request.routes:
+        grouped.setdefault((route.origin_longitude, route.origin_latitude), []).append(route)
+
+    rows: list[NavigationRouteRow] = []
+    for (longitude, latitude), routes in grouped.items():
+        result = await client.distance_matrix(
+            [{"longitude": longitude, "latitude": latitude}],
+            [
+                {
+                    "longitude": route.destination_longitude,
+                    "latitude": route.destination_latitude,
+                }
+                for route in routes
+            ],
+            mode=mode,
+        )
+        provider = result.get("provider")
+        if provider not in {"google", "mapbox"}:
+            raise RuntimeError("navigation_provider_result_invalid")
+        entries = result.get("entries")
+        if not isinstance(entries, list):
+            raise RuntimeError("navigation_matrix_entries_invalid")
+        by_destination = {
+            item.get("destinationIndex"): item
+            for item in entries
+            if isinstance(item, dict) and item.get("originIndex") == 0
+        }
+        for index, route in enumerate(routes):
+            rows.append(
+                _matrix_row(
+                    route,
+                    by_destination.get(index),
+                    provider=provider,
+                    mode=mode,
+                )
+            )
+
+    matrix = NavigationMatrixResult(
+        input_identity=request.input_identity,
+        warehouse_scope=request.warehouse_scope,
+        rows=rows,
+    )
+    try:
+        created = create_workspace_file(
+            workspace,
+            output_relative_path,
+            matrix.model_dump_json().encode("utf-8"),
+            max_bytes=MAX_WORKSPACE_FILE_BYTES,
+        )
+    except Exception as error:
+        raise ValueError("navigation_matrix_workspace_write_failed") from error
+    ready_count = sum(row.status == "ready" for row in rows)
+    unreachable_count = sum(row.status == "unreachable" for row in rows)
+    error_count = sum(row.status == "error" for row in rows)
+    return NavigationExecutionToolResult(
+        summary=(
+            f"Executed {len(rows)} navigation lanes with {provider}; ready {ready_count}, "
+            f"unreachable {unreachable_count}, provider-error {error_count}."
+        ),
+        navigation_matrix_relative_path=created.relative_path,
+        provider=provider,
+        ready_pair_count=ready_count,
+        unreachable_pair_count=unreachable_count,
+        error_pair_count=error_count,
     )
 
 

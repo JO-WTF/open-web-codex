@@ -14,6 +14,8 @@ from supply_chain_planner.network.matrix_models import (
     DemandUnitCostRule,
     HaversineRouteMatrixStats,
     NavigationRouteMatrixStats,
+    NavigationMatrixRequest,
+    NavigationRouteRequest,
     NetworkLayer,
     ProvidedRouteMatrixStats,
     RouteCostQuote,
@@ -28,6 +30,7 @@ from supply_chain_planner.network.models import (
     DemandCityRecord,
     ProvidedRouteFactRecord,
     RouteQuoteRecord,
+    PlanningInputIdentity,
     WarehouseRecord,
 )
 
@@ -43,6 +46,8 @@ def plan_route_matrix(
     method: Literal["haversine", "navigation", "provided"],
     detour_coefficient: float | None,
     average_speed_kph: float | None,
+    *,
+    input_identity: PlanningInputIdentity,
 ) -> RouteMatrixPlan:
     if method == "haversine" and (detour_coefficient is None or average_speed_kph is None):
         raise ValueError("haversine_requires_detour_coefficient_and_average_speed")
@@ -57,6 +62,51 @@ def plan_route_matrix(
         detour_coefficient=detour_coefficient,
         average_speed_kph=average_speed_kph,
         estimated_billable_calls=(len(expected) if method == "navigation" else 0),
+        input_identity=input_identity,
+    )
+
+
+def build_navigation_matrix_request(
+    demand_cities: list[DemandCityRecord],
+    warehouses: list[WarehouseRecord],
+    *,
+    warehouse_scope: WarehouseScope,
+    input_identity: PlanningInputIdentity,
+) -> NavigationMatrixRequest:
+    """Materialize exactly the lanes that one navigation provider may bill for."""
+    warehouse_by_id = {warehouse.warehouse_id: warehouse for warehouse in warehouses}
+    demand_by_id = {demand.city_id: demand for demand in demand_cities}
+    routes: list[NavigationRouteRequest] = []
+    for origin_id, destination_id, layer in _expected_route_pairs(demand_cities, warehouses):
+        origin = warehouse_by_id[origin_id]
+        destination = (
+            demand_by_id[destination_id]
+            if layer == "last_mile"
+            else warehouse_by_id[destination_id]
+        )
+        if (
+            origin.longitude is None
+            or origin.latitude is None
+            or destination.longitude is None
+            or destination.latitude is None
+        ):
+            raise ValueError("navigation_request_coordinates_missing")
+        routes.append(
+            NavigationRouteRequest(
+                origin_id=origin_id,
+                destination_id=destination_id,
+                layer=layer,
+                origin_longitude=origin.longitude,
+                origin_latitude=origin.latitude,
+                destination_longitude=destination.longitude,
+                destination_latitude=destination.latitude,
+            )
+        )
+    return NavigationMatrixRequest(
+        input_identity=input_identity,
+        warehouse_scope=warehouse_scope,
+        routes=routes,
+        estimated_billable_elements=len(routes),
     )
 
 
@@ -65,6 +115,8 @@ def build_haversine_route_matrix(
     warehouses: list[WarehouseRecord],
     detour_coefficient: float,
     average_speed_kph: float,
+    *,
+    input_identity: PlanningInputIdentity,
 ) -> RouteMatrix:
     return build_route_matrix_with_reuse(
         demand_cities,
@@ -73,6 +125,7 @@ def build_haversine_route_matrix(
         detour_coefficient,
         average_speed_kph,
         warehouse_scope="all_warehouses",
+        input_identity=input_identity,
     )
 
 
@@ -82,6 +135,7 @@ def build_provided_route_matrix(
     provided_route_facts: list[ProvidedRouteFactRecord],
     *,
     warehouse_scope: WarehouseScope,
+    input_identity: PlanningInputIdentity,
 ) -> RouteMatrix:
     """Materialize exact uploaded distance/duration facts for expected route pairs."""
 
@@ -129,6 +183,7 @@ def build_provided_route_matrix(
             complete=not missing,
             source_method_counts=dict(sorted(source_methods.items())),
         ),
+        input_identity=input_identity,
     )
 
 
@@ -140,6 +195,7 @@ def build_route_matrix_with_reuse(
     average_speed_kph: float,
     *,
     warehouse_scope: WarehouseScope,
+    input_identity: PlanningInputIdentity,
 ) -> RouteMatrix:
     """Reuse exact layered route facts and compute only missing expected pairs."""
 
@@ -238,6 +294,7 @@ def build_route_matrix_with_reuse(
             average_speed_kph=average_speed_kph,
             complete=not missing,
         ),
+        input_identity=input_identity,
     )
 
 
@@ -334,6 +391,7 @@ def register_navigation_route_matrix(
     rows: list[RouteMatrixRow],
     *,
     warehouse_scope: WarehouseScope,
+    input_identity: PlanningInputIdentity,
 ) -> RouteMatrix:
     expected = set(_expected_route_pairs(demand_cities, warehouses))
     warehouse_by_id = {warehouse.warehouse_id: warehouse for warehouse in warehouses}
@@ -385,6 +443,7 @@ def register_navigation_route_matrix(
             missing_pair_count=len(missing),
             complete=not missing,
         ),
+        input_identity=input_identity,
     )
 
 
@@ -447,6 +506,7 @@ def build_cost_matrix(
     prior_rows: list[CostMatrixRow] | None = None,
     *,
     warehouse_scope: WarehouseScope,
+    input_identity: PlanningInputIdentity,
 ) -> CostMatrix:
     expected = _expected_route_pairs(demand_cities, warehouses)
     expected_set = set(expected)
@@ -580,6 +640,7 @@ def build_cost_matrix(
             stale_pair_count=stale,
             complete=not missing,
         ),
+        input_identity=input_identity,
     )
 
 

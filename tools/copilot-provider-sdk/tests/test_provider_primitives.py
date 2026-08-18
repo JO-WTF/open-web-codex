@@ -170,6 +170,7 @@ def test_geojson_profile_is_bounded_and_derived_from_actual_features() -> None:
                         "kind": "demand",
                         "city_name": "Alpha",
                         "duration_hours": 8.5,
+                        "served": True,
                     },
                 },
                 {
@@ -192,7 +193,10 @@ def test_geojson_profile_is_bounded_and_derived_from_actual_features() -> None:
         "city_name": "string",
         "duration_hours": "number",
         "kind": "string",
+        "served": "boolean",
     }
+    assert demand.boolean_property_counts["served"].true_count == 1
+    assert demand.boolean_property_counts["served"].false_count == 0
     assert "Alpha" not in profile.model_dump_json()
 
 

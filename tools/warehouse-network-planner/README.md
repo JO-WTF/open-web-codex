@@ -21,7 +21,8 @@ Network Agent 的主要工具是：
 
 ```text
 prepare_route_matrix
-register_navigation_route_matrix
+create_navigation_matrix_request
+import_navigation_matrix
 plan_cost_matrix
 prepare_network_distribution_map
 evaluate_network_baseline
@@ -33,10 +34,10 @@ render_network_comparison_map
 publish_network_planning_report
 ```
 
-每个大数据结果都写入 Resource Store。Data/Network Agent 消息只传经校验的 typed `ResourceRef` 或工具返回的精确引用，不传原始文件、整张矩阵、完整工具结果或内部路径。缺失数据、矩阵不完整、求解器不可用和超时都是显式状态；不会自动加载 Mock、填零或切换旧实现。
+Data Tool 将完整准备输入以 create-new 语义写入用户可见的 `prepared_network_input.v1` Workspace JSON；Data/Network Agent 只交接其精确相对路径和内容身份。路线、成本、方案与比较等计算结果写入 Resource Store，并都绑定同一输入身份。Agent 不传原始文件、整张矩阵或完整工具结果。缺失数据、矩阵不完整、求解器不可用和超时都是显式状态；不会自动加载 Mock、填零或切换旧实现。
 
 Data Tool 会把用户输入中完整的起点、终点、距离、时长与来源方法保存在
-`normalized_network_input.v1`；Network Tool 可以按分析范围把这些事实物化为
+`prepared_network_input.v1`；Network Tool 可以按分析范围把这些事实物化为
 `route_matrix.v2`。矩阵自身持有 `warehouse_scope`，验证器按同一 scope 校验，不会因标准化资源
 同时包含未参与本次分析的候选仓而要求 Data 重新发布资源；也无需让模型重读文件或重新估算。基线和比较结果同时返回按城市数量与按需求量
 加权的覆盖指标，并以 typed Resource 支持实际基线、优化基线或场景之间的比较；模型只负责解释，

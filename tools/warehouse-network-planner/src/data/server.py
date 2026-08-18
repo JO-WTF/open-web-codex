@@ -16,6 +16,7 @@ from mcp.types import (
     ToolAnnotations,
 )
 from open_web_codex_provider import (
+    MAX_WORKSPACE_FILE_BYTES,
     McpResourceRuntime,
     ResourceRef,
 )
@@ -33,7 +34,6 @@ from supply_chain_planner.data.mapping import (
 from supply_chain_planner.data.normalization import (
     ConfirmedFieldMapping,
     ConfirmedSourceRows,
-    NetworkInputValidator,
     normalize_confirmed_rows,
 )
 from supply_chain_planner.data.workspace_intake import (
@@ -45,14 +45,13 @@ from supply_chain_planner.data.workspace_intake import (
 )
 from supply_chain_planner.network.models import NormalizedInputBatch
 from supply_chain_planner.shared.models import (
-    CandidateWarehouseDeltaRef,
-    CandidateWarehouseDeltaResource,
     ConfirmedSourceDecision,
-    DataAgentResourceToolResult,
+    DataInspectionToolResult,
+    DataPreparationToolResult,
     GeographyOverride,
-    PreparedNetworkInputRef,
     PreparedNetworkResource,
 )
+from supply_chain_planner.shared.planning_input import load_prepared_network_input
 from supply_chain_planner.shared.resources import SupplyChainResources
 
 RESOURCE_URI_PREFIX = "supply-chain://resources/"
@@ -69,6 +68,12 @@ CONTENT_ADDRESSED_RESOURCE_TOOL = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=False,
     idempotentHint=True,
+    openWorldHint=False,
+)
+WORKSPACE_PREPARATION_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
     openWorldHint=False,
 )
 
@@ -93,12 +98,11 @@ mcp = FastMCP(
         "head preview; preview rows are examples only and never the full source. Never use "
         "the preview row count as the source row count. The initial normalization tool rereads "
         "the complete explicitly confirmed source files and preserves every confirmed candidate "
-        "warehouse in normalized_network_input.v1. Candidate-only changes use the delta and "
-        "derive tools; source facts such as demand, existing warehouses, assignments, or route "
-        "facts require full normalization. Copy every "
-        "returned Resource reference unchanged. Validate the Resource before handing it to "
-        "the Network Planning Agent. Do not paste unbounded source rows into messages and do "
-        "not choose a warehouse-network solution."
+        "warehouse in a user-visible prepared_network_input.v1 Workspace JSON file. Source facts "
+        "such as demand, existing warehouses, assignments, routes, costs, or candidates always "
+        "require a complete new preparation. Return the exact Workspace-relative output path and "
+        "its content identity to the Network Planning Agent. Do not paste unbounded source rows "
+        "into messages and do not choose a warehouse-network solution."
     ),
     json_response=True,
 )
@@ -138,6 +142,31 @@ def _publish_json(
     return _runtime().publish(schema, payload, summary)
 
 
+def _write_prepared_input(
+    prepared: PreparedNetworkResource,
+    output_relative_path: str,
+    ctx: Context,
+    summary: str,
+) -> DataPreparationToolResult:
+    created = _runtime().create_workspace_model(
+        ctx,
+        output_relative_path,
+        prepared,
+        max_bytes=MAX_WORKSPACE_FILE_BYTES,
+    )
+    persisted, identity = load_prepared_network_input(
+        _workspace(ctx),
+        created.relative_path,
+    )
+    return DataPreparationToolResult(
+        summary=summary,
+        prepared_input_relative_path=created.relative_path,
+        input_identity=identity,
+        state=persisted.state,
+        issue_count=len(persisted.issues),
+    )
+
+
 @mcp.tool(structured_output=True, annotations=READ_ONLY_LOCAL_TOOL)
 def discover_workspace_sources(ctx: Context) -> dict[str, Any]:
     """Discover bounded Excel/CSV/JSON metadata across the trusted Workspace."""
@@ -156,7 +185,7 @@ def discover_workspace_sources(ctx: Context) -> dict[str, Any]:
 def inspect_workspace_sources(
     relative_paths: list[str],
     ctx: Context,
-) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
+) -> Annotated[CallToolResult, DataInspectionToolResult]:
     """Inspect selected Workspace files and publish one typed source profile.
 
     Preview rows are examples for schema inspection only. They are never a
@@ -282,14 +311,15 @@ def _load_source_profile(resource_ref: ResourceRef) -> dict[str, Any]:
     return profile
 
 
-@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
-def normalize_network_input(
+@mcp.tool(structured_output=True, annotations=WORKSPACE_PREPARATION_TOOL)
+def prepare_network_input(
     source_profile_ref: ResourceRef,
     confirmed_sources: list[ConfirmedSourceDecision],
     country_code: Annotated[str, Field(pattern=r"^[A-Za-z]{2}$")],
+    output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     ctx: Context,
-) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
-    """Normalize exact Workspace files using only explicit confirmed decisions."""
+) -> DataPreparationToolResult:
+    """Prepare one complete, validated Workspace input from confirmed raw sources."""
     profile = _load_source_profile(source_profile_ref)
     country = country_code.strip().upper()
     if not re.fullmatch(r"[A-Z]{2}", country):
@@ -326,11 +356,13 @@ def normalize_network_input(
     payload = PreparedNetworkResource(
         country_code=country,
         state=state,
+        confirmed_sources=confirmed_sources,
         **batch.model_dump(mode="json"),
     )
-    return _publish_json(
-        "normalized_network_input.v1",
+    return _write_prepared_input(
         payload,
+        output_relative_path,
+        ctx,
         f"Normalized {len(confirmed_sources)} confirmed Workspace sources; "
         f"{len(batch.demand_cities)} demand cities, {len(batch.warehouses)} warehouses, "
         f"{len(batch.current_assignments)} current assignments, "
@@ -339,147 +371,17 @@ def normalize_network_input(
     )
 
 
-@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
-def normalize_candidate_delta(
-    source_profile_ref: ResourceRef,
-    confirmed_sources: list[ConfirmedSourceDecision],
-    removed_candidate_ids: list[str],
-    ctx: Context,
-) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
-    """Normalize an explicit candidate-only change without reparsing base facts."""
-    profile = _load_source_profile(source_profile_ref)
-    available = {str(source["relative_path"]): source for source in profile.get("sources", [])}
-    selected_paths = [decision.relative_path for decision in confirmed_sources]
-    if len(set(selected_paths)) != len(selected_paths):
-        raise ValueError("confirmed_source_relative_paths_must_be_unique")
-    if not set(selected_paths) <= set(available):
-        raise ValueError("confirmed_source_not_in_profile")
-    if any(decision.role != SourceRole.CANDIDATE_WAREHOUSE for decision in confirmed_sources):
-        raise ValueError("candidate_delta_requires_candidate_warehouse_sources")
-    normalized_sources: list[ConfirmedSourceRows] = []
-    for decision in confirmed_sources:
-        mappings = [
-            ConfirmedFieldMapping(
-                target_field=mapping.target_field,
-                source_field=mapping.source_field,
-                transform=TransformSpec(kind=mapping.transform, factor=mapping.factor),
-            )
-            for mapping in decision.mappings
-        ]
-        normalized_sources.append(
-            ConfirmedSourceRows(
-                role=decision.role,
-                rows=read_rows(_workspace(ctx), decision.relative_path),
-                mappings=mappings,
-            )
-        )
-    _state, batch = normalize_confirmed_rows(normalized_sources)
-    candidate_errors = [
-        issue
-        for issue in batch.issues
-        if issue.code.startswith("candidate_warehouse") or issue.code == "warehouse_duplicate"
-    ]
-    if candidate_errors:
-        raise ValueError("candidate_delta_invalid")
-    delta = CandidateWarehouseDeltaResource(
-        upsertWarehouses=batch.warehouses,
-        removeWarehouseIds=removed_candidate_ids,
-    )
-    return _publish_json(
-        "candidate_warehouse_delta.v1",
-        delta,
-        f"Normalized candidate delta with {len(delta.upsert_warehouses)} upserts and "
-        f"{len(delta.remove_warehouse_ids)} removals.",
-    )
-
-
-@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
-def derive_normalized_network_input(
-    normalized_input_ref: PreparedNetworkInputRef,
-    candidate_delta_ref: CandidateWarehouseDeltaRef,
-    ctx: Context,
-) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
-    """Publish a new immutable input by applying one candidate-only delta."""
-    _workspace(ctx)
-    base = _runtime().load_model(
-        normalized_input_ref,
-        "normalized_network_input.v1",
-        PreparedNetworkResource,
-    )
-    if base.state != "ready":
-        raise ValueError("candidate_delta_base_must_be_ready")
-    delta = _runtime().load_model(
-        candidate_delta_ref,
-        "candidate_warehouse_delta.v1",
-        CandidateWarehouseDeltaResource,
-    )
-    existing_ids = {
-        warehouse.warehouse_id for warehouse in base.warehouses if warehouse.is_existing
-    }
-    if set(delta.remove_warehouse_ids) & existing_ids:
-        raise ValueError("candidate_delta_cannot_remove_existing_warehouse")
-    if {warehouse.warehouse_id for warehouse in delta.upsert_warehouses} & existing_ids:
-        raise ValueError("candidate_delta_cannot_replace_existing_warehouse")
-    warehouse_by_id = {
-        warehouse.warehouse_id: warehouse
-        for warehouse in base.warehouses
-        if warehouse.warehouse_id not in set(delta.remove_warehouse_ids)
-    }
-    warehouse_by_id.update(
-        {warehouse.warehouse_id: warehouse for warehouse in delta.upsert_warehouses}
-    )
-    batch = NormalizedInputBatch(
-        demand_cities=base.demand_cities,
-        warehouses=[warehouse_by_id[key] for key in sorted(warehouse_by_id)],
-        current_assignments=base.current_assignments,
-        route_quotes=base.route_quotes,
-        provided_route_facts=base.provided_route_facts,
-        issues=[issue for issue in base.issues if issue.severity != "error"],
-    )
-    issues = NetworkInputValidator().validate(batch)
-    has_missing_coordinates = any(
-        item.longitude is None or item.latitude is None
-        for item in [*batch.demand_cities, *batch.warehouses]
-    )
-    state = (
-        "needs_input"
-        if any(issue.severity == "error" for issue in issues)
-        else "needs_geography"
-        if has_missing_coordinates
-        else "ready"
-    )
-    prepared = PreparedNetworkResource(
-        country_code=base.country_code,
-        state=state,
-        demand_cities=batch.demand_cities,
-        warehouses=batch.warehouses,
-        current_assignments=batch.current_assignments,
-        route_quotes=batch.route_quotes,
-        provided_route_facts=batch.provided_route_facts,
-        issues=issues,
-        parentResourceRef=normalized_input_ref,
-    )
-    return _publish_json(
-        "normalized_network_input.v1",
-        prepared,
-        f"Derived normalized input from the exact base Resource with "
-        f"{len(delta.upsert_warehouses)} candidate upserts and "
-        f"{len(delta.remove_warehouse_ids)} candidate removals; state is {state}.",
-    )
-
-
-@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
+@mcp.tool(structured_output=True, annotations=WORKSPACE_PREPARATION_TOOL)
 def prepare_network_geography(
-    normalized_input_ref: ResourceRef,
+    prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     administrative_catalog_relative_path: str,
+    output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     ctx: Context,
     overrides: list[GeographyOverride] | None = None,
-) -> Annotated[CallToolResult, DataAgentResourceToolResult]:
-    """Enrich normalized records from one validated administrative catalog."""
-    payload = _runtime().load_model(
-        normalized_input_ref,
-        "normalized_network_input.v1",
-        PreparedNetworkResource,
+) -> DataPreparationToolResult:
+    """Create a new prepared Workspace input enriched by one exact boundary catalog."""
+    payload, parent_identity = load_prepared_network_input(
+        _workspace(ctx), prepared_input_relative_path
     )
     country_code = payload.country_code
     batch = NormalizedInputBatch.model_validate(
@@ -535,13 +437,16 @@ def prepare_network_geography(
         if has_missing_coordinates
         else "ready"
     )
-    return _publish_json(
-        "normalized_network_input.v1",
+    return _write_prepared_input(
         PreparedNetworkResource(
             country_code=country_code,
             state=state,
+            confirmed_sources=payload.confirmed_sources,
+            parent_input_identity=parent_identity,
             **prepared.model_dump(mode="json"),
         ),
+        output_relative_path,
+        ctx,
         f"Prepared network geography from the catalog's {admin_level.strip()} level; "
         f"{len(prepared.demand_cities)} demand cities and "
         f"{len(prepared.warehouses)} warehouses; missing-coordinate records "

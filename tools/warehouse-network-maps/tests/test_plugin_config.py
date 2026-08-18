@@ -30,7 +30,13 @@ class PluginConfigTests(unittest.TestCase):
                     "openWorldHint": False,
                 },
             )
-        for name in {"batch_geocode", "batch_reverse_geocode", "get_route", "distance_matrix"}:
+        for name in {
+            "batch_geocode",
+            "batch_reverse_geocode",
+            "get_route",
+            "distance_matrix",
+            "execute_navigation_matrix",
+        }:
             annotations = tools[name].annotations
             self.assertIsNotNone(annotations)
             assert annotations is not None

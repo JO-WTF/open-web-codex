@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from _network_fixtures import (
+    TEST_INPUT_IDENTITY,
     indonesia_current_assignments,
     indonesia_network_fixture,
 )
@@ -39,6 +40,18 @@ from supply_chain_planner.network.solver import (
     solve_current_assignment,
     summarize_assignment_cost,
 )
+
+
+def _with_identity(function):
+    def call(*args, **kwargs):
+        kwargs.setdefault("input_identity", TEST_INPUT_IDENTITY)
+        return function(*args, **kwargs)
+
+    return call
+
+
+build_cost_matrix = _with_identity(build_cost_matrix)
+build_haversine_route_matrix = _with_identity(build_haversine_route_matrix)
 
 
 @dataclass(frozen=True)
@@ -96,6 +109,7 @@ def sample2_delivery() -> Sample2Delivery:
         service=service_metrics(baseline_assignment, targets),
         coverage=coverage_metrics(baseline_assignment, targets),
         cost=summarize_assignment_cost(baseline_assignment, costs),
+        input_identity=TEST_INPUT_IDENTITY,
     )
     best, _, timed_out = enumerate_p_median(
         fixture.demand,
@@ -117,6 +131,7 @@ def sample2_delivery() -> Sample2Delivery:
         assignment=best.assignment,
         objective_value=best.objective_value,
         cost=summarize_assignment_cost(best.assignment, costs),
+        input_identity=TEST_INPUT_IDENTITY,
         service=service_metrics(best.assignment, targets),
         optimality="proven",
     )

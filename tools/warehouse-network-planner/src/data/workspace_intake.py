@@ -537,6 +537,23 @@ def read_json_document(root: Path, relative_path: str) -> dict[str, Any]:
     return payload
 
 
+def read_json_document_with_sha256(root: Path, relative_path: str) -> tuple[dict[str, Any], str]:
+    """Read one validated JSON source and return its exact byte identity."""
+    path = _validated_source_path(root, relative_path)
+    if path.suffix.lower() != ".json":
+        raise ValueError("workspace_source_must_be_json")
+    if path.stat().st_size > 8 * 1024 * 1024:
+        raise ValueError("json_source_exceeds_size_limit")
+    raw = path.read_bytes()
+    try:
+        payload = json.loads(raw.decode(detect_encoding(raw[: 64 * 1024])))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("workspace_json_invalid") from error
+    if not isinstance(payload, dict):
+        raise ValueError("json_source_must_be_object")
+    return payload, hashlib.sha256(raw).hexdigest()
+
+
 def _read_prefix(path: Path, limit: int) -> bytes:
     with path.open("rb") as stream:
         raw = stream.read(limit + 1)

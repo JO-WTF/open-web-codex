@@ -20,6 +20,7 @@ from supply_chain_planner.network.models import (
     ProvidedRouteFactRecord,
     RouteQuoteRecord,
     WarehouseRecord,
+    PlanningInputIdentity,
 )
 from supply_chain_planner.network.optimization_models import (
     AssignmentComparison,
@@ -27,7 +28,6 @@ from supply_chain_planner.network.optimization_models import (
     CoverageComparison,
     CoverageMetricSummary,
 )
-from supply_chain_planner.shared.resource_identity import DATA_MCP_SERVER_NAME
 
 
 class StrictModel(BaseModel):
@@ -35,10 +35,10 @@ class StrictModel(BaseModel):
 
 
 class PreparedNetworkResource(StrictModel):
-    """Typed Data-to-Network Resource payload owned by supply_chain."""
+    """Validated, user-visible Workspace input for one network-planning run."""
 
-    schema_version: Literal["normalized_network_input.v1"] = Field(
-        default="normalized_network_input.v1",
+    schema_version: Literal["prepared_network_input.v1"] = Field(
+        default="prepared_network_input.v1",
         alias="schemaVersion",
     )
     country_code: str = Field(pattern=r"^[A-Z]{2}$")
@@ -49,24 +49,8 @@ class PreparedNetworkResource(StrictModel):
     route_quotes: list[RouteQuoteRecord]
     provided_route_facts: list[ProvidedRouteFactRecord] = Field(default_factory=list)
     issues: list[DataQualityIssue] = Field(default_factory=list)
-    parent_resource_ref: _ResourceRef | None = Field(default=None, alias="parentResourceRef")
-
-
-class PreparedNetworkInputRef(_ResourceRef):
-    """The exact Data-Agent handoff accepted by Network planning Tools."""
-
-    server: Literal[DATA_MCP_SERVER_NAME] = Field(
-        description="The Data Agent MCP server that published this normalized input."
-    )
-    resource_schema: Literal["normalized_network_input.v1"] = Field(
-        description="The ready normalized warehouse-network input schema."
-    )
-
-
-def _validate_prepared_network_input_ref(value: object) -> PreparedNetworkInputRef:
-    if isinstance(value, _ResourceRef):
-        value = value.model_dump(mode="json")
-    return PreparedNetworkInputRef.model_validate(value)
+    confirmed_sources: list["ConfirmedSourceDecision"] = Field(default_factory=list)
+    parent_input_identity: PlanningInputIdentity | None = None
 
 
 class ConfirmedFieldDecision(StrictModel):
@@ -114,54 +98,43 @@ class GeographyOverride(StrictModel):
     catalog_city_id: str = Field(min_length=1, max_length=128)
 
 
-class DataAgentResourceToolResult(StrictModel):
+class DataInspectionToolResult(StrictModel):
+    """A Data-Agent-local source-profile Resource used only during preparation."""
+
     summary: str
     resource_ref: _ResourceRef
 
 
-class CandidateWarehouseDeltaResource(StrictModel):
-    """A candidate-only change set that can derive a new normalized input."""
+class DataPreparationToolResult(StrictModel):
+    """The only Data-to-Network handoff: one exact Workspace input file."""
 
-    schema_version: Literal["candidate_warehouse_delta.v1"] = Field(
-        default="candidate_warehouse_delta.v1",
-        alias="schemaVersion",
-    )
-    upsert_warehouses: list[WarehouseRecord] = Field(default_factory=list, alias="upsertWarehouses")
-    remove_warehouse_ids: list[str] = Field(default_factory=list, alias="removeWarehouseIds")
-
-    @model_validator(mode="after")
-    def validate_candidate_only(self) -> CandidateWarehouseDeltaResource:
-        ids = [warehouse.warehouse_id for warehouse in self.upsert_warehouses]
-        if len(ids) != len(set(ids)):
-            raise ValueError("candidate_delta_upsert_ids_must_be_unique")
-        if any(warehouse.is_existing for warehouse in self.upsert_warehouses):
-            raise ValueError("candidate_delta_must_not_contain_existing_warehouse")
-        if len(self.remove_warehouse_ids) != len(set(self.remove_warehouse_ids)):
-            raise ValueError("candidate_delta_remove_ids_must_be_unique")
-        if set(ids) & set(self.remove_warehouse_ids):
-            raise ValueError("candidate_delta_cannot_upsert_and_remove_same_warehouse")
-        return self
-
-
-class CandidateWarehouseDeltaRef(_ResourceRef):
-    server: Literal[DATA_MCP_SERVER_NAME]
-    resource_schema: Literal["candidate_warehouse_delta.v1"]
+    summary: str
+    prepared_input_relative_path: str = Field(min_length=1, max_length=1024)
+    input_identity: PlanningInputIdentity
+    state: Literal["ready", "needs_input", "needs_geography"]
+    issue_count: int = Field(ge=0)
 
 
 class RouteMatrixPreparationToolResult(StrictModel):
-    state: Literal["ready", "navigation_required"]
+    state: Literal["ready"]
     summary: str
     resource_ref: _ResourceRef
 
     @model_validator(mode="after")
     def validate_state_schema(self) -> RouteMatrixPreparationToolResult:
-        expected = {
-            "ready": "route_matrix.v2",
-            "navigation_required": "route_matrix_plan.v2",
-        }[self.state]
-        if self.resource_ref.resource_schema != expected:
-            raise ValueError(f"{self.state} requires {expected}")
+        if self.resource_ref.resource_schema != "route_matrix.v2":
+            raise ValueError("ready requires route_matrix.v2")
         return self
+
+
+class NavigationMatrixRequestToolResult(StrictModel):
+    summary: str
+    state: Literal["execution_required", "ready"]
+    navigation_request_relative_path: str | None = Field(default=None, max_length=1024)
+    input_identity: PlanningInputIdentity
+    warehouse_scope: Literal["existing_only", "all_warehouses"]
+    route_count: int = Field(ge=0)
+    estimated_billable_elements: int = Field(ge=0)
 
 
 class UncoveredCitySummary(StrictModel):
@@ -223,16 +196,11 @@ class NetworkPlanComparisonResource(StrictModel):
     """One complete, provenance-bound before-versus-after planning result."""
 
     schema_version: Literal["network_plan_comparison.v1"] = "network_plan_comparison.v1"
-    normalized_input_ref: PreparedNetworkInputRef
+    prepared_input_relative_path: str = Field(min_length=1, max_length=1024)
+    input_identity: PlanningInputIdentity
     before_ref: ComparableNetworkResultRef
     after_ref: ComparableNetworkResultRef
     comparison: AssignmentComparison
-
-    @field_validator("normalized_input_ref", mode="before")
-    @classmethod
-    def validate_normalized_input_ref(cls, value: object) -> PreparedNetworkInputRef:
-        return _validate_prepared_network_input_ref(value)
-
 
 class FacilityChangeAssessmentToolResult(StrictModel):
     """Bounded result of one deterministic facility-change assessment."""
@@ -281,13 +249,8 @@ class NetworkBaselineReportInput(StrictModel):
     """Exact typed inputs for a single current-network assessment brief."""
 
     mode: Literal["baseline"] = "baseline"
-    normalized_input_ref: PreparedNetworkInputRef
+    prepared_input_relative_path: str = Field(min_length=1, max_length=1024)
     baseline_ref: _ResourceRef
-
-    @field_validator("normalized_input_ref", mode="before")
-    @classmethod
-    def validate_normalized_input_ref(cls, value: object) -> PreparedNetworkInputRef:
-        return _validate_prepared_network_input_ref(value)
 
 
 class NetworkComparisonReportInput(StrictModel):
@@ -298,6 +261,13 @@ class NetworkComparisonReportInput(StrictModel):
         NetworkPlanComparisonResourceRef,
         Field(description="The exact provenance-bound planning comparison to report."),
     ]
+
+    @field_validator("plan_comparison_ref", mode="before")
+    @classmethod
+    def validate_plan_comparison_ref(cls, value: object) -> NetworkPlanComparisonResourceRef:
+        if isinstance(value, _ResourceRef):
+            value = value.model_dump(mode="json")
+        return NetworkPlanComparisonResourceRef.model_validate(value)
 
 
 NetworkReportInput = Annotated[

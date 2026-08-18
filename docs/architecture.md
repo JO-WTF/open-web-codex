@@ -120,12 +120,12 @@ Platform 侧过滤 Runtime discovery 或 Tool。
 `plugins.<tool>.mcp_servers.<server>` 下的精确 allowlist 与 Tool 级审批策略；其 Root 没有全局
 仓网 MCP。独立的单 Agent 仓网包由一个 Root Agent 直接启用同一 Data/Network/Maps Tool policy，
 并以 `features.multi_agent=false` 禁止 child Agent。两者只共享根级 Tool package，不互相引用或
-通信。Data 的六个有界本地 Tool（含 candidate delta/derive）统一预批准；Network 以 `prompt` 为默认，
+通信。Data 的四个有界本地 Tool（发现、检查、完整准备、地理补全）统一预批准；Network 以 `prompt` 为默认，
 预批准路线/成本/验证/分析/选址/比较、coverage GeoJSON 等本地 Tool 与最终 Markdown 报告 `publish_network_planning_report`；`map_utils` 预批准 `create_map_card` 与 `revise_map_card`。
-外部导航、距离矩阵和 final Workspace 地图导出继续保留 official approval。MCP provider
-将 Data→Network 输入声明为严格的 `normalized_input_ref`：必须是 `supply_chain_data` 发布的
-`normalized_network_input.v1` 精确 `{server, uri, resource_schema}`，由 Network Tool 通过 package-owned facade 在同一 provider 域内消费；
-Network Role 不枚举、猜测、扫描或重解析 Data 输入。Platform 不为当前原生协作链建立消息或数据平面。
+外部导航、距离矩阵和 final Workspace 地图导出继续保留 official approval。Data→Network 输入是 Data Tool
+create-new 的 `prepared_network_input.v1` Workspace 相对路径与 `input_identity`；Network Tool 在同一授权
+Workspace 内自行验证和读取该文件，Role 不枚举、猜测、扫描 raw 数据或重解析其来源。路线、成本和方案
+继续是 provider-owned Resource，并逐一绑定同一输入身份。Platform 不为当前原生协作链建立消息或数据平面。
 同时在 Tool annotations 中声明 read-only、destructive、idempotent 和 open-world 事实，Role
 policy 只裁决该 child 的精确允许面，不修改全局 `approvalPolicy`。prepared transport 不固定 MCP
 process cwd；Runtime 使用该 Thread 已授权的 Workspace 作为 stdio MCP cwd。依赖环境与
@@ -208,11 +208,11 @@ revision、operation、dependency、readiness 或 deliverable 状态。
 当前 `ResourceStore` 以内容寻址 URI 为同一 logical `supply_chain` provider 的 Data/Network
 能力提供不可变 Resource 内容，并以 Profile 私有、canonical Workspace 隔离的物理目录保存
 字节；这一 provider content owner 与 Codex 官方 MCP Resource 合同一致。Data4 与 Network 的
-decorated active surface 已统一使用 strict typed
-`ResourceRef`：
-Data Server 的 inspect 只发布 `source_profile.v1`，首次 normalize 只接受显式确认的 source
-mapping 并保留所有确认的候选仓；candidate-only change 先发布 `candidate_warehouse_delta.v1`，再以
-exact base/delta ref 派生新的 `normalized_network_input.v1`。prepare-geography 只接受已校验的行政区输入。
+active surface 以 Workspace 路径和 typed Resource 各司其职：Data Server 的 inspect 只在 Data child
+内发布 `source_profile.v1`，`prepare_network_input` 以显式确认 source mapping 和全部候选仓原子写入
+完整 `prepared_network_input.v1`，`prepare_network_geography` 再从该文件生成新的完整输入。Network
+Tool 只接受这个确切路径，并为矩阵与方案 Resource 绑定输入内容身份；不存在 candidate delta 或
+Data-to-Network ResourceRef 交接。
 CaseRepository、NetworkSnapshot、
 ArtifactRef 和其 wrappers 已在 Stage E 原子删除；不能通过新增第二套 resolver 或兼容包装
 恢复该切换。通用的 scope/ref/store/codec/bounds/error/writer 已迁到
@@ -222,18 +222,18 @@ provider SDK 提供可复用实现，但 Resource 字节与生命周期仍由实
 
 Data4 active surface 不再接受 `source_ref/sourceRef/source_refs/sourceRefs/source/source_file`、
 `mappings/entities` 或 `fields/field_mappings/fieldMappings` aliases。discover 可选，inspect
-只产生 source-profile Resource，normalize 使用 `ResourceRef` 加显式 confirmed source decisions，
-并可在缺少坐标时返回 `needs_geography`；prepare-geography 再接收 adapter 已验证的行政区
-catalog 与可选 overrides。Network active surface 已是 strict `ResourceRef`；旧
-Case/ArtifactRef compatibility tail 已删除。用户文件继续使用经校验的 Workspace 相对路径，provider-owned intermediate
-继续使用单一 typed MCP Resource ref；Platform 不建立数据 revision/binding/fingerprint/cache
+只产生 source-profile Resource，`prepare_network_input` 使用显式 confirmed source decisions 并可在缺少
+坐标时返回 `needs_geography`；`prepare_network_geography` 再接收已确认的行政区 catalog 与可选
+overrides。Network active surface 读取经校验的准备输入路径，provider-owned intermediate 继续使用
+typed MCP Resource；旧 Case/ArtifactRef compatibility tail 已删除。Platform 不建立数据
+revision/binding/fingerprint/cache
 或通用 Broker。`resource_ref_projections` 是当前已实现的有界投影：只保存 completed official Tool Item
 ResourceLink 的 producer event/item、ordinal、`{server, uri, resource_schema}`、Tool 与显示名；不保存
 Resource content、摘要语义、版本列表或“最佳/最新”判断。它只支持同 Profile+Workspace 的用户显式选择，
 Server 在 Turn 前重验所有字段。
 
-用户输入中的完整路线距离、时长和来源方法由 Data provider 作为 typed pair facts 保存在同一个
-`normalized_network_input.v1` Resource 中；Network provider 按明确仓库范围将其物化为
+用户输入中的完整路线距离、时长和来源方法由 Data Tool 保存在同一个
+`prepared_network_input.v1` Workspace 文件中；Network provider 按明确仓库范围将其物化为
 `route_matrix.v2`，矩阵与验证器共享其 typed `warehouse_scope`，并对该范围内缺失、重复和范围外
 pair 给出显式验证结果。覆盖口径及未覆盖城市由
 Network Tool 确定性计算，同时区分城市数量和需求量加权指标；这些领域事实不进入 Platform

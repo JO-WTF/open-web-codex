@@ -65,7 +65,7 @@ describe("MessageList", () => {
           {
             threadId: "data-thread",
             agentLabel: "Wanwan",
-            text: "Completed normalize_network_input",
+            text: "Completed prepare_network_input",
             status: "completed",
             kind: "tool_completed",
           },
@@ -99,7 +99,7 @@ describe("MessageList", () => {
     expect(card.textContent).toContain("Supervisor is still active");
     expect(card.textContent).toContain("Waiting");
     expect(card.textContent).toContain("Wanwan");
-    expect(card.textContent).toContain("Completed normalize_network_input");
+    expect(card.textContent).toContain("Completed prepare_network_input");
     expect(card.textContent).toContain("Euler");
     expect(card.textContent).toContain("Using evaluate_network_baseline");
     expect(view.container.querySelector(".web-tool-card")).toBeNull();

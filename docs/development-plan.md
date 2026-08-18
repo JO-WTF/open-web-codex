@@ -290,9 +290,9 @@ Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。
    `approvalPolicy` 降为 `never`。prepared transport 不固定 MCP cwd；Runtime 使用 Thread
    已授权的 Workspace 作为 stdio MCP cwd。maps
    credential/resource state 位于 Profile 私有 runtime，业务 Workspace 只能来自 native
-   `sandboxCwd`。Data→Network 只交接完整的 `supply_chain_data` / `normalized_network_input.v1`
-   ResourceRef；Data/Network 由 capability package facade 共享同一 Profile+Workspace `supply_chain`
-   Resource owner，Network 按 exact ref/schema 读取而不重建 Data runtime、扫描或重解析输入。工具代码、
+   `sandboxCwd`。Data→Network 只交接完整 `prepared_network_input.v1` 的 Workspace 相对路径和
+   `input_identity`；Network Tool 在授权 Workspace 内验证和读取该准备输入，不扫描或重解析 raw 数据。
+   矩阵、成本和方案继续由同一 Profile+Workspace `supply_chain` Resource owner 保存，并绑定输入身份。工具代码、
    共享 venv、Node 依赖、Mock、测试和缓存均不复制进 Profile。
 4. Skill watcher/`forceReload` 对下一 Turn 生效；Role 文件修改对下一次 spawn 生效；MCP
    reload 在安全 step 边界切换。Role 集合、allowlist、增删改名只对新 Root Thread 保证，
@@ -500,18 +500,19 @@ producer-time verifier snapshot，恢复不依赖届时 active package registry�
 4. 获取国家行政区 city/province ID/name 与经纬度，为需求城市、已有仓和候选仓补坐标。
 5. 有候选仓文件则使用；没有则询问省级、市级或用户指定范围。首次归一化保留所有已确认候选仓；
    baseline 通过计算范围排除，不删除已处理的候选事实。
-6. 按用户与 Skill 要求，把需用户看到或跨 package 交接的结果写成 Workspace 文件，
-   把 provider-owned typed intermediate 保存为 MCP Resource；是否保存和如何使用由用户与 Skill 决定。
-7. 仅新增、替换或移除候选仓时，Data Tool 先产出 candidate delta，再由 exact base input 与 delta
-   派生新的完整 immutable `normalized_network_input`。城市、现网仓、实际分配、需求或原始路线事实
-   变化时明确要求完整归一化；校验结果不构成授权、可信等级或自动复用许可。
+6. Data Tool 以 create-new 语义把完整 `prepared_network_input.v1`（含确认来源、候选仓和质量问题）
+   写入用户可见 Workspace；该路径和内容身份是唯一 Data→Network 交接。路线/成本/方案等高成本
+   typed intermediate 继续保存为 MCP Resource。
+7. 候选仓、城市、现网仓、实际分配、需求或原始路线事实任一变化都产生新的完整准备输入；不使用
+   candidate delta 或原地修改。校验结果不构成授权、可信等级或自动复用许可。
 
 #### 距离、成本与分析
 
 1. 构建已有仓/候选仓到需求城市的距离与时长；询问曲面距离×绕路系数或导航。缺绕路系数
    时询问；导航前展示路线数量、接口消耗和费用风险并取得许可。
-   用户已经提供完整起终点距离、时长与来源方法时，由 Data Tool 保留 typed pair facts，
-   Network Tool 按当前分析范围直接物化并验证，不重复询问估算参数或让模型重读文件。
+   用户已经提供完整起终点距离、时长与来源方法时，由 Data Tool 写入准备输入，
+   Network Tool 按当前分析范围直接物化并验证，不重复询问估算参数或让模型重读 raw 文件。导航则先
+   生成精确缺失 lane request，在费用确认后由地理 Tool 自动执行并导入验证结果。
 2. 优先使用用户路线报价；缺失路线时询问计价逻辑，禁止以零成本填补。
 3. 按成本优先或时效优先计算覆盖；计算一个或多个 SLA 目标的满足率，同时明确返回按城市
    数量与按需求量加权的两种口径及确定性的未覆盖城市，模型不得自行汇总。

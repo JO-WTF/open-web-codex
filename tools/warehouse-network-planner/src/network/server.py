@@ -41,21 +41,26 @@ from supply_chain_planner.delivery.report_service import (
 )
 from supply_chain_planner.network.matrix import build_cost_matrix as _build_composable_cost_matrix
 from supply_chain_planner.network.matrix import (
+    build_navigation_matrix_request,
     build_provided_route_matrix as _build_provided_route_matrix,
 )
 from supply_chain_planner.network.matrix import build_route_matrix_with_reuse
-from supply_chain_planner.network.matrix import plan_route_matrix as _plan_composable_route_matrix
 from supply_chain_planner.network.matrix import (
     register_navigation_route_matrix as _register_composable_navigation_matrix,
 )
 from supply_chain_planner.network.matrix import (
     validate_route_matrix as _validate_route_matrix_model,
 )
-from supply_chain_planner.network.matrix_models import CostCalculationPolicy, CostMatrix
+from supply_chain_planner.network.matrix_models import (
+    CostCalculationPolicy,
+    CostMatrix,
+    NavigationMatrixResult,
+)
 from supply_chain_planner.network.matrix_models import RouteMatrix as ComposableRouteMatrix
 from supply_chain_planner.network.models import (
     DemandCityRecord,
     NormalizedInputBatch,
+    PlanningInputIdentity,
     WarehouseRecord,
 )
 from supply_chain_planner.network.optimization_models import (
@@ -90,18 +95,20 @@ from supply_chain_planner.shared.models import (
     NetworkBaselineResourceToolResult,
     NetworkFinalArtifactDescriptor,
     NetworkFinalArtifactToolResult,
+    NavigationMatrixRequestToolResult,
     NetworkPlanComparisonResource,
     NetworkPlanComparisonResourceRef,
     NetworkReportInput,
     NetworkScenarioResourceRef,
-    PreparedNetworkInputRef,
     PreparedNetworkResource,
     RouteMatrixPreparationToolResult,
     UncoveredCitySummary,
 )
-from supply_chain_planner.shared.resource_identity import (
-    DATA_MCP_SERVER_NAME,
+from supply_chain_planner.shared.planning_input import (
+    load_prepared_network_input,
+    require_matching_input,
 )
+from supply_chain_planner.shared.resource_identity import NETWORK_MCP_SERVER_NAME
 from supply_chain_planner.shared.resources import SupplyChainResources
 
 McpResourceContractError = ProviderContractError
@@ -113,6 +120,12 @@ CONTENT_ADDRESSED_RESOURCE_TOOL = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=False,
     idempotentHint=True,
+    openWorldHint=False,
+)
+WORKSPACE_REQUEST_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
     openWorldHint=False,
 )
 BOUNDED_LOCAL_COMPUTE_TOOL = ToolAnnotations(
@@ -236,12 +249,6 @@ def _runtime() -> McpResourceRuntime:
     return _supply_chain_resources.network
 
 
-def _resources() -> SupplyChainResources:
-    _runtime()
-    assert _supply_chain_resources is not None
-    return _supply_chain_resources
-
-
 @mcp.resource(
     "supply-chain://resources/{resource_id}",
     name="supply_chain_resource",
@@ -255,7 +262,7 @@ def read_supply_chain_resource(resource_id: str) -> str:
 
 def _load_comparable_resource(
     resource_ref: ComparableNetworkResultRef,
-) -> tuple[AssignmentResult, set[str]]:
+) -> tuple[AssignmentResult, set[str], PlanningInputIdentity]:
     """Load one supported comparison subject through the provider runtime."""
     if resource_ref.resource_schema == "network_baseline.v2":
         result = _runtime().load_model(
@@ -279,20 +286,19 @@ def _load_comparable_resource(
             raise McpResourceContractError("comparable_assignment_unavailable")
     else:
         raise McpResourceContractError("comparison_subject_schema_invalid")
-    return result.assignment, set(result.active_warehouse_ids)
+    return result.assignment, set(result.active_warehouse_ids), result.input_identity
 
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def compare_network_scenarios(
-    normalized_input_ref: PreparedNetworkInputRef,
+    prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     before_ref: ComparableNetworkResultRef,
     after_ref: ComparableNetworkResultRef,
     service_targets: Annotated[list[float], Field(min_length=1, max_length=32)],
     ctx: Context,
 ) -> CallToolResult:
     """Compare two typed network results in either direction."""
-    _runtime().require_workspace(ctx)
-    _load_ready_network(normalized_input_ref)
+    _prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
     try:
         before_ref = ComparableNetworkResultRef.model_validate(before_ref.model_dump(mode="json"))
         after_ref = ComparableNetworkResultRef.model_validate(after_ref.model_dump(mode="json"))
@@ -300,8 +306,13 @@ def compare_network_scenarios(
         raise McpResourceContractError("comparison_subject_schema_invalid") from error
     if any(target <= 0 for target in service_targets):
         raise McpResourceContractError("comparison_service_targets_invalid")
-    before_assignment, before_active_ids = _load_comparable_resource(before_ref)
-    after_assignment, after_active_ids = _load_comparable_resource(after_ref)
+    before_assignment, before_active_ids, before_identity = _load_comparable_resource(before_ref)
+    after_assignment, after_active_ids, after_identity = _load_comparable_resource(after_ref)
+    try:
+        require_matching_input(input_identity, before_identity)
+        require_matching_input(input_identity, after_identity)
+    except ValueError as error:
+        raise McpResourceContractError("comparison_input_identity_mismatch") from error
     comparison: AssignmentComparison = compare_assignments(
         before_assignment,
         after_assignment,
@@ -331,7 +342,8 @@ def compare_network_scenarios(
         f"({comparison.cost_delta or 0:+.2f})"
     )
     plan_comparison = NetworkPlanComparisonResource(
-        normalized_input_ref=normalized_input_ref,
+        prepared_input_relative_path=prepared_input_relative_path,
+        input_identity=input_identity,
         before_ref=before_ref,
         after_ref=after_ref,
         comparison=comparison,
@@ -348,32 +360,51 @@ def compare_network_scenarios(
     )
 
 
-def _load_ready_network(resource_ref: PreparedNetworkInputRef) -> PreparedNetworkResource:
-    prepared = _resources().load_model(
-        DATA_MCP_SERVER_NAME,
-        resource_ref,
-        "normalized_network_input.v1",
-        PreparedNetworkResource,
+def _load_ready_network(
+    prepared_input_relative_path: str,
+    ctx: Context,
+) -> tuple[PreparedNetworkResource, PlanningInputIdentity]:
+    prepared, identity = load_prepared_network_input(
+        _runtime().require_workspace(ctx),
+        prepared_input_relative_path,
     )
     if prepared.state != "ready":
-        raise McpResourceContractError("normalized_input_not_ready")
-    return prepared
+        raise McpResourceContractError("prepared_network_input_not_ready")
+    return prepared, identity
 
 
 def _load_assignment_coverage_result(
     resource_ref: AssignmentResultResourceRef,
-) -> tuple[AssignmentResult, list[str], str, Literal["baseline", "scenario", "facility"]]:
+) -> tuple[
+    AssignmentResult,
+    list[str],
+    str,
+    Literal["baseline", "scenario", "facility"],
+    PlanningInputIdentity,
+]:
     """Adapt one solved domain result without choosing or recomputing it."""
     if resource_ref.resource_schema == "network_baseline.v2":
         baseline = _runtime().load_model(
             resource_ref, "network_baseline.v2", BaselineResult
         )
-        return baseline.assignment, baseline.active_warehouse_ids, baseline.label, "baseline"
+        return (
+            baseline.assignment,
+            baseline.active_warehouse_ids,
+            baseline.label,
+            "baseline",
+            baseline.input_identity,
+        )
     if resource_ref.resource_schema == "network_scenario.v2":
         scenario = _runtime().load_model(
             resource_ref, "network_scenario.v2", ScenarioResult
         )
-        return scenario.assignment, scenario.active_warehouse_ids, "scenario", "scenario"
+        return (
+            scenario.assignment,
+            scenario.active_warehouse_ids,
+            "scenario",
+            "scenario",
+            scenario.input_identity,
+        )
     facility = _runtime().load_model(
         resource_ref, "facility_location_solution.v3", PMedianSolution
     )
@@ -381,7 +412,13 @@ def _load_assignment_coverage_result(
         raise McpResourceContractError("coverage_assignment_required")
     if facility.status not in {"optimal", "feasible"}:
         raise McpResourceContractError("coverage_solution_not_deliverable")
-    return facility.assignment, facility.active_warehouse_ids, facility.status, "facility"
+    return (
+        facility.assignment,
+        facility.active_warehouse_ids,
+        facility.status,
+        "facility",
+        facility.input_identity,
+    )
 
 
 def _publish_geojson(
@@ -422,7 +459,7 @@ def _publish_geojson(
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def prepare_network_distribution_map(
-    normalized_input_ref: PreparedNetworkInputRef,
+    prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     ctx: Context,
     include_candidates: bool = False,
     baseline_ref: Annotated[
@@ -436,8 +473,7 @@ def prepare_network_distribution_map(
     ] = None,
 ) -> CallToolResult:
     """Publish raw GeoJSON facts for a separately authored map presentation."""
-    _runtime().require_workspace(ctx)
-    prepared = _load_ready_network(normalized_input_ref)
+    prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
     normalized = NormalizedInputBatch(
         demand_cities=prepared.demand_cities,
         warehouses=prepared.warehouses,
@@ -451,6 +487,11 @@ def prepare_network_distribution_map(
         if baseline_ref is not None
         else None
     )
+    if baseline is not None:
+        try:
+            require_matching_input(input_identity, baseline.input_identity)
+        except ValueError as error:
+            raise McpResourceContractError("map_input_identity_mismatch") from error
     geojson = build_network_distribution_geojson(
         normalized,
         include_candidates=include_candidates,
@@ -484,11 +525,96 @@ def prepare_network_distribution_map(
     return result
 
 
+@mcp.tool(structured_output=True, annotations=WORKSPACE_REQUEST_TOOL)
+def create_navigation_matrix_request(
+    prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    warehouse_scope: Literal["existing_only", "all_warehouses"],
+    output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    ctx: Context,
+    prior_route_matrix_ref: ResourceRef | None = None,
+) -> NavigationMatrixRequestToolResult:
+    """Write the exact billable navigation lanes for one prepared Workspace input."""
+    prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
+    warehouses = prepared.warehouses
+    if warehouse_scope == "existing_only":
+        warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
+    request = build_navigation_matrix_request(
+        prepared.demand_cities,
+        warehouses,
+        warehouse_scope=warehouse_scope,
+        input_identity=input_identity,
+    )
+    reused_rows = []
+    if prior_route_matrix_ref is not None:
+        prior = _runtime().load_model(
+            prior_route_matrix_ref,
+            "route_matrix.v2",
+            ComposableRouteMatrix,
+        )
+        try:
+            require_matching_input(input_identity, prior.input_identity)
+        except ValueError as error:
+            raise McpResourceContractError("navigation_prior_input_identity_mismatch") from error
+        if prior.warehouse_scope != warehouse_scope:
+            raise McpResourceContractError("navigation_route_matrix_scope_mismatch")
+        reused_rows = [
+            row
+            for row in prior.rows
+            if row.method == "navigation" and row.status == "ready"
+        ]
+        reusable_keys = {(row.origin_id, row.destination_id, row.layer) for row in reused_rows}
+        request = request.model_copy(
+            update={
+                "routes": [
+                    route
+                    for route in request.routes
+                    if (route.origin_id, route.destination_id, route.layer) not in reusable_keys
+                ],
+                "estimated_billable_elements": len(
+                    [
+                        route
+                        for route in request.routes
+                        if (route.origin_id, route.destination_id, route.layer) not in reusable_keys
+                    ]
+                ),
+            }
+        )
+    if not request.routes:
+        return NavigationMatrixRequestToolResult(
+            summary="All required navigation lane facts are already available from the exact prior matrix.",
+            state="ready",
+            navigation_request_relative_path=None,
+            input_identity=input_identity,
+            warehouse_scope=warehouse_scope,
+            route_count=0,
+            estimated_billable_elements=0,
+        )
+    created = _runtime().create_workspace_model(
+        ctx,
+        output_relative_path,
+        request,
+        max_bytes=MAX_WORKSPACE_FILE_BYTES,
+    )
+    return NavigationMatrixRequestToolResult(
+        summary=(
+            f"Prepared {len(request.routes)} exact navigation lanes for {warehouse_scope}; "
+            f"{len(reused_rows)} exact navigation facts reused, estimated billable route elements: "
+            f"{request.estimated_billable_elements}."
+        ),
+        state="execution_required",
+        navigation_request_relative_path=created.relative_path,
+        input_identity=input_identity,
+        warehouse_scope=warehouse_scope,
+        route_count=len(request.routes),
+        estimated_billable_elements=request.estimated_billable_elements,
+    )
+
+
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def prepare_route_matrix(
-    normalized_input_ref: PreparedNetworkInputRef,
+    prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     route_method: Annotated[
-        Literal["haversine", "navigation", "provided"],
+        Literal["haversine", "provided"],
         Field(
             description=(
                 "Route method for the required route pairs. Haversine requires both "
@@ -502,7 +628,7 @@ def prepare_route_matrix(
         float | None,
         Field(
             description=(
-                "Required when route_method is haversine; omit for navigation or provided routes."
+                "Required when route_method is haversine; omit for provided routes."
             )
         ),
     ] = None,
@@ -510,36 +636,17 @@ def prepare_route_matrix(
         float | None,
         Field(
             description=(
-                "Required when route_method is haversine; omit for navigation or provided routes."
+                "Required when route_method is haversine; omit for provided routes."
             )
         ),
     ] = None,
     prior_route_matrix_ref: ResourceRef | None = None,
 ) -> Annotated[CallToolResult, RouteMatrixPreparationToolResult]:
-    """Prepare one validated route matrix, or a navigation request estimate."""
-    _runtime().require_workspace(ctx)
-    prepared = _load_ready_network(normalized_input_ref)
+    """Prepare one provided or explicitly assumed haversine route matrix."""
+    prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
     warehouses = prepared.warehouses
     if warehouse_scope == "existing_only":
         warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
-    if route_method == "navigation":
-        plan = _plan_composable_route_matrix(
-            prepared.demand_cities,
-            warehouses,
-            route_method,
-            detour_coefficient,
-            average_speed_kph,
-        )
-        result = _runtime().publish(
-            plan.schema_version,
-            plan,
-            f"Navigation is required for {plan.route_count} layered routes; "
-            f"estimated billable calls: {plan.estimated_billable_calls}.",
-        )
-        if result.structuredContent is None:
-            raise McpResourceContractError("route_matrix_result_missing")
-        result.structuredContent["state"] = "navigation_required"
-        return result
     prior = (
         _runtime().load_model(
             prior_route_matrix_ref,
@@ -555,6 +662,7 @@ def prepare_route_matrix(
             warehouses,
             prepared.provided_route_facts,
             warehouse_scope=warehouse_scope,
+            input_identity=input_identity,
         )
     else:
         if detour_coefficient is None or average_speed_kph is None:
@@ -566,6 +674,7 @@ def prepare_route_matrix(
             detour_coefficient,
             average_speed_kph,
             warehouse_scope=warehouse_scope,
+            input_identity=input_identity,
         )
     stats = matrix.stats
     result = _runtime().publish(
@@ -583,25 +692,27 @@ def prepare_route_matrix(
 
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
-def register_navigation_route_matrix(
-    normalized_input_ref: PreparedNetworkInputRef,
-    navigation_result_relative_path: Annotated[
+def import_navigation_matrix(
+    prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    navigation_matrix_relative_path: Annotated[
         str,
         Field(min_length=1, max_length=1024),
     ],
     ctx: Context,
     prior_route_matrix_ref: ResourceRef | None = None,
 ) -> CallToolResult:
-    """Register navigation facts from one validated Workspace-relative JSON file."""
+    """Validate and publish provider-executed navigation facts from the Workspace."""
     workspace = _runtime().require_workspace(ctx)
-    prepared = _load_ready_network(normalized_input_ref)
-    document = read_json_document(workspace, navigation_result_relative_path)
+    prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
+    document = read_json_document(workspace, navigation_matrix_relative_path)
     try:
-        supplied = ComposableRouteMatrix.model_validate(document)
+        supplied = NavigationMatrixResult.model_validate(document)
     except ValidationError as error:
-        raise McpResourceContractError("navigation_result_invalid") from error
-    if supplied.method != "navigation":
-        raise McpResourceContractError("navigation_result_method_mismatch")
+        raise McpResourceContractError("navigation_matrix_result_invalid") from error
+    try:
+        require_matching_input(input_identity, supplied.input_identity)
+    except ValueError as error:
+        raise McpResourceContractError("navigation_matrix_input_identity_mismatch") from error
     prior = (
         _runtime().load_model(
             prior_route_matrix_ref,
@@ -611,8 +722,13 @@ def register_navigation_route_matrix(
         if prior_route_matrix_ref is not None
         else None
     )
-    if prior is not None and prior.warehouse_scope != supplied.warehouse_scope:
-        raise McpResourceContractError("navigation_route_matrix_scope_mismatch")
+    if prior is not None:
+        try:
+            require_matching_input(input_identity, prior.input_identity)
+        except ValueError as error:
+            raise McpResourceContractError("navigation_prior_input_identity_mismatch") from error
+        if prior.warehouse_scope != supplied.warehouse_scope:
+            raise McpResourceContractError("navigation_route_matrix_scope_mismatch")
     warehouses = prepared.warehouses
     if supplied.warehouse_scope == "existing_only":
         warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
@@ -622,6 +738,7 @@ def register_navigation_route_matrix(
         warehouses,
         [*prior_rows, *supplied.rows],
         warehouse_scope=supplied.warehouse_scope,
+        input_identity=input_identity,
     )
     if matrix.missing_routes:
         raise McpResourceContractError("navigation_matrix_incomplete")
@@ -641,13 +758,13 @@ def register_navigation_route_matrix(
         matrix.schema_version,
         matrix,
         f"Registered navigation matrix with {len(prior_rows)} reused and "
-        f"{len(supplied.rows)} supplied pair facts.",
+        f"{len(supplied.rows)} provider-executed pair facts.",
     )
 
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def plan_cost_matrix(
-    normalized_input_ref: PreparedNetworkInputRef,
+    prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     warehouse_scope: Literal["existing_only", "all_warehouses"],
     ctx: Context,
     calculation_policy: CostCalculationPolicy | None = None,
@@ -655,8 +772,7 @@ def plan_cost_matrix(
     prior_cost_matrix_ref: ResourceRef | None = None,
 ) -> CallToolResult:
     """Build quote-first lane costs with an optional explicit calculation policy."""
-    _runtime().require_workspace(ctx)
-    prepared = _load_ready_network(normalized_input_ref)
+    prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
     warehouses = prepared.warehouses
     if warehouse_scope == "existing_only":
         warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
@@ -669,6 +785,11 @@ def plan_cost_matrix(
         if route_matrix_ref is not None
         else None
     )
+    if route_matrix is not None:
+        try:
+            require_matching_input(input_identity, route_matrix.input_identity)
+        except ValueError as error:
+            raise McpResourceContractError("cost_route_input_identity_mismatch") from error
     prior = (
         _runtime().load_model(
             prior_cost_matrix_ref,
@@ -686,6 +807,7 @@ def plan_cost_matrix(
         route_matrix,
         prior.rows if prior is not None else None,
         warehouse_scope=warehouse_scope,
+        input_identity=input_identity,
     )
     stats = matrix.stats
     return _runtime().publish(
@@ -700,7 +822,7 @@ def plan_cost_matrix(
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def evaluate_network_baseline(
-    normalized_input_ref: PreparedNetworkInputRef,
+    prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     route_matrix_ref: ResourceRef,
     objective: Literal["min_time", "min_cost"],
     service_targets: Annotated[list[float], Field(min_length=1, max_length=32)],
@@ -709,10 +831,9 @@ def evaluate_network_baseline(
     cost_matrix_ref: ResourceRef | None = None,
 ) -> Annotated[CallToolResult, NetworkBaselineResourceToolResult]:
     """Evaluate one explicitly selected actual or optimized-existing baseline."""
-    _runtime().require_workspace(ctx)
     if any(target <= 0 for target in service_targets):
         raise McpResourceContractError("baseline_service_targets_invalid")
-    prepared = _load_ready_network(normalized_input_ref)
+    prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
     routes = _runtime().load_model(
         route_matrix_ref,
         "route_matrix.v2",
@@ -723,6 +844,12 @@ def evaluate_network_baseline(
         if cost_matrix_ref is not None
         else None
     )
+    try:
+        require_matching_input(input_identity, routes.input_identity)
+        if costs is not None:
+            require_matching_input(input_identity, costs.input_identity)
+    except ValueError as error:
+        raise McpResourceContractError("baseline_input_identity_mismatch") from error
     if objective == "min_cost" and costs is None:
         raise McpResourceContractError("min_cost_baseline_requires_cost_matrix")
     active_ids = {
@@ -765,6 +892,7 @@ def evaluate_network_baseline(
         coverage=coverage,
         cost=summarize_assignment_cost(assignment, costs) if costs is not None else None,
         notice_code=None,
+        input_identity=input_identity,
     )
     label_text = (
         "actual current assignment"
@@ -794,12 +922,14 @@ def evaluate_network_baseline(
 
 
 def _load_facility_scenario_inputs(
-    normalized_input_ref: PreparedNetworkInputRef,
+    prepared_input_relative_path: str,
     route_matrix_ref: ResourceRef,
     cost_matrix_ref: ResourceRef | None,
     scenario: ScenarioSpec,
+    ctx: Context,
 ) -> tuple[
     PreparedNetworkResource,
+    PlanningInputIdentity,
     ComposableRouteMatrix,
     CostMatrix | None,
     list[float],
@@ -813,7 +943,7 @@ def _load_facility_scenario_inputs(
         or any(target <= 0 for target in scenario.service_targets)
     ):
         raise McpResourceContractError("scenario_service_targets_invalid")
-    prepared = _load_ready_network(normalized_input_ref)
+    prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
     routes = _runtime().load_model(
         route_matrix_ref,
         "route_matrix.v2",
@@ -824,6 +954,12 @@ def _load_facility_scenario_inputs(
         if cost_matrix_ref is not None
         else None
     )
+    try:
+        require_matching_input(input_identity, routes.input_identity)
+        if costs is not None:
+            require_matching_input(input_identity, costs.input_identity)
+    except ValueError as error:
+        raise McpResourceContractError("scenario_input_identity_mismatch") from error
     if scenario.objective == "min_cost" and costs is None:
         raise McpResourceContractError("min_cost_scenario_requires_cost_matrix")
     warehouse_by_id = {warehouse.warehouse_id: warehouse for warehouse in prepared.warehouses}
@@ -845,6 +981,7 @@ def _load_facility_scenario_inputs(
         raise McpResourceContractError("scenario_add_remove_conflict")
     return (
         prepared,
+        input_identity,
         routes,
         costs,
         sorted(set(scenario.service_targets)),
@@ -855,6 +992,7 @@ def _load_facility_scenario_inputs(
 
 def _evaluate_facility_change(
     prepared: PreparedNetworkResource,
+    input_identity: PlanningInputIdentity,
     routes: ComposableRouteMatrix,
     costs: CostMatrix | None,
     scenario: ScenarioSpec,
@@ -893,12 +1031,13 @@ def _evaluate_facility_change(
             added=sorted(add_ids),
             removed=sorted(remove_ids),
         ),
+        input_identity=input_identity,
     )
 
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def assess_facility_change(
-    normalized_input_ref: PreparedNetworkInputRef,
+    prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     route_matrix_ref: ResourceRef,
     before_ref: ComparableNetworkResultRef,
     scenario: ScenarioSpec,
@@ -912,14 +1051,18 @@ def assess_facility_change(
     cost matrix are already available. It returns both the changed scenario and
     its comparison without requiring a second model-selected Tool call.
     """
-    _runtime().require_workspace(ctx)
-    prepared, routes, costs, targets, add_ids, remove_ids = _load_facility_scenario_inputs(
-        normalized_input_ref,
+    prepared, input_identity, routes, costs, targets, add_ids, remove_ids = _load_facility_scenario_inputs(
+        prepared_input_relative_path,
         route_matrix_ref,
         cost_matrix_ref,
         scenario,
+        ctx,
     )
-    before_assignment, before_active_ids = _load_comparable_resource(before_ref)
+    before_assignment, before_active_ids, before_identity = _load_comparable_resource(before_ref)
+    try:
+        require_matching_input(input_identity, before_identity)
+    except ValueError as error:
+        raise McpResourceContractError("scenario_before_input_identity_mismatch") from error
     known_warehouse_ids = {warehouse.warehouse_id for warehouse in prepared.warehouses}
     if before_active_ids - known_warehouse_ids:
         raise McpResourceContractError("scenario_before_warehouse_unknown")
@@ -929,6 +1072,7 @@ def assess_facility_change(
         raise McpResourceContractError("scenario_add_requires_inactive_warehouse")
     after = _evaluate_facility_change(
         prepared,
+        input_identity,
         routes,
         costs,
         scenario,
@@ -981,7 +1125,8 @@ def assess_facility_change(
         scenario_published.structuredContent["resource_ref"]
     )
     plan_comparison = NetworkPlanComparisonResource(
-        normalized_input_ref=normalized_input_ref,
+        prepared_input_relative_path=prepared_input_relative_path,
+        input_identity=input_identity,
         before_ref=before_ref,
         after_ref=ComparableNetworkResultRef.model_validate(scenario_ref.model_dump(mode="json")),
         comparison=comparison,
@@ -1034,7 +1179,7 @@ def assess_facility_change(
 
 @mcp.tool(structured_output=True, annotations=BOUNDED_LOCAL_COMPUTE_TOOL)
 def solve_p_median(
-    normalized_input_ref: PreparedNetworkInputRef,
+    prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     route_matrix_ref: ResourceRef,
     cost_matrix_ref: ResourceRef,
     number_to_open: Annotated[
@@ -1063,10 +1208,9 @@ def solve_p_median(
     service_constraints: list[ServiceCoverageConstraint] | None = None,
 ) -> CallToolResult:
     """Solve finite-candidate min-cost p-median under explicit existing-site policy."""
-    _runtime().require_workspace(ctx)
     if any(target <= 0 for target in service_targets):
         raise McpResourceContractError("p_median_service_targets_invalid")
-    prepared = _load_ready_network(normalized_input_ref)
+    prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
     routes = _runtime().load_model(
         route_matrix_ref,
         "route_matrix.v2",
@@ -1077,6 +1221,11 @@ def solve_p_median(
         "cost_matrix.v2",
         CostMatrix,
     )
+    try:
+        require_matching_input(input_identity, routes.input_identity)
+        require_matching_input(input_identity, costs.input_identity)
+    except ValueError as error:
+        raise McpResourceContractError("p_median_input_identity_mismatch") from error
     route_validation = _validate_route_matrix_model(
         prepared.demand_cities,
         prepared.warehouses,
@@ -1133,6 +1282,7 @@ def solve_p_median(
             closed_existing_ids=[],
             optimality="not_available",
             message=unavailable_message or "No feasible p-median solution was found.",
+            input_identity=input_identity,
         )
     else:
         solution_coverage = coverage_metrics(
@@ -1155,6 +1305,7 @@ def solve_p_median(
             message="The solver returned a feasible solution before the time limit."
             if timed_out
             else None,
+            input_identity=input_identity,
         )
     return _runtime().publish(
         solution.schema_version,
@@ -1170,6 +1321,7 @@ def solve_p_median(
 
 def _load_final_delivery_inputs(
     plan_comparison_ref: NetworkPlanComparisonResourceRef,
+    ctx: Context,
 ) -> tuple[
     PreparedNetworkResource,
     NormalizedInputBatch,
@@ -1186,7 +1338,10 @@ def _load_final_delivery_inputs(
         raise McpResourceContractError("delivery_before_baseline_required")
     if plan_comparison.after_ref.resource_schema != "facility_location_solution.v3":
         raise McpResourceContractError("delivery_after_facility_solution_required")
-    prepared = _load_ready_network(plan_comparison.normalized_input_ref)
+    prepared, input_identity = _load_ready_network(
+        plan_comparison.prepared_input_relative_path,
+        ctx,
+    )
     baseline = _runtime().load_model(
         plan_comparison.before_ref,
         "network_baseline.v2",
@@ -1197,6 +1352,12 @@ def _load_final_delivery_inputs(
         "facility_location_solution.v3",
         PMedianSolution,
     )
+    try:
+        require_matching_input(plan_comparison.input_identity, input_identity)
+        require_matching_input(input_identity, baseline.input_identity)
+        require_matching_input(input_identity, facility.input_identity)
+    except ValueError as error:
+        raise McpResourceContractError("delivery_input_identity_mismatch") from error
     normalized = NormalizedInputBatch(
         demand_cities=prepared.demand_cities,
         warehouses=prepared.warehouses,
@@ -1280,9 +1441,9 @@ def prepare_network_comparison_map(
     ctx: Context,
 ) -> CallToolResult:
     """Publish raw baseline-versus-plan GeoJSON for a separately authored map."""
-    _runtime().require_workspace(ctx)
     prepared, normalized, baseline, facility, comparison = _load_final_delivery_inputs(
         plan_comparison_ref,
+        ctx,
     )
     bundle = build_network_comparison_map_bundle(
         normalized,
@@ -1310,16 +1471,19 @@ def prepare_network_comparison_map(
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
 def prepare_network_coverage_map(
-    normalized_input_ref: PreparedNetworkInputRef,
+    prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     assignment_result_ref: AssignmentResultResourceRef,
     ctx: Context,
 ) -> CallToolResult:
     """Publish all straight-line coverage facts for one exact solved result."""
-    _runtime().require_workspace(ctx)
-    prepared = _load_ready_network(normalized_input_ref)
-    assignment, active_ids, result_label, scenario = _load_assignment_coverage_result(
+    prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
+    assignment, active_ids, result_label, scenario, result_identity = _load_assignment_coverage_result(
         assignment_result_ref
     )
+    try:
+        require_matching_input(input_identity, result_identity)
+    except ValueError as error:
+        raise McpResourceContractError("coverage_map_input_identity_mismatch") from error
     normalized = NormalizedInputBatch(
         demand_cities=prepared.demand_cities,
         warehouses=prepared.warehouses,
@@ -1354,9 +1518,9 @@ def render_network_comparison_map(
     ctx: Context,
 ) -> CallToolResult:
     """Create a self-contained baseline-versus-facility map JSON file."""
-    _runtime().require_workspace(ctx)
     prepared, normalized, baseline, facility, comparison = _load_final_delivery_inputs(
         plan_comparison_ref,
+        ctx,
     )
     bundle = build_network_comparison_map_bundle(
         normalized,
@@ -1380,9 +1544,11 @@ def publish_network_planning_report(
     ctx: Context,
 ) -> CallToolResult:
     """Create a Markdown brief for a baseline assessment or plan comparison."""
-    _runtime().require_workspace(ctx)
     if report_input.mode == "baseline":
-        prepared = _load_ready_network(report_input.normalized_input_ref)
+        prepared, input_identity = _load_ready_network(
+            report_input.prepared_input_relative_path,
+            ctx,
+        )
         normalized = NormalizedInputBatch(
             demand_cities=prepared.demand_cities,
             warehouses=prepared.warehouses,
@@ -1396,6 +1562,10 @@ def publish_network_planning_report(
             "network_baseline.v2",
             BaselineResult,
         )
+        try:
+            require_matching_input(input_identity, baseline.input_identity)
+        except ValueError as error:
+            raise McpResourceContractError("report_input_identity_mismatch") from error
         bundle = build_network_baseline_assessment_report_bundle(
             normalized,
             baseline,
@@ -1405,6 +1575,7 @@ def publish_network_planning_report(
     else:
         prepared, normalized, baseline, facility, comparison = _load_final_delivery_inputs(
             report_input.plan_comparison_ref,
+            ctx,
         )
         bundle = build_network_planning_report_bundle(
             normalized,
