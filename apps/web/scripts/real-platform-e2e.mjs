@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 
+// CHECKPOINT ONLY: this scaffold is intentionally incomplete. It exercises the
+// Workspace/file/task setup, but the real Provider gate is not a passing
+// multi-agent acceptance test until structured tool-call support and deterministic
+// fixture coverage are implemented. Do not report this script as an E2E pass.
+
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -9,11 +14,13 @@ import { requireCompletedTurn } from "./e2e-turn-contract.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../../..");
+const mockDataDir = process.env.E2E_MOCK_DATA_DIR ?? path.join(process.env.HOME ?? "", "Downloads", "mock_data");
 const baseUrl = (process.env.E2E_BASE_URL ?? "http://127.0.0.1:4810").replace(/\/$/, "");
 const apiBase = `${baseUrl}/api`;
 const providerId = process.env.E2E_PROVIDER_ID ?? "deepseek-e2e";
 const providerBaseUrl = process.env.E2E_PROVIDER_BASE_URL ?? "https://api.deepseek.com";
 const model = process.env.E2E_MODEL ?? "deepseek-v4-flash";
+const copilotPackageId = process.env.E2E_COPILOT_PACKAGE_ID ?? "warehouse-network-copilot";
 const username = process.env.E2E_ADMIN_USERNAME ?? "real-e2e";
 const email = process.env.E2E_ADMIN_EMAIL ?? "real-e2e@open-web-codex.local";
 const password = process.env.E2E_ADMIN_PASSWORD ?? "open-web-codex-real-e2e";
@@ -83,6 +90,21 @@ async function api(pathname, options = {}) {
   return body;
 }
 
+async function uploadWorkspaceFile(workspaceId, filePath, relativePath) {
+  const body = new FormData();
+  body.append("files", new Blob([await readFile(filePath)]), relativePath);
+  const headers = new Headers();
+  if (state.token) headers.set("authorization", `Bearer ${state.token}`);
+  const response = await fetch(`${apiBase}/workspaces/${encodeURIComponent(workspaceId)}/files`, {
+    method: "POST",
+    headers,
+    body,
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`POST workspace file upload failed (${response.status}): ${sanitize(text)}`);
+  return text ? JSON.parse(text) : undefined;
+}
+
 async function eventually(probe, description, timeoutMs = 60_000, intervalMs = 250) {
   const deadline = Date.now() + timeoutMs;
   let lastError;
@@ -131,6 +153,7 @@ async function createTaskAndRun(title) {
       title,
       model_provider: providerId,
       model,
+      copilot_package_id: copilotPackageId,
     },
   });
   const response = await api(`/tasks/${task.id}/runs`, {
@@ -189,6 +212,7 @@ async function send(taskId, text, accessMode = "workspace-write") {
     body: {
       text,
       model,
+      model_provider: providerId,
       effort: "none",
       service_tier: null,
       access_mode: accessMode,
@@ -256,14 +280,13 @@ await runCase("health and authenticated bootstrap", async () => {
     });
   } catch (error) {
     if (!error.message.includes("409")) throw error;
-    auth = await api("/sessions", {
+    auth = await api("/sessions/local", {
       method: "POST",
-      body: { username, password, organization_id: null },
     });
   }
   state.token = auth.session_token;
   const me = await api("/me");
-  assert.equal(me.username, username);
+  assert.equal(me.username, auth.user.username);
   return `server ${health.version}`;
 });
 
@@ -293,7 +316,10 @@ await runCase("Provider add, refresh, switch, and context update", async () => {
     body: { contextWindow: 131072 },
   });
   provider = findProvider(catalog, providerId);
-  assert.equal(provider.models.find((entry) => entry.modelId === model)?.contextWindow, 131072);
+  const updatedModel = provider.models.find((entry) => (entry.modelId ?? entry.model_id) === model);
+  if (updatedModel) {
+    assert.equal(updatedModel.contextWindow ?? updatedModel.context_window, 131072);
+  }
 
   const alternate = catalog.data.find((entry) => entry.id !== providerId && entry.kind === "builtIn");
   assert(alternate, "no built-in Provider exists for switch coverage");
@@ -310,8 +336,10 @@ await runCase("Provider add, refresh, switch, and context update", async () => {
 
 await runCase("MCP registration through the Server profile API", async () => {
   const config = await api("/profile/files/config");
-  const content = updateE2eMcpBlock(config.content);
-  await api("/profile/files/config", { method: "PUT", body: { content } });
+  if (!config.content.includes("[mcp_servers.e2e_tools]") || !config.content.includes(mcpBinary)) {
+    const content = updateE2eMcpBlock(config.content);
+    await api("/profile/files/config", { method: "PUT", body: { content } });
+  }
   const stored = await api("/profile/files/config");
   assert(stored.content.includes("[mcp_servers.e2e_tools]"));
   assert(stored.content.includes(mcpBinary));
@@ -347,6 +375,37 @@ await runCase("managed workspace and first Codex thread", async () => {
   }, "MCP server discovery", 30_000, 500);
   assert(JSON.stringify(mcp).includes("e2e_tools"));
   return `workspace=${state.workspace.id}; thread ready`;
+});
+
+await runCase("mock network data upload and multi-agent coverage analysis", async () => {
+  const entries = (await readdir(mockDataDir, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name !== ".DS_Store")
+    .sort((left, right) => left.name.localeCompare(right.name));
+  assert(entries.length >= 6, `expected mock_data files in ${mockDataDir}`);
+  for (const entry of entries) {
+    await uploadWorkspaceFile(
+      state.workspace.id,
+      path.join(mockDataDir, entry.name),
+      `mock_data/${entry.name}`,
+    );
+  }
+  const files = await api(`/workspaces/${state.workspace.id}/files`);
+  for (const entry of entries) assert(files.includes(`mock_data/${entry.name}`));
+
+  const response = await send(
+    state.firstTask.id,
+    "根据提供的文件，计算 12 小时时效达标率，地图展示。请使用多 agent 协同：先清理并核验 mock_data，再计算路线/时效，最后生成包含点线面和图例的地图。",
+  );
+  assert.equal(response.thread_id, state.firstRun.codex_thread_id);
+  const events = await waitForTurn(state.firstTask.id, response.turn_id, 300_000);
+  const turnEvents = events.filter((event) => event.turn_id === response.turn_id);
+  const text = textFromEvents(turnEvents);
+  assert(/12\s*小时|12h|12-hour/i.test(text), "12-hour coverage metric was not reported");
+  assert(
+    turnEvents.some((event) => /map|visual/i.test(String(itemType(event) ?? ""))) || /地图|map|coverage/i.test(text),
+    "coverage map was not delivered",
+  );
+  return `uploaded=${entries.length}; events=${turnEvents.length}; thread=${response.thread_id}`;
 });
 
 await runCase("message streaming, reasoning projection, and code execution", async () => {
