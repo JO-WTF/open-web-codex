@@ -1,49 +1,15 @@
 use crate::auth::SharedAuthProvider;
-use crate::endpoint::session::BoundedResponseError;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
-use codex_client::TransportError;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
 use http::Method;
-use http::StatusCode;
 use http::header::ETAG;
-use serde::Deserialize;
-use serde_json::Value;
-use std::collections::HashSet;
 use std::sync::Arc;
-
-const MAX_MODEL_CATALOG_BYTES: usize = 1024 * 1024;
-const MAX_MODEL_CATALOG_ENTRIES: usize = 512;
-const MAX_MODEL_ID_CHARS: usize = 256;
-const MAX_MODEL_DISPLAY_NAME_CHARS: usize = 512;
-
-/// A sanitized Provider `/models` response accepted by the Runtime.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ModelsCatalog {
-    /// Codex's rich model metadata response.
-    Rich(Vec<ModelInfo>),
-    /// OpenAI-compatible responses that only advertise `data[].id`.
-    OpenAiCompatible(Vec<String>),
-}
-
-/// A bounded, body-free error classification for a Provider `/models` request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModelsCatalogError {
-    Authentication,
-    NotFound,
-    RateLimited,
-    Upstream,
-    Timeout,
-    Network,
-    InvalidJson,
-    IncompatibleSchema,
-    EmptyCatalog,
-}
 
 pub struct ModelsClient<T: HttpTransport> {
     session: EndpointSession<T>,
@@ -111,153 +77,6 @@ impl<T: HttpTransport> ModelsClient<T> {
 
         Ok((models, header_etag))
     }
-
-    /// Fetch and validate either Codex rich metadata or an OpenAI-compatible
-    /// `data[].id` catalog without exposing response bytes or request details.
-    pub async fn list_models_catalog(
-        &self,
-        request_url: String,
-        extra_headers: HeaderMap,
-    ) -> Result<ModelsCatalog, ModelsCatalogError> {
-        let response = self
-            .session
-            .execute_bounded_with(
-                Method::GET,
-                Self::path(),
-                extra_headers,
-                /*body*/ None,
-                MAX_MODEL_CATALOG_BYTES,
-                move |req| {
-                    req.url.clone_from(&request_url);
-                },
-            )
-            .await
-            .map_err(classify_bounded_response_error)?;
-
-        parse_models_catalog(&response.body)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiCompatibleModelsResponse {
-    data: Vec<OpenAiCompatibleModel>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiCompatibleModel {
-    id: String,
-}
-
-fn parse_models_catalog(body: &[u8]) -> Result<ModelsCatalog, ModelsCatalogError> {
-    if body.len() > MAX_MODEL_CATALOG_BYTES {
-        return Err(ModelsCatalogError::IncompatibleSchema);
-    }
-    let value =
-        serde_json::from_slice::<Value>(body).map_err(|_| ModelsCatalogError::InvalidJson)?;
-
-    let has_models = value.get("models").is_some();
-    let has_data = value.get("data").is_some();
-    if has_models == has_data {
-        return Err(ModelsCatalogError::IncompatibleSchema);
-    }
-
-    if has_models {
-        let response = serde_json::from_value::<ModelsResponse>(value)
-            .map_err(|_| ModelsCatalogError::IncompatibleSchema)?;
-        let models = validate_rich_models(response.models)?;
-        return Ok(ModelsCatalog::Rich(models));
-    }
-
-    let response = serde_json::from_value::<OpenAiCompatibleModelsResponse>(value)
-        .map_err(|_| ModelsCatalogError::IncompatibleSchema)?;
-    let model_ids = validate_compatible_model_ids(response.data)?;
-    Ok(ModelsCatalog::OpenAiCompatible(model_ids))
-}
-
-fn validate_rich_models(models: Vec<ModelInfo>) -> Result<Vec<ModelInfo>, ModelsCatalogError> {
-    if models.len() > MAX_MODEL_CATALOG_ENTRIES {
-        return Err(ModelsCatalogError::IncompatibleSchema);
-    }
-    if models.is_empty() {
-        return Err(ModelsCatalogError::EmptyCatalog);
-    }
-
-    let mut slugs = HashSet::with_capacity(models.len());
-    let mut accepted: Vec<ModelInfo> = Vec::with_capacity(models.len());
-    for model in models {
-        if !valid_model_id(&model.slug)
-            || !valid_display_name(&model.display_name)
-            || !slugs.insert(model.slug.clone())
-        {
-            return Err(ModelsCatalogError::IncompatibleSchema);
-        }
-        accepted.push(model);
-    }
-    Ok(accepted)
-}
-
-fn validate_compatible_model_ids(
-    models: Vec<OpenAiCompatibleModel>,
-) -> Result<Vec<String>, ModelsCatalogError> {
-    if models.len() > MAX_MODEL_CATALOG_ENTRIES {
-        return Err(ModelsCatalogError::IncompatibleSchema);
-    }
-    if models.is_empty() {
-        return Err(ModelsCatalogError::EmptyCatalog);
-    }
-    let mut model_ids_seen = HashSet::with_capacity(models.len());
-    let mut model_ids = Vec::with_capacity(models.len());
-    for model in models {
-        if !valid_model_id(&model.id) || !model_ids_seen.insert(model.id.clone()) {
-            return Err(ModelsCatalogError::IncompatibleSchema);
-        }
-        model_ids.push(model.id);
-    }
-    Ok(model_ids)
-}
-
-fn valid_model_id(model_id: &str) -> bool {
-    model_id == model_id.trim()
-        && !model_id.is_empty()
-        && model_id.chars().count() <= MAX_MODEL_ID_CHARS
-        && !model_id.chars().any(char::is_control)
-}
-
-fn valid_display_name(display_name: &str) -> bool {
-    !display_name.is_empty()
-        && display_name == display_name.trim()
-        && display_name.chars().count() <= MAX_MODEL_DISPLAY_NAME_CHARS
-        && !display_name.chars().any(char::is_control)
-}
-
-fn classify_bounded_response_error(error: BoundedResponseError) -> ModelsCatalogError {
-    match error {
-        BoundedResponseError::Api(error) => classify_models_transport_error(error),
-        BoundedResponseError::BodyTooLarge => ModelsCatalogError::IncompatibleSchema,
-    }
-}
-
-fn classify_models_transport_error(error: ApiError) -> ModelsCatalogError {
-    match error {
-        ApiError::Transport(TransportError::Http { status, .. }) => classify_http_status(status),
-        ApiError::Transport(TransportError::Timeout) => ModelsCatalogError::Timeout,
-        ApiError::Transport(
-            TransportError::Connection(_) | TransportError::Network(_) | TransportError::Build(_),
-        ) => ModelsCatalogError::Network,
-        ApiError::Transport(TransportError::RetryLimit) => ModelsCatalogError::Upstream,
-        ApiError::Api { status, .. } => classify_http_status(status),
-        _ => ModelsCatalogError::Upstream,
-    }
-}
-
-fn classify_http_status(status: StatusCode) -> ModelsCatalogError {
-    match status {
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => ModelsCatalogError::Authentication,
-        StatusCode::NOT_FOUND => ModelsCatalogError::NotFound,
-        StatusCode::TOO_MANY_REQUESTS => ModelsCatalogError::RateLimited,
-        StatusCode::REQUEST_TIMEOUT | StatusCode::GATEWAY_TIMEOUT => ModelsCatalogError::Timeout,
-        _ => ModelsCatalogError::Upstream,
-    }
 }
 
 #[cfg(test)]
@@ -265,20 +84,16 @@ mod tests {
     use super::*;
     use crate::auth::AuthProvider;
     use crate::provider::RetryConfig;
-    use bytes::Bytes;
     use codex_client::Request;
     use codex_client::Response;
     use codex_client::StreamResponse;
     use codex_client::TransportError;
-    use futures::stream;
     use http::HeaderMap;
     use http::StatusCode;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::Arc;
     use std::sync::Mutex;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     #[derive(Clone)]
@@ -342,35 +157,6 @@ mod tests {
         }
     }
 
-    fn rich_model(slug: &str) -> ModelInfo {
-        serde_json::from_value(json!({
-            "slug": slug,
-            "display_name": slug,
-            "description": "desc",
-            "default_reasoning_level": "medium",
-            "supported_reasoning_levels": [
-                {"effort": "low", "description": "low"},
-                {"effort": "medium", "description": "medium"},
-                {"effort": "high", "description": "high"}
-            ],
-            "shell_type": "shell_command",
-            "visibility": "list",
-            "minimal_client_version": [0, 99, 0],
-            "supported_in_api": true,
-            "priority": 1,
-            "upgrade": null,
-            "support_verbosity": false,
-            "default_verbosity": null,
-            "apply_patch_tool_type": null,
-            "truncation_policy": {"mode": "bytes", "limit": 10_000},
-            "supports_parallel_tool_calls": false,
-            "supports_image_detail_original": false,
-            "context_window": 272_000,
-            "experimental_supported_tools": [],
-        }))
-        .unwrap()
-    }
-
     #[tokio::test]
     async fn appends_client_version_query() {
         let response = ModelsResponse { models: Vec::new() };
@@ -409,15 +195,30 @@ mod tests {
     #[tokio::test]
     async fn parses_models_response() {
         let response = ModelsResponse {
-            models: vec![rich_model("gpt-test")],
+            models: vec![
+                serde_json::from_value(json!({
+                    "slug": "gpt-test",
+                    "display_name": "gpt-test",
+                    "description": "desc",
+                    "default_reasoning_level": "medium",
+                    "supported_reasoning_levels": [{"effort": "low", "description": "low"}, {"effort": "medium", "description": "medium"}, {"effort": "high", "description": "high"}],
+                    "shell_type": "shell_command",
+                    "visibility": "list",
+                    "minimal_client_version": [0, 99, 0],
+                    "supported_in_api": true,
+                    "priority": 1,
+                    "upgrade": null,
+                    "support_verbosity": false,
+                    "default_verbosity": null,
+                    "apply_patch_tool_type": null,
+                    "truncation_policy": {"mode": "bytes", "limit": 10_000},
+                    "supports_image_detail_original": false,
+                    "context_window": 272_000,
+                    "experimental_supported_tools": [],
+                }))
+                .unwrap(),
+            ],
         };
-        let rich_body = serde_json::to_vec(&response).unwrap();
-        let mut invalid_response = response.clone();
-        invalid_response.models[0].slug = "bad\nslug".to_string();
-        assert_eq!(
-            parse_models_catalog(&serde_json::to_vec(&invalid_response).unwrap()),
-            Err(ModelsCatalogError::IncompatibleSchema)
-        );
 
         let transport = CapturingTransport {
             last_request: Arc::new(Mutex::new(None)),
@@ -438,9 +239,6 @@ mod tests {
         assert_eq!(models[0].slug, "gpt-test");
         assert_eq!(models[0].supported_in_api, true);
         assert_eq!(models[0].priority, 1);
-
-        let catalog = parse_models_catalog(&rich_body).expect("rich catalog should parse");
-        assert!(matches!(catalog, ModelsCatalog::Rich(models) if models[0].slug == "gpt-test"));
     }
 
     #[tokio::test]
@@ -464,215 +262,5 @@ mod tests {
 
         assert_eq!(models.len(), 0);
         assert_eq!(etag, Some("\"abc\"".to_string()));
-    }
-
-    #[test]
-    fn rejects_duplicate_openai_compatible_ids() {
-        assert_eq!(
-            parse_models_catalog(br#"{"data":[{"id":"first"},{"id":"first"},{"id":"second"}]}"#),
-            Err(ModelsCatalogError::IncompatibleSchema)
-        );
-    }
-
-    #[test]
-    fn rejects_mixed_rich_catalog_entries_without_filtering() {
-        let valid = rich_model("gpt-valid");
-        let duplicate = valid.clone();
-        let result = parse_models_catalog(
-            &serde_json::to_vec(&ModelsResponse {
-                models: vec![valid.clone(), duplicate],
-            })
-            .unwrap(),
-        );
-        assert_eq!(result, Err(ModelsCatalogError::IncompatibleSchema));
-
-        for invalid_slug in [
-            " gpt-whitespace ".to_string(),
-            String::new(),
-            "gpt\ncontrol".to_string(),
-            "x".repeat(MAX_MODEL_ID_CHARS + 1),
-        ] {
-            let mut invalid = valid.clone();
-            invalid.slug = invalid_slug;
-            assert_eq!(
-                parse_models_catalog(
-                    &serde_json::to_vec(&ModelsResponse {
-                        models: vec![valid.clone(), invalid],
-                    })
-                    .unwrap(),
-                ),
-                Err(ModelsCatalogError::IncompatibleSchema),
-            );
-        }
-        assert_eq!(
-            parse_models_catalog(br#"{"models":[]}"#),
-            Err(ModelsCatalogError::EmptyCatalog),
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_rich_display_names_without_normalizing() {
-        let valid = rich_model("gpt-valid");
-        for display_name in [
-            String::new(),
-            " Display Name".to_string(),
-            "Display Name ".to_string(),
-            "bad\u{0007}name".to_string(),
-            "x".repeat(MAX_MODEL_DISPLAY_NAME_CHARS + 1),
-        ] {
-            let mut invalid = valid.clone();
-            invalid.display_name = display_name;
-            assert_eq!(
-                parse_models_catalog(
-                    &serde_json::to_vec(&ModelsResponse {
-                        models: vec![invalid],
-                    })
-                    .unwrap(),
-                ),
-                Err(ModelsCatalogError::IncompatibleSchema)
-            );
-        }
-
-        let catalog = parse_models_catalog(
-            &serde_json::to_vec(&ModelsResponse {
-                models: vec![valid],
-            })
-            .unwrap(),
-        )
-        .expect("valid rich display name should parse");
-        let ModelsCatalog::Rich(models) = catalog else {
-            panic!("expected a rich catalog");
-        };
-        assert_eq!(models[0].display_name, "gpt-valid");
-    }
-
-    #[test]
-    fn rejects_mixed_openai_catalog_entries_without_filtering() {
-        for invalid_id in [
-            " first ".to_string(),
-            String::new(),
-            "bad\ncontrol".to_string(),
-            "x".repeat(MAX_MODEL_ID_CHARS + 1),
-        ] {
-            let body = json!({
-                "data": [
-                    {"id": "valid"},
-                    {"id": invalid_id},
-                ],
-            });
-            assert_eq!(
-                parse_models_catalog(&serde_json::to_vec(&body).unwrap()),
-                Err(ModelsCatalogError::IncompatibleSchema),
-            );
-        }
-        assert_eq!(
-            parse_models_catalog(br#"{"data":[]}"#),
-            Err(ModelsCatalogError::EmptyCatalog),
-        );
-    }
-
-    #[test]
-    fn classifies_catalog_shape_and_transport_errors_without_details() {
-        assert_eq!(
-            parse_models_catalog(br#"{"data":[]}"#),
-            Err(ModelsCatalogError::EmptyCatalog)
-        );
-        assert_eq!(
-            parse_models_catalog(br#"{"data":[{"name":"missing id"}]}"#),
-            Err(ModelsCatalogError::IncompatibleSchema)
-        );
-        assert_eq!(
-            parse_models_catalog(b"not-json"),
-            Err(ModelsCatalogError::InvalidJson)
-        );
-        assert_eq!(
-            classify_http_status(StatusCode::UNAUTHORIZED),
-            ModelsCatalogError::Authentication
-        );
-        assert_eq!(
-            classify_http_status(StatusCode::NOT_FOUND),
-            ModelsCatalogError::NotFound
-        );
-        assert_eq!(
-            classify_http_status(StatusCode::TOO_MANY_REQUESTS),
-            ModelsCatalogError::RateLimited
-        );
-        assert_eq!(
-            classify_http_status(StatusCode::REQUEST_TIMEOUT),
-            ModelsCatalogError::Timeout
-        );
-        assert_eq!(
-            classify_http_status(StatusCode::GATEWAY_TIMEOUT),
-            ModelsCatalogError::Timeout
-        );
-        assert_eq!(
-            classify_http_status(StatusCode::BAD_GATEWAY),
-            ModelsCatalogError::Upstream
-        );
-        assert_eq!(
-            classify_models_transport_error(ApiError::Transport(TransportError::Timeout)),
-            ModelsCatalogError::Timeout
-        );
-        assert_eq!(
-            classify_models_transport_error(ApiError::Transport(TransportError::Network(
-                "credential fragment must not escape".to_string(),
-            ))),
-            ModelsCatalogError::Network
-        );
-        assert!(!format!("{:?}", ModelsCatalogError::Authentication).contains("secret"));
-    }
-
-    #[tokio::test]
-    async fn bounded_catalog_reader_stops_after_first_over_limit_chunk() {
-        let polls = Arc::new(AtomicUsize::new(0));
-        let first = Bytes::from(vec![b'x'; MAX_MODEL_CATALOG_BYTES + 1]);
-        let marker = Bytes::from_static(b"body-canary");
-        let poll_counter = Arc::clone(&polls);
-        let bytes = stream::unfold(vec![first, marker].into_iter(), move |mut chunks| {
-            let poll_counter = Arc::clone(&poll_counter);
-            async move {
-                let chunk = chunks.next()?;
-                poll_counter.fetch_add(1, Ordering::SeqCst);
-                Some((Ok(chunk), chunks))
-            }
-        });
-        let transport = StreamingTransport {
-            bytes: Arc::new(Mutex::new(Some(Box::pin(bytes)))),
-        };
-        let provider = provider("https://example.com/api/codex");
-        let request_url = ModelsClient::<StreamingTransport>::request_url(&provider, "0.99.0");
-        let client = ModelsClient::new(transport, provider, Arc::new(DummyAuth));
-
-        assert_eq!(
-            client
-                .list_models_catalog(request_url, HeaderMap::new())
-                .await,
-            Err(ModelsCatalogError::IncompatibleSchema)
-        );
-        assert_eq!(polls.load(Ordering::SeqCst), 1);
-    }
-
-    struct StreamingTransport {
-        bytes: Arc<Mutex<Option<codex_client::ByteStream>>>,
-    }
-
-    impl HttpTransport for StreamingTransport {
-        async fn execute(&self, _req: Request) -> Result<Response, TransportError> {
-            Err(TransportError::Build("execute should not run".to_string()))
-        }
-
-        async fn stream(&self, _req: Request) -> Result<StreamResponse, TransportError> {
-            let bytes = self
-                .bytes
-                .lock()
-                .expect("stream body lock should not be poisoned")
-                .take()
-                .expect("stream should be consumed once");
-            Ok(StreamResponse {
-                status: StatusCode::OK,
-                headers: HeaderMap::new(),
-                bytes,
-            })
-        }
     }
 }

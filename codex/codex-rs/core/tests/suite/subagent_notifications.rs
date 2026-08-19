@@ -1,29 +1,31 @@
 use anyhow::Result;
-use codex_config::types::McpServerAuth;
-use codex_config::types::McpServerConfig;
-use codex_config::types::McpServerTransportConfig;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadConfigSnapshot;
+use codex_core::TurnInputRequest;
 use codex_core::config::AgentRoleConfig;
+use codex_core::config::CurrentTimeReminderConfig;
 use codex_features::Feature;
-use codex_model_provider_info::WireApi;
+use codex_history::RolloutItem;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::MultiAgentMessages;
+use codex_protocol::openai_models::MultiAgentRoleMessages;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::assert_parent_turn;
+use core_test_support::responses::assert_root_turn;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
@@ -39,18 +41,15 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::responses::strip_metadata_from_json;
 use core_test_support::responses::strip_response_item_ids_from_json;
 use core_test_support::skip_if_no_network;
-use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
-use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
@@ -60,11 +59,7 @@ use tokio::time::Instant;
 use tokio::time::sleep;
 use tracing::Level;
 use tracing_test::internal::MockWriter;
-use wiremock::Mock;
 use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 const SPAWN_CALL_ID: &str = "spawn-call-1";
 const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
@@ -119,101 +114,6 @@ fn decoded_body(req: &wiremock::Request) -> Option<Vec<u8>> {
     } else {
         Some(req.body.clone())
     }
-}
-
-fn chat_tool_call_response(call_id: &str, name: &str, arguments: &str) -> String {
-    let tool_chunk = json!({
-        "id": format!("chatcmpl-{call_id}"),
-        "choices": [{
-            "index": 0,
-            "delta": {
-                "tool_calls": [{
-                    "index": 0,
-                    "id": call_id,
-                    "type": "function",
-                    "function": {"name": name, "arguments": arguments},
-                }],
-            },
-        }],
-    });
-    let finish_chunk = json!({
-        "choices": [{
-            "index": 0,
-            "delta": {},
-            "finish_reason": "tool_calls",
-        }],
-    });
-    format!("data: {tool_chunk}\n\ndata: {finish_chunk}\n\ndata: [DONE]\n\n")
-}
-
-fn chat_text_response(id: &str, text: &str) -> String {
-    let text_chunk = json!({
-        "id": format!("chatcmpl-{id}"),
-        "choices": [{
-            "index": 0,
-            "delta": {"content": text},
-        }],
-    });
-    let finish_chunk = json!({
-        "choices": [{
-            "index": 0,
-            "delta": {},
-            "finish_reason": "stop",
-        }],
-    });
-    format!("data: {text_chunk}\n\ndata: {finish_chunk}\n\ndata: [DONE]\n\n")
-}
-
-async fn mount_chat_once_match<M>(server: &MockServer, matcher: M, response: ResponseTemplate)
-where
-    M: wiremock::Match + Send + Sync + 'static,
-{
-    Mock::given(method("POST"))
-        .and(path("/v1/chat/completions"))
-        .and(matcher)
-        .respond_with(response)
-        .up_to_n_times(1)
-        .expect(1)
-        .mount(server)
-        .await;
-}
-
-fn configure_chat_mcp_echo(config: &mut codex_core::config::Config, command: String) {
-    config.model_provider.wire_api = WireApi::Chat;
-    config.model_provider.supports_standalone_web_search = false;
-    let mut servers = config.mcp_servers.get().clone();
-    servers.insert(
-        "rmcp".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
-                command,
-                args: Vec::new(),
-                env: None,
-                env_vars: Vec::new(),
-                cwd: None,
-            },
-            auth: McpServerAuth::default(),
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            omit_tools_from: None,
-            disabled_reason: None,
-            startup_timeout_sec: Some(Duration::from_secs(10)),
-            tool_timeout_sec: Some(Duration::from_secs(10)),
-            default_tools_approval_mode: None,
-            enabled_tools: Some(["echo".to_string()].into_iter().collect()),
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
-    );
-    config
-        .mcp_servers
-        .set(servers)
-        .expect("test MCP configuration");
 }
 
 fn log_field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
@@ -917,23 +817,20 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
         turn_permission_fields(PermissionProfile::Disabled, test.cwd_path());
     internal_thread
         .thread
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
                 text: INTERNAL_SUBAGENT_PROMPT.to_string(),
                 text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
                 environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
                 model: Some(internal_thread.session_configured.model.clone()),
                 ..Default::default()
-            },
-        })
+            }),
+        )
         .await?;
     let turn_id = wait_for_event_match(internal_thread.thread.as_ref(), |event| match event {
         EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
@@ -1077,6 +974,8 @@ async fn spawned_child_receives_forked_parent_context(
         .expect("legacy spawn parent turn id");
     assert_parent_turn(&parent_body, /*expected*/ None)?;
     assert_parent_turn(&child_body, Some(original_parent_turn_id))?;
+    assert_root_turn(&parent_body, Some(original_parent_turn_id))?;
+    assert_root_turn(&child_body, Some(original_parent_turn_id))?;
     assert_eq!(
         (
             child_body["model"].clone(),
@@ -1140,6 +1039,8 @@ async fn spawned_child_receives_forked_parent_context(
     assert_eq!(metadata["thread_id"], json!(child_thread_id));
     assert_parent_turn(&followup_parent_body, /*expected*/ None)?;
     assert_parent_turn(&reused_child_body, Some(followup_parent_turn_id))?;
+    assert_root_turn(&followup_parent_body, Some(followup_parent_turn_id))?;
+    assert_root_turn(&reused_child_body, Some(followup_parent_turn_id))?;
     Ok(())
 }
 
@@ -1148,11 +1049,13 @@ enum FullHistoryV2ModelSelection {
     ConfiguredDefault,
     ExplicitOverride,
     WorldStateIdentity,
+    CurrentTimeReminders,
 }
 
 #[test_case(FullHistoryV2ModelSelection::ConfiguredDefault; "configured default with omitted fork_turns")]
 #[test_case(FullHistoryV2ModelSelection::ExplicitOverride; "explicit override with fork_turns all")]
 #[test_case(FullHistoryV2ModelSelection::WorldStateIdentity; "world state appends context window when agent identity changes")]
+#[test_case(FullHistoryV2ModelSelection::CurrentTimeReminders; "full fork drops inherited current-time reminders")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_context(
     selection: FullHistoryV2ModelSelection,
@@ -1172,7 +1075,8 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
     .await;
     let (spawn_args, expected_model, expected_reasoning_effort) = match selection {
         FullHistoryV2ModelSelection::ConfiguredDefault
-        | FullHistoryV2ModelSelection::WorldStateIdentity => (
+        | FullHistoryV2ModelSelection::WorldStateIdentity
+        | FullHistoryV2ModelSelection::CurrentTimeReminders => (
             json!({
                 "message": CHILD_PROMPT,
                 "task_name": "worker",
@@ -1239,12 +1143,42 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
             .features
             .enable(Feature::MultiAgentV2)
             .expect("test config should allow feature update");
+        let model_catalog = config.model_catalog.get_or_insert_with(|| {
+            bundled_models_response().expect("bundled models.json should parse")
+        });
+        for model in [INHERITED_MODEL, V2_DEFAULT_MODEL, V2_REQUESTED_MODEL] {
+            let model_info = model_catalog
+                .models
+                .iter_mut()
+                .find(|model_info| model_info.slug == model)
+                .unwrap_or_else(|| panic!("{model} should exist in bundled models.json"));
+            let multi_agent = model_info
+                .model_messages
+                .as_mut()
+                .expect("bundled model should include model messages")
+                .multi_agent
+                .get_or_insert_with(MultiAgentMessages::default);
+            multi_agent.role = Some(MultiAgentRoleMessages {
+                root: Some(format!("{model} root role.")),
+                subagent: Some(format!("{model} subagent role.")),
+            });
+        }
         if matches!(selection, FullHistoryV2ModelSelection::WorldStateIdentity) {
             config
                 .features
                 .enable(Feature::TokenBudget)
                 .expect("test config should allow feature update");
             config.model_context_window = Some(128_000);
+        }
+        if matches!(selection, FullHistoryV2ModelSelection::CurrentTimeReminders) {
+            config
+                .features
+                .enable(Feature::CurrentTimeReminder)
+                .expect("test config should allow feature update");
+            config.current_time_reminder = Some(CurrentTimeReminderConfig {
+                reminder_interval_seconds: 0,
+                ..CurrentTimeReminderConfig::default()
+            });
         }
         config.model = Some(INHERITED_MODEL.to_string());
         config.model_reasoning_effort = Some(INHERITED_REASONING_EFFORT);
@@ -1266,10 +1200,33 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
     test.submit_turn(TURN_0_FORK_PROMPT).await?;
     let _ = seed_turn.single_request();
     test.submit_turn(TURN_1_PROMPT).await?;
-    let _ = spawn_turn.single_request();
+    let parent_request = spawn_turn.single_request();
 
     let child_request = wait_for_request_with_model(&child_request_log, expected_model).await?;
     assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
+    let child_developer_messages = child_request.message_input_texts("developer");
+    assert_eq!(
+        child_developer_messages
+            .iter()
+            .filter(|message| message.contains(&format!("{expected_model} subagent role.")))
+            .count(),
+        1
+    );
+    assert!(!child_developer_messages.iter().any(|message| {
+        message.contains(&format!("{INHERITED_MODEL} root role."))
+            || message.contains(&format!("{INHERITED_MODEL} subagent role."))
+    }));
+    if matches!(selection, FullHistoryV2ModelSelection::CurrentTimeReminders) {
+        let reminder_count = |request: &ResponsesRequest| {
+            request
+                .message_input_texts("developer")
+                .into_iter()
+                .filter(|text| text.starts_with("<current_time_reminder>"))
+                .count()
+        };
+        assert_eq!(reminder_count(&parent_request), 2);
+        assert_eq!(reminder_count(&child_request), 1);
+    }
     let child_body = child_request.body_json();
     if matches!(selection, FullHistoryV2ModelSelection::WorldStateIdentity) {
         let child_thread_id = ThreadId::from_string(
@@ -1808,117 +1765,6 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
                 && log_field(line, "communication_id") == Some(communication_id)
         })
         .expect("correlated receive event");
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chat_parent_child_mcp_mailbox_round_trip() -> Result<()> {
-    let server = start_mock_server().await;
-    let spawn_args = serde_json::to_string(&json!({
-        "message": CHILD_PROMPT,
-        "task_name": "worker",
-    }))?;
-    mount_chat_once_match(
-        &server,
-        |req: &wiremock::Request| {
-            body_contains(req, TURN_1_PROMPT) && !body_contains(req, "Message Type: NEW_TASK")
-        },
-        sse_response(chat_tool_call_response(
-            SPAWN_CALL_ID,
-            "collaboration__spawn_agent",
-            &spawn_args,
-        )),
-    )
-    .await;
-    mount_chat_once_match(
-        &server,
-        |req: &wiremock::Request| {
-            body_contains(req, "Message Type: NEW_TASK")
-                && body_contains(req, CHILD_PROMPT)
-                && !body_contains(req, "mcp-echo-call")
-        },
-        sse_response(chat_tool_call_response(
-            "mcp-echo-call",
-            "mcp__rmcp__echo",
-            r#"{"message":"ping"}"#,
-        )),
-    )
-    .await;
-    mount_chat_once_match(
-        &server,
-        |req: &wiremock::Request| {
-            body_contains(req, SPAWN_CALL_ID) && !body_contains(req, "Message Type: NEW_TASK")
-        },
-        sse_response(chat_tool_call_response(
-            "wait-call",
-            "collaboration__wait_agent",
-            "{}",
-        )),
-    )
-    .await;
-    mount_chat_once_match(
-        &server,
-        |req: &wiremock::Request| {
-            body_contains(req, "Message Type: NEW_TASK")
-                && body_contains(req, "mcp-echo-call")
-                && body_contains(req, "ECHOING: ping")
-        },
-        sse_response(chat_text_response("child-final", "child echo complete")),
-    )
-    .await;
-    mount_chat_once_match(
-        &server,
-        |req: &wiremock::Request| {
-            body_contains(req, "wait-call")
-                && body_contains(req, "Message Type: FINAL_ANSWER")
-                && body_contains(req, "child echo complete")
-        },
-        sse_response(chat_text_response("parent-final", "parent final")),
-    )
-    .await;
-
-    let command = stdio_server_bin()?;
-    let mut builder = test_codex()
-        .with_model("koffing")
-        .with_config(move |config| {
-            config
-                .features
-                .enable(Feature::Collab)
-                .expect("test config should allow feature update");
-            config
-                .features
-                .enable(Feature::MultiAgentV2)
-                .expect("test config should allow feature update");
-            configure_chat_mcp_echo(config, command.clone());
-        });
-    let test = builder.build(&server).await?;
-    wait_for_mcp_server(&test.codex, "rmcp").await?;
-
-    test.submit_turn(TURN_1_PROMPT).await?;
-
-    let requests = server.received_requests().await.unwrap_or_default();
-    let expected_mailbox = concat!(
-        "Message Type: FINAL_ANSWER\n",
-        "Task name: /root\n",
-        "Sender: /root/worker\n",
-        "Payload:\n",
-        "child echo complete"
-    );
-    let parent_request = requests
-        .iter()
-        .find(|request| {
-            body_contains(request, "wait-call")
-                && body_contains(request, "Message Type: FINAL_ANSWER")
-        })
-        .expect("parent mailbox continuation request");
-    let body: Value =
-        serde_json::from_slice(&decoded_body(parent_request).expect("decode parent Chat request"))?;
-    assert!(body["messages"].as_array().is_some_and(|messages| {
-        messages.iter().any(|message| {
-            message["role"] == "assistant" && message["content"].as_str() == Some(expected_mailbox)
-        })
-    }));
 
     Ok(())
 }

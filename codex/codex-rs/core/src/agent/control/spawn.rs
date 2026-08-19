@@ -1,8 +1,12 @@
 use super::residency::is_v2_resident_session_source;
 use super::*;
-use crate::agent::role::reapply_role_to_config_for_child_resume;
+use crate::agent::role::apply_role_to_config;
+use crate::config::PermissionProfileSnapshot;
+use crate::context::ContextualUserFragment;
+use crate::context::CurrentTimeReminder;
+use crate::context::MultiAgentRoleInstructions;
+use crate::session::multi_agents::resolve_usage_hints;
 use codex_extension_api::ExtensionDataInit;
-use codex_thread_store::StoredThread;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
 
@@ -17,6 +21,7 @@ struct SpawnAgentThreadInheritance {
 /// submission and lifecycle logging cannot receive one without the other. Other spawn sources
 /// provide user input directly, making an uncontextualized inter-agent communication
 /// unrepresentable.
+#[allow(clippy::large_enum_variant)]
 enum SpawnInitialInput {
     UserInput(Vec<UserInput>),
     InterAgentCommunication(InterAgentCommunication, AgentCommunicationContext),
@@ -46,13 +51,12 @@ pub(super) fn agent_nickname_candidates(config: &Config, role_name: Option<&str>
 
 fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item: bool) -> bool {
     match item {
-        RolloutItem::ResponseItem(ResponseItem::Message { role, phase, .. }) => match role.as_str()
-        {
-            "system" | "developer" | "user" => true,
-            "assistant" => *phase == Some(MessagePhase::FinalAnswer),
-            _ => false,
-        },
-        RolloutItem::ResponseItem(
+        RolloutItem::ResponseItem(envelope) => match &envelope.item {
+            ResponseItem::Message { role, phase, .. } => match role.as_str() {
+                "system" | "developer" | "user" => true,
+                "assistant" => *phase == Some(MessagePhase::FinalAnswer),
+                _ => false,
+            },
             ResponseItem::AdditionalTools { .. }
             | ResponseItem::AgentMessage { .. }
             | ResponseItem::Reasoning { .. }
@@ -68,10 +72,11 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
             | ResponseItem::Compaction { .. }
             | ResponseItem::CompactionTrigger { .. }
             | ResponseItem::ContextCompaction { .. }
-            | ResponseItem::Other,
-        ) => false,
+            | ResponseItem::Other => false,
+        },
         RolloutItem::InterAgentCommunication(_)
-        | RolloutItem::InterAgentCommunicationMetadata { .. } => false,
+        | RolloutItem::InterAgentCommunicationMetadata { .. }
+        | RolloutItem::SecurityRiskScore(_) => false,
         // Full-history forks preserve the cached prompt prefix and can keep diffing
         // from the parent's durable baseline. Truncated forks drop part of that prompt,
         // so they must rebuild context on their first child turn.
@@ -80,7 +85,7 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
     }
 }
 
-fn is_multi_agent_v2_usage_hint_message(item: &ResponseItem, usage_hint_texts: &[String]) -> bool {
+fn is_fork_excluded_developer_message(item: &ResponseItem, usage_hint_texts: &[String]) -> bool {
     let ResponseItem::Message { role, content, .. } = item else {
         return false;
     };
@@ -91,9 +96,11 @@ fn is_multi_agent_v2_usage_hint_message(item: &ResponseItem, usage_hint_texts: &
         return false;
     };
 
-    usage_hint_texts
-        .iter()
-        .any(|usage_hint_text| usage_hint_text == text)
+    MultiAgentRoleInstructions::matches_text(text)
+        || CurrentTimeReminder::matches_text(text)
+        || usage_hint_texts
+            .iter()
+            .any(|usage_hint_text| usage_hint_text == text)
 }
 
 async fn load_agent_model_context(
@@ -121,39 +128,6 @@ async fn load_agent_model_context(
                 .items,
         )),
     }
-}
-
-/// Restores the model selection owned by the persisted child Thread.
-///
-/// A Role is reapplied first to recover its Skills and MCP inventory. Its layer can also declare
-/// a provider, so the persisted selection must be restored afterwards, once that provider is
-/// available in the effective configuration. The Thread store is the authoritative source for
-/// the latest model and reasoning effort; the parent/root configuration must not replace them
-/// while a child is being reloaded.
-fn restore_stored_child_model_selection(
-    config: &mut Config,
-    stored_thread: &StoredThread,
-) -> CodexResult<()> {
-    if let Some(model) = stored_thread.model.clone() {
-        config.model = Some(model);
-    }
-    if config.model_provider_id != stored_thread.model_provider {
-        config.model_provider = config
-            .model_providers
-            .get(&stored_thread.model_provider)
-            .cloned()
-            .ok_or_else(|| {
-                CodexErr::InvalidRequest(format!(
-                    "Model provider `{}` not found",
-                    stored_thread.model_provider
-                ))
-            })?;
-        config.model_provider_id = stored_thread.model_provider.clone();
-    }
-    if let Some(reasoning_effort) = stored_thread.reasoning_effort.clone() {
-        config.model_reasoning_effort = Some(reasoning_effort);
-    }
-    Ok(())
 }
 
 impl AgentControl {
@@ -301,6 +275,8 @@ impl AgentControl {
                 include_history: false,
             })
             .await?;
+        let stored_model = stored_thread.model.clone();
+        let stored_model_provider = stored_thread.model_provider.clone();
         let stored_source = stored_thread.source.clone();
         let stored_parent_thread_id = stored_thread.parent_thread_id;
         let history = load_agent_model_context(&state, thread_id, stored_thread.history_mode)
@@ -309,7 +285,7 @@ impl AgentControl {
         let initial_history = InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
             history: Arc::new(history),
-            rollout_path: stored_thread.rollout_path.clone(),
+            rollout_path: stored_thread.rollout_path,
         });
         if initial_history.get_multi_agent_version() != Some(MultiAgentVersion::V2) {
             return Err(CodexErr::ThreadNotFound(thread_id));
@@ -318,11 +294,56 @@ impl AgentControl {
             .get_resumed_session_sources()
             .unwrap_or((stored_source, None));
         if let Some(role_name) = session_source.get_agent_role() {
-            reapply_role_to_config_for_child_resume(&mut config, &role_name)
+            let runtime_approval_policy = config.permissions.approval_policy.value();
+            let runtime_approvals_reviewer = config.approvals_reviewer;
+            let runtime_cwd = config.cwd.clone();
+            let runtime_permission_profile = match config.permissions.active_permission_profile() {
+                Some(active_permission_profile) => {
+                    PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                        config.permissions.permission_profile().clone(),
+                        active_permission_profile,
+                        config.permissions.profile_workspace_roots().to_vec(),
+                    )
+                }
+                None => PermissionProfileSnapshot::legacy(
+                    config.permissions.permission_profile().clone(),
+                ),
+            };
+
+            apply_role_to_config(&mut config, Some(&role_name))
                 .await
                 .map_err(CodexErr::InvalidRequest)?;
+            config
+                .permissions
+                .approval_policy
+                .set(runtime_approval_policy)
+                .map_err(|err| {
+                    CodexErr::InvalidRequest(format!("approval_policy is invalid: {err}"))
+                })?;
+            config.approvals_reviewer = runtime_approvals_reviewer;
+            config.cwd = runtime_cwd;
+            config
+                .permissions
+                .set_permission_profile_from_session_snapshot(runtime_permission_profile)
+                .map_err(|err| {
+                    CodexErr::InvalidRequest(format!("permission_profile is invalid: {err}"))
+                })?;
         }
-        restore_stored_child_model_selection(&mut config, &stored_thread)?;
+        if let Some(model) = stored_model {
+            config.model = Some(model);
+        }
+        if config.model_provider_id != stored_model_provider {
+            config.model_provider = config
+                .model_providers
+                .get(&stored_model_provider)
+                .cloned()
+                .ok_or_else(|| {
+                    CodexErr::InvalidRequest(format!(
+                        "Model provider `{stored_model_provider}` not found"
+                    ))
+                })?;
+            config.model_provider_id = stored_model_provider;
+        }
         let residency_slot = self
             .reserve_v2_residency_slot(&state, &config, Some(thread_id))
             .await?;
@@ -530,11 +551,11 @@ impl AgentControl {
 
         match initial_input {
             SpawnInitialInput::UserInput(input) => {
-                self.send_input_after_capacity_check(
+                self.send_input(
                     new_thread.thread_id,
-                    &state,
                     input,
                     options.parent_turn_id,
+                    options.root_turn_id,
                 )
                 .await?;
             }
@@ -545,6 +566,7 @@ impl AgentControl {
                     communication,
                     context,
                     options.parent_turn_id,
+                    options.root_turn_id,
                 )
                 .await?;
             }
@@ -665,19 +687,13 @@ impl AgentControl {
         let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
             if multi_agent_version == MultiAgentVersion::V2 {
                 let parent_config = parent_thread.session.get_config().await;
-                [
-                    parent_config
-                        .multi_agent_v2
-                        .root_agent_usage_hint_text
-                        .clone(),
-                    parent_config
-                        .multi_agent_v2
-                        .subagent_usage_hint_text
-                        .clone(),
-                ]
-                .into_iter()
-                .flatten()
-                .collect()
+                let parent_usage_hints =
+                    resolve_usage_hints(&parent_config.multi_agent_v2, /*catalog*/ None);
+                [parent_usage_hints.root, parent_usage_hints.subagent]
+                    .into_iter()
+                    .flatten()
+                    .map(|instructions| instructions.render())
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -704,7 +720,7 @@ impl AgentControl {
             if matches!(response_item, ResponseItem::AgentMessage { .. }) {
                 return false;
             }
-            if is_multi_agent_v2_usage_hint_message(
+            if is_fork_excluded_developer_message(
                 response_item,
                 &multi_agent_v2_usage_hint_texts_to_filter,
             ) {
@@ -773,12 +789,18 @@ impl AgentControl {
                     }
                     true
                 }
+                RolloutItem::WorldState(world_state) => {
+                    if multi_agent_version == MultiAgentVersion::V2 {
+                        world_state.state.remove("multi_agent_usage_hint");
+                    }
+                    true
+                }
                 RolloutItem::EventMsg(_)
                 | RolloutItem::SessionMeta(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::InterAgentCommunication(_)
-                | RolloutItem::InterAgentCommunicationMetadata { .. }
-                | RolloutItem::WorldState(_) => true,
+                | RolloutItem::InterAgentCommunicationMetadata { .. } => true,
+                RolloutItem::SecurityRiskScore(_) => false,
             }
         });
         // Full forks reuse the parent's reference context instead of rebuilding it. If that
@@ -798,18 +820,22 @@ impl AgentControl {
                     subagent_developer_instructions.clone(),
                 ])
         {
-            forked_rollout_items.push(RolloutItem::ResponseItem(developer_message));
+            forked_rollout_items.push(RolloutItem::ResponseItem(developer_message.into()));
         }
         if preserve_reference_context_item
             && multi_agent_version == MultiAgentVersion::V2
-            && let Some(subagent_usage_hint_text) =
-                config.multi_agent_v2.subagent_usage_hint_text.clone()
-            && let Some(subagent_usage_hint_message) =
-                crate::context_manager::updates::build_developer_update_item(vec![
-                    subagent_usage_hint_text,
-                ])
+            && let Some(subagent_usage_hint) = options
+                .multi_agent_v2_usage_hints
+                .as_ref()
+                .map(|hints| hints.subagent.clone())
+                .unwrap_or_else(|| {
+                    resolve_usage_hints(&config.multi_agent_v2, /*catalog*/ None).subagent
+                })
         {
-            forked_rollout_items.push(RolloutItem::ResponseItem(subagent_usage_hint_message));
+            let subagent_usage_hint_message = ContextualUserFragment::into(subagent_usage_hint);
+            forked_rollout_items.push(RolloutItem::ResponseItem(
+                subagent_usage_hint_message.into(),
+            ));
         }
         let mut thread_extension_init = ExtensionDataInit::new();
         thread_extension_init.insert(selected_capability_roots);
@@ -910,7 +936,7 @@ impl AgentControl {
 
     async fn resume_single_agent_from_rollout(
         &self,
-        mut config: Config,
+        config: Config,
         thread_id: ThreadId,
         session_source: SessionSource,
     ) -> CodexResult<(ThreadId, MultiAgentVersion)> {
@@ -929,16 +955,7 @@ impl AgentControl {
             .transpose()
             .map_err(|err| CodexErr::InvalidRequest(format!("invalid stored agent path: {err}")))?;
         let resumed_agent_nickname = stored_thread.agent_nickname.clone();
-        let resumed_agent_role = stored_thread
-            .agent_role
-            .clone()
-            .or_else(|| stored_thread.source.get_agent_role());
-        if let Some(role_name) = resumed_agent_role.as_deref() {
-            reapply_role_to_config_for_child_resume(&mut config, role_name)
-                .await
-                .map_err(CodexErr::InvalidRequest)?;
-        }
-        restore_stored_child_model_selection(&mut config, &stored_thread)?;
+        let resumed_agent_role = stored_thread.agent_role.clone();
         let history = load_agent_model_context(&state, thread_id, stored_thread.history_mode)
             .await?
             .ok_or(CodexErr::ThreadNotFound(thread_id))?;
