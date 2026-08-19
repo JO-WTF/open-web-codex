@@ -8,14 +8,16 @@
 // full prompts/tool schemas.  The temporary Provider is removed in finally.
 
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(scriptDir, "../../..");
 const fixtureDir = path.join(scriptDir, "fixtures", "warehouse-network", "mock_data");
 const fixtureManifestPath = path.join(
   scriptDir,
@@ -32,6 +34,11 @@ const providerSourceId = process.env.E2E_REAL_DEEPSEEK_SOURCE_PROVIDER_ID ?? "de
 const model = process.env.E2E_REAL_DEEPSEEK_MODEL ?? "deepseek-v4-flash";
 const useExistingProvider =
   (process.env.E2E_REAL_DEEPSEEK_USE_EXISTING ?? "0") === "1";
+const d1Mode = process.env.E2E_REAL_DEEPSEEK_D1 === "1";
+const profileHome =
+  process.env.E2E_CODEX_HOME ??
+  process.env.CODEX_HOME ??
+  path.join(repoRoot, ".local", "open-web-codex", "profiles", "default");
 const targetBaseUrl = (
   process.env.E2E_REAL_DEEPSEEK_TARGET_BASE_URL ?? "https://api.deepseek.com"
 ).replace(/\/$/, "");
@@ -43,7 +50,12 @@ const password =
 const secrets = [password].filter(Boolean);
 const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
 const results = [];
-const state = { token: undefined, manifest: undefined, proxy: undefined };
+const state = {
+  token: undefined,
+  manifest: undefined,
+  proxy: undefined,
+  d1: undefined,
+};
 
 class ApiError extends Error {
   constructor(method, pathname, status, body) {
@@ -316,6 +328,130 @@ function eventSummary(events) {
   }));
 }
 
+function setTopLevelTomlString(content, key, value) {
+  const separator = content.includes("\r\n") ? "\r\n" : "\n";
+  const lines = content.split(/\r?\n/);
+  let inTable = false;
+  let replaced = false;
+  const next = lines.map((line) => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("[") && !trimmed.startsWith("[[")) {
+      inTable = true;
+    }
+    if (!inTable && new RegExp("^" + key + "\\s*=").test(trimmed)) {
+      replaced = true;
+      return key + " = " + JSON.stringify(value);
+    }
+    return line;
+  });
+  if (!replaced) next.unshift(key + " = " + JSON.stringify(value));
+  return next.join(separator);
+}
+
+async function buildD1ModelCatalog() {
+  const bundledPath = path.join(repoRoot, "codex", "codex-rs", "models-manager", "models.json");
+  const bundled = JSON.parse(await readFile(bundledPath, "utf8"));
+  const template = bundled.models?.find((candidate) => candidate.slug === "gpt-5.4");
+  if (!template) {
+    throw new NativeRuntimeBlocker("d1_model_catalog_template_unavailable", {
+      required_model: "gpt-5.4",
+    });
+  }
+  const modelInfo = {
+    ...template,
+    slug: model,
+    display_name: "DeepSeek V4 Flash (D1)",
+    supports_search_tool: true,
+    used_fallback_model_metadata: false,
+  };
+  assert.equal(modelInfo.slug, model);
+  assert.equal(modelInfo.supports_search_tool, true);
+  return { models: [modelInfo] };
+}
+
+async function installD1ModelCatalog() {
+  if (!d1Mode) return;
+  const profile = await api("/profile/files/config");
+  if (!profile.exists || profile.truncated) {
+    throw new NativeRuntimeBlocker("d1_profile_config_unavailable", {
+      exists: profile.exists,
+      truncated: profile.truncated,
+    });
+  }
+  const catalogPath = path.join(
+    profileHome,
+    ".open-web-codex-d1-model-catalog-" + stamp + ".json",
+  );
+  const catalog = await buildD1ModelCatalog();
+  state.d1 = {
+    originalConfig: profile.content,
+    catalogPath,
+  };
+  try {
+    await writeFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n", {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    await api("/profile/files/config", {
+      method: "PUT",
+      body: { content: setTopLevelTomlString(profile.content, "model_catalog_json", catalogPath) },
+    });
+    // The existing typed Agent settings mutation uses the official
+    // config/batchWrite reloadUserConfig path. It is only a reload trigger;
+    // the D1 catalog itself is owned by native model_catalog_json.
+    await enableMultiAgent();
+  } catch (error) {
+    await restoreD1ModelCatalog();
+    throw error;
+  }
+}
+
+async function restoreD1ModelCatalog() {
+  const d1 = state.d1;
+  if (!d1) return;
+  try {
+    await api("/profile/files/config", {
+      method: "PUT",
+      body: { content: d1.originalConfig },
+    });
+    // Restore the exact bytes once more after the reload trigger so the
+    // user-owned Profile file is byte-for-byte back to its original state.
+    await enableMultiAgent().catch(() => undefined);
+    await api("/profile/files/config", {
+      method: "PUT",
+      body: { content: d1.originalConfig },
+    });
+  } finally {
+    await rm(d1.catalogPath, { force: true }).catch(() => undefined);
+    state.d1 = undefined;
+  }
+}
+
+async function restartLocalServiceForD1() {
+  await new Promise((resolve, reject) => {
+    const child = spawn(path.join(repoRoot, "scripts", "run-local.sh"), ["--restart", "--no-build"], {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: "ignore",
+    });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error("local service restart failed with exit code " + code));
+    });
+  });
+}
+
+function runSelfTests() {
+  const original = 'model = "gpt-5.4"\n[model_providers.deepseek]\nwire_api = "chat"\n';
+  const catalogPath = "/tmp/d1-model-catalog.json";
+  const patched = setTopLevelTomlString(original, "model_catalog_json", catalogPath);
+  assert.equal((patched.match(/^model_catalog_json\s*=/gm) ?? []).length, 1);
+  assert(patched.indexOf('model_catalog_json = "/tmp/d1-model-catalog.json"') >= 0);
+  assert.equal(setTopLevelTomlString(patched, "model_catalog_json", catalogPath), patched);
+  log("[PASS] real DeepSeek D1 config/catalog self-test");
+}
+
 async function ensureAuthenticated() {
   const health = await api("/health");
   assert.equal(health.ok, true);
@@ -557,14 +693,21 @@ async function createTaskAndRun(providerIdValue, title) {
 }
 
 async function send(taskId) {
-  return api("/tasks/" + taskId + "/messages", {
-    method: "POST",
-    body: {
-      text: [
+  const text = d1Mode
+    ? [
+        "这是一次最小 Provider 能力验证，不执行业务分析。",
+        "第一步必须调用原生 tool_search，查询可用的 multi-agent spawn_agent 工具。",
+        "tool_search 成功后只调用一次 spawn_agent，然后停止；不要调用 exec_command，不要读取文件。",
+      ].join("\n")
+    : [
         "根据已上传的 mock_data 文件，计算 12 小时时效达标率并展示地图。",
         "请使用当前 warehouse-network-copilot 的 native multi-agent 协同：清理 raw data，",
         "将处理后的输入留在 Workspace，由 network agent 完成路线、12h 求解和地图交付。",
-      ].join("\n"),
+      ].join("\n");
+  return api("/tasks/" + taskId + "/messages", {
+    method: "POST",
+    body: {
+      text,
       model,
       model_provider: taskProviderId,
       effort: "none",
@@ -654,6 +797,133 @@ async function cleanupCase(record) {
 }
 
 let taskProviderId;
+
+async function runD1Gate(provider) {
+  const record = await createTaskAndRun(provider.id, "Real DeepSeek D1 tool-search " + stamp);
+  try {
+    const response = await send(record.task.id);
+    assert(response.turn_id);
+    const firstRound = await eventually(
+      async () => state.proxy.rounds.find((round) => round.wire_api === "chat"),
+      "D1 first real Chat request",
+      300_000,
+      250,
+    );
+    const firstEvidence = {
+      round: firstRound.round,
+      tools_present: firstRound.tools_present,
+      tool_count: firstRound.tool_count,
+      tool_choice: firstRound.tool_choice,
+      visible_tool_names: firstRound.visible_tool_names,
+      structured_tool_calls: firstRound.structured_tool_calls,
+      wire_tool_names: firstRound.wire_tool_names,
+      model_supports_native_tool_search:
+        firstRound.visible_tool_names.includes("tool_search"),
+    };
+    const firstEvents = await taskEvents(record.task.id).catch(() => []);
+    log("[D1 ROUND 1] " + JSON.stringify(firstEvidence));
+    if (!firstEvidence.tools_present || !firstEvidence.model_supports_native_tool_search) {
+      throw new NativeRuntimeBlocker("d1_model_catalog_not_applied", {
+        provider_id: provider.id,
+        model,
+        evidence: firstEvidence,
+        canonical_items: eventSummary(firstEvents).filter(
+          (event) => event.turn_id === response.turn_id,
+        ),
+      });
+    }
+    if (!firstEvidence.structured_tool_calls) {
+      throw new NativeRuntimeBlocker("provider_tool_call_not_produced", {
+        provider_id: provider.id,
+        model,
+        stage: "tool_search",
+        evidence: firstEvidence,
+        canonical_items: eventSummary(firstEvents).filter(
+          (event) => event.turn_id === response.turn_id,
+        ),
+      });
+    }
+    if (!firstEvidence.wire_tool_names.includes("tool_search")) {
+      throw new NativeRuntimeBlocker("provider_tool_search_not_called", {
+        provider_id: provider.id,
+        model,
+        evidence: firstEvidence,
+        canonical_items: eventSummary(firstEvents).filter(
+          (event) => event.turn_id === response.turn_id,
+        ),
+      });
+    }
+
+    const secondRound = await eventually(
+      async () =>
+        state.proxy.rounds.find(
+          (round) => round.wire_api === "chat" && round.round > firstRound.round,
+        ),
+      "D1 spawn_agent follow-up request",
+      120_000,
+      250,
+    ).catch(() => undefined);
+    if (!secondRound) {
+      const events = await taskEvents(record.task.id).catch(() => []);
+      throw new NativeRuntimeBlocker("provider_spawn_agent_call_not_produced", {
+        provider_id: provider.id,
+        model,
+        evidence: firstEvidence,
+        canonical_items: eventSummary(events).filter(
+          (event) => event.turn_id === response.turn_id,
+        ),
+      });
+    }
+    const secondEvidence = {
+      round: secondRound.round,
+      tools_present: secondRound.tools_present,
+      tool_count: secondRound.tool_count,
+      tool_choice: secondRound.tool_choice,
+      visible_tool_names: secondRound.visible_tool_names,
+      structured_tool_calls: secondRound.structured_tool_calls,
+      wire_tool_names: secondRound.wire_tool_names,
+    };
+    log("[D1 ROUND 2] " + JSON.stringify(secondEvidence));
+    const events = await taskEvents(record.task.id).catch(() => []);
+    const nativeNames = nativeToolNames(events);
+    log(
+      "[D1 CANONICAL] " +
+        JSON.stringify({
+          native_tool_names: nativeNames,
+          items: eventSummary(events).filter((event) => event.turn_id === response.turn_id),
+        }),
+    );
+    if (!secondEvidence.structured_tool_calls) {
+      throw new NativeRuntimeBlocker("provider_tool_call_not_produced", {
+        provider_id: provider.id,
+        model,
+        stage: "spawn_agent",
+        evidence: secondEvidence,
+        native_tool_names: nativeNames,
+      });
+    }
+    const spawnCalled = secondEvidence.wire_tool_names.some(
+      (name) => name === "multi_agent_v1__spawn_agent" || name === "spawn_agent",
+    );
+    if (!spawnCalled) {
+      throw new NativeRuntimeBlocker("provider_spawn_agent_call_not_produced", {
+        provider_id: provider.id,
+        model,
+        evidence: secondEvidence,
+        native_tool_names: nativeNames,
+      });
+    }
+    return {
+      status: "passed",
+      provider_id: provider.id,
+      model,
+      round_count: state.proxy.rounds.length,
+      native_tool_names: nativeNames,
+    };
+  } finally {
+    await cleanupCase(record);
+  }
+}
 
 async function runGate(provider) {
   const record = await createTaskAndRun(provider.id, "Real DeepSeek 12h network " + stamp);
@@ -749,6 +1019,10 @@ async function runGate(provider) {
 }
 
 async function main() {
+  if (process.env.E2E_REAL_DEEPSEEK_SELF_TEST === "1") {
+    runSelfTests();
+    return;
+  }
   if (process.env.E2E_REAL_DEEPSEEK !== "1") {
     log("[SKIP] real DeepSeek gate is opt-in; set E2E_REAL_DEEPSEEK=1");
     return;
@@ -759,8 +1033,33 @@ async function main() {
   try {
     const version = await ensureAuthenticated();
     await ensureCopilotActive();
-    await enableMultiAgent();
+    if (d1Mode) {
+      await installD1ModelCatalog();
+    } else {
+      await enableMultiAgent();
+    }
     provider = await configureTemporaryProvider();
+    if (d1Mode) {
+      // model_catalog_json is loaded into the native ModelsManager when the
+      // Profile Host starts. Restart the existing service process rather than
+      // adding a second Runtime reload or a test-only catalog cache.
+      await restartLocalServiceForD1();
+      await ensureAuthenticated();
+      // Profile startup restores the previously selected Provider from the
+      // durable catalog. Select the temporary Provider again so the new
+      // Thread uses the exact temporary Chat endpoint and capability flag.
+      await api("/providers/" + encodeURIComponent(provider.id) + "/select", {
+        method: "POST",
+      });
+      await api(
+        "/providers/" +
+          encodeURIComponent(provider.id) +
+          "/models/" +
+          encodeURIComponent(model) +
+          "/select",
+        { method: "POST" },
+      );
+    }
     taskProviderId = provider.id;
     log(
       "server=" +
@@ -772,13 +1071,19 @@ async function main() {
     );
     const started = Date.now();
     try {
-      const details = await runGate(provider);
-      results.push({ name: "real DeepSeek multi-agent gate", ...details, durationMs: Date.now() - started });
-      log("[PASS] real DeepSeek multi-agent gate");
+      const details = d1Mode ? await runD1Gate(provider) : await runGate(provider);
+      const name = d1Mode
+        ? "real DeepSeek D1 native tool gate"
+        : "real DeepSeek multi-agent gate";
+      results.push({ name, ...details, durationMs: Date.now() - started });
+      log("[PASS] " + name);
     } catch (error) {
       if (error instanceof NativeRuntimeBlocker) {
+        const name = d1Mode
+          ? "real DeepSeek D1 native tool gate"
+          : "real DeepSeek multi-agent gate";
         results.push({
-          name: "real DeepSeek multi-agent gate",
+          name,
           status: "typed_failure",
           code: error.code,
           details: error.details,
@@ -790,6 +1095,11 @@ async function main() {
     }
   } finally {
     await removeTemporaryProvider(provider);
+    await restoreD1ModelCatalog();
+    if (d1Mode && state.d1 === undefined) {
+      await restartLocalServiceForD1().catch(() => undefined);
+      await ensureAuthenticated().catch(() => undefined);
+    }
     await state.proxy.close();
   }
   log("Real DeepSeek E2E summary");

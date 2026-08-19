@@ -106,6 +106,20 @@ schema 或工具参数；临时 Provider、Run、Workspace 和 Project 在终态
 脚本验证 `tool_search → spawn_agent → Data/Network MCP → 12h/map` canonical 链。不能按模型名
 或 DeepSeek 的普通 `/models` 响应推断该能力。
 
+### D1：native `model_catalog_json` 临时目录验证
+
+在不修改 Runtime 生命周期代码的前提下，脚本临时生成完整有效的 `ModelsResponse`，以仓库内完整
+`ModelInfo` 为模板，将 exact `deepseek-v4-flash` 的 `supports_search_tool` 设为 `true`，写入
+Profile 的 `model_catalog_json`，重启现有 Profile Host 使官方 `ModelsManager` 加载该目录，再
+通过真实 Task 入口运行最小能力门。
+
+结果：第一轮 Chat 请求只暴露 12 个工具并包含 `tool_search`；真实 DeepSeek 返回结构化
+`tool_search` 调用，证明原生 catalog 入口可以打开 deferred search。第二轮模型没有调用
+`spawn_agent`，而是返回 `exec_command`，门以 typed `provider_spawn_agent_call_not_produced`
+停止；没有进入完整业务链，也没有伪造协同结果。Config、Provider、临时 catalog、Run、Workspace
+和 Project 均已恢复或删除，服务最终停止。该结果将 Provider 限制从“没有 search capability”
+收敛为“search 可用，但当前模型未按要求产生 spawn_agent structured call”。
+
 ## 3. 历史：2026-08-12 clean real Web E4（已被 ADR-023 合同替代）
 
 在当前 Server/Codex、clean DB/Profile、真实 Provider 和一个授权 Workspace 中，使用用户给出的
