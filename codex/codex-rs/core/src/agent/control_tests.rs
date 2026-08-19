@@ -3177,7 +3177,11 @@ async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
 
 #[tokio::test]
 async fn resume_thread_subagent_restores_stored_metadata() {
-    let (home, mut config) = test_config().await;
+    let (home, mut config) = test_config_with_cli_overrides(vec![(
+        "agents.roles.explorer.runtime_mcp_projection".to_string(),
+        TomlValue::Boolean(true),
+    )])
+    .await;
     let role_path = home.path().join("explorer-role.toml");
     std::fs::write(
         &role_path,
