@@ -349,7 +349,7 @@ impl ModelsRequestTelemetry {
     fn record_catalog_result(&self, result: Result<(), &ProviderModelsError>) {
         let (success, error_category) = match result {
             Ok(()) => (true, None),
-            Err(error) => (false, Some(provider_models_error_category(error))),
+            Err(error) => (false, Some(provider_models_error_category(*error))),
         };
         tracing::event!(
             target: "codex_otel.trace_safe",
@@ -362,7 +362,7 @@ impl ModelsRequestTelemetry {
     }
 }
 
-fn provider_models_error_category(error: &ProviderModelsError) -> &'static str {
+fn provider_models_error_category(error: ProviderModelsError) -> &'static str {
     match error {
         ProviderModelsError::Authentication => "authentication",
         ProviderModelsError::NotFound => "not_found",
@@ -839,7 +839,7 @@ mod tests {
             Default::default()
         );
         assert_eq!(
-            provider_models_error_category(&ProviderModelsError::IncompatibleSchema),
+            provider_models_error_category(ProviderModelsError::IncompatibleSchema),
             "incompatible_schema"
         );
 

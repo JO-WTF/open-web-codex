@@ -662,18 +662,17 @@ async fn response_stream_records_last_model_feedback_ids() {
 }
 
 #[tokio::test]
-async fn bedrock_unauthorized_error_uses_provider_mapping() {
+async fn bedrock_unauthorized_error_uses_safe_provider_agnostic_mapping() {
     let provider = create_model_provider(
         ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
         /*auth_manager*/ None,
     );
     let mut auth_recovery = None;
     let mut provider_auth_recovery_attempted = false;
-    let url = "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses";
     let error = super::handle_unauthorized(
         TransportError::Http {
             status: http::StatusCode::UNAUTHORIZED,
-            url: Some(url.to_string()),
+            url: Some("https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses".to_string()),
             headers: None,
             body: Some(
                 "Signature expired: 20260609T133205Z is now earlier than 20260614T062525Z"
@@ -690,9 +689,7 @@ async fn bedrock_unauthorized_error_uses_provider_mapping() {
 
     assert_eq!(
         error.to_string(),
-        format!(
-            "Amazon Bedrock rejected the request because its AWS signature has expired. Refresh your AWS credentials and retry. If `AWS_BEARER_TOKEN_BEDROCK` is set, update or unset it, then restart Codex, url: {url}"
-        )
+        "Authentication failed. Check the Provider credentials."
     );
 }
 
@@ -795,7 +792,12 @@ async fn provider_owned_auth_recovery_is_bounded_and_preserves_unauthorized_fail
         match error.details() {
             CodexErrorDetails::UnexpectedStatus(response) => {
                 assert_eq!(response.status, http::StatusCode::UNAUTHORIZED);
-                assert_eq!(response.body, "unauthorized");
+                assert!(response.body.is_empty());
+                assert!(response.url.is_none());
+                assert_eq!(
+                    response.user_message.as_deref(),
+                    Some("Authentication failed. Check the Provider credentials.")
+                );
             }
             other => panic!("unexpected error after provider recovery: {other}"),
         }

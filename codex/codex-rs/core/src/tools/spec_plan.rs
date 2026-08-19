@@ -70,6 +70,7 @@ use codex_protocol::account::PlanType;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::PermissionProfile;
@@ -128,6 +129,14 @@ pub(crate) fn build_tool_router(
     step_store: &ExtensionData,
     tool_suggest_candidates: Option<&crate::tools::router::ToolSuggestCandidates>,
 ) -> CodexResult<ToolRouter> {
+    if turn_context.provider.info().wire_api == WireApi::Chat
+        && !turn_context.provider.capabilities().function_tools
+    {
+        return Err(CodexErr::UnsupportedOperation(
+            "the configured Provider does not support function tools".to_string(),
+        ));
+    }
+
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let wait_for_environment_tool_config = session
@@ -581,9 +590,7 @@ fn hosted_model_tool_specs(
 }
 
 pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
-    (turn_context.model_info.supports_search_tool
-        || turn_context.provider.info().wire_api == WireApi::Chat)
-        && namespace_tools_enabled(turn_context)
+    turn_context.model_info.supports_search_tool && namespace_tools_enabled(turn_context)
 }
 
 pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {

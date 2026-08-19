@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use codex_extension_api::ExtensionData;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -61,6 +62,7 @@ use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::router::ToolSuggestPresentation;
 use crate::tools::spec_plan::append_source_tools;
 use crate::tools::spec_plan::build_core_tool_registry;
+use crate::tools::spec_plan::build_tool_router;
 
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 
@@ -232,6 +234,25 @@ async fn probe(configure_turn: impl FnOnce(&mut TurnContext)) -> ToolPlanProbe {
     probe_with(configure_turn, ToolPlanInputs::default()).await
 }
 
+async fn try_build_router(
+    configure_turn: impl FnOnce(&mut TurnContext),
+) -> codex_protocol::error::Result<ToolRouter> {
+    let (session, mut turn) = make_session_and_context().await;
+    configure_turn(&mut turn);
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let step_store = ExtensionData::new("spec-plan-test");
+    build_tool_router(
+        &session,
+        turn.as_ref(),
+        &step_context.environments,
+        &step_context.mcp,
+        /*apps_enabled*/ true,
+        &step_store,
+        /*tool_suggest_candidates*/ None,
+    )
+}
+
 fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
     let mut config = (*turn.config).clone();
     if enabled {
@@ -307,6 +328,7 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
 fn use_chat_provider(turn: &mut TurnContext) {
     let mut provider_info = turn.config.model_provider.clone();
     provider_info.wire_api = WireApi::Chat;
+    provider_info.supports_function_tools = true;
     update_config(turn, |config| {
         config.model_provider = provider_info.clone();
     });
@@ -1141,6 +1163,56 @@ async fn chat_provider_omits_hosted_web_search_and_keeps_mcp_functions() {
 }
 
 #[tokio::test]
+async fn chat_provider_function_only_model_omits_tool_search() {
+    let plan = probe_with(
+        |turn| {
+            Arc::make_mut(&mut turn.model_info).supports_search_tool = false;
+            use_chat_provider(turn);
+        },
+        ToolPlanInputs {
+            tool_runtimes: vec![mcp_runtime(
+                "chat",
+                "mcp__chat",
+                "echo",
+                ToolExposure::Direct,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_lacks(&["tool_search"]);
+    assert_eq!(
+        plan.namespace_function_names("mcp__chat"),
+        &["echo".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn chat_provider_without_function_tools_returns_typed_unsupported() {
+    let error = try_build_router(|turn| {
+        let mut provider_info = turn.config.model_provider.clone();
+        provider_info.wire_api = WireApi::Chat;
+        provider_info.supports_function_tools = false;
+        update_config(turn, |config| {
+            config.model_provider = provider_info.clone();
+        });
+        turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+    })
+    .await;
+    let error = match error {
+        Ok(_) => panic!("Chat Providers without function-tool support must fail closed"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error.details(),
+        CodexErrorDetails::UnsupportedOperation(message)
+            if message == "the configured Provider does not support function tools"
+    ));
+}
+
+#[tokio::test]
 async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     let direct_mcp = probe_with(
         |_| {},
@@ -1181,7 +1253,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
 
     let chat_bridge_capability = probe_with(
         |turn| {
-            Arc::make_mut(&mut turn.model_info).supports_search_tool = false;
+            Arc::make_mut(&mut turn.model_info).supports_search_tool = true;
             use_chat_provider(turn);
         },
         searchable_mcp(),

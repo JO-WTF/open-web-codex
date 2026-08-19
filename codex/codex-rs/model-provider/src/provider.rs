@@ -50,6 +50,8 @@ pub enum RemoteCompactionSupport {
 /// that the active provider marks unsupported here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderCapabilities {
+    /// Whether the active Provider accepts function-tool calls on its wire.
+    pub function_tools: bool,
     pub namespace_tools: bool,
     pub image_generation: bool,
     pub web_search: bool,
@@ -60,6 +62,7 @@ pub struct ProviderCapabilities {
 impl Default for ProviderCapabilities {
     fn default() -> Self {
         Self {
+            function_tools: false,
             namespace_tools: true,
             image_generation: true,
             web_search: true,
@@ -349,6 +352,7 @@ impl ModelProvider for ConfiguredModelProvider {
         };
 
         let mut capabilities = ProviderCapabilities {
+            function_tools: self.info.supports_function_tools,
             remote_compaction,
             ..ProviderCapabilities::default()
         };
@@ -583,6 +587,7 @@ mod tests {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
+            supports_function_tools: false,
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -653,18 +658,36 @@ mod tests {
             /*auth_manager*/ None,
         );
 
-        assert_eq!(provider.capabilities(), ProviderCapabilities::default());
+        assert_eq!(
+            provider.capabilities(),
+            ProviderCapabilities {
+                function_tools: true,
+                ..ProviderCapabilities::default()
+            }
+        );
     }
 
     #[test]
     fn configured_chat_provider_disables_hosted_web_search() {
         let mut provider_info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
         provider_info.wire_api = WireApi::Chat;
+        provider_info.supports_function_tools = true;
 
         let provider = create_model_provider(provider_info, /*auth_manager*/ None);
 
         assert!(!provider.capabilities().web_search);
         assert!(ProviderCapabilities::default().web_search);
+    }
+
+    #[test]
+    fn configured_chat_provider_requires_explicit_function_tool_capability() {
+        let mut provider_info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+        provider_info.wire_api = WireApi::Chat;
+        provider_info.supports_function_tools = false;
+
+        let provider = create_model_provider(provider_info, /*auth_manager*/ None);
+
+        assert!(!provider.capabilities().function_tools);
     }
 
     #[test]

@@ -20,6 +20,7 @@ base_url = "http://localhost:11434/v1"
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        supports_function_tools: false,
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -53,6 +54,7 @@ query_params = { api-version = "2025-04-01-preview" }
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        supports_function_tools: false,
         query_params: Some(maplit::hashmap! {
             "api-version".to_string() => "2025-04-01-preview".to_string(),
         }),
@@ -90,6 +92,7 @@ supports_standalone_web_search = true
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        supports_function_tools: false,
         query_params: None,
         http_headers: Some(maplit::hashmap! {
             "X-Example-Header".to_string() => "example-value".to_string(),
@@ -121,7 +124,22 @@ wire_api = "chat"
 
     let provider: ModelProviderInfo = toml::from_str(provider_toml).unwrap();
     assert_eq!(provider.wire_api, WireApi::Chat);
+    assert!(!provider.supports_function_tools);
     assert_eq!(provider.wire_api.to_string(), "chat");
+}
+
+#[test]
+fn test_deserialize_explicit_function_tool_capability() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "Function Tool Provider"
+wire_api = "chat"
+supports_function_tools = true
+"#,
+    )
+    .expect("provider should deserialize");
+
+    assert!(provider.supports_function_tools);
 }
 
 #[test]
@@ -260,6 +278,7 @@ fn test_create_amazon_bedrock_provider() {
                 auth_refresh: None,
             }),
             wire_api: WireApi::Responses,
+            supports_function_tools: true,
             query_params: None,
             http_headers: Some(maplit::hashmap! {
                 AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string() =>

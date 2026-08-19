@@ -2004,6 +2004,10 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "supports_function_tools": {
+          "description": "Whether this Provider explicitly supports function-tool calls.\n\nThis is opt-in for configured Providers. ToolSearch remains a model-level capability reported by `ModelInfo.supports_search_tool`.",
+          "type": "boolean"
+        },
         "supports_standalone_web_search": {
           "default": false,
           "description": "Whether this provider supports the standalone web-search endpoint.",

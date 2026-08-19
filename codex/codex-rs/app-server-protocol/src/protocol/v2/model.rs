@@ -42,6 +42,7 @@ pub struct ModelProviderCapabilitiesReadParams {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ModelProviderCapabilitiesReadResponse {
+    pub function_tools: bool,
     pub namespace_tools: bool,
     pub image_generation: bool,
     pub web_search: bool,

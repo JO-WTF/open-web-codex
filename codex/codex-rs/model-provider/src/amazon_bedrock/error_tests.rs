@@ -6,7 +6,6 @@ use http::HeaderValue;
 use http::StatusCode;
 use pretty_assertions::assert_eq;
 
-use super::error::BEDROCK_EXPIRED_SIGNATURE_MESSAGE;
 use super::error::is_refreshable_auth_error;
 use super::error::map_api_error;
 
@@ -24,7 +23,7 @@ fn http_error(status: StatusCode, body: &str) -> ApiError {
 }
 
 #[test]
-fn expired_signature_has_actionable_guidance() {
+fn unauthorized_signature_error_uses_safe_provider_agnostic_message() {
     let error = map_api_error(http_error(
         StatusCode::UNAUTHORIZED,
         "Signature expired: 20260609T133205Z is now earlier than 20260614T062525Z",
@@ -35,18 +34,18 @@ fn expired_signature_has_actionable_guidance() {
     };
     assert_eq!(
         response.user_message.as_deref(),
-        Some(BEDROCK_EXPIRED_SIGNATURE_MESSAGE)
+        Some("Authentication failed. Check the Provider credentials.")
     );
+    assert!(response.body.is_empty());
+    assert!(response.url.is_none());
     assert_eq!(
         error.to_string(),
-        format!(
-            "{BEDROCK_EXPIRED_SIGNATURE_MESSAGE}, url: {BEDROCK_RESPONSES_URL}, request id: req-bedrock"
-        )
+        "Authentication failed. Check the Provider credentials., request id: req-bedrock"
     );
 }
 
 #[test]
-fn other_unauthorized_errors_remain_generic() {
+fn unauthorized_errors_do_not_expose_provider_response_body() {
     let error = map_api_error(http_error(
         StatusCode::UNAUTHORIZED,
         "The security token included in the request is invalid",
@@ -55,13 +54,13 @@ fn other_unauthorized_errors_remain_generic() {
     let CodexErrorDetails::UnexpectedStatus(response) = error.details() else {
         panic!("expected unexpected status error, got {error:?}");
     };
-    assert_eq!(response.user_message, None);
     assert_eq!(
-        error.to_string(),
-        format!(
-            "unexpected status 401 Unauthorized: The security token included in the request is invalid, url: {BEDROCK_RESPONSES_URL}, request id: req-bedrock"
-        )
+        response.user_message.as_deref(),
+        Some("Authentication failed. Check the Provider credentials.")
     );
+    assert!(response.body.is_empty());
+    assert!(response.url.is_none());
+    assert!(!error.to_string().contains("security token"));
 }
 
 #[test]
