@@ -254,7 +254,7 @@ impl CopilotPackageAssets {
         &self,
         profile_home: &Path,
     ) -> Result<RootExecutionConfig, CopilotPackageError> {
-        let runtime_config = if let Some(agent) = self.root_agent.as_deref() {
+        let mut runtime_config = if let Some(agent) = self.root_agent.as_deref() {
             let rendered = self.render_role(agent, profile_home)?;
             let mut role = parse_role_template(agent, &rendered)?;
             role.remove("name");
@@ -272,6 +272,25 @@ impl CopilotPackageAssets {
         } else {
             serde_json::json!({})
         };
+        let runtime_config_object = runtime_config.as_object_mut().ok_or_else(|| {
+            invalid_role(
+                self.root_agent.as_deref().unwrap_or("root"),
+                "Root Agent config must be an object",
+            )
+        })?;
+        for role_id in self.agent_role_ids() {
+            let role_config_file = profile_home
+                .join("agents")
+                .join(format!("{role_id}.toml"));
+            runtime_config_object.insert(
+                format!("agents.roles.{role_id}.config_file"),
+                Value::String(role_config_file.to_string_lossy().into_owned()),
+            );
+            runtime_config_object.insert(
+                format!("agents.roles.{role_id}.runtime_mcp_projection"),
+                Value::Bool(true),
+            );
+        }
         Ok(RootExecutionConfig {
             id: self.id.clone(),
             skill_config: self.root_skill_config(profile_home),
@@ -1423,7 +1442,6 @@ fn project_role_mcp_servers(
     }
     role.remove("plugins");
     role["mcp_servers"] = Item::Table(runtime_servers);
-    role["__codex_runtime_mcp_projection"] = value(true);
     Ok(())
 }
 
@@ -1897,10 +1915,17 @@ runtime = "tools/maps/runtime.toml"
             network["mcp_servers"].get("supply_chain_data").is_none(),
             "Network Role must consume the Data Agent reference through its planning Tools, not configure the Data MCP server",
         );
+        assert!(
+            data.get("__codex_runtime_mcp_projection").is_none(),
+            "managed Role MCP provenance must not be embedded in Role file content",
+        );
+        let root_execution = assets
+            .root_execution_config(&profile)
+            .expect("root execution config");
         assert_eq!(
-            data["__codex_runtime_mcp_projection"].as_bool(),
-            Some(true),
-            "managed Role MCP projection must carry typed Runtime provenance",
+            root_execution.runtime_config["agents.roles.data_agent.runtime_mcp_projection"],
+            Value::Bool(true),
+            "managed Role MCP projection must be carried by typed Runtime config",
         );
         let supply_python = _temp
             .path()

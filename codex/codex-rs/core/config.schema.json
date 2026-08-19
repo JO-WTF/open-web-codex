@@ -27,6 +27,10 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "runtime_mcp_projection": {
+          "description": "Runtime-owned Role metadata. Only trusted server-supplied session config may enable the full package Role projection; ordinary Profile and Workspace declarations default to the bounded Role projection.",
+          "type": "boolean"
         }
       },
       "type": "object"

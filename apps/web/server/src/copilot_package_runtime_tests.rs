@@ -1299,11 +1299,16 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         "Profile startup seeds must not rewrite config.toml",
     );
 
-    let adapter = RealCodexAdapter::from_host_with_root_skill_config(
+    let adapter = RealCodexAdapter::from_host_with_root_executions(
         host.clone(),
         "package-network-runtime-runner",
         runner_root.clone(),
-        assets.root_skill_config(&profile_home),
+        vec![
+            assets
+                .root_execution_config(&profile_home)
+                .expect("resolve managed Root execution config"),
+        ],
+        Some(assets.id().to_string()),
     )
     .expect("construct real Codex adapter");
     let workspace = AuthorizedWorkspace {

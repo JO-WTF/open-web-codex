@@ -217,8 +217,6 @@ struct RawAgentRoleFileToml {
     name: Option<String>,
     description: Option<String>,
     nickname_candidates: Option<Vec<String>>,
-    #[serde(rename = "__codex_runtime_mcp_projection")]
-    _runtime_mcp_projection: Option<bool>,
     #[serde(flatten)]
     config: ConfigToml,
 }
@@ -304,7 +302,6 @@ pub(crate) fn parse_agent_role_file_contents(
     config_table.remove("name");
     config_table.remove("description");
     config_table.remove("nickname_candidates");
-    config_table.remove("__codex_runtime_mcp_projection");
 
     Ok(ResolvedAgentRoleFile {
         role_name,

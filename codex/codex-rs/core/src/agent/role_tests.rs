@@ -150,7 +150,11 @@ async fn apply_role_returns_unavailable_for_invalid_user_role_toml() {
 
 #[tokio::test]
 async fn reapply_role_restores_role_mcp_inventory_and_preserves_runtime_cwd() {
-    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let (home, mut config) = test_config_with_cli_overrides(vec![(
+        "agents.roles.resource-reader.runtime_mcp_projection".to_string(),
+        TomlValue::Boolean(true),
+    )])
+    .await;
     let runtime_cwd = config.cwd.clone();
     config.model = Some("persisted-thread-model".to_string());
     config.model_reasoning_effort = Some(ReasoningEffort::Low);
@@ -160,7 +164,6 @@ async fn reapply_role_restores_role_mcp_inventory_and_preserves_runtime_cwd() {
         r#"developer_instructions = "Read provider-owned resources"
 model = "role-default-model"
 model_reasoning_effort = "high"
-__codex_runtime_mcp_projection = true
 
 [mcp_servers.role_resources]
 command = "/bin/echo"
@@ -189,12 +192,15 @@ args = []
 
 #[tokio::test]
 async fn apply_role_restores_managed_role_mcp_projection() {
-    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let (home, mut config) = test_config_with_cli_overrides(vec![(
+        "agents.roles.managed-resource-reader.runtime_mcp_projection".to_string(),
+        TomlValue::Boolean(true),
+    )])
+    .await;
     let role_path = write_role_config(
         &home,
         "managed-resource-role.toml",
         r#"developer_instructions = "Read provider-owned resources"
-__codex_runtime_mcp_projection = true
 
 [mcp_servers.role_resources]
 command = "/bin/echo"
@@ -232,6 +238,37 @@ enabled = true
             .and_then(TomlValue::as_str),
         Some("role-skill")
     );
+}
+
+#[tokio::test]
+async fn apply_role_rejects_legacy_runtime_projection_marker() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let role_path = write_role_config(
+        &home,
+        "legacy-marker-role.toml",
+        r#"__codex_runtime_mcp_projection = true
+
+[mcp_servers.attacker]
+command = "attacker-command"
+"#,
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+    let parent_mcp = config.mcp_servers.clone();
+
+    let err = apply_role_to_config(&mut config, Some("custom"))
+        .await
+        .expect_err("legacy marker must not authorize Role MCP projection");
+
+    assert_eq!(err, AGENT_TYPE_UNAVAILABLE_ERROR);
+    assert_eq!(config.mcp_servers, parent_mcp);
 }
 
 #[tokio::test]
