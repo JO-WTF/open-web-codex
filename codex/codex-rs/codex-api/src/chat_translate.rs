@@ -101,7 +101,9 @@ pub struct ChatCompletionsApiRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
     /// Reverse targets for deferred tools discovered in the current Turn.
-    /// These are transport metadata only and never become Chat `tools`.
+    /// Current-turn exact specs are also projected into Chat `tools`; this map
+    /// keeps the same target available to the SSE decoder without changing
+    /// canonical Core Prompt.tools.
     #[serde(skip)]
     pub history_tool_targets: HashMap<String, ChatToolTarget>,
 }
@@ -191,11 +193,15 @@ pub fn responses_request_to_chat_completions_request(
             })
         })
         .transpose()?;
-    let tools = decoded_tools
+    let mut tools = decoded_tools
         .map(|tools| responses_tools_to_chat_tools(&tools))
         .transpose()?
         .unwrap_or_default();
-    let history_tool_targets = current_turn_tool_targets(&input, &tools)?;
+    let (current_turn_tools, history_tool_targets) = current_turn_tool_targets(&input, &tools)?;
+    // This is a request-scoped Chat compatibility projection of the current
+    // Turn's completed client ToolSearchOutput. It never mutates canonical
+    // Prompt.tools or the Core ToolRouter registry.
+    tools.extend(current_turn_tools);
     let tool_choice = chat_tool_choice(&tool_choice, !tools.is_empty())?;
     // `include`, `prompt_cache_key`, and `client_metadata` are Responses
     // metadata. The known encrypted-reasoning include is omitted as a
@@ -299,6 +305,7 @@ struct ToolTargetCandidate {
     wire_name: String,
     target: ChatToolTarget,
     schema: Value,
+    chat_tool: Option<ChatTool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -328,7 +335,7 @@ enum ToolSearchNamespaceTool {
 fn current_turn_tool_targets(
     input: &[ResponseItem],
     prompt_tools: &[ChatTool],
-) -> Result<HashMap<String, ChatToolTarget>, ApiError> {
+) -> Result<(Vec<ChatTool>, HashMap<String, ChatToolTarget>), ApiError> {
     let Some((turn_boundary_index, current_turn_id)) =
         input
             .iter()
@@ -341,7 +348,7 @@ fn current_turn_tool_targets(
                 _ => None,
             })
     else {
-        return Ok(HashMap::new());
+        return Ok((Vec::new(), HashMap::new()));
     };
 
     let mut tool_search_call_ids = HashSet::new();
@@ -384,17 +391,25 @@ fn current_turn_tool_targets(
                 wire_name: tool.function.name.clone(),
                 target: tool.target.clone(),
                 schema: chat_function_schema(tool.function.strict, &tool.function.parameters),
+                chat_tool: None,
             },
         )?;
     }
 
     let mut history_wire_names = HashSet::new();
+    let mut current_turn_tools = Vec::new();
     for candidate in history_candidates {
-        history_wire_names.insert(candidate.wire_name.clone());
+        let wire_name = candidate.wire_name.clone();
+        let chat_tool = candidate.chat_tool.clone();
+        history_wire_names.insert(wire_name.clone());
+        let is_new_target = !targets.contains_key(&wire_name);
         register_tool_target(&mut targets, candidate)?;
+        if is_new_target && let Some(chat_tool) = chat_tool {
+            current_turn_tools.push(chat_tool);
+        }
     }
 
-    Ok(history_wire_names
+    let history_tool_targets = history_wire_names
         .into_iter()
         .filter(|wire_name| !direct_wire_names.contains(wire_name))
         .filter_map(|wire_name| {
@@ -402,7 +417,9 @@ fn current_turn_tool_targets(
                 .remove(&wire_name)
                 .map(|entry| (wire_name, entry.target))
         })
-        .collect())
+        .collect();
+
+    Ok((current_turn_tools, history_tool_targets))
 }
 
 fn item_belongs_to_current_turn(item: &ResponseItem, current_turn_id: Option<&str>) -> bool {
@@ -424,6 +441,7 @@ fn loadable_tool_targets(tools: &[Value]) -> Result<Vec<ToolTargetCandidate>, Ap
                 candidates.push(tool_target_candidate(
                     ToolName::plain(name),
                     chat_function_schema_from_value(tool),
+                    convert_function_tool(tool, None, None)?,
                 )?);
             }
             ToolSearchSpec::Namespace {
@@ -449,6 +467,10 @@ fn loadable_tool_targets(tools: &[Value]) -> Result<Vec<ToolTargetCandidate>, Ap
                         ),
                     });
                 }
+                let namespace_description = tool
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .filter(|description| !description.is_empty());
                 for (nested_tool, nested_value) in tools.into_iter().zip(raw_tools) {
                     let ToolSearchNamespaceTool::Function { name } = nested_tool else {
                         return Err(unsupported("custom deferred tools"));
@@ -456,6 +478,11 @@ fn loadable_tool_targets(tools: &[Value]) -> Result<Vec<ToolTargetCandidate>, Ap
                     candidates.push(tool_target_candidate(
                         ToolName::namespaced(namespace.clone(), name),
                         chat_function_schema_from_value(nested_value),
+                        convert_function_tool(
+                            nested_value,
+                            Some(&namespace),
+                            namespace_description,
+                        )?,
                     )?);
                 }
             }
@@ -485,6 +512,7 @@ fn chat_function_schema_from_value(tool: &Value) -> Value {
 fn tool_target_candidate(
     tool_name: ToolName,
     schema: Value,
+    chat_tool: ChatTool,
 ) -> Result<ToolTargetCandidate, ApiError> {
     if tool_name.name.is_empty() {
         return Err(ApiError::InvalidRequest {
@@ -504,6 +532,7 @@ fn tool_target_candidate(
             namespace: tool_name.namespace,
         },
         schema,
+        chat_tool: Some(chat_tool),
     })
 }
 

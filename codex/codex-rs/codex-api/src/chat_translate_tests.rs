@@ -203,7 +203,7 @@ fn flattens_function_and_namespace_tools_with_reversible_targets() {
 }
 
 #[test]
-fn translates_current_turn_tool_search_history_into_reverse_targets_only() {
+fn translates_current_turn_tool_search_history_into_chat_tools_and_reverse_targets() {
     let mut request = request(Some(vec![serde_json::json!({
         "type": "tool_search",
         "execution": "client",
@@ -251,7 +251,7 @@ fn translates_current_turn_tool_search_history_into_reverse_targets_only() {
             .iter()
             .map(|tool| tool.function.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["tool_search"]
+        vec!["tool_search", "evaluate_network_baseline"]
     );
     assert_eq!(
         translated.messages,
@@ -290,9 +290,11 @@ fn translates_current_turn_tool_search_history_into_reverse_targets_only() {
         })
     );
     assert_eq!(
-        translated.tools.len(),
-        1,
-        "deferred schema must stay out of Chat tools"
+        translated.tools[1].target,
+        ChatToolTarget {
+            name: "evaluate_network_baseline".to_string(),
+            namespace: None,
+        }
     );
 }
 
@@ -624,6 +626,121 @@ fn rejects_repeated_current_turn_deferred_tool_with_different_schema() {
     assert!(matches!(
         responses_request_to_chat_completions_request(request),
         Err(ApiError::InvalidRequest { message }) if message.contains("multiple schemas")
+    ));
+}
+
+#[test]
+fn rejects_current_turn_deferred_tool_schema_conflict_with_prompt_tool() {
+    let mut request = request(Some(vec![
+        serde_json::json!({
+            "type": "tool_search",
+            "execution": "client",
+            "description": "Search available tools.",
+            "parameters": {"type": "object"}
+        }),
+        serde_json::json!({
+            "type": "function",
+            "name": "route",
+            "parameters": {"type": "object"}
+        }),
+    ]));
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Use the route tool.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+        },
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: None,
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "route"}),
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+        },
+        ResponseItem::ToolSearchOutput {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: vec![serde_json::json!({
+                "type": "function",
+                "name": "route",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"mode": {"type": "string"}}
+                }
+            })],
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+        },
+    ];
+
+    assert!(matches!(
+        responses_request_to_chat_completions_request(request),
+        Err(ApiError::InvalidRequest { message }) if message.contains("multiple schemas")
+    ));
+}
+
+#[test]
+fn rejects_current_turn_deferred_flatten_collision_with_prompt_tool() {
+    let mut request = request(Some(vec![
+        serde_json::json!({
+            "type": "tool_search",
+            "execution": "client",
+            "description": "Search available tools.",
+            "parameters": {"type": "object"}
+        }),
+        serde_json::json!({
+            "type": "function",
+            "name": "a__b__c",
+            "parameters": {"type": "object"}
+        }),
+    ]));
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Use the matching tool.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+        },
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: None,
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "matching"}),
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+        },
+        ResponseItem::ToolSearchOutput {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: vec![serde_json::json!({
+                "type": "namespace",
+                "name": "a__b",
+                "tools": [{
+                    "type": "function",
+                    "name": "c",
+                    "parameters": {"type": "object"}
+                }]
+            })],
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+        },
+    ];
+
+    assert!(matches!(
+        responses_request_to_chat_completions_request(request),
+        Err(ApiError::InvalidRequest { message }) if message.contains("colliding deferred tool target")
     ));
 }
 
