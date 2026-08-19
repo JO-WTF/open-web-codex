@@ -17,11 +17,16 @@ use crate::tools::spec_plan::finalize_tool_router;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_tools::DiscoverableTool;
+use codex_tools::LoadableToolSpec;
+use codex_tools::ResponsesApiNamespace;
+use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
@@ -68,6 +73,87 @@ pub(crate) fn tool_log_payload<'a>(
 pub struct ToolRouter {
     registry: ToolRegistry,
     model_visible_specs: Vec<ToolSpec>,
+    loaded_deferred_tools: Arc<LoadedDeferredToolSet>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct LoadedDeferredToolSet {
+    tools: Mutex<BTreeMap<ToolName, LoadedDeferredTool>>,
+}
+
+#[derive(Clone, Debug)]
+enum LoadedDeferredTool {
+    Function(ResponsesApiTool),
+    NamespaceTool {
+        namespace: String,
+        namespace_description: String,
+        tool: ResponsesApiNamespaceTool,
+    },
+}
+
+impl LoadedDeferredTool {
+    fn from_loadable(spec: LoadableToolSpec) -> Vec<(ToolName, Self)> {
+        match spec {
+            LoadableToolSpec::Function(tool) => {
+                let name = ToolName::plain(tool.name.clone()).with_default_namespace();
+                vec![(name, Self::Function(tool))]
+            }
+            LoadableToolSpec::Namespace(namespace) => namespace
+                .tools
+                .into_iter()
+                .map(|tool| {
+                    let tool_name = match &tool {
+                        ResponsesApiNamespaceTool::Function(tool) => tool.name.clone(),
+                        ResponsesApiNamespaceTool::Custom(tool) => tool.name.clone(),
+                    };
+                    let name = ToolName::namespaced(namespace.name.clone(), tool_name);
+                    (
+                        name,
+                        Self::NamespaceTool {
+                            namespace: namespace.name.clone(),
+                            namespace_description: namespace.description.clone(),
+                            tool,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn has_same_schema(&self, candidate: &Self) -> bool {
+        match (self, candidate) {
+            (Self::Function(existing), Self::Function(candidate)) => {
+                existing.strict == candidate.strict
+                    && existing.parameters == candidate.parameters
+                    && existing.output_schema == candidate.output_schema
+            }
+            (
+                Self::NamespaceTool { tool: existing, .. },
+                Self::NamespaceTool {
+                    tool: candidate, ..
+                },
+            ) => match (existing, candidate) {
+                (
+                    ResponsesApiNamespaceTool::Function(existing),
+                    ResponsesApiNamespaceTool::Function(candidate),
+                ) => {
+                    existing.strict == candidate.strict
+                        && existing.parameters == candidate.parameters
+                        && existing.output_schema == candidate.output_schema
+                }
+                (
+                    ResponsesApiNamespaceTool::Custom(existing),
+                    ResponsesApiNamespaceTool::Custom(candidate),
+                ) => existing.format == candidate.format,
+                (ResponsesApiNamespaceTool::Function(_), ResponsesApiNamespaceTool::Custom(_))
+                | (ResponsesApiNamespaceTool::Custom(_), ResponsesApiNamespaceTool::Function(_)) => {
+                    false
+                }
+            },
+            (Self::Function(_), Self::NamespaceTool { .. })
+            | (Self::NamespaceTool { .. }, Self::Function(_)) => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,15 +185,101 @@ impl ToolRouter {
         .expect("test tool registry should not contain duplicate tools")
     }
 
+    #[cfg(test)]
     pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
+        Self::from_parts_with_loaded_deferred_tools(
+            registry,
+            model_visible_specs,
+            Arc::new(LoadedDeferredToolSet::default()),
+        )
+    }
+
+    pub(crate) fn from_parts_with_loaded_deferred_tools(
+        registry: ToolRegistry,
+        model_visible_specs: Vec<ToolSpec>,
+        loaded_deferred_tools: Arc<LoadedDeferredToolSet>,
+    ) -> Self {
         Self {
             registry,
             model_visible_specs,
+            loaded_deferred_tools,
         }
     }
 
     pub(crate) fn model_visible_specs(&self) -> Vec<ToolSpec> {
-        self.model_visible_specs.clone()
+        let mut specs = self.model_visible_specs.clone();
+        let mut namespace_indices = specs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, spec)| match spec {
+                ToolSpec::Namespace(namespace) => Some((namespace.name.clone(), index)),
+                ToolSpec::Function(_)
+                | ToolSpec::Freeform(_)
+                | ToolSpec::ToolSearch { .. }
+                | ToolSpec::WebSearch { .. } => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        let loaded = self.loaded_deferred_tools.tools.lock();
+        let loaded = match loaded {
+            Ok(loaded) => loaded,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        for loaded_tool in loaded.values() {
+            match loaded_tool {
+                LoadedDeferredTool::Function(tool) => specs.push(ToolSpec::Function(tool.clone())),
+                LoadedDeferredTool::NamespaceTool {
+                    namespace,
+                    namespace_description,
+                    tool,
+                } => {
+                    if let Some(index) = namespace_indices.get(namespace).copied() {
+                        let ToolSpec::Namespace(existing) = &mut specs[index] else {
+                            unreachable!("namespace index must point to a namespace spec");
+                        };
+                        existing.tools.push(tool.clone());
+                    } else {
+                        namespace_indices.insert(namespace.clone(), specs.len());
+                        specs.push(ToolSpec::Namespace(ResponsesApiNamespace {
+                            name: namespace.clone(),
+                            description: namespace_description.clone(),
+                            tools: vec![tool.clone()],
+                        }));
+                    }
+                }
+            }
+        }
+
+        specs
+    }
+
+    pub(crate) fn register_loaded_deferred_tools(
+        &self,
+        specs: &[LoadableToolSpec],
+    ) -> Result<(), FunctionCallError> {
+        let loaded = self.loaded_deferred_tools.tools.lock();
+        let mut loaded = match loaded {
+            Ok(loaded) => loaded,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        for (name, candidate) in specs
+            .iter()
+            .cloned()
+            .flat_map(LoadedDeferredTool::from_loadable)
+        {
+            if let Some(existing) = loaded.get(&name) {
+                if existing.has_same_schema(&candidate) {
+                    continue;
+                }
+                return Err(FunctionCallError::Fatal(format!(
+                    "tool_search returned conflicting schemas for deferred tool `{name}`"
+                )));
+            }
+            loaded.insert(name, candidate);
+        }
+
+        Ok(())
     }
 
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {

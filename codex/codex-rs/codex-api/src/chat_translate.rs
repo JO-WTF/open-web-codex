@@ -4,7 +4,6 @@
 use crate::common::ResponsesApiRequest;
 use crate::error::ApiError;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use serde::Deserialize;
 use serde::Serialize;
@@ -184,12 +183,10 @@ pub fn responses_request_to_chat_completions_request(
             })
         })
         .transpose()?;
-    let mut tools = decoded_tools
+    let tools = decoded_tools
         .map(|tools| responses_tools_to_chat_tools(&tools))
         .transpose()?
         .unwrap_or_default();
-    let deferred_tools = tool_search_output_tools(&input)?;
-    append_chat_tools(&mut tools, responses_tools_to_chat_tools(&deferred_tools)?)?;
     let tool_choice = chat_tool_choice(&tool_choice, !tools.is_empty())?;
     // `include`, `prompt_cache_key`, and `client_metadata` are Responses
     // metadata. The known encrypted-reasoning include is omitted as a
@@ -285,57 +282,6 @@ pub fn responses_tools_to_chat_tools(tools: &[Value]) -> Result<Vec<ChatTool>, A
         deduplicated.push(tool);
     }
     Ok(deduplicated)
-}
-
-fn append_chat_tools(tools: &mut Vec<ChatTool>, additions: Vec<ChatTool>) -> Result<(), ApiError> {
-    for addition in additions {
-        if let Some(existing) = tools
-            .iter()
-            .find(|tool| tool.function.name == addition.function.name)
-        {
-            if existing != &addition {
-                return Err(ApiError::InvalidRequest {
-                    message: format!(
-                        "wire_api = \"chat\" cannot encode conflicting loaded tool `{}`",
-                        addition.function.name
-                    ),
-                });
-            }
-            continue;
-        }
-        tools.push(addition);
-    }
-    Ok(())
-}
-
-fn tool_search_output_tools(input: &[ResponseItem]) -> Result<Vec<Value>, ApiError> {
-    // A deferred schema is a one-Turn loading result. The Chat wire needs the
-    // schema alongside the tool-search result so the immediately following
-    // Chat request can call it, but an older Turn's result must not make that
-    // schema directly callable again in a new Turn. Runtime stamps emitted
-    // items with their Turn identity; retain the metadata-free behavior for
-    // synthetic/legacy inputs that have no usable identity at all.
-    let active_turn_id = input.iter().rev().find_map(ResponseItem::turn_id);
-    let mut tools = Vec::new();
-    for item in input {
-        if active_turn_id.is_some_and(|turn_id| item.turn_id() != Some(turn_id)) {
-            continue;
-        }
-        let ResponseItem::ToolSearchOutput {
-            status,
-            execution,
-            tools: output_tools,
-            ..
-        } = item
-        else {
-            continue;
-        };
-        if status != "completed" || execution != "client" {
-            return Err(unsupported("non-client completed tool_search output"));
-        }
-        tools.extend(output_tools.iter().cloned());
-    }
-    Ok(tools)
 }
 
 fn convert_tool_search_tool(tool: &Value) -> Result<ChatTool, ApiError> {

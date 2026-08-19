@@ -201,7 +201,7 @@ fn flattens_function_and_namespace_tools_with_reversible_targets() {
 }
 
 #[test]
-fn translates_tool_search_and_replays_loaded_tools_as_chat_functions() {
+fn translates_tool_search_history_without_replaying_loaded_schemas() {
     let mut request = request(Some(vec![serde_json::json!({
         "type": "tool_search",
         "execution": "client",
@@ -240,7 +240,7 @@ fn translates_tool_search_and_replays_loaded_tools_as_chat_functions() {
             .iter()
             .map(|tool| tool.function.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["tool_search", "evaluate_network_baseline"]
+        vec!["tool_search"]
     );
     assert_eq!(
         translated.messages,
@@ -322,13 +322,26 @@ fn does_not_replay_a_previous_turns_loaded_tool_schema() {
 }
 
 #[test]
-fn deduplicates_identical_loaded_namespace_tools_before_chat_replay() {
-    let mut request = request(Some(vec![serde_json::json!({
-        "type": "tool_search",
-        "execution": "client",
-        "description": "Search available tools.",
-        "parameters": {"type": "object"}
-    })]));
+fn encodes_a_loaded_namespace_from_prompt_once() {
+    let mut request = request(Some(vec![
+        serde_json::json!({
+            "type": "tool_search",
+            "execution": "client",
+            "description": "Search available tools.",
+            "parameters": {"type": "object"}
+        }),
+        serde_json::json!({
+            "type": "namespace",
+            "name": "mcp__supply_chain",
+            "description": "Warehouse network tools.",
+            "tools": [{
+                "type": "function",
+                "name": "compare_network_scenarios",
+                "description": "Compare network scenarios.",
+                "parameters": {"type": "object", "properties": {}}
+            }]
+        }),
+    ]));
     request.instructions.clear();
     request.input = vec![
         ResponseItem::ToolSearchCall {
@@ -348,20 +361,12 @@ fn deduplicates_identical_loaded_namespace_tools_before_chat_replay() {
                 "type": "namespace",
                 "name": "mcp__supply_chain",
                 "description": "Warehouse network tools.",
-                "tools": [
-                    {
-                        "type": "function",
-                        "name": "compare_network_scenarios",
-                        "description": "Compare network scenarios.",
-                        "parameters": {"type": "object", "properties": {}}
-                    },
-                    {
-                        "type": "function",
-                        "name": "compare_network_scenarios",
-                        "description": "Compare network scenarios.",
-                        "parameters": {"type": "object", "properties": {}}
-                    }
-                ]
+                "tools": [{
+                    "type": "function",
+                    "name": "compare_network_scenarios",
+                    "description": "Compare network scenarios.",
+                    "parameters": {"type": "object", "properties": {}}
+                }]
             })],
             internal_chat_message_metadata_passthrough: None,
         },
@@ -378,6 +383,13 @@ fn deduplicates_identical_loaded_namespace_tools_before_chat_replay() {
             "tool_search",
             "mcp__supply_chain__compare_network_scenarios"
         ]
+    );
+    assert_eq!(
+        translated.tools[1].target,
+        ChatToolTarget {
+            name: "compare_network_scenarios".to_string(),
+            namespace: Some("mcp__supply_chain".to_string()),
+        }
     );
 }
 

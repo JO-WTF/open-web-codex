@@ -28,6 +28,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_tools::LoadableToolSpec;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -38,6 +39,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+use super::LoadedDeferredToolSet;
 use super::ToolCall;
 use super::ToolCallSource;
 use super::ToolRouter;
@@ -57,6 +59,106 @@ fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
     assert_eq!(
         tool_log_payload(&payload, &ToolCallSource::Direct),
         payload.log_payload()
+    );
+}
+
+#[test]
+fn loaded_deferred_tools_are_unique_within_a_turn_and_isolated_to_its_next_turn() {
+    let current_turn_plan = Arc::new(LoadedDeferredToolSet::default());
+    let router = ToolRouter::from_parts_with_loaded_deferred_tools(
+        crate::tools::registry::ToolRegistry::empty_for_test(),
+        vec![ToolSpec::ToolSearch {
+            execution: "client".to_string(),
+            description: "Search tools.".to_string(),
+            parameters: codex_tools::JsonSchema::default(),
+        }],
+        Arc::clone(&current_turn_plan),
+    );
+    let deferred_tool = |name: &str, parameters: serde_json::Value| {
+        LoadableToolSpec::Namespace(ResponsesApiNamespace {
+            name: "mcp__map_utils".to_string(),
+            description: "Map tools.".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Function(
+                codex_tools::ResponsesApiTool {
+                    name: name.to_string(),
+                    description: format!("{name} description."),
+                    strict: false,
+                    defer_loading: Some(true),
+                    parameters: codex_extension_api::parse_tool_input_schema(&parameters)
+                        .expect("test schema should parse"),
+                    output_schema: None,
+                },
+            )],
+        })
+    };
+    let create_map = deferred_tool(
+        "create_network_map_card",
+        json!({"type": "object", "properties": {"title": {"type": "string"}}}),
+    );
+    let revise_map = deferred_tool(
+        "revise_map_card",
+        json!({"type": "object", "properties": {"map_spec_ref": {"type": "string"}}}),
+    );
+
+    router
+        .register_loaded_deferred_tools(std::slice::from_ref(&create_map))
+        .expect("first search result should load");
+    router
+        .register_loaded_deferred_tools(&[create_map, revise_map.clone()])
+        .expect("repeated matching search result should merge");
+
+    assert_eq!(
+        namespace_function_names(&router.model_visible_specs(), "mcp__map_utils"),
+        vec![
+            "create_network_map_card".to_string(),
+            "revise_map_card".to_string(),
+        ]
+    );
+
+    let conflicting_create_map = deferred_tool(
+        "create_network_map_card",
+        json!({"type": "object", "properties": {"width": {"type": "integer"}}}),
+    );
+    assert!(matches!(
+        router.register_loaded_deferred_tools(&[conflicting_create_map]),
+        Err(codex_tools::FunctionCallError::Fatal(_))
+    ));
+
+    let next_step_router = ToolRouter::from_parts_with_loaded_deferred_tools(
+        crate::tools::registry::ToolRegistry::empty_for_test(),
+        vec![ToolSpec::ToolSearch {
+            execution: "client".to_string(),
+            description: "Search tools.".to_string(),
+            parameters: codex_tools::JsonSchema::default(),
+        }],
+        current_turn_plan,
+    );
+    assert_eq!(
+        namespace_function_names(&next_step_router.model_visible_specs(), "mcp__map_utils"),
+        vec![
+            "create_network_map_card".to_string(),
+            "revise_map_card".to_string(),
+        ]
+    );
+
+    let next_turn_router = ToolRouter::from_parts(
+        crate::tools::registry::ToolRegistry::empty_for_test(),
+        vec![ToolSpec::ToolSearch {
+            execution: "client".to_string(),
+            description: "Search tools.".to_string(),
+            parameters: codex_tools::JsonSchema::default(),
+        }],
+    );
+    assert_eq!(
+        namespace_function_names(&next_turn_router.model_visible_specs(), "mcp__map_utils"),
+        Vec::<String>::new()
+    );
+    next_turn_router
+        .register_loaded_deferred_tools(&[revise_map])
+        .expect("a new turn should load its own deferred schema");
+    assert_eq!(
+        namespace_function_names(&next_turn_router.model_visible_specs(), "mcp__map_utils"),
+        vec!["revise_map_card".to_string()]
     );
 }
 

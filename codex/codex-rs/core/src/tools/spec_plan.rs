@@ -447,7 +447,11 @@ pub(crate) fn finalize_tool_router(
             ));
     }
 
-    Ok(ToolRouter::from_parts(registry, model_visible_specs))
+    Ok(ToolRouter::from_parts_with_loaded_deferred_tools(
+        registry,
+        model_visible_specs,
+        Arc::clone(&turn_context.loaded_deferred_tools),
+    ))
 }
 
 fn apply_direct_model_only_namespace_overrides(

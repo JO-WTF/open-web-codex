@@ -11,16 +11,19 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ToolContributor;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_model_provider_info::WireApi;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -74,13 +77,113 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
+use wiremock::Mock;
+use wiremock::Respond;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
     "You have access to tools from the following sources",
     "- Calendar: Plan events and manage your calendar.",
 ];
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
+
+fn decoded_chat_body(request: &wiremock::Request) -> Value {
+    let body = request
+        .headers
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|entry| entry.trim().eq_ignore_ascii_case("zstd"))
+        })
+        .then(|| zstd::stream::decode_all(std::io::Cursor::new(&request.body)))
+        .transpose()
+        .expect("decode Chat request")
+        .unwrap_or_else(|| request.body.clone());
+    serde_json::from_slice(&body).expect("Chat request should be JSON")
+}
+
+fn chat_tool_call_response(call_id: &str, name: &str, arguments: &str) -> String {
+    let tool_chunk = json!({
+        "id": format!("chatcmpl-{call_id}"),
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "tool_calls": [{
+                    "index": 0,
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": name, "arguments": arguments},
+                }],
+            },
+        }],
+    });
+    let finish_chunk = json!({
+        "choices": [{
+            "index": 0,
+            "delta": {},
+            "finish_reason": "tool_calls",
+        }],
+    });
+    format!("data: {tool_chunk}\n\ndata: {finish_chunk}\n\ndata: [DONE]\n\n")
+}
+
+fn chat_text_response(id: &str, text: &str) -> String {
+    let text_chunk = json!({
+        "id": format!("chatcmpl-{id}"),
+        "choices": [{
+            "index": 0,
+            "delta": {"content": text},
+        }],
+    });
+    let finish_chunk = json!({
+        "choices": [{
+            "index": 0,
+            "delta": {},
+            "finish_reason": "stop",
+        }],
+    });
+    format!("data: {text_chunk}\n\ndata: {finish_chunk}\n\ndata: [DONE]\n\n")
+}
+
+async fn mount_chat_response_sequence(server: &wiremock::MockServer, responses: Vec<String>) {
+    struct SequenceResponder {
+        calls: AtomicUsize,
+        responses: Vec<String>,
+    }
+
+    impl Respond for SequenceResponder {
+        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+            let index = self.calls.fetch_add(1, Ordering::SeqCst);
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(
+                    self.responses
+                        .get(index)
+                        .unwrap_or_else(|| panic!("unexpected Chat request {index}"))
+                        .clone(),
+                )
+        }
+    }
+
+    let count = responses.len();
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(SequenceResponder {
+            calls: AtomicUsize::new(0),
+            responses,
+        })
+        .up_to_n_times(count as u64)
+        .expect(count as u64)
+        .mount(server)
+        .await;
+}
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -547,7 +650,7 @@ async fn explicit_app_mentions_leave_app_tools_deferred() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -> Result<()> {
+async fn tool_search_loads_deferred_tools_into_the_current_turn_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -799,16 +902,19 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
 
     let second_request_tools = tool_names(&requests[1].body_json());
     assert!(
-        !second_request_tools
-            .iter()
-            .any(|name| name == CALENDAR_CREATE_TOOL),
-        "follow-up request should rely on tool_search_output history, not tool injection: {second_request_tools:?}"
-    );
-    assert!(
-        !second_request_tools
+        second_request_tools
             .iter()
             .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
-        "follow-up request should rely on tool_search_output history, not namespace injection: {second_request_tools:?}"
+        "the current Turn prompt should contain the loaded namespace: {second_request_tools:?}"
+    );
+    assert!(
+        namespace_child_tool(
+            &requests[1].body_json(),
+            SEARCH_CALENDAR_NAMESPACE,
+            SEARCH_CALENDAR_CREATE_TOOL
+        )
+        .is_some(),
+        "the current Turn prompt should contain the loaded calendar tool"
     );
 
     let output_item = requests[2].function_call_output("calendar-call-1");
@@ -819,16 +925,19 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
 
     let third_request_tools = tool_names(&requests[2].body_json());
     assert!(
-        !third_request_tools
-            .iter()
-            .any(|name| name == CALENDAR_CREATE_TOOL),
-        "post-tool follow-up should still rely on tool_search_output history, not tool injection: {third_request_tools:?}"
-    );
-    assert!(
-        !third_request_tools
+        third_request_tools
             .iter()
             .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
-        "post-tool follow-up should still rely on tool_search_output history, not namespace injection: {third_request_tools:?}"
+        "the loaded namespace should remain available for the current Turn: {third_request_tools:?}"
+    );
+    assert!(
+        namespace_child_tool(
+            &requests[2].body_json(),
+            SEARCH_CALENDAR_NAMESPACE,
+            SEARCH_CALENDAR_CREATE_TOOL
+        )
+        .is_some(),
+        "the loaded calendar tool should remain available for the current Turn"
     );
 
     Ok(())
@@ -1051,6 +1160,10 @@ async fn tool_search_returns_deferred_custom_tool_and_routes_follow_up_call() ->
             }],
         })]
     );
+    assert!(
+        namespace_child_tool(&requests[1].body_json(), "functions", "custom_echo").is_some(),
+        "the current Turn prompt should contain the loaded custom tool"
+    );
     let output = requests[2].custom_tool_call_output("custom-1");
     let output: Value = serde_json::from_str(
         output["output"]
@@ -1245,8 +1358,12 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
     let second_request_body = requests[1].body_json();
     let second_request_tools = tool_names(&second_request_body);
     assert!(
-        !second_request_tools.iter().any(|name| name == tool_name),
-        "follow-up request should rely on tool_search_output history, not tool injection: {second_request_tools:?}"
+        second_request_tools.iter().any(|name| name == "codex_app"),
+        "the current Turn prompt should contain the loaded namespace: {second_request_tools:?}"
+    );
+    assert!(
+        namespace_child_tool(&second_request_body, "codex_app", tool_name).is_some(),
+        "the current Turn prompt should contain the loaded dynamic tool"
     );
 
     let output = requests[2]
@@ -1263,9 +1380,162 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
     let third_request_body = requests[2].body_json();
     let third_request_tools = tool_names(&third_request_body);
     assert!(
-        !third_request_tools.iter().any(|name| name == tool_name),
-        "post-tool follow-up should rely on tool_search_output history, not tool injection: {third_request_tools:?}"
+        third_request_tools.iter().any(|name| name == "codex_app"),
+        "the loaded namespace should remain available for the current Turn: {third_request_tools:?}"
     );
+    assert!(
+        namespace_child_tool(&third_request_body, "codex_app", tool_name).is_some(),
+        "the loaded dynamic tool should remain available for the current Turn"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chat_tool_search_loads_the_map_card_tool_once_and_preserves_inline_delivery() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let map_call_id = "map-card-call";
+    let inline_map_directive = "::codex-inline-vis{artifact=\"map-card-test\"}";
+    mount_chat_response_sequence(
+        &server,
+        vec![
+            chat_tool_call_response(
+                "tool-search-call",
+                TOOL_SEARCH_TOOL_NAME,
+                r#"{"query":"create a warehouse coverage map"}"#,
+            ),
+            chat_tool_call_response(
+                map_call_id,
+                "mcp__map_utils__create_network_map_card",
+                r#"{"title":"12 hour coverage"}"#,
+            ),
+            chat_text_response("map-card-final", inline_map_directive),
+        ],
+    )
+    .await;
+
+    let map_tool = DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+        name: "mcp__map_utils".to_string(),
+        description: "Warehouse map delivery tools.".to_string(),
+        tools: vec![DynamicToolNamespaceTool::Function(
+            DynamicToolFunctionSpec {
+                name: "create_network_map_card".to_string(),
+                description: "Creates an inline warehouse network map card.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {"title": {"type": "string"}},
+                    "required": ["title"],
+                    "additionalProperties": false,
+                }),
+                defer_loading: true,
+            },
+        )],
+    });
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.support_verbosity = false;
+            model_info.default_verbosity = None;
+            model_info.supports_search_tool = false;
+            model_info.apply_patch_tool_type = None;
+            model_info.experimental_supported_tools.clear();
+        })
+        .with_config(|config| {
+            config.model = Some("gpt-5.4".to_string());
+            config.model_provider.wire_api = WireApi::Chat;
+            config.model_provider.supports_standalone_web_search = false;
+        });
+    let base_test = builder.build_with_auto_env(&server).await?;
+    let new_thread = base_test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![map_tool],
+            ..StartThreadOptions::new(base_test.config.clone())
+        })
+        .await?;
+    let mut test = base_test;
+    test.codex = new_thread.thread;
+    test.session_configured = new_thread.session_configured;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Show the warehouse coverage map".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    let request = loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::DynamicToolCallRequest(request) => break request,
+            EventMsg::Error(error) => panic!("Chat map delivery failed: {}", error.message),
+            EventMsg::TurnComplete(_) => {
+                panic!("Chat map delivery completed without calling the map tool")
+            }
+            _ => {}
+        }
+    };
+    assert_eq!(request.call_id, map_call_id);
+    assert_eq!(request.namespace.as_deref(), Some("mcp__map_utils"));
+    assert_eq!(request.tool, "create_network_map_card");
+    assert_eq!(request.arguments, json!({"title":"12 hour coverage"}));
+
+    test.codex
+        .submit(Op::DynamicToolResponse {
+            id: request.call_id,
+            response: DynamicToolResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "map card created: map-card-test".to_string(),
+                }],
+                success: true,
+            },
+        })
+        .await?;
+
+    let mut final_text = None;
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::AgentMessage(message),
+                ..
+            }) => {
+                final_text = message.content.first().map(|content| {
+                    let codex_protocol::items::AgentMessageContent::Text { text } = content;
+                    text.clone()
+                });
+            }
+            EventMsg::Error(error) => panic!("Chat map delivery failed: {}", error.message),
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    assert_eq!(final_text.as_deref(), Some(inline_map_directive));
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 3);
+    for (index, request) in requests.iter().enumerate().skip(1) {
+        let body = decoded_chat_body(request);
+        let map_tools = body["tools"]
+            .as_array()
+            .expect("Chat request should contain tools")
+            .iter()
+            .filter(|tool| {
+                tool.pointer("/function/name").and_then(Value::as_str)
+                    == Some("mcp__map_utils__create_network_map_card")
+            })
+            .count();
+        assert_eq!(
+            map_tools, 1,
+            "Chat request {index} must encode the map tool exactly once"
+        );
+    }
 
     Ok(())
 }
