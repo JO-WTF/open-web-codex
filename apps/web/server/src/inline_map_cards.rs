@@ -30,20 +30,27 @@ pub(crate) struct InlineMapSource {
 pub(crate) fn candidate_with_registry(
     item: &Map<String, Value>,
     registry: &DeliveryRegistry,
-) -> Option<InlineMapCandidate> {
-    let contract = registry.for_item(item)?;
-    if item.get("type")?.as_str()? != "mcpToolCall"
-        || !matches!(contract.kind, DeliveryKind::InlineGeoJsonMapCard)
-    {
-        return None;
+) -> Result<Option<InlineMapCandidate>, &'static str> {
+    let Some(contract) = registry.for_item(item) else {
+        return Ok(None);
+    };
+    if item.get("type").and_then(Value::as_str) != Some("mcpToolCall") {
+        return Err("inline_map_card_invalid");
+    }
+    if !matches!(contract.kind, DeliveryKind::InlineGeoJsonMapCard) {
+        return Ok(None);
     }
     let structured = item
-        .get("result")?
-        .as_object()?
-        .get("structuredContent")?
-        .as_object()?;
-    if structured.get("type")?.as_str()? != "open-web-artifact"
-        || structured.get("kind")?.as_str()? != "inline-visualization.v1"
+        .get("result")
+        .ok_or("inline_map_card_invalid")?
+        .as_object()
+        .ok_or("inline_map_card_invalid")?
+        .get("structuredContent")
+        .ok_or("inline_map_card_invalid")?
+        .as_object()
+        .ok_or("inline_map_card_invalid")?;
+    if structured.get("type").and_then(Value::as_str) != Some("open-web-artifact")
+        || structured.get("kind").and_then(Value::as_str) != Some("inline-visualization.v1")
         || structured.keys().any(|key| {
             !matches!(
                 key.as_str(),
@@ -51,43 +58,68 @@ pub(crate) fn candidate_with_registry(
             )
         })
     {
-        return None;
+        return Err("inline_map_card_invalid");
     }
-    validate_warnings(structured.get("warnings"))?;
-    let artifact = structured.get("artifact")?.as_object()?;
+    validate_warnings(structured.get("warnings")).ok_or("inline_map_card_invalid")?;
+    let artifact = structured
+        .get("artifact")
+        .ok_or("inline_map_card_invalid")?
+        .as_object()
+        .ok_or("inline_map_card_invalid")?;
     if artifact
         .keys()
         .any(|key| !matches!(key.as_str(), "ref" | "renderer"))
     {
-        return None;
+        return Err("inline_map_card_invalid");
     }
-    let card_ref = artifact.get("ref")?.as_str()?.trim();
+    let card_ref = artifact
+        .get("ref")
+        .ok_or("inline_map_card_invalid")?
+        .as_str()
+        .ok_or("inline_map_card_invalid")?
+        .trim();
     if !valid_identifier(card_ref) {
-        return None;
+        return Err("inline_map_card_invalid");
     }
-    let renderer = artifact.get("renderer")?.as_object()?;
+    let renderer = artifact
+        .get("renderer")
+        .ok_or("inline_map_card_invalid")?
+        .as_object()
+        .ok_or("inline_map_card_invalid")?;
     if renderer.len() != 2
-        || renderer.get("kind")?.as_str()? != "map.v3"
+        || renderer.get("kind").and_then(Value::as_str) != Some("map.v3")
         || renderer
             .keys()
             .any(|key| !matches!(key.as_str(), "kind" | "payload"))
     {
-        return None;
+        return Err("inline_map_card_invalid");
     }
-    let renderer_payload = validate_renderer_payload(renderer.get("payload")?)?;
-    let embed = structured.get("embed")?.as_object()?;
+    let renderer_payload =
+        validate_renderer_payload(renderer.get("payload").ok_or("inline_map_card_invalid")?)
+            .ok_or("inline_map_card_invalid")?;
+    let embed = structured
+        .get("embed")
+        .ok_or("inline_map_card_invalid")?
+        .as_object()
+        .ok_or("inline_map_card_invalid")?;
     if embed.len() != 2
-        || embed.get("syntax")?.as_str()? != "codex-inline-vis.artifact.v1"
-        || embed.get("code")?.as_str()? != format!("::codex-inline-vis{{artifact=\"{card_ref}\"}}")
+        || embed.get("syntax").and_then(Value::as_str) != Some("codex-inline-vis.artifact.v1")
+        || embed.get("code").and_then(Value::as_str)
+            != Some(format!("::codex-inline-vis{{artifact=\"{card_ref}\"}}").as_str())
     {
-        return None;
+        return Err("inline_map_card_invalid");
     }
-    let map_spec_ref = validate_map_spec_ref(structured.get("map_spec_ref")?)?;
-    Some(InlineMapCandidate {
+    let map_spec_ref = validate_map_spec_ref(
+        structured
+            .get("map_spec_ref")
+            .ok_or("inline_map_card_invalid")?,
+    )
+    .ok_or("inline_map_card_invalid")?;
+    Ok(Some(InlineMapCandidate {
         card_ref: card_ref.to_string(),
         renderer_payload,
         map_spec_ref,
-    })
+    }))
 }
 
 fn validate_map_spec_ref(value: &Value) -> Option<Value> {
@@ -109,6 +141,8 @@ fn validate_map_spec_ref(value: &Value) -> Option<Value> {
 #[cfg(test)]
 fn candidate(item: &Map<String, Value>) -> Option<InlineMapCandidate> {
     candidate_with_registry(item, &crate::delivery_contracts::warehouse_test_registry())
+        .ok()
+        .flatten()
 }
 
 fn validate_warnings(value: Option<&Value>) -> Option<()> {
@@ -551,55 +585,75 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_the_exact_map_card_tool_and_projects_private_sources_to_urls() {
-        let mut value = Value::Object(item(MAP_SERVER, MAP_TOOL));
-        value
-            .pointer_mut("/result/structuredContent/artifact/renderer/payload/sources/network")
-            .and_then(Value::as_object_mut)
-            .expect("map source")
-            .insert("lineMetrics".to_string(), Value::Bool(true));
-        let map_candidate =
-            candidate(value.as_object().expect("map item")).expect("valid map card");
-        assert_eq!(map_candidate.card_ref, "map-network");
-        assert_eq!(
-            map_candidate
-                .map_spec_ref
-                .pointer("/uri")
-                .and_then(Value::as_str),
-            Some("maps-data://map-card-spec/map-card-spec-network")
-        );
-        let projected = browser_payload(
-            Uuid::nil(),
-            &map_candidate.card_ref,
-            map_candidate.renderer_payload,
-        )
-        .expect("browser payload");
-        assert_eq!(
-            projected
-                .pointer("/sources/network/data/type")
-                .and_then(Value::as_str),
-            Some("resource")
-        );
-        assert_eq!(
-            projected.pointer("/sources/network/data/url").and_then(Value::as_str),
-            Some("/api/runs/00000000-0000-0000-0000-000000000000/inline-maps/map-network/sources/network")
-        );
-        assert!(!projected.to_string().contains("supply-chain://"));
-        assert_eq!(
-            projected
-                .pointer("/sources/network/lineMetrics")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-
-        assert!(candidate(&item("supply_chain", MAP_TOOL)).is_none());
-        assert!(candidate(&item(MAP_SERVER, "get_route")).is_none());
+    fn accepts_each_declared_map_card_producer_and_projects_private_sources_to_urls() {
+        for tool in [
+            "create_network_map_card",
+            "create_map_card",
+            "revise_map_card",
+        ] {
+            let mut value = Value::Object(item(MAP_SERVER, tool));
+            value
+                .pointer_mut("/result/structuredContent/artifact/renderer/payload/sources/network")
+                .and_then(Value::as_object_mut)
+                .expect("map source")
+                .insert("lineMetrics".to_string(), Value::Bool(true));
+            let map_candidate =
+                candidate(value.as_object().expect("map item")).expect("valid map card");
+            assert_eq!(map_candidate.card_ref, "map-network");
+            assert_eq!(
+                map_candidate
+                    .map_spec_ref
+                    .pointer("/uri")
+                    .and_then(Value::as_str),
+                Some("maps-data://map-card-spec/map-card-spec-network")
+            );
+            let projected = browser_payload(
+                Uuid::nil(),
+                &map_candidate.card_ref,
+                map_candidate.renderer_payload,
+            )
+            .expect("browser payload");
+            assert_eq!(
+                projected
+                    .pointer("/sources/network/data/type")
+                    .and_then(Value::as_str),
+                Some("resource")
+            );
+            assert_eq!(
+                projected.pointer("/sources/network/data/url").and_then(Value::as_str),
+                Some("/api/runs/00000000-0000-0000-0000-000000000000/inline-maps/map-network/sources/network")
+            );
+            assert!(!projected.to_string().contains("supply-chain://"));
+            assert_eq!(
+                projected
+                    .pointer("/sources/network/lineMetrics")
+                    .and_then(Value::as_bool),
+                Some(true)
+            );
+        }
 
         let mut unsafe_item = Value::Object(item(MAP_SERVER, MAP_TOOL));
         *unsafe_item
             .pointer_mut("/result/structuredContent/artifact/renderer/payload/title")
             .expect("map title") = Value::String("/private/tmp/internal-map.json".to_string());
         assert!(candidate(unsafe_item.as_object().expect("unsafe map item")).is_none());
+    }
+
+    #[test]
+    fn rejects_a_declared_map_card_with_an_invalid_contract() {
+        let mut value = Value::Object(item(MAP_SERVER, "create_map_card"));
+        *value
+            .pointer_mut("/result/structuredContent/map_spec_ref")
+            .expect("map spec ref") = Value::Null;
+        assert_eq!(
+            candidate_with_registry(
+                value.as_object().expect("invalid map item"),
+                &crate::delivery_contracts::warehouse_test_registry(),
+            ),
+            Err("inline_map_card_invalid")
+        );
+        assert!(candidate(&item("supply_chain", MAP_TOOL)).is_none());
+        assert!(candidate(&item(MAP_SERVER, "get_route")).is_none());
     }
 
     #[test]

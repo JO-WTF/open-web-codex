@@ -19,6 +19,8 @@ metadata:
 
 生成仓网点、线、面地图时优先调用 `create_network_map_card`，传入 Network Tool 返回的精确 GeoJSON `data_ref`。用户要求行政区边界时，先将 Data 已确认的 Workspace GeoJSON 通过 `publish_workspace_geojson(require_polygon=true)` 发布成精确 `boundary_data_ref`，再传入地图 Tool。该 Tool 按 profile 自动生成仓库、需求、末端覆盖、干线、候选与设施状态图层；不要自行拼 `sources`、`layers` 或猜字段。只有超出该固定领域表达的明确用户样式需求，才按 `data_ref.profile` 直接调用低层 `create_map_card`。
 
+一次地图交付中，`create_network_map_card` 成功后必须立即引用该次返回的 `structuredContent.embed.code`，并停止地图构建；不得在同一交付中再调用 `create_map_card` 或用另一张卡片替换其 Artifact 引用。超出领域表达的样式要求应作为新的、明确的地图样式请求处理；只有在该请求开始时才调用一次低层 `create_map_card`，并且只引用该调用成功返回的 embed 指令。
+
 低层样式调整时才按 `profile.discriminator_property`、`feature_types` 和实际非空字段构造筛选、标签与 hover；不要从业务名称或历史地图猜字段。单一结果可使用 `assigned_warehouse_id`、`distance_km`、`duration_hours`、`unit_cost`；comparison 才可使用 `baseline_*` 与 `facility_*`。缺失字段直接省略，不制作通用替代字段。
 
 用户要求修订已有地图时，纯标题、图层、颜色、图例、hover 或视角只调用 `revise_map_card`，且只接受当前 Turn 由 Platform 注入的精确 `map_spec_ref`：它必须是 `server="map_utils"`、`resource_schema="map_card_spec.v1"`、`uri` 以 `maps-data://map-card-spec/` 开头的 ResourceRef。artifact ID、GeoJSON ref、地图标题、模型文本或“上一张地图”不是 spec；缺少精确选择时返回 `needs_context`，请用户在卡片上选择「基于此图修改」。`map_card_spec_ref_invalid` 或 `map_card_spec_unavailable` 是当前请求的 typed 终态，不构造变体、不重试。需要新覆盖线时先从精确分配结果生成新 GeoJSON。

@@ -676,10 +676,14 @@ fn project_frame_with_deliveries(
         Some(Err(code)) if event_type == "codex.item.completed" => (Vec::new(), Some(code), true),
         _ => (Vec::new(), None, false),
     };
-    let inline_map = if event_type == "codex.item.completed" {
-        item.and_then(|item| inline_map_cards::candidate_with_registry(item, deliveries))
+    let (inline_map, inline_map_delivery_error) = if event_type == "codex.item.completed" {
+        match item.map(|item| inline_map_cards::candidate_with_registry(item, deliveries)) {
+            Some(Ok(candidate)) => (candidate, None),
+            Some(Err(code)) => (None, Some(code)),
+            None => (None, None),
+        }
     } else {
-        None
+        (None, None)
     };
     let resource_refs = if event_type == "codex.item.completed" {
         item.map(resource_ref_projections::candidates)
@@ -710,7 +714,7 @@ fn project_frame_with_deliveries(
             .and_then(Value::as_object_mut)
             .map(|structured| structured.remove("artifact"));
     }
-    if let Some(code) = artifact_delivery_error {
+    if let Some(code) = artifact_delivery_error.or(inline_map_delivery_error) {
         mark_artifact_delivery_failure(&mut payload, &code);
     }
 

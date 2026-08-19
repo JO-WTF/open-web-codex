@@ -1582,6 +1582,7 @@ mod tests {
             assert!(skill.contains("`create_network_map_card`"));
             assert!(skill.contains("`publish_workspace_geojson(require_polygon=true)`"));
             assert!(skill.contains("不要自行拼 `sources`、`layers` 或猜字段"));
+            assert!(skill.contains("不得在同一交付中再调用 `create_map_card`"));
         }
         assert!(SUPERVISOR_SKILL.contains("`existing_only` 只限制 baseline 的计算范围"));
     }
