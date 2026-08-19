@@ -3,11 +3,15 @@
 
 use crate::common::ResponsesApiRequest;
 use crate::error::ApiError;
+use codex_protocol::ToolName;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -96,6 +100,10 @@ pub struct ChatCompletionsApiRequest {
     pub reasoning_effort: Option<ChatReasoningEffort>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
+    /// Reverse targets for deferred tools discovered in the current Turn.
+    /// These are transport metadata only and never become Chat `tools`.
+    #[serde(skip)]
+    pub history_tool_targets: HashMap<String, ChatToolTarget>,
 }
 
 #[derive(Debug, Default, Serialize, Clone, PartialEq)]
@@ -187,6 +195,7 @@ pub fn responses_request_to_chat_completions_request(
         .map(|tools| responses_tools_to_chat_tools(&tools))
         .transpose()?
         .unwrap_or_default();
+    let history_tool_targets = current_turn_tool_targets(&input, &tools)?;
     let tool_choice = chat_tool_choice(&tool_choice, !tools.is_empty())?;
     // `include`, `prompt_cache_key`, and `client_metadata` are Responses
     // metadata. The known encrypted-reasoning include is omitted as a
@@ -213,6 +222,7 @@ pub fn responses_request_to_chat_completions_request(
         },
         reasoning_effort,
         service_tier,
+        history_tool_targets,
     })
 }
 
@@ -282,6 +292,254 @@ pub fn responses_tools_to_chat_tools(tools: &[Value]) -> Result<Vec<ChatTool>, A
         deduplicated.push(tool);
     }
     Ok(deduplicated)
+}
+
+#[derive(Debug)]
+struct ToolTargetCandidate {
+    wire_name: String,
+    target: ChatToolTarget,
+    schema: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum ToolSearchSpec {
+    #[serde(rename = "function")]
+    Function { name: String },
+    #[serde(rename = "namespace")]
+    Namespace {
+        name: String,
+        tools: Vec<ToolSearchNamespaceTool>,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum ToolSearchNamespaceTool {
+    #[serde(rename = "function")]
+    Function { name: String },
+    #[serde(rename = "custom")]
+    Custom {
+        #[serde(rename = "name")]
+        _name: String,
+    },
+}
+
+fn current_turn_tool_targets(
+    input: &[ResponseItem],
+    prompt_tools: &[ChatTool],
+) -> Result<HashMap<String, ChatToolTarget>, ApiError> {
+    let Some((turn_boundary_index, current_turn_id)) =
+        input
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, item)| match item {
+                ResponseItem::Message { role, .. } if role == "user" => {
+                    Some((index, item.turn_id().map(str::to_string)))
+                }
+                _ => None,
+            })
+    else {
+        return Ok(HashMap::new());
+    };
+
+    let mut tool_search_call_ids = HashSet::new();
+    let mut history_candidates = Vec::new();
+    for item in input.iter().skip(turn_boundary_index) {
+        match item {
+            ResponseItem::ToolSearchCall {
+                call_id: Some(call_id),
+                execution,
+                ..
+            } if execution == "client"
+                && item_belongs_to_current_turn(item, current_turn_id.as_deref()) =>
+            {
+                tool_search_call_ids.insert(call_id.as_str());
+            }
+            ResponseItem::ToolSearchOutput {
+                call_id: Some(call_id),
+                status,
+                execution,
+                tools,
+                ..
+            } if status == "completed"
+                && execution == "client"
+                && item_belongs_to_current_turn(item, current_turn_id.as_deref())
+                && tool_search_call_ids.contains(call_id.as_str()) =>
+            {
+                history_candidates.extend(loadable_tool_targets(tools)?);
+            }
+            _ => {}
+        }
+    }
+
+    let mut targets = HashMap::new();
+    let mut direct_wire_names = HashSet::new();
+    for tool in prompt_tools {
+        direct_wire_names.insert(tool.function.name.clone());
+        register_tool_target(
+            &mut targets,
+            ToolTargetCandidate {
+                wire_name: tool.function.name.clone(),
+                target: tool.target.clone(),
+                schema: chat_function_schema(tool.function.strict, &tool.function.parameters),
+            },
+        )?;
+    }
+
+    let mut history_wire_names = HashSet::new();
+    for candidate in history_candidates {
+        history_wire_names.insert(candidate.wire_name.clone());
+        register_tool_target(&mut targets, candidate)?;
+    }
+
+    Ok(history_wire_names
+        .into_iter()
+        .filter(|wire_name| !direct_wire_names.contains(wire_name))
+        .filter_map(|wire_name| {
+            targets
+                .remove(&wire_name)
+                .map(|entry| (wire_name, entry.target))
+        })
+        .collect())
+}
+
+fn item_belongs_to_current_turn(item: &ResponseItem, current_turn_id: Option<&str>) -> bool {
+    current_turn_id.is_none_or(|current_turn_id| {
+        item.turn_id()
+            .is_none_or(|item_turn_id| item_turn_id == current_turn_id)
+    })
+}
+
+fn loadable_tool_targets(tools: &[Value]) -> Result<Vec<ToolTargetCandidate>, ApiError> {
+    let mut candidates = Vec::new();
+    for tool in tools {
+        let parsed: ToolSearchSpec =
+            serde_json::from_value(tool.clone()).map_err(|error| ApiError::InvalidRequest {
+                message: format!("invalid completed tool_search tool definition: {error}"),
+            })?;
+        match parsed {
+            ToolSearchSpec::Function { name } => {
+                candidates.push(tool_target_candidate(
+                    ToolName::plain(name),
+                    chat_function_schema_from_value(tool),
+                )?);
+            }
+            ToolSearchSpec::Namespace {
+                name: namespace,
+                tools,
+            } => {
+                if namespace.is_empty() {
+                    return Err(ApiError::InvalidRequest {
+                        message: "completed tool_search namespace must not be empty".to_string(),
+                    });
+                }
+                let raw_tools = tool.get("tools").and_then(Value::as_array).ok_or_else(|| {
+                    ApiError::InvalidRequest {
+                        message: format!(
+                            "completed tool_search namespace `{namespace}` omitted its tools"
+                        ),
+                    }
+                })?;
+                if raw_tools.len() != tools.len() {
+                    return Err(ApiError::InvalidRequest {
+                        message: format!(
+                            "completed tool_search namespace `{namespace}` has inconsistent tools"
+                        ),
+                    });
+                }
+                for (nested_tool, nested_value) in tools.into_iter().zip(raw_tools) {
+                    let ToolSearchNamespaceTool::Function { name } = nested_tool else {
+                        return Err(unsupported("custom deferred tools"));
+                    };
+                    candidates.push(tool_target_candidate(
+                        ToolName::namespaced(namespace.clone(), name),
+                        chat_function_schema_from_value(nested_value),
+                    )?);
+                }
+            }
+        }
+    }
+    Ok(candidates)
+}
+
+fn chat_function_schema(strict: bool, parameters: &Value) -> Value {
+    serde_json::json!({
+        "strict": strict,
+        "parameters": parameters,
+    })
+}
+
+fn chat_function_schema_from_value(tool: &Value) -> Value {
+    let parameters = tool
+        .get("parameters")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    chat_function_schema(
+        tool.get("strict").and_then(Value::as_bool).unwrap_or(false),
+        &parameters,
+    )
+}
+
+fn tool_target_candidate(
+    tool_name: ToolName,
+    schema: Value,
+) -> Result<ToolTargetCandidate, ApiError> {
+    if tool_name.name.is_empty() {
+        return Err(ApiError::InvalidRequest {
+            message: "completed tool_search tool name must not be empty".to_string(),
+        });
+    }
+    if tool_name.is_default_namespace() && tool_name.name == "tool_search" {
+        return Err(ApiError::InvalidRequest {
+            message: "completed tool_search output cannot redefine native tool_search".to_string(),
+        });
+    }
+    let wire_name = chat_wire_name(&tool_name);
+    Ok(ToolTargetCandidate {
+        wire_name,
+        target: ChatToolTarget {
+            name: tool_name.name,
+            namespace: tool_name.namespace,
+        },
+        schema,
+    })
+}
+
+fn register_tool_target(
+    targets: &mut HashMap<String, ToolTargetCandidate>,
+    candidate: ToolTargetCandidate,
+) -> Result<(), ApiError> {
+    if let Some(existing) = targets.get(&candidate.wire_name) {
+        if existing.target != candidate.target {
+            return Err(ApiError::InvalidRequest {
+                message: format!(
+                    "wire_api = \"chat\" cannot encode colliding deferred tool target `{}`",
+                    candidate.wire_name
+                ),
+            });
+        }
+        if existing.schema != candidate.schema {
+            return Err(ApiError::InvalidRequest {
+                message: format!(
+                    "wire_api = \"chat\" cannot encode deferred tool `{}` with multiple schemas",
+                    candidate.wire_name
+                ),
+            });
+        }
+        return Ok(());
+    }
+    targets.insert(candidate.wire_name.clone(), candidate);
+    Ok(())
+}
+
+fn chat_wire_name(tool_name: &ToolName) -> String {
+    tool_name
+        .namespace
+        .as_deref()
+        .map(|namespace| format!("{namespace}__{}", tool_name.name))
+        .unwrap_or_else(|| tool_name.name.clone())
 }
 
 fn convert_tool_search_tool(tool: &Value) -> Result<ChatTool, ApiError> {

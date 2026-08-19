@@ -163,6 +163,38 @@ async fn chat_sse_maps_tool_search_function_to_a_native_tool_search_item() {
 }
 
 #[tokio::test]
+async fn chat_sse_resolves_current_turn_deferred_target() {
+    let events = collect(
+        concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"spawn-1\",\"function\":{\"name\":\"multi_agent_v1__spawn_agent\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n"
+        ),
+        HashMap::from([(
+            "multi_agent_v1__spawn_agent".to_string(),
+            ChatToolTarget {
+                name: "spawn_agent".to_string(),
+                namespace: Some("multi_agent_v1".to_string()),
+            },
+        )]),
+    )
+    .await;
+
+    let Ok(ResponseEvent::OutputItemDone(ResponseItem::FunctionCall {
+        name,
+        namespace,
+        call_id,
+        ..
+    })) = &events[1]
+    else {
+        panic!("expected the deferred Chat target to become a native function call");
+    };
+    assert_eq!(name, "spawn_agent");
+    assert_eq!(namespace.as_deref(), Some("multi_agent_v1"));
+    assert_eq!(call_id, "spawn-1");
+    assert!(matches!(&events[2], Ok(ResponseEvent::Completed { .. })));
+}
+
+#[tokio::test]
 async fn chat_sse_rejects_invalid_wire_and_terminal_shapes() {
     let cases = [
         (

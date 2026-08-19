@@ -90,6 +90,18 @@ function visibleToolNames(body) {
     : [];
 }
 
+function chatToolSearchOutput(body) {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const toolMessage = [...messages].reverse().find((message) => message?.role === "tool");
+  if (typeof toolMessage?.content !== "string") return undefined;
+  try {
+    const content = JSON.parse(toolMessage.content);
+    return Array.isArray(content) ? content : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function log(message) {
   process.stdout.write(sanitize(message) + "\n");
 }
@@ -578,6 +590,7 @@ class DeterministicModelServer {
     });
     this.requests = [];
     this.calls = [];
+    this.toolSearchOutputs = [];
     this.address = undefined;
   }
 
@@ -620,7 +633,11 @@ class DeterministicModelServer {
         : "root";
     const text = JSON.stringify(body);
     const isChat = request.url?.includes("/chat/completions") ?? false;
-    const plan = this.responseFor(body, text, runId, role, isChat);
+    const toolSearchOutput = chatToolSearchOutput(body);
+    if (toolSearchOutput) {
+      this.toolSearchOutputs.push({ runId, role, count: toolSearchOutput.length });
+    }
+    const plan = this.responseFor(body, text, runId, role, isChat, toolSearchOutput);
     this.requests.push({
       path: request.url,
       runId,
@@ -657,11 +674,11 @@ class DeterministicModelServer {
     response.end(ssePayload(plan.events));
   }
 
-  responseFor(body, text, runId, role, isChat) {
-    // Chat flattens namespaced V1 tools to `<namespace>__<name>`, so the
-    // namespace is not JSON-quoted as a standalone value in the request.
-    const v2 = !text.includes('"multi_agent_v1"') &&
-      !(isChat && text.includes("multi_agent_v1__"));
+  responseFor(body, text, runId, role, isChat, toolSearchOutput) {
+    // This Copilot explicitly declares native Multi-Agent V1. Chat flattens
+    // that namespace, and the deferred schema is intentionally absent from
+    // the request `tools` list, so infer neither version from wire JSON.
+    const v2 = !isChat && !text.includes('"multi_agent_v1"');
     const id = (suffix) => "e2e:" + runId + ":" + suffix;
     const has = (suffix) => hasCall(text, id(suffix));
     const toolSearch = (suffix, query) => ({
@@ -703,6 +720,12 @@ class DeterministicModelServer {
     if (role === "data") {
       if (!has("data:search")) {
         return toolSearch("data:search", "inspect workspace sources and prepare network input");
+      }
+      if (toolSearchOutput?.length === 0) {
+        return message(
+          "data:blocked",
+          "E2E_TYPED_BLOCKER=data_mcp_tools_not_discovered Data Role tool_search returned no callable Data MCP tools.",
+        );
       }
       if (!has("data:inspect")) {
         return mcp("data:inspect", "inspect_workspace_sources", {
@@ -823,6 +846,12 @@ class DeterministicModelServer {
         targets: [target],
         timeout_ms: 300_000,
       });
+    }
+    if (text.includes("E2E_TYPED_BLOCKER=data_mcp_tools_not_discovered")) {
+      return message(
+        "root:data-blocked",
+        "E2E_TYPED_BLOCKER=data_mcp_tools_not_discovered Data Role could not discover its configured MCP tools.",
+      );
     }
     if (!has("root:spawn-network")) {
       const preparedPath = findPreparedPath(body);
@@ -1104,30 +1133,30 @@ async function runCase(index) {
       (request) => request.runId === runId,
     );
     const modelCalls = state.modelServer.calls.filter((call) => call.runId === runId);
-    const toolSearchRequestIndex = modelRequests.findIndex((request) =>
-      request.visibleTools.includes("tool_search"),
+    const spawnCalls = modelCalls.filter((call) => call.name === "spawn_agent");
+    const projectedCollaboration = events.some(
+      (event) =>
+        itemType(event) === "collabAgentToolCall" &&
+        /spawn|wait/i.test(String(eventTool(event))),
     );
-    const visibleAfterToolSearch = modelRequests
-      .slice(toolSearchRequestIndex + 1)
-      .flatMap((request) => request.visibleTools);
-    const collaborationAttempted = modelCalls.some((call) =>
-      /spawn_agent|send_message|wait_agent|followup_task/.test(call.name),
-    );
-    if (
-      toolSearchRequestIndex >= 0 &&
-      collaborationAttempted &&
-      !visibleAfterToolSearch.some((name) =>
-        /(?:multi_agent_v1__)?spawn_agent/.test(name),
-      )
-    ) {
-      throw new NativeRuntimeBlocker("deferred_tool_not_visible_after_tool_search", {
+    if (spawnCalls.length > 1 && !projectedCollaboration) {
+      throw new NativeRuntimeBlocker("chat_deferred_tool_target_unresolved", {
         expected_tool: "multi_agent_v1.spawn_agent",
-        tool_search_visible_tools: modelRequests[toolSearchRequestIndex].visibleTools,
-        next_request_visible_tools: visibleAfterToolSearch,
+        prompt_tools_after_search: modelRequests[1]?.visibleTools ?? [],
         model_calls: modelCalls,
         runtime_events: events
           .filter((event) => event.event_type === "codex.unknown" || event.event_type === "codex.item.completed")
           .map((event) => event.payload?.data ?? event.payload),
+      });
+    }
+    const emptyDataSearch = state.modelServer.toolSearchOutputs.find(
+      (output) => output.runId === runId && output.role === "data" && output.count === 0,
+    );
+    if (emptyDataSearch || eventText.includes("E2E_TYPED_BLOCKER=data_mcp_tools_not_discovered")) {
+      throw new NativeRuntimeBlocker("child_mcp_tools_not_discovered", {
+        role: "data_agent",
+        tool_search_output: emptyDataSearch ?? { count: 0 },
+        model_calls: modelCalls,
       });
     }
     assert(/12\s*h|12\s*小时|12-hour/i.test(eventText), "12h result was not reported");
