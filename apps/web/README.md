@@ -132,6 +132,25 @@ event timing, code execution, file preview, Provider add/switch/context updates,
 real stdio MCP invocation, approval resolution, delayed Turn state, history
 restoration and durable/live event ordering. It never prints the Provider key.
 
+The real DeepSeek tool-capability gate is a separate opt-in check. It uses the
+real `warehouse-network-copilot` Task entry and fixture upload, but stops at a
+typed Provider capability result when the current model does not expose native
+`tool_search`; it never retries with a prompt variant or fabricates a Tool call.
+The forwarding probe records only tool counts/names, `tool_choice`, structured
+call presence and canonical terminal summaries. It reuses a registered
+credential environment reference through a temporary Provider and removes that
+Provider, Run, Workspace and Project in its terminal cleanup:
+
+```bash
+E2E_REAL_DEEPSEEK=1 \
+E2E_BASE_URL=http://127.0.0.1:4810 \
+E2E_REAL_DEEPSEEK_SOURCE_PROVIDER_ID=deepseek \
+npm run test:e2e:real-deepseek
+```
+
+This gate requires the source Provider to already have a Platform-managed
+credential. It does not print or persist the credential value.
+
 ## Layout
 
 ```text

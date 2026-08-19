@@ -366,9 +366,11 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
 
 当前唯一关键路径固定为：
 
-1. **A — Codex Runtime 最小封口。** R2 真实 DeepSeek 门已通过：
-   encrypted Secret restart、显式 model Turn，以及原生 `tool_search`→deferred MCP schema 加载→授权
-   MCP 成功→final 均有真实证据；不借机实施 model refresh 或完整 R3。
+1. **A — Codex Runtime 最小封口。** R2 真实 DeepSeek 工具门已执行但未通过：
+   encrypted Secret restart、显式 model Turn 和真实 Chat function-tool 请求均有证据；当前
+   `deepseek-v4-flash` 的 Runtime 模型目录没有声明原生 `ModelInfo.supports_search_tool`，因此
+   gate 以 typed `provider_tool_search_capability_unavailable` 停止，未伪造 `tool_search`、deferred
+   MCP 或最终业务结果。
 2. **B — Server 实际适配。** 只完成通用 Copilot 运行对当前 Web Server 必需的 typed bridge 与
    owning-layer 适配，包括把官方 child Thread/Turn/Item 生命周期投影为可追踪的 Agent activity；
    不建立第二 Runtime、第二上下文、第二执行日志或固定业务流程。
@@ -384,9 +386,11 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
    `CaseRepository`、`NetworkSnapshot`、`ArtifactRef`、旧 services/models/tests 与 Demo launcher
    surface，不保留兼容双路径；Data4 与 Network active `ResourceRef` surface 不回退为 aliases。
 
-R2 真实门退出：fresh local session 可添加并列出 DeepSeek Provider；配置只保存 env ref，Platform
-Secret 重启后仍能注入同一密钥；显式 `deepseek-v4-flash` Turn 必须先完成 Runtime 原生 `tool_search`、再加载并调用一个 deferred MCP Tool，最后给出
-final。浏览器响应、日志、Workspace 与普通 Profile 文件均不得出现 Secret 明文。后续真实空目录
+R2 真实门当前状态：fresh local session 可添加并列出 DeepSeek Provider；配置只保存 env ref，Platform
+Secret 可注入同一密钥；显式 `deepseek-v4-flash` Turn 已证明 Chat function-tool `exec_command`
+调用可达，但没有原生 `tool_search`，所以不能进入 deferred MCP 或最终业务链。浏览器响应、日志、
+Workspace 与普通 Profile 文件均不得出现 Secret 明文；本轮 opt-in 探针已验证无明文泄漏。只有可信
+Runtime 模型目录补充 `supports_search_tool=true` 后，才能重新运行并退出 R2。后续真实空目录
 故障已用窄 follow-up 收口：Codex 只增加 exact Provider 的 fresh typed catalog，Platform 不切换
 current Provider，只在非空成功后持久化目标目录并在刷新/重启后恢复；Turn Provider override、
 Provider owner 全量重构和 Browser dead graph 仍不属于阶段一关键门。

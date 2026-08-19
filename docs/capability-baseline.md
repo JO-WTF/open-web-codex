@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档性质 | 当前事实与证据 |
 | 观察日期 | 2026-08-20 |
-| 代码快照 | 阶段四仓网 E2E checkpoint（基于 `14d2f3e76`，含当前 Chat transport seam） |
+| 代码快照 | 阶段五真实 Provider gate checkpoint（含当前 Chat transport seam 与 opt-in DeepSeek gate） |
 | 当前阶段 | 阶段二已进入；阶段一仓网 Copilot 正常业务闭环作为已通过基线 |
 | 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) + [ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) |
 
@@ -16,8 +16,9 @@
 当前 checkout 已从 clean DB/Profile、真实 Web Task 入口、真实 Codex Runtime 和真实 Provider
 完成多 Agent 仓网 Copilot 的阶段一正常业务闭环。这个结论不自动覆盖新加入的单 Agent 仓网
 Copilot，也不代表 Web Studio、Marketplace、多用户产品或完整 hardening 矩阵已经完成。单 Agent
-包当前已有静态组合、共享 Tool、package-keyed Root config 和 Web 显式选择的 E1/E2 证据；完整
-真实业务 E4 尚未运行。
+包当前已有静态组合、共享 Tool、package-keyed Root config 和 Web 显式选择的 E1/E2 证据；真实
+DeepSeek 工具能力门已运行，但因当前模型目录没有声明原生 `ModelInfo.supports_search_tool`
+而以 typed failure 停止，不能声称真实 DeepSeek 的仓网 E4。
 
 阶段二 Copilot SDK 已提供 `copilot init` 源码脚手架和 `copilot validate` 静态组合
 验证；`copilot dev` 提供隔离 discovery probe：通过官方 app-server 握手、
@@ -81,6 +82,29 @@ ADR-023 已将 Data→Network 输入、导航执行和地图装配合同切换�
 Tool 单元/合同证据（E1）；下方旧 E4 记录适用于被替代的 Data Resource/手工导航路径，不能作为当前
 合同的 E4 声明。单 Agent 与多 Agent 都必须按新的 Workspace 输入、导航确认、地图和报告路径重新通过
 clean Profile/Workspace 的真实验收。多用户、完整失败/竞态矩阵、a11y 和视觉细节仍属于后续 hardening。
+
+### 2026-08-20 真实 DeepSeek 工具能力门
+
+使用 `apps/web/scripts/real-deepseek-e2e.mjs` 的 opt-in 门，从真实
+`warehouse-network-copilot` Task 入口创建临时 Project/Workspace，上传仓网 6 个 fixture
+文件，并通过本地只记录元数据的转发探针调用真实 DeepSeek。探针不记录密钥、完整 prompt、工具
+schema 或工具参数；临时 Provider、Run、Workspace 和 Project 在终态清理，原 Provider 选择和
+模型目录恢复。
+
+已观察到的第一轮安全摘要：
+
+- Chat 请求包含 26 个 Runtime 可见工具，`tool_choice` 未设置；其中有
+  `multi_agent_v1__spawn_agent`，没有 `tool_search`。
+- DeepSeek 返回了结构化 `exec_command` Tool call，说明 function-tool wire 调用本身可达；但
+  当前模型没有 Runtime 原生 `tool_search` 能力，不能进入仓网 deferred MCP discovery。
+- 门以 typed `provider_tool_search_capability_unavailable` 终止，没有提示词重试、历史 schema
+  回放、single-agent fallback 或伪造路线/地图结果。脚本另有普通文本响应的 typed
+  `provider_tool_call_not_produced` 分支，当前这轮未触发。
+
+因此这次是 E3 受控 Provider 能力证据，不是仓网 E4；要通过完整真实门，必须由可信 Runtime
+模型目录为 `deepseek-v4-flash` 提供原生 `ModelInfo.supports_search_tool=true`，并重新运行同一
+脚本验证 `tool_search → spawn_agent → Data/Network MCP → 12h/map` canonical 链。不能按模型名
+或 DeepSeek 的普通 `/models` 响应推断该能力。
 
 ## 3. 历史：2026-08-12 clean real Web E4（已被 ADR-023 合同替代）
 
@@ -352,7 +376,7 @@ ADR-018 是阶段一规范裁决，Codex 子树 seam 只由 Patch Map 分类。�
 
 | 稳定 ID | 分类 | 已验证问题与源码证据 | 风险 | 当前裁决与阶段/触发条件 | 目标 owner/删除条件 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `P1-R2-CHAT` | 当前关键链 | pinned official Codex 的 Chat transport 与 Platform `PUT/list` 依赖保留在 `codex/codex-rs/codex-api/src/{chat_translate.rs,chat_translate_history.rs,endpoint/chat.rs,sse/chat.rs}`、`core/src/client/chat.rs` 和 app-server catalog processor；Chat bridge 将 Runtime 原生 client ToolSearch 映射为普通 function call；当前用户 Turn 的 completed client `ToolSearchOutput` 只贡献 exact namespace/name 的 request-scoped reverse target，Deferred schema 仍只在 history 中给模型，不进入 canonical `Prompt.tools`，旧 Turn、取消、失败和恢复前输出不参与映射；Runtime 仍拥有搜索、deferred registry、Tool identity、审批与分派。Role MCP server scope 仍是搜索边界。Chat Provider 的 function-tool 能力来自 `ModelProviderInfo.supports_function_tools` 的显式 typed 配置/目录事实，缺失时在 Core tool planning 返回 `UnsupportedOperation`；ToolSearch 仍只由模型级 `ModelInfo.supports_search_tool` 决定，不由 `wire_api`、模型名或错误文本推断。 | 自定义 active-Turn schema plan、历史 schema 回放和 cold-resume schema 恢复会制造第二个工具生命周期 owner，并可能让新 Turn 继续使用旧 provider schema；Role MCP discovery 缺口也会阻止领域 Tool 进入当前 Turn | 仅保留 Chat wire 适配、Provider capability/catalog 和真实仓网 gate 所需的最小 typed seam；新 Turn、取消、失败或恢复后按原生 Runtime 重新 tool_search；确定性 Web gate 已连续两次完成真实 `spawn_agent → Role/Skill/MCP → Workspace typed Role declaration → Workspace prepared input → route/cost/12h baseline → coverage/map delivery`，并验证第二次运行无残留 Run/Workspace 冲突 | Codex 拥有 wire/app-server typed 执行、deferred registry、搜索与 Provider capability gate；Platform 只拥有 CRUD、授权与密文注入 | 已验证：Chat request/stream/history 基础 round-trip、同 Turn reverse target、旧 Turn exclusion、collision/schema rejection、ToolSearch schema 不进入 `Prompt.tools`、Chat unsupported/function-only Core 回归、typed managed Role MCP/Skill projection、旧 marker 拒绝、unmarked MCP authority rejection、确定性 multi-agent E2E 两次通过；真实 DeepSeek 仅完成 Workspace/Thread/Turn 启动，未产生结构化 tool call，仍未宣称真实 Provider E4 |
+| `P1-R2-CHAT` | 当前关键链 | pinned official Codex 的 Chat transport 与 Platform `PUT/list` 依赖保留在 `codex/codex-rs/codex-api/src/{chat_translate.rs,chat_translate_history.rs,endpoint/chat.rs,sse/chat.rs}`、`core/src/client/chat.rs` 和 app-server catalog processor；Chat bridge 将 Runtime 原生 client ToolSearch 映射为普通 function call；当前用户 Turn 的 completed client `ToolSearchOutput` 只贡献 exact namespace/name 的 request-scoped reverse target，Deferred schema 仍只在 history 中给模型，不进入 canonical `Prompt.tools`，旧 Turn、取消、失败和恢复前输出不参与映射；Runtime 仍拥有搜索、deferred registry、Tool identity、审批与分派。Role MCP server scope 仍是搜索边界。Chat Provider 的 function-tool 能力来自 `ModelProviderInfo.supports_function_tools` 的显式 typed 配置/目录事实，缺失时在 Core tool planning 返回 `UnsupportedOperation`；ToolSearch 仍只由模型级 `ModelInfo.supports_search_tool` 决定，不由 `wire_api`、模型名或错误文本推断。 | 自定义 active-Turn schema plan、历史 schema 回放和 cold-resume schema 恢复会制造第二个工具生命周期 owner，并可能让新 Turn 继续使用旧 provider schema；Role MCP discovery 缺口也会阻止领域 Tool 进入当前 Turn | 仅保留 Chat wire 适配、Provider capability/catalog 和真实仓网 gate 所需的最小 typed seam；新 Turn、取消、失败或恢复后按原生 Runtime 重新 tool_search；确定性 Web gate 已连续两次完成真实 `spawn_agent → Role/Skill/MCP → Workspace typed Role declaration → Workspace prepared input → route/cost/12h baseline → coverage/map delivery`，并验证第二次运行无残留 Run/Workspace 冲突 | Codex 拥有 wire/app-server typed 执行、deferred registry、搜索与 Provider capability gate；Platform 只拥有 CRUD、授权与密文注入 | 已验证：Chat request/stream/history 基础 round-trip、同 Turn reverse target、旧 Turn exclusion、collision/schema rejection、ToolSearch schema 不进入 `Prompt.tools`、Chat unsupported/function-only Core 回归、typed managed Role MCP/Skill projection、旧 marker 拒绝、unmarked MCP authority rejection、确定性 multi-agent E2E 两次通过；真实 DeepSeek 的 function-tool `exec_command` 调用可达，但当前 `deepseek-v4-flash` 模型目录未声明原生 `supports_search_tool`，gate 以 `provider_tool_search_capability_unavailable` 停止，仍未宣称真实 Provider E4 |
 | `P1-SC-REF` | 当前关键链 | Data4 `data_server.py` 与 `server.py` 的 decorated active tools 已统一使用一个 logical `supply_chain` provider、Workspace-scoped ResourceStore 和 strict `ResourceRef`；通用 ref/schema/codec/bounds/store/runtime/Workspace primitives 已迁到独立 provider SDK，仓网旧模块和 import 已删除 | 跨 provider 越权、Resource 不可达、同一内容多个身份 | 保持单一 provider ResourceStore 与 strict typed refs；Tool 用 typed `platform_packages` 取得 SDK，不建 Broker/新表或路径 fallback | MCP provider 拥有中间内容；provider SDK 拥有通用 primitives；每个 tool 验证启动 scope 与 native `sandboxCwd` | Provider SDK 6/6、仓网 full Python 121/121 与 stdio normal/domain gates passed |
 | `P1-SC-DATA4` | 当前关键链 | `data_server.py` active path 已删除 hash `source_ref` 重扫和多套 alias/wire shape；inspect 产生 source-profile Resource，首次 normalize 接显式 confirmed decisions 并保留全部确认 candidates，candidate-only delta/derive 产生新的 immutable normalized snapshot，prepare-geography 接受 adapter 已验证的行政区 catalog 与 overrides | 默认印尼数据准备链曾不可达，模型承担协议翻译或猜字段 | strict surface：discover 可选、一次 inspect、typed `ResourceRef`、显式 mapping、candidate delta、分阶段 geography；Indonesia built-in asset 只属于验收 fixture，其他国家无 provider 时 typed unavailable | Tool 拥有格式/映射/标准化；复用 `workspace_intake.py`、`mapping.py`、`normalization.py` 中纯函数与 `geography.py`，不建 source/revision/CAS 包装 | focused Data/Network Resource tests 覆盖 immutable derive 与不重读 base |
 | `P1-SC-NET9` | 当前关键链 | `server.py` 的 active Resource/final tools 使用 strict `ResourceRef`；`prepare_route_matrix` 统一 provided/haversine/navigation 的模型入口并显式返回 `ready` 或 `navigation_required`，构建时即完成矩阵校验；`assess_facility_change` 组合一次 scenario solve 与直接 before/after compare，并返回 scenario ref、单一 provenance-bound comparison ref 和最多 10 个重点城市。`prepare_network_coverage_map` 从 exact solved assignment 产生通用 Point/LineString 覆盖 GeoJSON，不依赖具体城市或仓库名。 | Data/Network 必须继续保持单一 provider ResourceStore 与 strict typed refs，不能恢复旧 Case 状态、Demo 入口或 Platform workflow | 路线/cost 由 pair/lane fact 自主部分复用；模型不再选择重复的 plan/build/validate、standalone scenario 或四引用交付拼装路径 | Network Tool 拥有算法、pair facts 与业务渲染；Data Tool 拥有 mapping/normalization/geography；Provider ResourceStore 拥有中间内容和统一 GeoJSON ref/profile | focused Planner/Maps test 通过；真实 Web 计时待复测 |

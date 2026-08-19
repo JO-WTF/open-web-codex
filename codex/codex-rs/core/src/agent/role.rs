@@ -241,19 +241,18 @@ fn role_overrides_from_config(
             }
         }
     }
-    if !runtime_mcp_projection
-        && let Some(mut skills) = role_config.skills {
-            skills.config.retain(|skill| !skill.enabled);
-            skills.bundled = skills.bundled.filter(|bundled| !bundled.enabled);
-            skills.include_instructions = skills.include_instructions.filter(|enabled| !enabled);
-            skills.max_context_tokens = None;
-            if !skills.config.is_empty()
-                || skills.bundled.is_some()
-                || skills.include_instructions.is_some()
-            {
-                overrides.skills = Some(skills);
-            }
+    if !runtime_mcp_projection && let Some(mut skills) = role_config.skills {
+        skills.config.retain(|skill| !skill.enabled);
+        skills.bundled = skills.bundled.filter(|bundled| !bundled.enabled);
+        skills.include_instructions = skills.include_instructions.filter(|enabled| !enabled);
+        skills.max_context_tokens = None;
+        if !skills.config.is_empty()
+            || skills.bundled.is_some()
+            || skills.include_instructions.is_some()
+        {
+            overrides.skills = Some(skills);
         }
+    }
     overrides
 }
 
