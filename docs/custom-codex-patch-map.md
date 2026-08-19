@@ -6,7 +6,7 @@ after an official subtree update. Generated schemas, TypeScript definitions,
 fixtures, and snapshots are derivatives of the source seams and are not
 independent custom behavior.
 
-The integrated official base is `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9`.
+The integrated official base is `d1d51f6315f84a1737c655cb4d78104d030d5102`.
 The target is a small, explicit set of Provider Runtime and TUI seams; it is
 not a zero-diff Codex subtree.
 
@@ -25,18 +25,15 @@ not a zero-diff Codex subtree.
 
 ## Current state
 
-The integrated base is `6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9`.
-The observed official main is `94937de51ba28d4b308dbe1b8472d6fe1dddad28`;
-579 official commits await the next dedicated synchronization branch. The raw
-comparison contains 2,143 paths: 119 added locally, 1,549 modified, and 475
-missing locally, classified by the status script as 1,982 `upstream-only`, 50
-`local-only`, and 111 `diverged`.
+The integrated base and observed official main are both
+`d1d51f6315f84a1737c655cb4d78104d030d5102`; no official commits are pending.
+The current raw comparison contains 77 local-only paths: 25 added locally and
+52 modified, with no upstream-only, missing, or diverged paths.
 
-All product-specific differences on the integrated base are classified under
-the retained seams and decisions below. The 111 diverged paths require the next
-sync to accept official structure first and replay only those classified seams.
-Generated app-server artifacts have no drift on the integrated base, and the
-Runtime/TUI scoped validation matrix passes there. Machine-readable evidence is in
+All current product-specific differences are classified under the retained
+seams and decisions below. Generated app-server artifacts are derived from the
+current Runtime sources; the Runtime/TUI scoped validation matrix is the
+required post-sync gate. Machine-readable evidence is in
 `.sync/codex-customization-inventory.json`.
 
 Use `scripts/codex-customization-status.sh` as the inventory input. It compares
@@ -72,11 +69,11 @@ The script separates the raw tree difference into:
 
 ## Current inventory classification
 
-The current comparison against `codex-upstream/main` contains 2,143 paths:
-1,982 `upstream-only`, 50 `local-only`, and 111 `diverged`. The integrated base remains
-the validation baseline until the 579 pending official commits are accepted on a
-new sync branch. Generated artifacts, tests, and snapshots follow their owning
-source seam.
+The current comparison against `codex-upstream/main` contains 77 local-only
+paths: 25 added locally and 52 modified, with no upstream-only or diverged
+paths. The integrated base is synchronized through
+`d1d51f6315f84a1737c655cb4d78104d030d5102`. Generated artifacts, tests, and
+snapshots follow their owning source seam.
 
 | Classification | Source paths | Decision and reason |
 | --- | --- | --- |
@@ -89,7 +86,7 @@ source seam.
 | `retain-core`: selected Plugin MCP policy | `config/src/types.rs`, `core-plugins/src/loader.rs`, narrow application in `core/src/config/mod.rs`, selected-capability propagation through `core/src/agent/{control.rs,control/spawn.rs}` and the `thread_manager.rs` spawn contract, plus `ext/mcp` tests | A selected capability root is not blanket MCP authority. Runtime applies its typed per-server/per-tool policy and preserves only the parent's selected roots when spawning a non-fork child. |
 | `retain-core`: V2 collaboration Item lifecycle | `core/src/tools/handlers/multi_agents_v2{.rs,/spawn.rs,/message_tool.rs}` and focused handler tests | V2 spawn and message operations emit existing typed collaboration Item start/completion events with bounded prompt and receiver metadata, instead of requiring clients to infer behavior from encrypted child context. |
 | `retain-core`: Runtime path, identity and history fixes | `app-server-protocol/src/protocol/v2/thread.rs`, `app-server/src/{config_manager_service.rs,request_processors/thread_processor.rs}`, `core/src/{agent/role.rs,agent/control/spawn.rs,thread_manager.rs}`, child identity ordering in the narrow `thread_manager.rs` integration, `thread-store/src/local/{rollout_lineage.rs,thread_history.rs,thread_history/**,thread_history_materialization.rs}`, and focused tests | Profile-managed relative Role files validate against their owning config layer; child events expose parent/Role identity before lifecycle delivery; cold-resumed V1 and V2 children reapply their persisted native Role before MCP use; paginated history converges to valid canonical rollout JSONL after projection lag or restart. |
-| `upstream-first, then replay` | `core/src/{codex_thread.rs,guardian/review_session.rs,session/**}`, `protocol/src/{openai_models.rs,protocol.rs}`, `app-server/src/request_processors/turn_processor.rs`, `app-server/README.md`, TUI thread-routing/event files | These files contain substantial official SessionIo, AgentRunner, model-catalog, rate-limit, paging, fork, and TUI behavior. Preserve upstream structure and reapply only the adjacent retained seam. |
+| `upstream-first, then replay` | `core/src/{codex_thread.rs,guardian/review_session.rs,session/**}`, `protocol/src/{openai_models.rs,protocol.rs}`, `app-server/src/request_processors/turn_processor.rs`, `app-server/README.md`, TUI thread-routing/event files | These files contain substantial official SessionIo, AgentRunner, model-catalog, rate-limit, paging, fork, and TUI behavior. The current upstream structure is already integrated; future updates must preserve it and reapply only the adjacent retained seam. |
 | `retain-core`: Provider propagation followers | `core/src/session/{handlers.rs,turn.rs}`, `exec/src/lib.rs`, `login/src/auth_env_telemetry.rs`, `app-server` remote-thread/turn tests, and `core` stream/header/model-switching tests | These changes propagate the selected Provider through settings and the actual turn client, preserve Provider-scoped cache test isolation, or satisfy the expanded Provider metadata shape. They follow the owning Provider seam and are not independent feature surfaces. |
 | `upstreamed` | `protocol/src/tool_name.rs` | The local normalization patch is removed and this file matches official Codex. Chat-only namespace flattening and reverse mapping remain inside `codex-api`, so protocol and MCP tool identity use official semantics. |
 | `upstreamed`: MCP standard elicitation decoder backport | `rmcp-client/src/elicitation_client_service.rs` | Backports the official `61de0d8fe812137cec943d58309b26df1dd227b5` handling of standard `elicitation/create` when the current RMCP model supplies it as `CustomRequest`. It parses the existing `CreateElicitationRequestParams` and uses the pre-existing `send_elicitation` path; it adds no Runtime capability, protocol, feature, Manifest, or Platform behavior. Validate the direct service regression, production `dev-small` CLI, official app-server elicitation gate, and the real Platform Data-child gate. Remove this row and local hunk when the next full official Codex synchronization includes `61de0d8` or a later equivalent upstream implementation; do not replay it as a retained seam. |
@@ -98,9 +95,8 @@ source seam.
 
 ## Current convergence analysis
 
-The integrated `6e5a2d6b8d14` structure has no unresolved tree conflicts. The
-observed official main is 579 commits ahead, so its 111 diverged paths must be
-resolved on the next dedicated sync branch. On the integrated base,
+The integrated `d1d51f6315f8` structure has no unresolved tree conflicts and
+matches the observed official main. On the synchronized base,
 `codex-api/src/common.rs` matches the official object exactly. Chat request
 DTOs and owned Responses-to-Chat conversion live in `chat_translate.rs`; the
 Core client calls that converter immediately before the Chat endpoint. The
@@ -183,9 +179,10 @@ semantics on an OpenAI-compatible Chat Completions wire:
   flags and therefore resolves both to the safe disabled default;
 - native client `tool_search` is flattened to the reserved `tool_search`
   function only for typed `wire_api = "chat"` Providers. Its call and result
-  round-trip through Chat history, and only the active Turn's loaded schemas
-  join that Turn's next request. The Runtime's existing deferred registry and Role MCP server scope remain
-  the sole source of discoverability and dispatch authority;
+  round-trip through Chat history, while Chat encodes only the current Runtime
+  `Prompt.tools`; it does not replay historical schemas. The Runtime's existing
+  deferred registry and Role MCP server scope remain the sole source of
+  discoverability and dispatch authority;
 - hosted `web_search` and `image_generation` remain hidden because a generic
   third-party endpoint cannot execute OpenAI-hosted tools;
 - `custom` freeform tools and unknown Responses tool kinds remain hidden

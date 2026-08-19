@@ -3,20 +3,20 @@
   "purpose": "Tracks the committed Codex-tree comparison snapshot and convergence classification progress for codex/.",
   "comparison": {
     "upstreamRef": "codex-upstream/main",
-    "upstreamCommit": "94937de51ba28d4b308dbe1b8472d6fe1dddad28",
+    "upstreamCommit": "d1d51f6315f84a1737c655cb4d78104d030d5102",
     "comparisonLocalTree": "HEAD:codex",
-    "comparisonSnapshotScope": "Pre-Slice 4B.2-B committed HEAD snapshot; its counts intentionally exclude uncommitted working-tree changes until the atomic commit is created and this inventory is refreshed.",
-    "comparisonObservedAt": "2026-08-09T02:46:02Z",
-    "differenceCount": 2143,
-    "addedLocally": 119,
-    "modified": 1549,
-    "missingLocally": 475,
-    "upstreamOnly": 1982,
-    "localOnly": 50,
-    "diverged": 111
+    "comparisonSnapshotScope": "Stage 2 synchronized committed HEAD snapshot after accepting official upstream d1d51f6315f8.",
+    "comparisonObservedAt": "2026-08-19T14:09:24Z",
+    "differenceCount": 77,
+    "addedLocally": 25,
+    "modified": 52,
+    "missingLocally": 0,
+    "upstreamOnly": 0,
+    "localOnly": 77,
+    "diverged": 0
   },
   "progress": {
-    "state": "integrated-base-validated-upstream-update-available",
+    "state": "synchronized-upstream-stage-2",
     "classificationSource": "docs/custom-codex-patch-map.md",
     "classifiedRetainCore": [
       "provider-chat-transport",
@@ -31,30 +31,31 @@
       "platform-runtime-path-identity-history"
     ],
     "classification": {
-      "classifiedLocalOnlyPaths": 50,
+      "classifiedLocalOnlyPaths": 77,
       "unclassifiedSourcePaths": 0,
-      "temporaryUpstreamedFixes": 1
+      "temporaryUpstreamedFixes": 0
     },
     "completed": [
-      "The Codex subtree is integrated through 6e5a2d6b8d14; 579 later official commits await a dedicated sync branch.",
-      "The pre-Slice 4B.2-B committed HEAD comparison has 50 local-only and 111 diverged paths. Retained seams are classified only in docs/custom-codex-patch-map.md; the next sync remains upstream-first replay.",
+      "The Codex subtree is synchronized through d1d51f6315f8; no official commits are pending.",
+      "The current committed HEAD comparison has 77 local-only paths and no upstream-only, missing, or diverged paths. Retained seams and generated derivatives are classified in docs/custom-codex-patch-map.md.",
       "Profile lifecycle, encrypted credentials, authorization, durable approvals, Git workspaces, Run leases, browser DTOs, and event delivery are owned by apps/web.",
       "The browser uses typed REST and authenticated WebSocket transport; Tauri, desktop sidecars, raw browser RPC, desktop release chains, and desktop build dependencies are absent.",
       "Provider configuration, event payloads, model context and onboarding implementation live in dedicated TUI Provider modules; high-churn upstream parent files retain only narrow attachments.",
       "The protocol ToolName implementation matches official Codex; Chat namespace flattening is isolated in codex-api.",
-      "The uncommitted Slice 4B.2-B worktree removed the local Capability Manifest, its generated Web contract bundle, and the Profile capability mirror; its validation passed, but comparison counts wait for the atomic commit and refresh. Official initialize Schema/TypeScript now carry only the upstream four fields.",
+      "The incomplete real-platform E2E scaffold is checkpointed separately and explicitly does not claim a passing multi-agent/tool/map acceptance gate.",
       "The standard MCP elicitation decoder is an upstreamed backport of official commit 61de0d8fe812137cec943d58309b26df1dd227b5; it is not a retained core seam."
     ],
     "validation": {
-      "format": "just fmt passed for Slice 4B.2-B",
-      "clippyFix": "just fix -p codex-app-server-protocol passed",
-      "appServerSchema": "official generator ran twice with identical schema-tree hash f21ed74fd472c19e1b9e99ad53924a4dfc070b8cfbececfd91cd849386b9ac59",
-      "protocolTests": "scripts/test-codex.sh -p codex-app-server-protocol: 274 passed",
-      "webHarness": "npm --prefix apps/web run test:codex-harness passed; it validates official initialize fields then thread/list"
+      "format": "just fmt-check passed after Runtime convergence",
+      "clippyFix": "just fix -p codex-core passed with existing unfulfilled test lint expectation warnings",
+      "protocolTests": "codex-api 210/210; Role 23/23; child V2 cold resume and Role MCP resource gates passed",
+      "appServerTests": "full app-server 1223/1236; 13 baseline environment/fixture failures (missing codex/test_stdio/code-mode host, imagegen/zsh/analytics); Role MCP resource and permission resume gates passed",
+      "schemaDrift": "scripts/test-codex.sh -p codex-app-server-protocol: 290/290 passed after official generation",
+      "appServerSmoke": "npm --prefix apps/web run smoke:codex-app-server passed: {ok:true,threadListCount:1}"
     },
-    "validatedAgainstIntegratedUpstream": "6e5a2d6b8d148a5554fdceb6f399ca45bd1c78d9",
-    "validationWorktreeBaseCommit": "75a3d5eb98a42e8556da34a19e1ca5bfe4571326",
-    "validationScope": "Uncommitted Slice 4B.2-B worktree changes; this validation does not update the committed comparison snapshot.",
-    "nextAction": "Before Slice 4B.3, create a dedicated codex/sync-upstream-* branch to accept the 579 pending official commits upstream-first, then audit and remove upstreamed/drop replay hunks and replay only seams still evidenced as retain-core in the Patch Map."
+    "validatedAgainstIntegratedUpstream": "d1d51f6315f84a1737c655cb4d78104d030d5102",
+    "validationWorktreeBaseCommit": "dc0ad1a24",
+    "validationScope": "Stage 2 synchronized Runtime tree with generated stable/experimental schema fixtures and official initialize/thread-list smoke.",
+    "nextAction": "Review the synchronized diff, commit the generated fixtures and current inventory/Patch Map, then hand off to the next stage without push."
   }
 }
