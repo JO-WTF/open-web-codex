@@ -1181,7 +1181,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
 
     let chat_bridge_capability = probe_with(
         |turn| {
-            turn.model_info.supports_search_tool = false;
+            Arc::make_mut(&mut turn.model_info).supports_search_tool = false;
             use_chat_provider(turn);
         },
         searchable_mcp(),

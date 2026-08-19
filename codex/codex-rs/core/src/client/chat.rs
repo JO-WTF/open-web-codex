@@ -44,7 +44,6 @@ impl ModelClientSession {
             self.client.state.auth_env_telemetry.clone(),
         );
         let mut request = self.client.build_responses_request(
-            &client_setup.api_provider,
             prompt,
             model_info,
             effort,

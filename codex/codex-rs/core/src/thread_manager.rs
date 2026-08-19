@@ -996,17 +996,14 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
-        if let Some((session_source, _)) = initial_history.get_resumed_session_sources()
-            && let Some(role_name) = session_source.get_agent_role()
-        {
-            reapply_role_to_config_for_child_resume(&mut config, &role_name)
-                .await
-                .map_err(CodexErr::InvalidRequest)?;
-        }
-        let agent_control = self.agent_control_for_config(&config);
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
+        config = self
+            .state
+            .prepare_resumed_config(config, &session_source, &initial_history)
+            .await?;
+        let agent_control = self.agent_control_for_config(&config);
         if let InitialHistory::Resumed(resumed) = &initial_history
             && initial_history.get_multi_agent_version() == Some(MultiAgentVersion::V2)
             && !session_source.is_non_root_agent()
@@ -1690,6 +1687,9 @@ impl ThreadManagerState {
             inherited_environments,
             inherited_exec_policy,
         } = options;
+        let config = self
+            .prepare_resumed_config(config, &session_source, &initial_history)
+            .await?;
         let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
         let thread_source = initial_history.get_resumed_thread_source();
         let environments = inherited_environments
@@ -1710,6 +1710,48 @@ impl ThreadManagerState {
         request.inherited_environments = inherited_environments;
         request.inherited_exec_policy = inherited_exec_policy;
         Box::pin(self.spawn_thread(request)).await
+    }
+
+    async fn prepare_resumed_config(
+        &self,
+        mut config: Config,
+        session_source: &SessionSource,
+        initial_history: &InitialHistory,
+    ) -> CodexResult<Config> {
+        if let InitialHistory::Resumed(resumed) = initial_history {
+            let stored_thread = self
+                .read_stored_thread(ReadThreadParams {
+                    thread_id: resumed.conversation_id,
+                    include_archived: true,
+                    include_history: false,
+                })
+                .await?;
+            if let Some(model) = stored_thread.model {
+                config.model = Some(model);
+            }
+            if config.model_provider_id != stored_thread.model_provider {
+                config.model_provider = config
+                    .model_providers
+                    .get(&stored_thread.model_provider)
+                    .cloned()
+                    .ok_or_else(|| {
+                        CodexErr::InvalidRequest(format!(
+                            "Model provider `{}` not found",
+                            stored_thread.model_provider
+                        ))
+                    })?;
+                config.model_provider_id = stored_thread.model_provider;
+            }
+            if let Some(reasoning_effort) = stored_thread.reasoning_effort {
+                config.model_reasoning_effort = Some(reasoning_effort);
+            }
+        }
+        if let Some(role_name) = session_source.get_agent_role() {
+            reapply_role_to_config_for_child_resume(&mut config, &role_name)
+                .await
+                .map_err(CodexErr::InvalidRequest)?;
+        }
+        Ok(config)
     }
 
     #[allow(clippy::too_many_arguments)]

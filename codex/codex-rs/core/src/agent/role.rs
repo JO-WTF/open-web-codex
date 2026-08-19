@@ -5,6 +5,8 @@
 
 use crate::config::AgentRoleConfig;
 use crate::config::Config;
+use crate::config::ConfigOverrides;
+use crate::config::PermissionProfileSnapshot;
 use crate::config::agent_roles::parse_agent_role_file_contents;
 use crate::config::deserialize_config_toml_with_base;
 use anyhow::anyhow;
@@ -13,6 +15,7 @@ use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::SkillsConfig;
 use codex_config::loader::resolve_relative_paths_in_config_toml;
+use codex_exec_server::LOCAL_FS;
 use codex_exec_server::read_sensitive_file_to_string;
 use codex_features::Feature;
 use codex_features::feature_for_key;
@@ -58,7 +61,7 @@ pub(crate) async fn apply_role_to_config(
         .cloned()
         .ok_or_else(|| format!("unknown agent_type '{role_name}'"))?;
 
-    apply_role_to_config_inner(config, role_name, &role)
+    apply_bounded_role_to_config_inner(config, role_name, &role)
         .await
         .map_err(|err| {
             tracing::warn!("failed to apply role to config: {err}");
@@ -66,7 +69,80 @@ pub(crate) async fn apply_role_to_config(
         })
 }
 
-async fn apply_role_to_config_inner(
+/// Reapplies a persisted child Role without replacing the session settings
+/// restored from the native rollout.
+pub(crate) async fn reapply_role_to_config_for_child_resume(
+    config: &mut Config,
+    role_name: &str,
+) -> Result<(), String> {
+    let role = resolve_role_config(config, role_name)
+        .cloned()
+        .ok_or_else(|| format!("unknown agent_type '{role_name}'"))?;
+    let is_built_in = !config.agent_roles.contains_key(role_name);
+    let Some(config_file) = role.config_file.as_ref() else {
+        return Ok(());
+    };
+
+    let runtime_model = config.model.clone();
+    let runtime_model_reasoning_effort = config.model_reasoning_effort.clone();
+    let runtime_model_reasoning_summary = config.model_reasoning_summary;
+    let runtime_model_verbosity = config.model_verbosity;
+    let runtime_model_provider_id = config.model_provider_id.clone();
+    let runtime_model_provider = config.model_provider.clone();
+    let runtime_service_tier = config.service_tier.clone();
+    let runtime_approval_policy = config.permissions.approval_policy.value();
+    let runtime_approvals_reviewer = config.approvals_reviewer;
+    let runtime_cwd = config.cwd.clone();
+    let runtime_permission_profile = match config.permissions.active_permission_profile() {
+        Some(active_permission_profile) => {
+            PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                config.permissions.permission_profile().clone(),
+                active_permission_profile,
+                config.permissions.profile_workspace_roots().to_vec(),
+            )
+        }
+        None => PermissionProfileSnapshot::legacy(config.permissions.permission_profile().clone()),
+    };
+
+    let role_layer_toml = load_role_layer_toml(config, config_file, is_built_in, role_name)
+        .await
+        .map_err(|err| {
+            tracing::warn!("failed to load role config for resume: {err}");
+            AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
+        })?;
+    if !role_layer_toml
+        .as_table()
+        .is_some_and(toml::map::Map::is_empty)
+    {
+        *config = reload::build_next_config(config, role_layer_toml)
+            .await
+            .map_err(|err| {
+                tracing::warn!("failed to reload role config for resume: {err}");
+                AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
+            })?;
+    }
+    config.model = runtime_model;
+    config.model_reasoning_effort = runtime_model_reasoning_effort;
+    config.model_reasoning_summary = runtime_model_reasoning_summary;
+    config.model_verbosity = runtime_model_verbosity;
+    config.model_provider_id = runtime_model_provider_id;
+    config.model_provider = runtime_model_provider;
+    config.service_tier = runtime_service_tier;
+    config
+        .permissions
+        .approval_policy
+        .set(runtime_approval_policy)
+        .map_err(|err| format!("approval_policy is invalid: {err}"))?;
+    config.approvals_reviewer = runtime_approvals_reviewer;
+    config.cwd = runtime_cwd;
+    config
+        .permissions
+        .set_permission_profile_from_session_snapshot(runtime_permission_profile)
+        .map_err(|err| format!("permission_profile is invalid: {err}"))?;
+    Ok(())
+}
+
+async fn apply_bounded_role_to_config_inner(
     config: &mut Config,
     role_name: &str,
     role: &AgentRoleConfig,
@@ -260,6 +336,76 @@ mod role_overrides {
                 .config_layer_stack
                 .ignore_user_and_project_exec_policy_rules(),
         ))
+    }
+}
+
+mod reload {
+    use super::*;
+
+    pub(super) async fn build_next_config(
+        config: &Config,
+        role_layer_toml: TomlValue,
+    ) -> anyhow::Result<Config> {
+        let preserve_current_model = role_layer_toml.get("model").is_none();
+        let preserve_current_provider = role_layer_toml.get("model_provider").is_none();
+        let preserve_current_service_tier = role_layer_toml.get("service_tier").is_none();
+        let preserve_current_reasoning_effort =
+            role_layer_toml.get("model_reasoning_effort").is_none();
+        let preserve_current_base_instructions = role_layer_toml.get("instructions").is_none()
+            && role_layer_toml.get("model_instructions_file").is_none();
+        let config_layer_stack = build_config_layer_stack(config, &role_layer_toml)?;
+        let merged_config = deserialize_config_toml_with_base(
+            config_layer_stack.effective_config(),
+            &config.codex_home,
+        )?;
+        let mut next_config = Config::load_config_with_layer_stack(
+            LOCAL_FS.as_ref(),
+            merged_config,
+            ConfigOverrides {
+                cwd: Some(config.cwd.to_path_buf()),
+                model: preserve_current_model
+                    .then(|| config.model.clone())
+                    .flatten(),
+                model_provider: preserve_current_provider.then(|| config.model_provider_id.clone()),
+                service_tier: preserve_current_service_tier.then(|| config.service_tier.clone()),
+                codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+                main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
+                ..Default::default()
+            },
+            config.codex_home.clone(),
+            config_layer_stack,
+        )
+        .await?;
+        if preserve_current_reasoning_effort {
+            next_config
+                .model_reasoning_effort
+                .clone_from(&config.model_reasoning_effort);
+        }
+        if preserve_current_base_instructions {
+            next_config.base_instructions = config.base_instructions.clone();
+            next_config.base_instructions_provenance = config.base_instructions_provenance.clone();
+        }
+        Ok(next_config)
+    }
+
+    fn build_config_layer_stack(
+        config: &Config,
+        role_layer_toml: &TomlValue,
+    ) -> anyhow::Result<ConfigLayerStack> {
+        let mut layers = config
+            .config_layer_stack
+            .all_layers_low_to_high()
+            .cloned()
+            .collect::<Vec<_>>();
+        let role_layer =
+            ConfigLayerEntry::new(ConfigLayerSource::SessionFlags, role_layer_toml.clone());
+        let insertion_index = layers.partition_point(|layer| layer.name <= role_layer.name);
+        layers.insert(insertion_index, role_layer);
+        Ok(ConfigLayerStack::new(
+            layers,
+            config.config_layer_stack.requirements().clone(),
+            config.config_layer_stack.requirements_toml().clone(),
+        )?)
     }
 }
 

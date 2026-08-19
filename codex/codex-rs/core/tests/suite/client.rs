@@ -1807,16 +1807,10 @@ async fn chat_provider_completes_mixed_message_before_core_tool_item() -> anyhow
         });
     let test = builder.build_with_auto_env(&server).await?;
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "check the route".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "check the route".to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     let mut reasoning_started = None;
@@ -1962,16 +1956,10 @@ async fn chat_provider_replays_reasoning_for_tool_only_turn() -> anyhow::Result<
         .build_with_auto_env(&server)
         .await?;
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "check the route".to_string(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        })
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "check the route".to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     loop {

@@ -5,6 +5,7 @@ use futures::StreamExt;
 
 #[derive(Clone)]
 pub(crate) struct CatalogRequestProcessor {
+    pub(super) auth_manager: Arc<AuthManager>,
     pub(super) outgoing: Arc<OutgoingMessageSender>,
     pub(super) skills_watcher: Arc<SkillsWatcher>,
     pub(super) thread_manager: Arc<ThreadManager>,
@@ -161,6 +162,7 @@ fn valid_model_provider_id(provider_id: &str) -> bool {
 
 impl CatalogRequestProcessor {
     pub(crate) fn new(
+        auth_manager: Arc<AuthManager>,
         outgoing: Arc<OutgoingMessageSender>,
         skills_watcher: Arc<SkillsWatcher>,
         thread_manager: Arc<ThreadManager>,
@@ -168,6 +170,7 @@ impl CatalogRequestProcessor {
         config_manager: ConfigManager,
     ) -> Self {
         Self {
+            auth_manager,
             outgoing,
             skills_watcher,
             thread_manager,

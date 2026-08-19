@@ -406,6 +406,7 @@ impl MessageProcessor {
             app_list_shutdown_token,
         );
         let catalog_processor = CatalogRequestProcessor::new(
+            auth_manager.clone(),
             outgoing.clone(),
             Arc::clone(&skills_watcher),
             Arc::clone(&thread_manager),

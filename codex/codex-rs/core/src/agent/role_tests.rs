@@ -3,6 +3,7 @@ use crate::config::ConfigBuilder;
 use crate::plugins::plugins_manager_for_config;
 use crate::skills_load_input_from_config;
 use codex_config::test_support::CloudConfigBundleFixture;
+use codex_features::Feature;
 use codex_login::test_support::auth_manager_from_optional_auth;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::BaseInstructionsProvenance;

@@ -35,9 +35,9 @@ use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::MultiAgentVersion;
-use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_rollout::RolloutItem;
 use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::read_session_meta_line;
 use core_test_support::responses;
@@ -218,8 +218,10 @@ required = true
             request_id,
             params: McpResourceReadParams {
                 thread_id: Some(child_thread_id),
+                origin_call_id: None,
                 server: "role_resources".to_string(),
                 uri: TEST_RESOURCE_URI.to_string(),
+                connector_id: None,
             },
         })
         .await?;
