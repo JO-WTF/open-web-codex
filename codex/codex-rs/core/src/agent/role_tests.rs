@@ -160,6 +160,7 @@ async fn reapply_role_restores_role_mcp_inventory_and_preserves_runtime_cwd() {
         r#"developer_instructions = "Read provider-owned resources"
 model = "role-default-model"
 model_reasoning_effort = "high"
+__codex_runtime_mcp_projection = true
 
 [mcp_servers.role_resources]
 command = "/bin/echo"
@@ -184,6 +185,53 @@ args = []
     assert_eq!(config.model.as_deref(), Some("persisted-thread-model"));
     assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Low));
     assert!(config.mcp_servers.get().contains_key("role_resources"));
+}
+
+#[tokio::test]
+async fn apply_role_restores_managed_role_mcp_projection() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    let role_path = write_role_config(
+        &home,
+        "managed-resource-role.toml",
+        r#"developer_instructions = "Read provider-owned resources"
+__codex_runtime_mcp_projection = true
+
+[mcp_servers.role_resources]
+command = "/bin/echo"
+args = []
+
+[[skills.config]]
+name = "role-skill"
+enabled = true
+"#,
+    )
+    .await;
+    config.agent_roles.insert(
+        "managed-resource-reader".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    apply_role_to_config(&mut config, Some("managed-resource-reader"))
+        .await
+        .expect("managed role should apply");
+
+    assert!(config.mcp_servers.get().contains_key("role_resources"));
+    assert_eq!(
+        config
+            .config_layer_stack
+            .effective_config()
+            .get("skills")
+            .and_then(|skills| skills.get("config"))
+            .and_then(TomlValue::as_array)
+            .and_then(|skills| skills.first())
+            .and_then(|skill| skill.get("name"))
+            .and_then(TomlValue::as_str),
+        Some("role-skill")
+    );
 }
 
 #[tokio::test]

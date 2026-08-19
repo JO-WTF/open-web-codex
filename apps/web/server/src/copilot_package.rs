@@ -1423,6 +1423,7 @@ fn project_role_mcp_servers(
     }
     role.remove("plugins");
     role["mcp_servers"] = Item::Table(runtime_servers);
+    role["__codex_runtime_mcp_projection"] = value(true);
     Ok(())
 }
 
@@ -1895,6 +1896,11 @@ runtime = "tools/maps/runtime.toml"
         assert!(
             network["mcp_servers"].get("supply_chain_data").is_none(),
             "Network Role must consume the Data Agent reference through its planning Tools, not configure the Data MCP server",
+        );
+        assert_eq!(
+            data["__codex_runtime_mcp_projection"].as_bool(),
+            Some(true),
+            "managed Role MCP projection must carry typed Runtime provenance",
         );
         let supply_python = _temp
             .path()

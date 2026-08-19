@@ -302,12 +302,9 @@ async function send(taskId, marker) {
 }
 
 function findFirstKey(value, keys) {
-  if (typeof value === "string" && /^[\\s]*[\\[{]/.test(value)) {
-    try {
-      return findFirstKey(JSON.parse(value), keys);
-    } catch {
-      return undefined;
-    }
+  const parsed = parseStructuredText(value);
+  if (parsed !== undefined) {
+    return findFirstKey(parsed, keys);
   }
   if (!value || typeof value !== "object") return undefined;
   if (!Array.isArray(value)) {
@@ -329,13 +326,26 @@ function findFirstKey(value, keys) {
   return undefined;
 }
 
-function findResourceRef(value, schema) {
-  if (typeof value === "string" && /^[\\s]*[\\[{]/.test(value)) {
+function parseStructuredText(value) {
+  if (typeof value !== "string") return undefined;
+  const candidates = [
+    value,
+    value.match(/(?:^|\n)Output:\s*([\[{][\s\S]*)\s*$/)?.[1],
+  ].filter(Boolean);
+  for (const candidate of candidates) {
     try {
-      return findResourceRef(JSON.parse(value), schema);
+      return JSON.parse(candidate);
     } catch {
-      return undefined;
+      // Try the next canonical tool-output envelope candidate.
     }
+  }
+  return undefined;
+}
+
+function findResourceRef(value, schema) {
+  const parsed = parseStructuredText(value);
+  if (parsed !== undefined) {
+    return findResourceRef(parsed, schema);
   }
   if (!value || typeof value !== "object") return undefined;
   if (!Array.isArray(value)) {
@@ -371,12 +381,9 @@ function findResourceRef(value, schema) {
 }
 
 function findDataRef(value) {
-  if (typeof value === "string" && /^[\\s]*[\\[{]/.test(value)) {
-    try {
-      return findDataRef(JSON.parse(value));
-    } catch {
-      return undefined;
-    }
+  const parsed = parseStructuredText(value);
+  if (parsed !== undefined) {
+    return findDataRef(parsed);
   }
   if (!value || typeof value !== "object") return undefined;
   if (!Array.isArray(value)) {
@@ -417,6 +424,26 @@ function findPreparedPath(body) {
 function findAgentId(body) {
   const value = findFirstKey(body, ["agent_id", "agentId"]);
   return typeof value === "string" ? value : undefined;
+}
+
+function findLatestAgentId(value) {
+  const parsed = parseStructuredText(value);
+  if (parsed !== undefined) return findLatestAgentId(parsed);
+  if (!value || typeof value !== "object") return undefined;
+  if (Array.isArray(value)) {
+    for (const child of [...value].reverse()) {
+      const found = findLatestAgentId(child);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (typeof value.agent_id === "string") return value.agent_id;
+  if (typeof value.agentId === "string") return value.agentId;
+  for (const child of Object.values(value).reverse()) {
+    const found = findLatestAgentId(child);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 function findMapEmbed(body) {
@@ -624,11 +651,23 @@ class DeterministicModelServer {
       return;
     }
     const body = bodyText ? JSON.parse(bodyText) : {};
-    const markerMatch = bodyText.match(/OWC_DETERMINISTIC_E2E:([A-Za-z0-9_-]+)/);
+    const markerMatch =
+      bodyText.match(/OWC_DETERMINISTIC_E2E:([A-Za-z0-9_-]+)/) ??
+      bodyText.match(/E2E_AGENT=(?:data_agent|network_agent):([A-Za-z0-9_-]+)/);
     const runId = markerMatch?.[1] ?? "unknown";
-    const role = bodyText.includes("E2E_AGENT=data_agent:" + runId)
+    const latestUserText = Array.isArray(body.messages)
+      ? [...body.messages]
+          .reverse()
+          .find((message) => message?.role === "user")
+          ?.content
+      : undefined;
+    const latestUserTextString =
+      typeof latestUserText === "string"
+        ? latestUserText
+        : JSON.stringify(latestUserText ?? "");
+    const role = latestUserTextString.includes("E2E_AGENT=data_agent:" + runId)
       ? "data"
-      : bodyText.includes("E2E_AGENT=network_agent:" + runId)
+      : latestUserTextString.includes("E2E_AGENT=network_agent:" + runId)
         ? "network"
         : "root";
     const text = JSON.stringify(body);
@@ -719,7 +758,7 @@ class DeterministicModelServer {
 
     if (role === "data") {
       if (!has("data:search")) {
-        return toolSearch("data:search", "inspect workspace sources and prepare network input");
+        return toolSearch("data:search", "inspect workspace sources");
       }
       if (toolSearchOutput?.length === 0) {
         return message(
@@ -839,6 +878,15 @@ class DeterministicModelServer {
         ...(v2 ? { task_name: "data_agent" } : { fork_context: false }),
       });
     }
+    if (
+      text.includes("<subagent_notification>") &&
+      !has("root:search-after-child")
+    ) {
+      return toolSearch(
+        "root:search-after-child",
+        "wait agent child completion and continue warehouse planning",
+      );
+    }
     if (!has("root:wait-data")) {
       const target = findAgentId(body);
       if (!target) throw new Error("deterministic model could not find data agent id");
@@ -867,7 +915,7 @@ class DeterministicModelServer {
       });
     }
     if (!has("root:wait-network")) {
-      const target = findAgentId(body);
+      const target = findLatestAgentId(body);
       if (!target) throw new Error("deterministic model could not find network agent id");
       return collaboration("root:wait-network", "wait_agent", v2 ? { timeout_ms: 300_000 } : {
         targets: [target],
@@ -1186,31 +1234,39 @@ async function runCase(index) {
     const schemas = new Set(refs.map((ref) => ref.resourceSchema ?? ref.resource_schema));
     for (const schema of [
       "source_profile.v1",
-      "prepared_network_input.v1",
       "route_matrix.v2",
       "network_baseline.v2",
       "network_coverage_geojson.v1",
     ]) {
       assert(schemas.has(schema), "missing Resource provenance for " + schema);
     }
+    assert(
+      eventText.includes("prepared_input_relative_path=prepared_network_input.json") &&
+        eventText.includes('"schema_version":"prepared_network_input.v1"') &&
+        eventText.includes('"content_sha256":"'),
+      "prepared Workspace input identity was not reported",
+    );
     const mapEvent = events.find(
       (event) =>
+        (event.event_type === "codex.item.completed" ||
+          event.lifecycle === "completed") &&
         itemType(event) === "mcpToolCall" &&
         /create_network_map_card/.test(String(eventTool(event))),
     );
     assert(mapEvent, "map producer Tool Item was not projected");
+    const mapEventText = JSON.stringify(mapEvent);
     assert(
-      JSON.stringify(mapEvent).includes("map.v3") &&
-        JSON.stringify(mapEvent).includes("map_spec_ref"),
+      mapEventText.includes("map.v3") &&
+        (mapEventText.includes("map_card_spec.v1") ||
+          mapEventText.includes("map-card-spec-")),
       "map delivery lacked renderer and map spec provenance",
     );
+    const preparedFiles = await api(
+      "/workspaces/" + record.workspace.id + "/files",
+    );
     assert(
-      events.some(
-        (event) =>
-          itemType(event) === "fileChange" &&
-          JSON.stringify(event).includes("prepared_network_input.json"),
-      ),
-      "prepared Workspace file provenance was not projected",
+      preparedFiles.includes("prepared_network_input.json"),
+      "prepared Workspace file was not persisted",
     );
     assert(
       eventText.includes("::codex-inline-vis{artifact="),
@@ -1218,22 +1274,37 @@ async function runCase(index) {
     );
     const agents = await api("/runs/" + record.run.id + "/agents");
     assert(agents.length >= 3, "Runtime agent projection did not include root and two children");
+    const roleByThread = new Map(
+      agents.map((agent) => [
+        agent.threadId ?? agent.thread_id,
+        agent.agentRole ?? agent.agent_role,
+      ]),
+    );
     assert(
-      agents.some((agent) => agent.agentRole === "data_agent") &&
-        agents.some((agent) => agent.agentRole === "network_agent"),
+      [...roleByThread.values()].includes("data_agent") &&
+        [...roleByThread.values()].includes("network_agent"),
       "Runtime agent projection missing Role identities",
     );
     const executions = await api("/runs/" + record.run.id + "/agent-executions");
     assert(
-      executions.some((execution) => execution.agentRole === "data_agent") &&
-        executions.some((execution) => execution.agentRole === "network_agent"),
+      executions.some(
+        (execution) => roleByThread.get(execution.threadId ?? execution.thread_id) === "data_agent",
+      ) &&
+        executions.some(
+          (execution) =>
+            roleByThread.get(execution.threadId ?? execution.thread_id) === "network_agent",
+        ),
       "Runtime agent execution provenance missing child Roles",
     );
     const runtimeStatus = await eventually(
       async () => {
         const status = await api("/profile/copilots");
         const target = installationId(status, copilotPackageId);
-        return target?.state?.toLowerCase() === "ready" ? target : undefined;
+        return target?.agentRolesConfigured &&
+          (target.runtimeDiscoveredSkillIds ?? []).includes("warehouse-supervisor") &&
+          (target.runtimeDiscoveredMcpServerIds ?? []).includes("supply_chain_data")
+          ? target
+          : undefined;
       },
       "warehouse-network-copilot Runtime discovery",
       120_000,

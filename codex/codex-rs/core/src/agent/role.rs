@@ -14,6 +14,7 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::SkillsConfig;
+use codex_config::config_toml::ConfigToml;
 use codex_config::loader::resolve_relative_paths_in_config_toml;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::read_sensitive_file_to_string;
@@ -48,6 +49,11 @@ struct AgentRoleOverrides {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     features: BTreeMap<String, bool>,
     skills: Option<SkillsConfig>,
+}
+
+struct LoadedRoleLayer {
+    toml: TomlValue,
+    runtime_mcp_projection: bool,
 }
 
 /// Applies typed role overrides to the existing parent-derived configuration.
@@ -104,12 +110,16 @@ pub(crate) async fn reapply_role_to_config_for_child_resume(
         None => PermissionProfileSnapshot::legacy(config.permissions.permission_profile().clone()),
     };
 
-    let role_layer_toml = load_role_layer_toml(config, config_file, is_built_in, role_name)
+    let loaded_role_layer = load_role_layer_toml(config, config_file, is_built_in, role_name)
         .await
         .map_err(|err| {
             tracing::warn!("failed to load role config for resume: {err}");
             AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
         })?;
+    let role_layer_toml = project_role_layer_toml(config, &loaded_role_layer).map_err(|err| {
+        tracing::warn!("failed to project role config for resume: {err}");
+        AGENT_TYPE_UNAVAILABLE_ERROR.to_string()
+    })?;
     if !role_layer_toml
         .as_table()
         .is_some_and(toml::map::Map::is_empty)
@@ -151,8 +161,42 @@ async fn apply_bounded_role_to_config_inner(
     let Some(config_file) = role.config_file.as_ref() else {
         return Ok(());
     };
-    let role_layer_toml = load_role_layer_toml(config, config_file, is_built_in, role_name).await?;
-    let role_config = deserialize_config_toml_with_base(role_layer_toml, &config.codex_home)?;
+    let loaded_role_layer =
+        load_role_layer_toml(config, config_file, is_built_in, role_name).await?;
+    let role_layer_toml = project_role_layer_toml(config, &loaded_role_layer)?;
+    if loaded_role_layer.runtime_mcp_projection {
+        *config = reload::build_next_config(config, role_layer_toml).await?;
+        return Ok(());
+    }
+    let role_config =
+        deserialize_config_toml_with_base(role_layer_toml.clone(), &config.codex_home)?;
+    let overrides =
+        role_overrides_from_config(role_config, loaded_role_layer.runtime_mcp_projection);
+    if role_layer_toml
+        .as_table()
+        .is_some_and(toml::map::Map::is_empty)
+    {
+        return Ok(());
+    }
+    *config = role_overrides::build_next_config(config, role_layer_toml, &overrides)?;
+    Ok(())
+}
+
+fn project_role_layer_toml(
+    config: &Config,
+    loaded_role_layer: &LoadedRoleLayer,
+) -> anyhow::Result<TomlValue> {
+    let role_config =
+        deserialize_config_toml_with_base(loaded_role_layer.toml.clone(), &config.codex_home)?;
+    let overrides =
+        role_overrides_from_config(role_config, loaded_role_layer.runtime_mcp_projection);
+    merge_role_owned_layers(TomlValue::try_from(&overrides)?, loaded_role_layer)
+}
+
+fn role_overrides_from_config(
+    role_config: ConfigToml,
+    runtime_mcp_projection: bool,
+) -> AgentRoleOverrides {
     let mut overrides = AgentRoleOverrides {
         developer_instructions: role_config.developer_instructions,
         model: role_config.model,
@@ -180,28 +224,50 @@ async fn apply_bounded_role_to_config_inner(
             }
         }
     }
-    if let Some(mut skills) = role_config.skills {
-        skills.config.retain(|skill| !skill.enabled);
-        skills.bundled = skills.bundled.filter(|bundled| !bundled.enabled);
-        skills.include_instructions = skills.include_instructions.filter(|enabled| !enabled);
-        skills.max_context_tokens = None;
-        if !skills.config.is_empty()
-            || skills.bundled.is_some()
-            || skills.include_instructions.is_some()
-        {
-            overrides.skills = Some(skills);
+    if !runtime_mcp_projection {
+        if let Some(mut skills) = role_config.skills {
+            skills.config.retain(|skill| !skill.enabled);
+            skills.bundled = skills.bundled.filter(|bundled| !bundled.enabled);
+            skills.include_instructions = skills.include_instructions.filter(|enabled| !enabled);
+            skills.max_context_tokens = None;
+            if !skills.config.is_empty()
+                || skills.bundled.is_some()
+                || skills.include_instructions.is_some()
+            {
+                overrides.skills = Some(skills);
+            }
         }
     }
+    overrides
+}
 
-    let role_layer_toml = TomlValue::try_from(&overrides)?;
-    if role_layer_toml
-        .as_table()
-        .is_some_and(toml::map::Map::is_empty)
-    {
-        return Ok(());
+fn merge_role_owned_layers(
+    mut role_layer_toml: TomlValue,
+    loaded_role_layer: &LoadedRoleLayer,
+) -> anyhow::Result<TomlValue> {
+    if loaded_role_layer.runtime_mcp_projection {
+        let Some(projected) = role_layer_toml.as_table_mut() else {
+            return Err(anyhow!("projected Role layer must be a TOML table"));
+        };
+        let Some(source) = loaded_role_layer.toml.as_table() else {
+            return Err(anyhow!("loaded Role layer must be a TOML table"));
+        };
+        for key in [
+            "mcp_servers",
+            "skills",
+            "instructions",
+            "model_instructions_file",
+            "include_permissions_instructions",
+            "include_apps_instructions",
+            "include_collaboration_mode_instructions",
+            "include_environment_context",
+        ] {
+            if let Some(value) = source.get(key) {
+                projected.insert(key.to_string(), value.clone());
+            }
+        }
     }
-    *config = role_overrides::build_next_config(config, role_layer_toml, &overrides)?;
-    Ok(())
+    Ok(role_layer_toml)
 }
 
 async fn load_role_layer_toml(
@@ -209,7 +275,7 @@ async fn load_role_layer_toml(
     config_file: &Path,
     is_built_in: bool,
     role_name: &str,
-) -> anyhow::Result<TomlValue> {
+) -> anyhow::Result<LoadedRoleLayer> {
     let (role_config_toml, role_config_base) = if is_built_in {
         let role_config_contents = built_in::config_file_contents(config_file)
             .map(str::to_owned)
@@ -218,6 +284,10 @@ async fn load_role_layer_toml(
         (role_config_toml, config.codex_home.as_path())
     } else {
         let role_config_contents = read_sensitive_file_to_string(config_file).await?;
+        let runtime_mcp_projection = toml::from_str::<TomlValue>(&role_config_contents)?
+            .get("__codex_runtime_mcp_projection")
+            .and_then(TomlValue::as_bool)
+            .unwrap_or(false);
         let role_config_base = config_file
             .parent()
             .ok_or(anyhow!("No corresponding config content"))?;
@@ -228,14 +298,17 @@ async fn load_role_layer_toml(
             Some(role_name),
         )?
         .config;
-        (role_config_toml, role_config_base)
+        return Ok(LoadedRoleLayer {
+            toml: resolve_relative_paths_in_config_toml(role_config_toml, role_config_base)?,
+            runtime_mcp_projection,
+        });
     };
 
     deserialize_config_toml_with_base(role_config_toml.clone(), role_config_base)?;
-    Ok(resolve_relative_paths_in_config_toml(
-        role_config_toml,
-        role_config_base,
-    )?)
+    Ok(LoadedRoleLayer {
+        toml: resolve_relative_paths_in_config_toml(role_config_toml, role_config_base)?,
+        runtime_mcp_projection: false,
+    })
 }
 
 pub(crate) fn resolve_role_config<'a>(
