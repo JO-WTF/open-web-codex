@@ -3,20 +3,20 @@
   "purpose": "Tracks the committed Codex-tree comparison snapshot and convergence classification progress for codex/.",
   "comparison": {
     "upstreamRef": "codex-upstream/main",
-    "upstreamCommit": "d1d51f6315f84a1737c655cb4d78104d030d5102",
+    "upstreamCommit": "3b45c29062ff0e76e71c91b6753290400e7fa8da",
     "comparisonLocalTree": "HEAD:codex",
-    "comparisonSnapshotScope": "Stage 2 synchronized committed HEAD snapshot after accepting official upstream d1d51f6315f8.",
-    "comparisonObservedAt": "2026-08-19T14:09:24Z",
-    "differenceCount": 77,
+    "comparisonSnapshotScope": "Stage 5.5 synchronized committed HEAD snapshot after accepting the frozen official upstream 3b45c29062ff.",
+    "comparisonObservedAt": "2026-08-19T19:22:45Z",
+    "differenceCount": 92,
     "addedLocally": 25,
-    "modified": 52,
+    "modified": 67,
     "missingLocally": 0,
     "upstreamOnly": 0,
-    "localOnly": 77,
+    "localOnly": 92,
     "diverged": 0
   },
   "progress": {
-    "state": "synchronized-upstream-stage-2",
+    "state": "synchronized-upstream-stage-5.5",
     "classificationSource": "docs/custom-codex-patch-map.md",
     "classifiedRetainCore": [
       "provider-chat-transport",
@@ -31,31 +31,31 @@
       "platform-runtime-path-identity-history"
     ],
     "classification": {
-      "classifiedLocalOnlyPaths": 77,
+      "classifiedLocalOnlyPaths": 92,
       "unclassifiedSourcePaths": 0,
       "temporaryUpstreamedFixes": 0
     },
     "completed": [
-      "The Codex subtree is synchronized through d1d51f6315f8; no official commits are pending.",
-      "The current committed HEAD comparison has 77 local-only paths and no upstream-only, missing, or diverged paths. Retained seams and generated derivatives are classified in docs/custom-codex-patch-map.md.",
+      "The Codex subtree is synchronized through the frozen official upstream 3b45c29062ff; 13 official commits were accepted and no official commits are pending relative to that freeze.",
+      "The current committed HEAD comparison has 92 local-only paths and no upstream-only, missing, or diverged paths. Retained seams and generated derivatives are classified in docs/custom-codex-patch-map.md.",
       "Profile lifecycle, encrypted credentials, authorization, durable approvals, Git workspaces, Run leases, browser DTOs, and event delivery are owned by apps/web.",
       "The browser uses typed REST and authenticated WebSocket transport; Tauri, desktop sidecars, raw browser RPC, desktop release chains, and desktop build dependencies are absent.",
       "Provider configuration, event payloads, model context and onboarding implementation live in dedicated TUI Provider modules; high-churn upstream parent files retain only narrow attachments.",
       "The protocol ToolName implementation matches official Codex; Chat namespace flattening is isolated in codex-api.",
-      "The incomplete real-platform E2E scaffold is checkpointed separately and explicitly does not claim a passing multi-agent/tool/map acceptance gate.",
+      "The deterministic multi-agent/tool/map E2E gate passed twice; the opt-in real DeepSeek gate remains a typed Provider-capability result and does not claim a full business E4.",
       "The standard MCP elicitation decoder is an upstreamed backport of official commit 61de0d8fe812137cec943d58309b26df1dd227b5; it is not a retained core seam."
     ],
     "validation": {
       "format": "just fmt-check passed after Runtime convergence",
       "clippyFix": "just fix -p codex-core passed with existing unfulfilled test lint expectation warnings",
-      "protocolTests": "codex-api 210/210; Role 23/23; child V2 cold resume and Role MCP resource gates passed",
-      "appServerTests": "full app-server 1223/1236; 13 baseline environment/fixture failures (missing codex/test_stdio/code-mode host, imagegen/zsh/analytics); Role MCP resource and permission resume gates passed",
-      "schemaDrift": "scripts/test-codex.sh -p codex-app-server-protocol: 290/290 passed after official generation",
-      "appServerSmoke": "npm --prefix apps/web run smoke:codex-app-server passed: {ok:true,threadListCount:1}"
+      "protocolTests": "codex-api 214/214; Role 25/25; model-provider-info 27/27; model-provider 81/81; config 264/264",
+      "appServerTests": "pre-freeze full app-server 1222/1236 passed (2 flaky retries); 14 environment/fixture failures retained (missing test binaries/code-mode host, imagegen, MCP/selected capability, zsh); post-freeze app-server protocol 290/290 passed",
+      "schemaDrift": "post-freeze schema generation test passed and codex-app-server-protocol 290/290 passed; Web typecheck and no-desktop checks passed",
+      "appServerSmoke": "post-freeze npm --prefix apps/web run smoke:codex-app-server passed: {ok:true,threadListCount:1}; deterministic multi-agent E2E passed twice"
     },
-    "validatedAgainstIntegratedUpstream": "d1d51f6315f84a1737c655cb4d78104d030d5102",
-    "validationWorktreeBaseCommit": "dc0ad1a24",
-    "validationScope": "Stage 2 synchronized Runtime tree with generated stable/experimental schema fixtures and official initialize/thread-list smoke.",
-    "nextAction": "Review the synchronized diff, commit the generated fixtures and current inventory/Patch Map, then hand off to the next stage without push."
+    "validatedAgainstIntegratedUpstream": "3b45c29062ff0e76e71c91b6753290400e7fa8da",
+    "validationWorktreeBaseCommit": "d546b35d9",
+    "validationScope": "Stage 5.5 synchronized Runtime tree with refreshed generated stable/experimental schema fixtures, typed Chat/Provider seams, and official initialize/thread-list smoke.",
+    "nextAction": "Run the final frozen-baseline validation matrix, review the exact diff and commit the synchronization/convergence result without push."
   }
 }
