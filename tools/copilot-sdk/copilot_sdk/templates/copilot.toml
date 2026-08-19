@@ -4,6 +4,7 @@ display_name = "__DISPLAY_NAME__"
 
 [root]
 skill = "__SUPERVISOR_SKILL__"
+task_skills = "none"
 
 [[skills]]
 id = "__SUPERVISOR_SKILL__"

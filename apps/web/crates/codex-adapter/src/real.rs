@@ -23,8 +23,8 @@ use crate::{
 pub struct ThreadSkillConfig {
     pub name: String,
     pub enabled: bool,
-    /// The one small, always-loaded Root Skill. Other enabled skills remain in
-    /// Codex's native catalog and load their body only after native selection.
+    /// The one small, always-loaded Root Skill. Package policy decides which
+    /// task Skills remain enabled in this Root Thread's native catalog.
     pub main_prompt: Option<PathBuf>,
 }
 
@@ -2133,7 +2133,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_start_params_project_typed_skill_config_in_order() {
+    fn thread_start_params_projects_root_scoped_skill_config_in_order() {
         let execution = RootExecutionConfig {
             id: "multi-agent".to_string(),
             skill_config: vec![
@@ -2144,12 +2144,12 @@ mod tests {
                 },
                 ThreadSkillConfig {
                     name: "warehouse-data".to_string(),
-                    enabled: true,
+                    enabled: false,
                     main_prompt: None,
                 },
                 ThreadSkillConfig {
                     name: "warehouse-route-planning".to_string(),
-                    enabled: true,
+                    enabled: false,
                     main_prompt: None,
                 },
             ],
@@ -2168,8 +2168,8 @@ mod tests {
                     "skills.include_instructions": true,
                     "skills.config": [
                         { "name": "warehouse-supervisor", "enabled": true },
-                        { "name": "warehouse-data", "enabled": true },
-                        { "name": "warehouse-route-planning", "enabled": true },
+                        { "name": "warehouse-data", "enabled": false },
+                        { "name": "warehouse-route-planning", "enabled": false },
                     ],
                 },
             })

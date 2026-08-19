@@ -59,11 +59,18 @@ pub(crate) struct CopilotPackageAssets {
     display_name: String,
     source_revision: String,
     root_skill: String,
+    root_task_skill_access: RootTaskSkillAccess,
     root_agent: Option<String>,
     skills: Vec<PackageSkill>,
     roles: Vec<PackageRole>,
     capability_roots: BTreeMap<String, PreparedCapabilityRoot>,
     deliveries: DeliveryRegistry,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RootTaskSkillAccess {
+    None,
+    All,
 }
 
 #[derive(Clone, Debug)]
@@ -184,6 +191,7 @@ impl CopilotPackageAssets {
             display_name: package.display_name,
             source_revision,
             root_skill: package.root_skill,
+            root_task_skill_access: package.root_task_skill_access,
             root_agent: package.root_agent,
             skills: package.skills,
             roles: package.roles,
@@ -234,7 +242,8 @@ impl CopilotPackageAssets {
             .iter()
             .map(|skill| ThreadSkillConfig {
                 name: skill.id.clone(),
-                enabled: true,
+                enabled: skill.id == self.root_skill
+                    || self.root_task_skill_access == RootTaskSkillAccess::All,
                 main_prompt: (skill.id == self.root_skill)
                     .then(|| profile_home.join("skills").join(&skill.id).join("SKILL.md")),
             })
@@ -391,6 +400,7 @@ struct LoadedCopilotPackage {
     id: String,
     display_name: String,
     root_skill: String,
+    root_task_skill_access: RootTaskSkillAccess,
     root_agent: Option<String>,
     skills: Vec<PackageSkill>,
     roles: Vec<PackageRole>,
@@ -439,8 +449,23 @@ fn load_copilot_package(package_root: &Path) -> Result<LoadedCopilotPackage, Cop
     require_stable_identifier(COMPONENT, "Copilot id", &id)?;
     let display_name = required_string(COMPONENT, manifest.as_table(), "display_name")?.to_string();
     let root_config = required_table(COMPONENT, manifest.as_table(), "root")?;
-    reject_unknown_keys(COMPONENT, "root", root_config, &["skill", "agent"])?;
+    reject_unknown_keys(
+        COMPONENT,
+        "root",
+        root_config,
+        &["skill", "agent", "task_skills"],
+    )?;
     let root_skill = required_string(COMPONENT, root_config, "skill")?.to_string();
+    let root_task_skill_access = match required_string(COMPONENT, root_config, "task_skills")? {
+        "none" => RootTaskSkillAccess::None,
+        "all" => RootTaskSkillAccess::All,
+        _ => {
+            return Err(unavailable_message(
+                COMPONENT,
+                "root.task_skills must equal `none` or `all`".to_string(),
+            ));
+        }
+    };
 
     let skill_entries = manifest
         .get("skills")
@@ -604,6 +629,7 @@ fn load_copilot_package(package_root: &Path) -> Result<LoadedCopilotPackage, Cop
         id,
         display_name,
         root_skill,
+        root_task_skill_access,
         root_agent,
         skills,
         roles,
@@ -1591,6 +1617,7 @@ display_name = "Warehouse network"
 
 [root]
 skill = "warehouse-supervisor"
+task_skills = "none"
 
 [[skills]]
 id = "warehouse-supervisor"
@@ -1703,11 +1730,20 @@ runtime = "tools/maps/runtime.toml"
                     {
                         "id": "map-card",
                         "server": "map_utils",
+                        "tool": "create_network_map_card",
+                        "kind": "inline_geojson_map_card",
+                        "schema": "map.v3",
+                        "mimeType": "application/vnd.open-web-codex.map-card+json",
+                        "displayName": "Warehouse network map"
+                    },
+                    {
+                        "id": "map-card-custom",
+                        "server": "map_utils",
                         "tool": "create_map_card",
                         "kind": "inline_geojson_map_card",
                         "schema": "map.v3",
                         "mimeType": "application/vnd.open-web-codex.map-card+json",
-                        "displayName": "Interactive map"
+                        "displayName": "Custom warehouse map"
                     },
                     {
                         "id": "map-card-revision",
@@ -1784,7 +1820,7 @@ runtime = "tools/maps/runtime.toml"
             assets
                 .deliveries()
                 .for_item(
-                    serde_json::json!({"server":"map_utils","tool":"create_map_card"})
+                    serde_json::json!({"server":"map_utils","tool":"create_network_map_card"})
                         .as_object()
                         .expect("item")
                 )
@@ -1812,30 +1848,39 @@ runtime = "tools/maps/runtime.toml"
                 },
                 ThreadSkillConfig {
                     name: "warehouse-data".to_string(),
-                    enabled: true,
+                    enabled: false,
                     main_prompt: None,
                 },
                 ThreadSkillConfig {
                     name: "warehouse-route-planning".to_string(),
-                    enabled: true,
+                    enabled: false,
                     main_prompt: None,
                 },
                 ThreadSkillConfig {
                     name: "warehouse-network-analysis".to_string(),
-                    enabled: true,
+                    enabled: false,
                     main_prompt: None,
                 },
                 ThreadSkillConfig {
                     name: "warehouse-network-optimization".to_string(),
-                    enabled: true,
+                    enabled: false,
                     main_prompt: None,
                 },
                 ThreadSkillConfig {
                     name: "warehouse-map-delivery".to_string(),
-                    enabled: true,
+                    enabled: false,
                     main_prompt: None,
                 },
             ]
+        );
+        let mut direct_root_assets = assets.clone();
+        direct_root_assets.root_task_skill_access = RootTaskSkillAccess::All;
+        assert!(
+            direct_root_assets
+                .root_skill_config(&profile)
+                .iter()
+                .all(|skill| skill.enabled),
+            "a direct-execution Root must retain its declared task Skill catalog"
         );
         let data = assets
             .render_role("data_agent", &profile)
@@ -1919,10 +1964,12 @@ runtime = "tools/maps/runtime.toml"
                 .and_then(|value| value.as_str()),
             Some("HTTP_PROXY")
         );
-        assert!(data["developer_instructions"]
+        let data_instructions = data["developer_instructions"]
             .as_str()
-            .expect("data instructions")
-            .contains("Do not use shell, Workspace command, Git, jq, or ad-hoc Python"));
+            .expect("data instructions");
+        assert!(data_instructions.contains("exact Host `SKILL.md` path"));
+        assert!(data_instructions
+            .contains("do not use shell, Workspace command, Git, jq, or ad-hoc Python"));
         assert!(network["mcp_servers"]["supply_chain"].get("cwd").is_none());
         assert_eq!(
             network["mcp_servers"]["supply_chain"]["required"].as_bool(),

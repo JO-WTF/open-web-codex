@@ -67,6 +67,7 @@ display_name = "Network Copilot"
 
 [root]
 skill = "supervisor"
+task_skills = "none"
 
 [[skills]]
 id = "supervisor"
@@ -257,8 +258,19 @@ display_name = "Map"
 
     def test_requires_root(self) -> None:
         manifest = (self.root / "copilot.toml").read_text(encoding="utf-8")
-        self.write_manifest(manifest.replace('[root]\nskill = "supervisor"\n\n', ""))
+        self.write_manifest(
+            manifest.replace(
+                '[root]\nskill = "supervisor"\ntask_skills = "none"\n\n', ""
+            )
+        )
         self.assert_code("required_field")
+
+    def test_requires_a_valid_root_task_skill_policy(self) -> None:
+        manifest = (self.root / "copilot.toml").read_text(encoding="utf-8")
+        self.write_manifest(
+            manifest.replace('task_skills = "none"', 'task_skills = "some"')
+        )
+        self.assert_code("invalid_field")
 
     def test_rejects_skill_frontmatter_mismatch(self) -> None:
         (self.root / "skills" / "worker" / "SKILL.md").write_text(

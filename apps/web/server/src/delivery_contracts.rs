@@ -207,11 +207,20 @@ pub(crate) fn warehouse_test_registry() -> DeliveryRegistry {
         DeliveryContract {
             id: "network-map-card".into(),
             server: "map_utils".into(),
+            tool: "create_network_map_card".into(),
+            kind: DeliveryKind::InlineGeoJsonMapCard,
+            schema: "map.v3".into(),
+            mime_type: "application/vnd.open-web-codex.map-card+json".into(),
+            display_name: "Warehouse network map".into(),
+        },
+        DeliveryContract {
+            id: "network-map-card-custom".into(),
+            server: "map_utils".into(),
             tool: "create_map_card".into(),
             kind: DeliveryKind::InlineGeoJsonMapCard,
             schema: "map.v3".into(),
             mime_type: "application/vnd.open-web-codex.map-card+json".into(),
-            display_name: "Interactive map".into(),
+            display_name: "Custom warehouse map".into(),
         },
         DeliveryContract {
             id: "network-map-card-revision".into(),
@@ -235,7 +244,7 @@ mod tests {
         let registry = warehouse_test_registry();
         let matching = serde_json::json!({
             "server": "map_utils",
-            "tool": "create_map_card"
+            "tool": "create_network_map_card"
         });
         let unrelated = serde_json::json!({
             "server": "map_utils",

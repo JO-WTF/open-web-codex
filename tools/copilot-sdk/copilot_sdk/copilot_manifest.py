@@ -127,7 +127,7 @@ def validate_copilot_package(
     root_config = _required(manifest, "root", "copilot.toml")
     if not isinstance(root_config, dict):
         _fail("invalid_type", "root", "must be a table")
-    unknown_root = sorted(set(root_config) - {"skill", "agent"})
+    unknown_root = sorted(set(root_config) - {"skill", "agent", "task_skills"})
     if unknown_root:
         _fail(
             "invalid_field",
@@ -135,6 +135,13 @@ def validate_copilot_package(
             "field is not part of schema v1",
         )
     root_skill = _required_string(root_config, "skill", "root")
+    task_skills = _required_string(root_config, "task_skills", "root")
+    if task_skills not in {"none", "all"}:
+        _fail(
+            "invalid_field",
+            "root.task_skills",
+            "must equal 'none' or 'all'",
+        )
     if root_skill not in skill_ids:
         _fail(
             "missing_reference",

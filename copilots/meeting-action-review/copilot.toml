@@ -4,6 +4,7 @@ display_name = "Meeting Action Review"
 
 [root]
 skill = "meeting-action-supervisor"
+task_skills = "none"
 
 [[skills]]
 id = "meeting-action-supervisor"

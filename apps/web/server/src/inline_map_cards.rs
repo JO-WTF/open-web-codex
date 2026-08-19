@@ -11,7 +11,7 @@ const MAX_LAYERS: usize = 64;
 #[cfg(test)]
 const MAP_SERVER: &str = "map_utils";
 #[cfg(test)]
-const MAP_TOOL: &str = "create_map_card";
+const MAP_TOOL: &str = "create_network_map_card";
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct InlineMapCandidate {

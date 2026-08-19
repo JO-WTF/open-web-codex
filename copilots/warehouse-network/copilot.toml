@@ -4,6 +4,7 @@ display_name = "Warehouse Network · Multi-Agent"
 
 [root]
 skill = "warehouse-supervisor"
+task_skills = "none"
 
 [[skills]]
 id = "warehouse-supervisor"
@@ -68,11 +69,20 @@ content_verifier = { kind = "markdown_marker", marker = "<!-- network_planning_r
 [[deliveries]]
 id = "network-map-card"
 server = "map_utils"
+tool = "create_network_map_card"
+kind = "inline_geojson_map_card"
+schema = "map.v3"
+mime_type = "application/vnd.open-web-codex.map-card+json"
+display_name = "Warehouse network map"
+
+[[deliveries]]
+id = "network-map-card-custom"
+server = "map_utils"
 tool = "create_map_card"
 kind = "inline_geojson_map_card"
 schema = "map.v3"
 mime_type = "application/vnd.open-web-codex.map-card+json"
-display_name = "Interactive map"
+display_name = "Custom warehouse map"
 
 [[deliveries]]
 id = "network-map-card-revision"

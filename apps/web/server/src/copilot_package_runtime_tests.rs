@@ -1448,10 +1448,17 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     );
     assert!(
         root_developer_text.contains("### Available skills")
-            && WAREHOUSE_SKILLS
-                .iter()
-                .all(|skill| root_developer_text.contains(&format!("- {skill}: "))),
-        "the Root omitted the native task Skill catalog: {root_developer_text}",
+            && root_developer_text.contains("- warehouse-supervisor: ")
+            && [
+                "warehouse-data",
+                "warehouse-route-planning",
+                "warehouse-network-analysis",
+                "warehouse-network-optimization",
+                "warehouse-map-delivery",
+            ]
+            .iter()
+            .all(|skill| !root_developer_text.contains(&format!("- {skill}: "))),
+        "the multi-Agent Root exposed task Skills outside its declared scope: {root_developer_text}",
     );
     assert!(
         !root_user_text.contains("<name>warehouse-data</name>")
@@ -1475,13 +1482,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
             "warehouse-data",
             "仅供仓网 Supervisor 原生创建的 data_agent 使用",
         )],
-        &[
-            "warehouse-data",
-            "warehouse-route-planning",
-            "warehouse-network-analysis",
-            "warehouse-network-optimization",
-            "warehouse-map-delivery",
-        ],
+        &["warehouse-data"],
     );
     let data_mcp = adapter
         .query_profile(ProfileQuery::McpServers {
@@ -1560,13 +1561,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
             "warehouse-data",
             "仅供仓网 Supervisor 原生创建的 data_agent 使用",
         )],
-        &[
-            "warehouse-data",
-            "warehouse-route-planning",
-            "warehouse-network-analysis",
-            "warehouse-network-optimization",
-            "warehouse-map-delivery",
-        ],
+        &["warehouse-data"],
     );
     let reloaded_data_mcp = adapter
         .query_profile(ProfileQuery::McpServers {
@@ -1687,13 +1682,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     assert_child_skill_policy(
         &hot_data_request,
         &[("warehouse-data", SKILL_HOT_MARKER)],
-        &[
-            "warehouse-data",
-            "warehouse-route-planning",
-            "warehouse-network-analysis",
-            "warehouse-network-optimization",
-            "warehouse-map-delivery",
-        ],
+        &["warehouse-data"],
     );
     assert!(
         request_developer_text(&hot_data_request).contains(ROLE_HOT_MARKER),
