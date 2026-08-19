@@ -919,11 +919,17 @@ impl ModelClient {
             }
             None
         };
-        let text = create_text_param_for_request(
-            verbosity,
-            &prompt.output_schema,
-            prompt.output_schema_strict,
-        );
+        let text = if self.state.provider.info().wire_api == WireApi::Chat
+            && prompt.output_schema.is_none()
+        {
+            None
+        } else {
+            create_text_param_for_request(
+                verbosity,
+                &prompt.output_schema,
+                prompt.output_schema_strict,
+            )
+        };
         let prompt_cache_key = Some(self.prompt_cache_key(responses_metadata));
         let service_tier = model_info.service_tier_for_request(service_tier);
         let request = ResponsesApiRequest {

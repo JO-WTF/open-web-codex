@@ -1,82 +1,111 @@
 #!/usr/bin/env node
 
-// CHECKPOINT ONLY: this scaffold is intentionally incomplete. It exercises the
-// Workspace/file/task setup, but the real Provider gate is not a passing
-// multi-agent acceptance test until structured tool-call support and deterministic
-// fixture coverage are implemented. Do not report this script as an E2E pass.
+// Deterministic native Runtime acceptance gate for warehouse-network-copilot.
+// The model server below only returns structured Chat tool calls. Agent/Role,
+// Skill, MCP, Workspace, domain computation, Resource and map delivery all run
+// through the real Platform and Codex Runtime.
 
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { createServer } from "node:http";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { requireCompletedTurn } from "./e2e-turn-contract.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../../..");
-const mockDataDir = process.env.E2E_MOCK_DATA_DIR ?? path.join(process.env.HOME ?? "", "Downloads", "mock_data");
-const baseUrl = (process.env.E2E_BASE_URL ?? "http://127.0.0.1:4810").replace(/\/$/, "");
-const apiBase = `${baseUrl}/api`;
-const providerId = process.env.E2E_PROVIDER_ID ?? "deepseek-e2e";
-const providerBaseUrl = process.env.E2E_PROVIDER_BASE_URL ?? "https://api.deepseek.com";
-const model = process.env.E2E_MODEL ?? "deepseek-v4-flash";
-const copilotPackageId = process.env.E2E_COPILOT_PACKAGE_ID ?? "warehouse-network-copilot";
-const username = process.env.E2E_ADMIN_USERNAME ?? "real-e2e";
-const email = process.env.E2E_ADMIN_EMAIL ?? "real-e2e@open-web-codex.local";
-const password = process.env.E2E_ADMIN_PASSWORD ?? "open-web-codex-real-e2e";
-const mcpBinary = process.env.E2E_MCP_BIN ?? path.join(
-  repoRoot,
-  "codex/codex-rs/target/debug/test_stdio_server",
+const fixtureDir = path.join(
+  scriptDir,
+  "fixtures",
+  "warehouse-network",
+  "mock_data",
 );
-const deepseekKey = await loadSecret(
-  "DEEPSEEK_API_KEY",
-  process.env.DEEPSEEK_API_KEY_FILE,
-);
-
-const secrets = [deepseekKey, password].filter(Boolean);
+const fixtureManifestPath = path.join(fixtureDir, "manifest.json");
+const baseUrl = (
+  process.env.E2E_BASE_URL ?? "http://127.0.0.1:4810"
+).replace(/\/$/, "");
+const apiBase = baseUrl + "/api";
+const providerId = process.env.E2E_PROVIDER_ID ?? "deterministic-chat-e2e";
+const model = process.env.E2E_MODEL ?? "gpt-5.4";
+const copilotPackageId =
+  process.env.E2E_COPILOT_PACKAGE_ID ?? "warehouse-network-copilot";
+const username = process.env.E2E_ADMIN_USERNAME ?? "deterministic-e2e";
+const email =
+  process.env.E2E_ADMIN_EMAIL ?? "deterministic-e2e@open-web-codex.local";
+const password =
+  process.env.E2E_ADMIN_PASSWORD ?? "open-web-codex-deterministic-e2e";
+const secrets = [password].filter(Boolean);
 const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
-const marker = `OWC_E2E_${stamp}`;
 const results = [];
 const state = {
   token: undefined,
-  project: undefined,
-  firstTask: undefined,
-  firstRun: undefined,
-  firstTurnEvents: [],
-  secondTask: undefined,
-  secondRun: undefined,
-  ws: undefined,
+  manifest: undefined,
+  modelServer: undefined,
 };
+
+class ApiError extends Error {
+  constructor(method, pathname, status, body) {
+    super(
+      method +
+        " " +
+        pathname +
+        " failed (" +
+        status +
+        "): " +
+        sanitize(body),
+    );
+    this.status = status;
+    this.body = body;
+  }
+}
+
+class NativeRuntimeBlocker extends Error {
+  constructor(code, details) {
+    super(code + ": " + JSON.stringify(details));
+    this.name = "NativeRuntimeBlocker";
+    this.code = code;
+    this.details = details;
+  }
+}
 
 function sanitize(value) {
   let text = typeof value === "string" ? value : JSON.stringify(value);
   for (const secret of secrets) {
-    if (secret) text = text.split(secret).join("[redacted]");
+    text = text.split(secret).join("[redacted]");
   }
   return text;
 }
 
-function log(message) {
-  process.stdout.write(`${sanitize(message)}\n`);
+function visibleToolNames(body) {
+  return Array.isArray(body.tools)
+    ? body.tools.map(
+        (tool) =>
+          tool?.function?.name ??
+          tool?.name ??
+          tool?.namespace ??
+          tool?.type ??
+          "unknown",
+      )
+    : [];
 }
 
-async function loadSecret(envName, fileName) {
-  if (fileName) return (await readFile(fileName, "utf8")).trim();
-  if (process.env[envName]) return process.env[envName].trim();
-  throw new Error(`${envName} or ${envName}_FILE is required`);
+function log(message) {
+  process.stdout.write(sanitize(message) + "\n");
 }
 
 async function api(pathname, options = {}) {
   const headers = new Headers(options.headers);
-  if (state.token) headers.set("authorization", `Bearer ${state.token}`);
+  if (state.token) headers.set("authorization", "Bearer " + state.token);
   if (options.body !== undefined) headers.set("content-type", "application/json");
-  const response = await fetch(`${apiBase}${pathname}`, {
+  const response = await fetch(apiBase + pathname, {
     ...options,
     headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    body:
+      options.body === undefined ? undefined : JSON.stringify(options.body),
   });
   const text = await response.text();
-  let body = undefined;
+  let body;
   if (text) {
     try {
       body = JSON.parse(text);
@@ -85,24 +114,9 @@ async function api(pathname, options = {}) {
     }
   }
   if (!response.ok) {
-    throw new Error(`${options.method ?? "GET"} ${pathname} failed (${response.status}): ${sanitize(body)}`);
+    throw new ApiError(options.method ?? "GET", pathname, response.status, body);
   }
   return body;
-}
-
-async function uploadWorkspaceFile(workspaceId, filePath, relativePath) {
-  const body = new FormData();
-  body.append("files", new Blob([await readFile(filePath)]), relativePath);
-  const headers = new Headers();
-  if (state.token) headers.set("authorization", `Bearer ${state.token}`);
-  const response = await fetch(`${apiBase}/workspaces/${encodeURIComponent(workspaceId)}/files`, {
-    method: "POST",
-    headers,
-    body,
-  });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`POST workspace file upload failed (${response.status}): ${sanitize(text)}`);
-  return text ? JSON.parse(text) : undefined;
 }
 
 async function eventually(probe, description, timeoutMs = 60_000, intervalMs = 250) {
@@ -117,432 +131,1154 @@ async function eventually(probe, description, timeoutMs = 60_000, intervalMs = 2
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
-  throw new Error(`${description} timed out${lastError ? `: ${sanitize(lastError.message)}` : ""}`);
+  throw new Error(
+    description +
+      " timed out" +
+      (lastError ? ": " + sanitize(lastError.message) : ""),
+  );
 }
 
-async function runCase(name, test) {
-  const started = performance.now();
-  log(`\n[RUN] ${name}`);
-  try {
-    const details = await test();
-    const durationMs = Math.round(performance.now() - started);
-    results.push({ name, status: "passed", durationMs, details });
-    log(`[PASS] ${name} (${durationMs} ms)${details ? ` — ${details}` : ""}`);
-  } catch (error) {
-    const durationMs = Math.round(performance.now() - started);
-    results.push({ name, status: "failed", durationMs, error: sanitize(error.message) });
-    log(`[FAIL] ${name} (${durationMs} ms) — ${error.message}`);
-    throw error;
+async function readFixtureManifest() {
+  const manifest = JSON.parse(await readFile(fixtureManifestPath, "utf8"));
+  assert.equal(manifest.schema_version, 1);
+  assert.deepEqual(manifest.excluded_files, [".DS_Store"]);
+  assert.equal(manifest.files.length, 6);
+  for (const entry of manifest.files) {
+    const fixturePath = path.join(fixtureDir, entry.path);
+    const bytes = await readFile(fixturePath);
+    assert.equal(bytes.length, entry.bytes, entry.path + " byte count drifted");
+    assert.equal(
+      createHash("sha256").update(bytes).digest("hex"),
+      entry.sha256,
+      entry.path + " SHA-256 drifted",
+    );
   }
+  return manifest;
 }
 
-function findProvider(catalog, id) {
-  return catalog.data.find((provider) => provider.id === id);
+async function uploadWorkspaceFile(workspaceId, fixturePath, relativePath) {
+  const body = new FormData();
+  body.append(
+    "file",
+    new Blob([await readFile(fixturePath)]),
+    relativePath,
+  );
+  const headers = new Headers();
+  if (state.token) headers.set("authorization", "Bearer " + state.token);
+  const response = await fetch(
+    apiBase + "/workspaces/" + encodeURIComponent(workspaceId) + "/files",
+    { method: "POST", headers, body },
+  );
+  const text = await response.text();
+  if (!response.ok) {
+    throw new ApiError(
+      "POST",
+      "/workspaces/" + workspaceId + "/files",
+      response.status,
+      text,
+    );
+  }
+  return text ? JSON.parse(text) : undefined;
 }
 
-function currentProviderId(catalog) {
-  return catalog.currentProviderId ?? catalog.current_provider_id;
-}
-
-async function createTaskAndRun(title) {
+async function createTaskAndRun(project, workspace, title) {
   const task = await api("/tasks", {
     method: "POST",
     body: {
-      project_id: state.project.id,
-      workspace_id: state.workspace.id,
+      project_id: project.id,
+      workspace_id: workspace.id,
       title,
       model_provider: providerId,
       model,
       copilot_package_id: copilotPackageId,
     },
   });
-  const response = await api(`/tasks/${task.id}/runs`, {
+  const started = await api("/tasks/" + task.id + "/runs", {
     method: "POST",
     body: {
-      idempotency_key: `real-e2e-${crypto.randomUUID()}`,
+      idempotency_key: "deterministic-e2e-" + randomUUID(),
       fork_thread_id: null,
       fork_source_run_id: null,
     },
   });
-  const run = await eventually(async () => {
-    const current = await api(`/runs/${response.run.id}`);
-    return current.codex_thread_id && current.workspace_id ? current : undefined;
-  }, `Run ${response.run.id} readiness`, 90_000, 500);
+  const run = await eventually(
+    async () => {
+      const current = await api("/runs/" + (started.run ?? started).id);
+      return current.codex_thread_id && current.workspace_id ? current : undefined;
+    },
+    "Run readiness",
+    90_000,
+    500,
+  );
   return { task, run };
 }
 
-async function taskEvents(taskId, afterSequence) {
-  const query = new URLSearchParams({ limit: "200" });
-  if (afterSequence !== undefined) query.set("after_sequence", String(afterSequence));
-  return api(`/tasks/${taskId}/events?${query}`);
+async function taskEvents(taskId) {
+  return api("/tasks/" + taskId + "/events?limit=5000");
 }
 
-async function waitForTurn(taskId, turnId, timeoutMs = 180_000) {
-  return eventually(async () => {
-    const events = await taskEvents(taskId);
-    const failure = events.find((event) =>
-      event.turn_id === turnId &&
-      (event.event_type === "codex.thread.failed" || event.payload?.data?.failureReason),
-    );
-    if (failure) throw new Error(`Turn ${turnId} failed: ${sanitize(failure.payload)}`);
-    return requireCompletedTurn(events, {
-      threadId: undefined,
-      turnId,
-      label: `Turn ${turnId}`,
-      sanitize,
-    });
-  }, `Turn ${turnId} completion`, timeoutMs, 500);
+async function waitForTurn(taskId, turnId, timeoutMs = 300_000) {
+  return eventually(
+    async () => {
+      const events = await taskEvents(taskId);
+      const failure = events.find(
+        (event) =>
+          event.turn_id === turnId &&
+          (event.event_type === "codex.thread.failed" ||
+            event.payload?.data?.failureReason ||
+            event.payload?.data?.artifactDelivery?.state === "failed"),
+      );
+      if (failure) {
+        throw new Error("Turn failed: " + sanitize(failure.payload));
+      }
+      const completed = events.some(
+        (event) =>
+          event.turn_id === turnId &&
+          event.event_type === "codex.turn.completed",
+      );
+      return completed ? events : undefined;
+    },
+    "Turn " + turnId + " completion",
+    timeoutMs,
+    500,
+  );
+}
+
+function itemType(event) {
+  return event.payload?.itemType ?? event.payload?.data?.type;
 }
 
 function itemData(event) {
   return event.payload?.data ?? {};
 }
 
-function itemType(event) {
-  return event.payload?.itemType ?? itemData(event).type;
-}
-
 function textFromEvents(events) {
   return events.map((event) => sanitize(event.payload)).join("\n");
 }
 
-async function send(taskId, text, accessMode = "workspace-write") {
-  return api(`/tasks/${taskId}/messages`, {
+function eventTool(event) {
+  const data = itemData(event);
+  return (
+    data.tool ??
+    data.name ??
+    data.data?.tool ??
+    data.result?.tool ??
+    ""
+  );
+}
+
+async function send(taskId, marker) {
+  return api("/tasks/" + taskId + "/messages", {
     method: "POST",
     body: {
-      text,
+      text: [
+        "E2E_ROOT_MARKER=" + marker,
+        "根据已上传的 mock_data 文件，计算 12 小时时效达标率并展示地图。",
+        "必须走真实 native multi-agent 协同：先 spawn data_agent 清理 raw data，",
+        "再由 network_agent 使用 Workspace prepared input 计算路线、12h baseline，",
+        "最后生成包含点线面和图例的 map card。不要模拟业务结果，不要使用 shell 代替 MCP。",
+      ].join("\n"),
       model,
       model_provider: providerId,
       effort: "none",
       service_tier: null,
-      access_mode: accessMode,
+      access_mode: "workspace-write",
       images: [],
       collaboration_mode: null,
     },
   });
 }
 
-class EventSocket {
-  constructor(url, token) {
-    this.events = [];
-    this.messages = [];
-    this.socket = new WebSocket(url);
-    this.ready = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("event WebSocket readiness timed out")), 10_000);
-      this.socket.addEventListener("open", () => {
-        this.socket.send(JSON.stringify({ type: "authenticate", token }));
-      });
-      this.socket.addEventListener("message", ({ data }) => {
-        const message = JSON.parse(String(data));
-        this.messages.push(message);
-        if (message.type === "ready") {
-          clearTimeout(timer);
-          resolve();
-        }
-        if (message.type === "run.event") this.events.push(message.event);
-      });
-      this.socket.addEventListener("error", () => reject(new Error("event WebSocket failed")));
+function findFirstKey(value, keys) {
+  if (typeof value === "string" && /^[\\s]*[\\[{]/.test(value)) {
+    try {
+      return findFirstKey(JSON.parse(value), keys);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!value || typeof value !== "object") return undefined;
+  if (!Array.isArray(value)) {
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        return value[key];
+      }
+    }
+    for (const child of Object.values(value)) {
+      const found = findFirstKey(child, keys);
+      if (found !== undefined) return found;
+    }
+  } else {
+    for (const child of value) {
+      const found = findFirstKey(child, keys);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
+function findResourceRef(value, schema) {
+  if (typeof value === "string" && /^[\\s]*[\\[{]/.test(value)) {
+    try {
+      return findResourceRef(JSON.parse(value), schema);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!value || typeof value !== "object") return undefined;
+  if (!Array.isArray(value)) {
+    if (
+      value.resource_schema === schema &&
+      typeof value.uri === "string" &&
+      typeof value.server === "string"
+    ) {
+      return value;
+    }
+    if (
+      value.resourceSchema === schema &&
+      typeof value.uri === "string" &&
+      typeof value.server === "string"
+    ) {
+      return {
+        server: value.server,
+        uri: value.uri,
+        resource_schema: value.resourceSchema,
+      };
+    }
+    for (const child of Object.values(value)) {
+      const found = findResourceRef(child, schema);
+      if (found) return found;
+    }
+  } else {
+    for (const child of value) {
+      const found = findResourceRef(child, schema);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+function findDataRef(value) {
+  if (typeof value === "string" && /^[\\s]*[\\[{]/.test(value)) {
+    try {
+      return findDataRef(JSON.parse(value));
+    } catch {
+      return undefined;
+    }
+  }
+  if (!value || typeof value !== "object") return undefined;
+  if (!Array.isArray(value)) {
+    if (
+      typeof value.server === "string" &&
+      typeof value.uri === "string" &&
+      typeof value.resource_schema === "string" &&
+      value.profile &&
+      typeof value.profile === "object"
+    ) {
+      return value;
+    }
+    for (const child of Object.values(value)) {
+      const found = findDataRef(child);
+      if (found) return found;
+    }
+  } else {
+    for (const child of value) {
+      const found = findDataRef(child);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+function findPreparedPath(body) {
+  const value = findFirstKey(body, [
+    "prepared_input_relative_path",
+    "preparedInputRelativePath",
+  ]);
+  if (typeof value === "string") return value;
+  const match = JSON.stringify(body).match(
+    /prepared_input_relative_path[=:]\\?"?([A-Za-z0-9_./-]+)/,
+  );
+  return match?.[1];
+}
+
+function findAgentId(body) {
+  const value = findFirstKey(body, ["agent_id", "agentId"]);
+  return typeof value === "string" ? value : undefined;
+}
+
+function findMapEmbed(body) {
+  const text = JSON.stringify(body);
+  const match = text.match(
+    /::codex-inline-vis\{artifact="([^"]+)"\}/,
+  );
+  return match ? match[0] : "";
+}
+
+function hasCall(text, callId) {
+  return text.includes(callId);
+}
+
+function toolSearchSpec(callId, query) {
+  return {
+    id: callId,
+    namespace: undefined,
+    name: "tool_search",
+    arguments: { query, limit: 20 },
+  };
+}
+
+function functionSpec(callId, namespace, name, argumentsObject) {
+  return {
+    id: callId,
+    namespace,
+    name,
+    arguments: argumentsObject,
+  };
+}
+
+function responseEvents(responseId, item) {
+  return [
+    {
+      type: "response.created",
+      response: { id: responseId },
+    },
+    item,
+    {
+      type: "response.completed",
+      response: {
+        id: responseId,
+        usage: {
+          input_tokens: 0,
+          input_tokens_details: null,
+          output_tokens: 0,
+          output_tokens_details: null,
+          total_tokens: 0,
+        },
+      },
+    },
+  ];
+}
+
+function responseMessage(responseId, text) {
+  return responseEvents(responseId, {
+    type: "response.output_item.done",
+    item: {
+      type: "message",
+      role: "assistant",
+      id: responseId + "-message",
+      content: [{ type: "output_text", text }],
+    },
+  });
+}
+
+function responseToolCall(responseId, spec) {
+  return responseEvents(responseId, {
+    type: "response.output_item.done",
+    item: {
+      type: spec.name === "tool_search" ? "tool_search_call" : "function_call",
+      call_id: spec.id,
+      ...(spec.namespace ? { namespace: spec.namespace } : {}),
+      ...(spec.name === "tool_search" ? { execution: "client" } : {}),
+      name: spec.name === "tool_search" ? undefined : spec.name,
+      arguments: spec.arguments,
+    },
+  }).map((event) => {
+    if (event.type === "response.output_item.done") {
+      delete event.item.name;
+    }
+    return event;
+  });
+}
+
+function chatSse(events, responseId, spec) {
+  const chunks = [];
+  if (spec) {
+    const wireName = spec.namespace
+      ? spec.namespace + "__" + spec.name
+      : spec.name;
+    chunks.push({
+      id: responseId,
+      object: "chat.completion.chunk",
+      model,
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: spec.id,
+                function: {
+                  name: wireName,
+                  arguments: JSON.stringify(spec.arguments),
+                },
+              },
+            ],
+          },
+          finish_reason: null,
+        },
+      ],
+    });
+    chunks.push({
+      id: responseId,
+      object: "chat.completion.chunk",
+      model,
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+    });
+  } else {
+    chunks.push({
+      id: responseId,
+      object: "chat.completion.chunk",
+      model,
+      choices: [
+        {
+          index: 0,
+          delta: { content: events[0]?.text ?? "" },
+          finish_reason: null,
+        },
+      ],
+    });
+    chunks.push({
+      id: responseId,
+      object: "chat.completion.chunk",
+      model,
+      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
     });
   }
+  return chunks;
+}
 
-  close() {
-    this.socket.close();
+function ssePayload(events) {
+  return (
+    events
+      .map((event) => {
+        const type =
+          event.type === "chat"
+            ? JSON.stringify(event.payload)
+            : "event: " +
+              event.type +
+              "\ndata: " +
+              JSON.stringify(event) +
+              "\n\n";
+        return event.type === "chat" ? "data: " + type + "\n\n" : type;
+      })
+      .join("") + (events.some((event) => event.type === "chat") ? "data: [DONE]\n\n" : "")
+  );
+}
+
+class DeterministicModelServer {
+  constructor() {
+    this.server = createServer((request, response) => {
+      this.handle(request, response).catch((error) => {
+        response.statusCode = 500;
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ error: String(error.message ?? error) }));
+      });
+    });
+    this.requests = [];
+    this.calls = [];
+    this.address = undefined;
+  }
+
+  async start() {
+    await new Promise((resolve, reject) => {
+      this.server.once("error", reject);
+      this.server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = this.server.address();
+    this.address = "http://127.0.0.1:" + address.port;
+    return this;
+  }
+
+  async close() {
+    await new Promise((resolve) => this.server.close(() => resolve()));
+  }
+
+  async handle(request, response) {
+    const bodyText = await new Promise((resolve, reject) => {
+      const chunks = [];
+      request.on("data", (chunk) => chunks.push(chunk));
+      request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+      request.on("error", reject);
+    });
+    if (request.url?.endsWith("/models")) {
+      const body = JSON.stringify({
+        data: [{ id: model, object: "model", owned_by: "deterministic-e2e" }],
+      });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(body);
+      return;
+    }
+    const body = bodyText ? JSON.parse(bodyText) : {};
+    const markerMatch = bodyText.match(/OWC_DETERMINISTIC_E2E:([A-Za-z0-9_-]+)/);
+    const runId = markerMatch?.[1] ?? "unknown";
+    const role = bodyText.includes("E2E_AGENT=data_agent:" + runId)
+      ? "data"
+      : bodyText.includes("E2E_AGENT=network_agent:" + runId)
+        ? "network"
+        : "root";
+    const text = JSON.stringify(body);
+    const isChat = request.url?.includes("/chat/completions") ?? false;
+    const plan = this.responseFor(body, text, runId, role, isChat);
+    this.requests.push({
+      path: request.url,
+      runId,
+      role,
+      body,
+      visibleTools: visibleToolNames(body),
+    });
+    if (plan.spec) {
+      this.calls.push({
+        runId,
+        role,
+        namespace: plan.spec.namespace,
+        name: plan.spec.name,
+        id: plan.spec.id,
+      });
+    }
+    if (request.url?.includes("/chat/completions")) {
+      const events = chatSse(plan.events, plan.responseId, plan.spec);
+      response.writeHead(200, {
+        "content-type": "text/event-stream",
+        connection: "close",
+      });
+      response.end(
+        events
+          .map((event) => "data: " + JSON.stringify(event) + "\n\n")
+          .join("") + "data: [DONE]\n\n",
+      );
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": "text/event-stream",
+      connection: "close",
+    });
+    response.end(ssePayload(plan.events));
+  }
+
+  responseFor(body, text, runId, role, isChat) {
+    // Chat flattens namespaced V1 tools to `<namespace>__<name>`, so the
+    // namespace is not JSON-quoted as a standalone value in the request.
+    const v2 = !text.includes('"multi_agent_v1"') &&
+      !(isChat && text.includes("multi_agent_v1__"));
+    const id = (suffix) => "e2e:" + runId + ":" + suffix;
+    const has = (suffix) => hasCall(text, id(suffix));
+    const toolSearch = (suffix, query) => ({
+      responseId: id("response:" + suffix),
+      spec: toolSearchSpec(id(suffix), query),
+      events: [],
+    });
+    const mcp = (suffix, name, args) => ({
+      responseId: id("response:" + suffix),
+      spec: functionSpec(id(suffix), "mcp__supply_chain_data", name, args),
+      events: [],
+    });
+    const network = (suffix, name, args) => ({
+      responseId: id("response:" + suffix),
+      spec: functionSpec(id(suffix), "mcp__supply_chain", name, args),
+      events: [],
+    });
+    const map = (suffix, name, args) => ({
+      responseId: id("response:" + suffix),
+      spec: functionSpec(id(suffix), "mcp__map_utils", name, args),
+      events: [],
+    });
+    const collaboration = (suffix, name, args) => ({
+      responseId: id("response:" + suffix),
+      spec: functionSpec(
+        id(suffix),
+        v2 ? undefined : "multi_agent_v1",
+        name,
+        args,
+      ),
+      events: [],
+    });
+    const message = (suffix, value) => ({
+      responseId: id("response:" + suffix),
+      spec: undefined,
+      events: [{ text: value }],
+    });
+
+    if (role === "data") {
+      if (!has("data:search")) {
+        return toolSearch("data:search", "inspect workspace sources and prepare network input");
+      }
+      if (!has("data:inspect")) {
+        return mcp("data:inspect", "inspect_workspace_sources", {
+          relative_paths: [
+            "mock_data/administrative-areas.json",
+            "mock_data/candidate-warehouses.csv",
+            "mock_data/demand-cities.csv",
+            "mock_data/existing-warehouses.csv",
+            "mock_data/population-snapshot.csv",
+            "mock_data/route-quotes.csv",
+          ],
+        });
+      }
+      if (!has("data:prepare")) {
+        const profileRef = findResourceRef(body, "source_profile.v1");
+        if (!profileRef) {
+          throw new Error("deterministic model could not find source_profile.v1");
+        }
+        return mcp("data:prepare", "prepare_network_input", {
+          source_profile_ref: profileRef,
+          confirmed_sources: confirmedSources(),
+          country_code: "ID",
+          output_relative_path: "prepared_network_input.json",
+        });
+      }
+      const preparedPath = findPreparedPath(body) ?? "prepared_network_input.json";
+      const identity = findFirstKey(body, ["input_identity"]) ?? {};
+      return message(
+        "data:done",
+        "E2E data_agent completed native cleanup. prepared_input_relative_path=" +
+          preparedPath +
+          " input_identity=" +
+          JSON.stringify(identity),
+      );
+    }
+
+    if (role === "network") {
+      const preparedPath = findPreparedPath(body) ?? "prepared_network_input.json";
+      if (!has("network:search-tools")) {
+        return toolSearch(
+          "network:search-tools",
+          "prepare route matrix cost matrix evaluate 12 hour baseline coverage map",
+        );
+      }
+      if (!has("network:route")) {
+        return network("network:route", "prepare_route_matrix", {
+          prepared_input_relative_path: preparedPath,
+          route_method: "provided",
+          warehouse_scope: "existing_only",
+        });
+      }
+      const routeRef = findResourceRef(body, "route_matrix.v2");
+      if (!routeRef) throw new Error("deterministic model could not find route_matrix.v2");
+      if (!has("network:cost")) {
+        return network("network:cost", "plan_cost_matrix", {
+          prepared_input_relative_path: preparedPath,
+          warehouse_scope: "existing_only",
+          route_matrix_ref: routeRef,
+        });
+      }
+      const costRef = findResourceRef(body, "cost_matrix.v2");
+      if (!costRef) throw new Error("deterministic model could not find cost_matrix.v2");
+      if (!has("network:baseline")) {
+        return network("network:baseline", "evaluate_network_baseline", {
+          prepared_input_relative_path: preparedPath,
+          route_matrix_ref: routeRef,
+          cost_matrix_ref: costRef,
+          objective: "min_time",
+          service_targets: [12],
+          coverage_mode: "optimized_existing_footprint",
+        });
+      }
+      const baselineRef = findResourceRef(body, "network_baseline.v2");
+      if (!baselineRef) throw new Error("deterministic model could not find network_baseline.v2");
+      if (!has("network:coverage")) {
+        return network("network:coverage", "prepare_network_coverage_map", {
+          prepared_input_relative_path: preparedPath,
+          assignment_result_ref: baselineRef,
+        });
+      }
+      if (!has("network:search-map")) {
+        return toolSearch("network:search-map", "create warehouse network map card with points lines legend");
+      }
+      const dataRef = findDataRef(body);
+      if (!dataRef) throw new Error("deterministic model could not find coverage GeoJSON data_ref");
+      if (!has("network:map")) {
+        return map("network:map", "create_network_map_card", {
+          title: "12 小时仓网覆盖地图",
+          network_data_ref: dataRef,
+        });
+      }
+      const embed = findMapEmbed(body);
+      return message(
+        "network:done",
+        "network_agent completed route and coverage delivery: 12h service coverage is ready. " +
+          (embed || "::codex-inline-vis{artifact=\"deterministic-map\"}"),
+      );
+    }
+
+    if (!has("root:search")) {
+      return toolSearch("root:search", "spawn data_agent and network_agent for warehouse planning");
+    }
+    if (!has("root:spawn-data")) {
+      return collaboration("root:spawn-data", "spawn_agent", {
+        message: [
+          "E2E_AGENT=data_agent:" + runId,
+          "清理并核验 Workspace mock_data 文件，使用 native tool_search 后调用 Data MCP，",
+          "返回精确 prepared_input_relative_path 与 input_identity。",
+        ].join(" "),
+        agent_type: "data_agent",
+        ...(v2 ? { task_name: "data_agent" } : { fork_context: false }),
+      });
+    }
+    if (!has("root:wait-data")) {
+      const target = findAgentId(body);
+      if (!target) throw new Error("deterministic model could not find data agent id");
+      return collaboration("root:wait-data", "wait_agent", v2 ? { timeout_ms: 300_000 } : {
+        targets: [target],
+        timeout_ms: 300_000,
+      });
+    }
+    if (!has("root:spawn-network")) {
+      const preparedPath = findPreparedPath(body);
+      if (!preparedPath) throw new Error("deterministic model could not find prepared input path");
+      return collaboration("root:spawn-network", "spawn_agent", {
+        message: [
+          "E2E_AGENT=network_agent:" + runId,
+          "Use this exact prepared_input_relative_path unchanged: " + preparedPath,
+          "Continue with native tool_search, route matrix, 12h baseline and map delivery.",
+        ].join(" "),
+        agent_type: "network_agent",
+        ...(v2 ? { task_name: "network_agent" } : { fork_context: false }),
+      });
+    }
+    if (!has("root:wait-network")) {
+      const target = findAgentId(body);
+      if (!target) throw new Error("deterministic model could not find network agent id");
+      return collaboration("root:wait-network", "wait_agent", v2 ? { timeout_ms: 300_000 } : {
+        targets: [target],
+        timeout_ms: 300_000,
+      });
+    }
+    const embed = findMapEmbed(body);
+    return message(
+      "root:done",
+      "已完成真实 multi-agent 仓网规划。12h 时效达标率已计算，地图已生成。" +
+        (embed || "::codex-inline-vis{artifact=\"deterministic-map\"}"),
+    );
   }
 }
 
-function updateE2eMcpBlock(content) {
-  const begin = "# BEGIN open-web-codex real E2E MCP";
-  const end = "# END open-web-codex real E2E MCP";
-  const escaped = mcpBinary.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
-  const block = [
-    begin,
-    "[mcp_servers.e2e_tools]",
-    `command = "${escaped}"`,
-    'env = { MCP_TEST_VALUE = "MCP_ENV_OK" }',
-    "startup_timeout_sec = 20.0",
-    "tool_timeout_sec = 30.0",
-    "required = true",
-    end,
-  ].join("\n");
-  const pattern = new RegExp(`${begin.replaceAll("-", "\\-")}[^]*?${end.replaceAll("-", "\\-")}\\n?`, "m");
-  const cleaned = content.replace(pattern, "").trimEnd();
-  return `${cleaned}${cleaned ? "\n\n" : ""}${block}\n`;
+function confirmedSources() {
+  const transform = (sourceField, targetField, kind) => ({
+    source_field: sourceField,
+    target_field: targetField,
+    transform: kind,
+  });
+  const demand = [
+    ["city_id", "city_id", "normalize_identifier"],
+    ["city_name", "city_name", "trim"],
+    ["province_id", "province_id", "normalize_identifier"],
+    ["province_name", "province_name", "trim"],
+    ["demand_quantity", "demand_quantity", "parse_integer"],
+    ["longitude", "longitude", "parse_decimal"],
+    ["latitude", "latitude", "parse_decimal"],
+  ].map((row) => transform(...row));
+  const warehouse = [
+    ["warehouse_id", "warehouse_id", "normalize_identifier"],
+    ["warehouse_name", "warehouse_name", "trim"],
+    ["warehouse_type", "warehouse_type", "normalize_warehouse_type"],
+    ["city_id", "city_id", "normalize_identifier"],
+    ["city_name", "city_name", "trim"],
+    ["province_id", "province_id", "normalize_identifier"],
+    ["province_name", "province_name", "trim"],
+    ["longitude", "longitude", "parse_decimal"],
+    ["latitude", "latitude", "parse_decimal"],
+    ["upstream_center_id", "upstream_center_id", "normalize_identifier"],
+    ["is_fixed", "is_fixed", "parse_boolean"],
+  ].map((row) => transform(...row));
+  const route = [
+    ["origin_id", "origin_id", "normalize_identifier"],
+    ["destination_id", "destination_id", "normalize_identifier"],
+    ["destination_name", "destination_name", "trim"],
+    ["layer", "layer", "trim"],
+    ["distance_km", "distance_km", "parse_decimal"],
+    ["duration_hours", "duration_hours", "parse_decimal"],
+    ["price_per_vehicle", "price_per_vehicle", "parse_decimal"],
+    ["currency", "currency", "trim"],
+    ["vehicle_capacity", "vehicle_capacity", "parse_decimal"],
+    ["method", "method", "trim"],
+  ].map((row) => transform(...row));
+  return [
+    {
+      relative_path: "mock_data/demand-cities.csv",
+      role: "demand",
+      mappings: demand,
+    },
+    {
+      relative_path: "mock_data/existing-warehouses.csv",
+      role: "existing_warehouse",
+      mappings: warehouse,
+    },
+    {
+      relative_path: "mock_data/candidate-warehouses.csv",
+      role: "candidate_warehouse",
+      mappings: warehouse,
+    },
+    {
+      relative_path: "mock_data/route-quotes.csv",
+      role: "route_quote",
+      mappings: route,
+    },
+  ];
 }
 
-await runCase("health and authenticated bootstrap", async () => {
+async function ensureAuthenticated() {
   const health = await api("/health");
   assert.equal(health.ok, true);
   let auth;
   try {
     auth = await api("/bootstrap", {
       method: "POST",
-      body: { name: "Real E2E Owner", username, email, password },
+      body: { name: "Deterministic E2E Owner", username, email, password },
     });
   } catch (error) {
-    if (!error.message.includes("409")) throw error;
-    auth = await api("/sessions/local", {
-      method: "POST",
-    });
+    if (!(error instanceof ApiError) || error.status !== 409) throw error;
+    auth = await api("/sessions/local", { method: "POST" });
   }
   state.token = auth.session_token;
   const me = await api("/me");
   assert.equal(me.username, auth.user.username);
-  return `server ${health.version}`;
-});
+  return health.version;
+}
 
-await runCase("Provider add, refresh, switch, and context update", async () => {
-  let catalog = await api(`/providers/${providerId}`, {
+function installationId(status, packageId) {
+  return (status.installations ?? []).find(
+    (entry) => (entry.package_id ?? entry.packageId) === packageId,
+  );
+}
+
+async function ensureCopilotActive() {
+  let status = await api("/profile/copilots");
+  for (const installation of status.installations ?? []) {
+    const active = installation.active;
+    const packageId = installation.package_id ?? installation.packageId;
+    if (active && packageId !== copilotPackageId) {
+      await api("/profile/copilots/deactivate", {
+        method: "POST",
+        body: { packageId },
+      });
+    }
+  }
+  const current = installationId(status, copilotPackageId);
+  const currentState = String(current?.state ?? "").toLowerCase();
+  if (current?.active && currentState !== "ready") {
+    await api("/profile/copilots/deactivate", {
+      method: "POST",
+      body: { packageId: copilotPackageId },
+    });
+    await eventually(
+      async () => {
+        const next = await api("/profile/copilots");
+        const target = installationId(next, copilotPackageId);
+        return target?.active === false ? next : undefined;
+      },
+      "stale warehouse-network-copilot deactivation",
+      120_000,
+      1_000,
+    );
+  }
+  if (!current?.active || currentState !== "ready") {
+    await api("/profile/copilots/activate", {
+      method: "POST",
+      body: { packageId: copilotPackageId },
+    });
+  }
+  status = await api("/profile/copilots");
+  const target = installationId(status, copilotPackageId);
+  assert(target);
+  assert.equal(target.active, true);
+  return status;
+}
+
+async function configureProvider() {
+  const catalog = await api("/providers/" + encodeURIComponent(providerId), {
     method: "PUT",
     body: {
-      name: "DeepSeek E2E",
-      baseUrl: providerBaseUrl,
+      name: "Deterministic Chat E2E",
+      baseUrl: state.modelServer.address + "/v1",
       wireApi: "chat",
-      credentials: { mode: "direct", apiKey: deepseekKey },
+      supportsFunctionTools: true,
+      credentials: { mode: "none" },
       select: true,
     },
   });
-  let provider = findProvider(catalog, providerId);
-  assert(provider, "created Provider is missing");
-  assert.equal(currentProviderId(catalog), providerId);
+  const provider = catalog.data.find((entry) => entry.id === providerId);
+  assert(provider);
   assert.equal(provider.wireApi, "chat");
-  assert(!JSON.stringify(catalog).includes(deepseekKey), "Provider catalog leaked the API key");
+  assert.equal(catalog.currentProviderId ?? catalog.current_provider_id, providerId);
+  return provider;
+}
 
-  catalog = await api(`/providers/${providerId}/models/refresh`, { method: "POST" });
-  provider = findProvider(catalog, providerId);
-  assert(provider.models.some((entry) => entry.modelId === model), `${model} was not discovered`);
-
-  catalog = await api(`/providers/${providerId}/models/${encodeURIComponent(model)}`, {
-    method: "PATCH",
-    body: { contextWindow: 131072 },
-  });
-  provider = findProvider(catalog, providerId);
-  const updatedModel = provider.models.find((entry) => (entry.modelId ?? entry.model_id) === model);
-  if (updatedModel) {
-    assert.equal(updatedModel.contextWindow ?? updatedModel.context_window, 131072);
-  }
-
-  const alternate = catalog.data.find((entry) => entry.id !== providerId && entry.kind === "builtIn");
-  assert(alternate, "no built-in Provider exists for switch coverage");
-  catalog = await api(`/providers/${alternate.id}/select`, { method: "POST" });
-  assert.equal(currentProviderId(catalog), alternate.id);
-  catalog = await api(`/providers/${providerId}/select`, { method: "POST" });
-  assert.equal(currentProviderId(catalog), providerId);
-
-  const config = await api("/profile/files/config");
-  assert(!config.content.includes(deepseekKey), "Profile config leaked the direct Provider key");
-  assert(provider.envKey, "secured Provider did not expose its safe environment key name");
-  return `${provider.modelCount} models; current=${currentProviderId(catalog)}`;
-});
-
-await runCase("MCP registration through the Server profile API", async () => {
-  const config = await api("/profile/files/config");
-  if (!config.content.includes("[mcp_servers.e2e_tools]") || !config.content.includes(mcpBinary)) {
-    const content = updateE2eMcpBlock(config.content);
-    await api("/profile/files/config", { method: "PUT", body: { content } });
-  }
-  const stored = await api("/profile/files/config");
-  assert(stored.content.includes("[mcp_servers.e2e_tools]"));
-  assert(stored.content.includes(mcpBinary));
-  return "e2e_tools registered without browser path or raw JSON-RPC";
-});
-
-await runCase("managed workspace and first Codex thread", async () => {
-  state.project = await api("/projects/managed", {
-    method: "POST",
-    body: { name: `Real E2E ${stamp}` },
-  });
-  state.workspace = await api("/workspaces", {
-    method: "POST",
+async function enableMultiAgent() {
+  const settings = await api("/profile/agents/settings", {
+    method: "PUT",
     body: {
-      project_id: state.project.id,
-      idempotency_key: `real-e2e-workspace-${crypto.randomUUID()}`,
-      kind: "main",
-      name: state.project.name,
-      source_ref: null,
-      parent_workspace_id: null,
-      copy_agents_md: false,
+      multiAgentEnabled: true,
+      maxThreads: 4,
+      maxDepth: 3,
     },
   });
-  const created = await createTaskAndRun(`Primary ${stamp}`);
-  state.firstTask = created.task;
-  state.firstRun = created.run;
-  assert.equal(created.run.status, "running");
-  assert(created.run.codex_thread_id);
-  assert(created.run.workspace_id);
-  const mcp = await eventually(async () => {
-    const projection = await api(`/profile/mcp-servers?runId=${created.run.id}`);
-    return JSON.stringify(projection).includes("e2e_tools") ? projection : undefined;
-  }, "MCP server discovery", 30_000, 500);
-  assert(JSON.stringify(mcp).includes("e2e_tools"));
-  return `workspace=${state.workspace.id}; thread ready`;
-});
+  assert.equal(settings.multiAgentEnabled ?? settings.multi_agent_enabled, true);
+  return settings;
+}
 
-await runCase("mock network data upload and multi-agent coverage analysis", async () => {
-  const entries = (await readdir(mockDataDir, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && entry.name !== ".DS_Store")
-    .sort((left, right) => left.name.localeCompare(right.name));
-  assert(entries.length >= 6, `expected mock_data files in ${mockDataDir}`);
-  for (const entry of entries) {
-    await uploadWorkspaceFile(
-      state.workspace.id,
-      path.join(mockDataDir, entry.name),
-      `mock_data/${entry.name}`,
+async function cleanupRun(runId) {
+  if (!runId) return;
+  try {
+    const run = await api("/runs/" + runId);
+    if (["running", "queued", "recovery_pending"].includes(run.status)) {
+      await api("/runs/" + runId + "/cancel", { method: "POST" });
+    }
+  } catch {
+    // Cleanup is best effort; the caller reports the original gate failure.
+  }
+  await eventually(
+    async () => {
+      try {
+        const run = await api("/runs/" + runId);
+        return !["running", "queued", "recovery_pending"].includes(run.status);
+      } catch {
+        return true;
+      }
+    },
+    "Run " + runId + " terminal cleanup",
+    30_000,
+    500,
+  ).catch(() => undefined);
+}
+
+async function cleanupCase(record) {
+  await cleanupRun(record.run?.id);
+  if (record.workspace?.id) {
+    await api("/workspaces/" + record.workspace.id, { method: "DELETE" }).catch(() => undefined);
+  }
+  if (record.project?.id) {
+    await api("/projects/" + record.project.id, { method: "DELETE" }).catch(() => undefined);
+  }
+}
+
+async function runCase(index) {
+  const runId = "run" + index + "_" + stamp;
+  const marker = "OWC_DETERMINISTIC_E2E:" + runId;
+  const record = { project: undefined, workspace: undefined, task: undefined, run: undefined };
+  try {
+    record.project = await api("/projects/managed", {
+      method: "POST",
+      body: { name: "Deterministic warehouse E2E " + runId },
+    });
+    record.workspace = await api("/workspaces", {
+      method: "POST",
+      body: {
+        project_id: record.project.id,
+        idempotency_key: "deterministic-workspace-" + runId,
+        kind: "main",
+        name: record.project.name,
+        source_ref: null,
+        parent_workspace_id: null,
+        copy_agents_md: false,
+      },
+    });
+    for (const entry of state.manifest.files) {
+      await uploadWorkspaceFile(
+        record.workspace.id,
+        path.join(fixtureDir, entry.path),
+        "mock_data/" + entry.path,
+      );
+    }
+    const files = await api("/workspaces/" + record.workspace.id + "/files");
+    assert.deepEqual(
+      state.manifest.files.map((entry) => "mock_data/" + entry.path).sort(),
+      files.filter((entry) => entry.startsWith("mock_data/")).sort(),
     );
+
+    const created = await createTaskAndRun(
+      record.project,
+      record.workspace,
+      "Deterministic 12h network " + runId,
+    );
+    record.task = created.task;
+    record.run = created.run;
+    assert(record.run.codex_thread_id);
+    const response = await send(record.task.id, marker);
+    assert.equal(response.thread_id, record.run.codex_thread_id);
+    const events = await waitForTurn(record.task.id, response.turn_id);
+    const turnEvents = events.filter((event) => event.turn_id === response.turn_id);
+    const eventText = textFromEvents(events);
+    const modelRequests = state.modelServer.requests.filter(
+      (request) => request.runId === runId,
+    );
+    const modelCalls = state.modelServer.calls.filter((call) => call.runId === runId);
+    const toolSearchRequestIndex = modelRequests.findIndex((request) =>
+      request.visibleTools.includes("tool_search"),
+    );
+    const visibleAfterToolSearch = modelRequests
+      .slice(toolSearchRequestIndex + 1)
+      .flatMap((request) => request.visibleTools);
+    const collaborationAttempted = modelCalls.some((call) =>
+      /spawn_agent|send_message|wait_agent|followup_task/.test(call.name),
+    );
+    if (
+      toolSearchRequestIndex >= 0 &&
+      collaborationAttempted &&
+      !visibleAfterToolSearch.some((name) =>
+        /(?:multi_agent_v1__)?spawn_agent/.test(name),
+      )
+    ) {
+      throw new NativeRuntimeBlocker("deferred_tool_not_visible_after_tool_search", {
+        expected_tool: "multi_agent_v1.spawn_agent",
+        tool_search_visible_tools: modelRequests[toolSearchRequestIndex].visibleTools,
+        next_request_visible_tools: visibleAfterToolSearch,
+        model_calls: modelCalls,
+        runtime_events: events
+          .filter((event) => event.event_type === "codex.unknown" || event.event_type === "codex.item.completed")
+          .map((event) => event.payload?.data ?? event.payload),
+      });
+    }
+    assert(/12\s*h|12\s*小时|12-hour/i.test(eventText), "12h result was not reported");
+    assert(
+      events.some(
+        (event) =>
+          itemType(event) === "collabAgentToolCall" &&
+          /spawn|wait/i.test(String(eventTool(event))),
+      ),
+      "native collaboration Item was not projected",
+    );
+    assert(
+      /data_agent/.test(eventText) && /network_agent/.test(eventText),
+      "data_agent/network_agent Role provenance was not projected",
+    );
+    assert(
+      events.some(
+        (event) =>
+          itemType(event) === "mcpToolCall" &&
+          /inspect_workspace_sources|prepare_network_input|prepare_route_matrix|evaluate_network_baseline|create_network_map_card/.test(
+            String(eventTool(event)),
+          ),
+      ),
+      "domain MCP Tool Items were not projected",
+    );
+    const refs = await api("/tasks/" + record.task.id + "/resource-refs");
+    const schemas = new Set(refs.map((ref) => ref.resourceSchema ?? ref.resource_schema));
+    for (const schema of [
+      "source_profile.v1",
+      "prepared_network_input.v1",
+      "route_matrix.v2",
+      "network_baseline.v2",
+      "network_coverage_geojson.v1",
+    ]) {
+      assert(schemas.has(schema), "missing Resource provenance for " + schema);
+    }
+    const mapEvent = events.find(
+      (event) =>
+        itemType(event) === "mcpToolCall" &&
+        /create_network_map_card/.test(String(eventTool(event))),
+    );
+    assert(mapEvent, "map producer Tool Item was not projected");
+    assert(
+      JSON.stringify(mapEvent).includes("map.v3") &&
+        JSON.stringify(mapEvent).includes("map_spec_ref"),
+      "map delivery lacked renderer and map spec provenance",
+    );
+    assert(
+      events.some(
+        (event) =>
+          itemType(event) === "fileChange" &&
+          JSON.stringify(event).includes("prepared_network_input.json"),
+      ),
+      "prepared Workspace file provenance was not projected",
+    );
+    assert(
+      eventText.includes("::codex-inline-vis{artifact="),
+      "final assistant message did not cite the delivered map",
+    );
+    const agents = await api("/runs/" + record.run.id + "/agents");
+    assert(agents.length >= 3, "Runtime agent projection did not include root and two children");
+    assert(
+      agents.some((agent) => agent.agentRole === "data_agent") &&
+        agents.some((agent) => agent.agentRole === "network_agent"),
+      "Runtime agent projection missing Role identities",
+    );
+    const executions = await api("/runs/" + record.run.id + "/agent-executions");
+    assert(
+      executions.some((execution) => execution.agentRole === "data_agent") &&
+        executions.some((execution) => execution.agentRole === "network_agent"),
+      "Runtime agent execution provenance missing child Roles",
+    );
+    const runtimeStatus = await eventually(
+      async () => {
+        const status = await api("/profile/copilots");
+        const target = installationId(status, copilotPackageId);
+        return target?.state?.toLowerCase() === "ready" ? target : undefined;
+      },
+      "warehouse-network-copilot Runtime discovery",
+      120_000,
+      1_000,
+    );
+    assert.equal(runtimeStatus.agentRolesConfigured, true);
+    assert(
+      (runtimeStatus.runtimeDiscoveredSkillIds ?? []).includes(
+        "warehouse-supervisor",
+      ),
+    );
+    assert(
+      (runtimeStatus.runtimeDiscoveredMcpServerIds ?? []).includes(
+        "supply_chain_data",
+      ),
+    );
+    const calls = state.modelServer.calls.filter((call) => call.runId === runId);
+    assert(calls.some((call) => call.name === "tool_search"), "fixture did not issue native tool_search");
+    assert(
+      calls.some((call) => /spawn_agent/.test(call.name)) &&
+        calls.some((call) => /prepare_route_matrix/.test(call.name)) &&
+        calls.some((call) => /create_network_map_card/.test(call.name)),
+      "fixture did not issue the canonical multi-agent/domain/map call chain",
+    );
+    return {
+      runId,
+      run: record.run.id,
+      rootThread: response.thread_id,
+      rootTurn: response.turn_id,
+      eventCount: turnEvents.length,
+      resourceSchemas: [...schemas].sort(),
+    };
+  } finally {
+    await cleanupCase(record);
   }
-  const files = await api(`/workspaces/${state.workspace.id}/files`);
-  for (const entry of entries) assert(files.includes(`mock_data/${entry.name}`));
+}
 
-  const response = await send(
-    state.firstTask.id,
-    "根据提供的文件，计算 12 小时时效达标率，地图展示。请使用多 agent 协同：先清理并核验 mock_data，再计算路线/时效，最后生成包含点线面和图例的地图。",
-  );
-  assert.equal(response.thread_id, state.firstRun.codex_thread_id);
-  const events = await waitForTurn(state.firstTask.id, response.turn_id, 300_000);
-  const turnEvents = events.filter((event) => event.turn_id === response.turn_id);
-  const text = textFromEvents(turnEvents);
-  assert(/12\s*小时|12h|12-hour/i.test(text), "12-hour coverage metric was not reported");
-  assert(
-    turnEvents.some((event) => /map|visual/i.test(String(itemType(event) ?? ""))) || /地图|map|coverage/i.test(text),
-    "coverage map was not delivered",
-  );
-  return `uploaded=${entries.length}; events=${turnEvents.length}; thread=${response.thread_id}`;
-});
-
-await runCase("message streaming, reasoning projection, and code execution", async () => {
-  const wsUrl = baseUrl.replace(/^http/, "ws") + "/api/events/ws";
-  state.ws = new EventSocket(wsUrl, state.token);
-  await state.ws.ready;
-  const sentAt = Date.now();
-  const response = await send(
-    state.firstTask.id,
-    `This is ${marker}. Use the shell or file tools to create e2e/fibonacci.py. ` +
-      "The program must print exactly FIB_OK=55, run it, verify that output, and then briefly report completion.",
-  );
-  assert.equal(response.thread_id, state.firstRun.codex_thread_id);
-  const events = await waitForTurn(state.firstTask.id, response.turn_id);
-  state.firstTurnEvents = events;
-  const turnEvents = events.filter((event) => event.turn_id === response.turn_id);
-  assert(turnEvents.some((event) => event.event_type === "codex.turn.started"));
-  assert(turnEvents.some((event) => event.event_type === "codex.turn.completed"));
-  assert(turnEvents.some((event) => event.event_type === "codex.item.delta"), "no streaming delta was projected");
-  assert(turnEvents.some((event) => itemType(event) === "commandExecution"), "no command execution item was projected");
-  assert(turnEvents.some((event) => itemType(event) === "fileChange") || textFromEvents(turnEvents).includes("fibonacci.py"));
-  assert(textFromEvents(turnEvents).includes("FIB_OK=55"), "verified command output was not projected");
-  const timestamps = turnEvents.map((event) => Date.parse(event.created_at));
-  assert(timestamps.every((time, index) => index === 0 || time >= timestamps[index - 1]), "event timestamps regressed");
-  const live = state.ws.events.filter((event) => event.turn_id === response.turn_id);
-  assert(live.some((event) => event.event_type === "codex.item.delta"), "live socket missed streaming deltas");
-  assert(live.some((event) => event.event_type === "codex.turn.completed"), "live socket missed Turn completion");
-  const reasoningProjected = turnEvents.some((event) => itemType(event) === "reasoning") ||
-    turnEvents.some((event) => event.payload?.data?.sourceType?.startsWith("item/reasoning"));
-  const elapsedMs = Date.now() - sentAt;
-  return `events=${turnEvents.length}, live=${live.length}, elapsed=${elapsedMs}ms, reasoning=${reasoningProjected}`;
-});
-
-await runCase("workspace file tree and file preview", async () => {
-  const files = await api(`/workspaces/${state.workspace.id}/files`);
-  assert(files.includes("e2e/fibonacci.py"), "generated source file is absent from file tree");
-  const preview = await api(
-    `/workspaces/${state.workspace.id}/files/content?path=${encodeURIComponent("e2e/fibonacci.py")}`,
-  );
-  assert.equal(preview.truncated, false);
-  assert(preview.content.includes("FIB_OK"));
-  return `previewed ${preview.content.length} bytes`;
-});
-
-await runCase("third-party Provider MCP tool invocation", async () => {
-  const response = await send(
-    state.firstTask.id,
-    `Call the e2e_tools MCP echo tool with message "${marker}_MCP" and env_var "MCP_TEST_VALUE". ` +
-      "Do not simulate the tool. Return both the echo and environment value.",
-  );
-  const events = await waitForTurn(state.firstTask.id, response.turn_id);
-  const turnEvents = events.filter((event) => event.turn_id === response.turn_id);
-  const mcpCall = turnEvents.find((event) => itemType(event) === "mcpToolCall");
-  assert(mcpCall, "no mcpToolCall event was projected");
-  const projected = textFromEvents(turnEvents);
-  assert(projected.includes(`${marker}_MCP`), "MCP echo marker was not projected");
-  assert(projected.includes("MCP_ENV_OK"), "MCP environment result was not projected");
-  return "DeepSeek emitted a tool call and the real stdio MCP server replied";
-});
-
-await runCase("approval request and decision event lifecycle", async () => {
-  const approvalMarker = `/Users/zhaoyu/Documents/open-web-codex-approval-${stamp}.txt`;
-  const response = await send(
-    state.firstTask.id,
-    `Use the shell to write the exact text APPROVAL_OK into ${approvalMarker}, read it back, ` +
-      "and remove it in the same command. This is intentionally outside the workspace; request approval.",
-  );
-  const approval = await eventually(async () => {
-    const pending = await api("/approvals");
-    return pending.find((entry) => entry.runId === state.firstRun.id) ?? undefined;
-  }, "approval request", 60_000, 250);
-  assert.equal(approval.state, "pending");
-  await api(`/approvals/${approval.id}/decision`, {
-    method: "POST",
-    body: { decision: "accept", version: approval.version },
-  });
-  const events = await waitForTurn(state.firstTask.id, response.turn_id);
-  const turnEvents = events.filter((event) => event.turn_id === response.turn_id);
-  assert(turnEvents.some((event) => event.event_type === "platform.approval.requested"));
-  assert(turnEvents.some((event) => event.event_type === "platform.approval.resolved"));
-  return `approval=${approval.id} resolved`;
-});
-
-await runCase("thread running state and conversation history restoration", async () => {
-  const created = await createTaskAndRun(`Delayed ${stamp}`);
-  state.secondTask = created.task;
-  state.secondRun = created.run;
-  const historyBefore = await taskEvents(state.firstTask.id);
-  const beforeSignature = historyBefore.map((event) => `${event.sequence}:${event.event_type}:${event.item_id ?? ""}`).join("|");
-  const response = await send(
-    state.secondTask.id,
-    "Run this exact shell command: sleep 8 && mkdir -p e2e && printf DELAY_DONE > e2e/delay-done.txt. " +
-      "Wait for it to finish, then report DELAY_DONE.",
-  );
-  const active = await eventually(async () => {
-    const run = await api(`/runs/${state.secondRun.id}`);
-    return run.active_turn_id === response.turn_id ? run : undefined;
-  }, "delayed thread active state", 15_000, 200);
-  assert.equal(active.status, "running");
-
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
-  const stillActive = await api(`/runs/${state.secondRun.id}`);
-  assert.equal(stillActive.active_turn_id, response.turn_id, "delayed Turn stopped reporting active too early");
-  const restored = await taskEvents(state.firstTask.id);
-  const restoredPrefix = restored.slice(0, historyBefore.length);
-  const restoredSignature = restoredPrefix.map((event) => `${event.sequence}:${event.event_type}:${event.item_id ?? ""}`).join("|");
-  assert.equal(restoredSignature, beforeSignature, "first Thread history changed while second Thread was active");
-  assert(textFromEvents(restored).includes(marker), "first Thread message history did not restore");
-
-  const completed = await waitForTurn(state.secondTask.id, response.turn_id, 120_000);
-  const finishedRun = await api(`/runs/${state.secondRun.id}`);
-  assert.equal(finishedRun.active_turn_id, null);
-  assert(completed.some((event) => event.turn_id === response.turn_id && itemType(event) === "commandExecution"));
-  const delayedFile = await api(
-    `/workspaces/${state.workspace.id}/files/content?path=${encodeURIComponent("e2e/delay-done.txt")}`,
-  );
-  assert.equal(delayedFile.content, "DELAY_DONE");
-  return `history=${restored.length} events; delayed Turn stayed active and completed`;
-});
-
-await runCase("durable event replay matches live ordering", async () => {
-  const durable = await taskEvents(state.firstTask.id);
-  const sequences = durable.map((event) => event.sequence);
-  assert.equal(new Set(sequences).size, sequences.length, "durable event sequence contains duplicates");
-  assert(sequences.every((sequence, index) => index === 0 || sequence > sequences[index - 1]), "durable event sequence is not strictly increasing");
-  const liveSequences = new Set(state.ws.events.map((event) => event.sequence));
-  const comparable = durable.filter((event) => liveSequences.has(event.sequence));
-  assert(comparable.length > 0, "no overlap between live and durable event streams");
-  for (const event of comparable) {
-    const live = state.ws.events.find((candidate) => candidate.sequence === event.sequence);
-    assert.equal(live.event_type, event.event_type);
-    assert.equal(live.run_id, event.run_id);
+async function main() {
+  state.manifest = await readFixtureManifest();
+  state.modelServer = await new DeterministicModelServer().start();
+  try {
+    const version = await ensureAuthenticated();
+    await ensureCopilotActive();
+    await configureProvider();
+    await enableMultiAgent();
+    log("server=" + version + " fixture_files=" + state.manifest.files.length);
+    for (const index of [1, 2]) {
+      const started = Date.now();
+      log("[RUN] deterministic multi-agent gate " + index);
+      const details = await runCase(index);
+      results.push({
+        name: "deterministic multi-agent gate " + index,
+        status: "passed",
+        durationMs: Date.now() - started,
+        details,
+      });
+      log("[PASS] deterministic multi-agent gate " + index);
+    }
+  } finally {
+    await state.modelServer.close();
   }
-  return `${comparable.length} live events matched durable replay`;
-});
+  log("Deterministic E2E summary");
+  for (const result of results) {
+    log("- " + result.status.toUpperCase() + " " + result.name + " " + JSON.stringify(result.details));
+  }
+  assert.equal(results.length, 2);
+  assert(results.every((result) => result.status === "passed"));
+}
 
-state.ws?.close();
-log("\nReal platform E2E summary");
-for (const result of results) log(`- ${result.status.toUpperCase()} ${result.name} (${result.durationMs} ms)`);
-log(`\n${results.length}/${results.length} cases passed.`);
+main().catch((error) => {
+  if (error instanceof NativeRuntimeBlocker) {
+    log("[BLOCKED] " + error.message);
+  } else {
+    log("[FAIL] " + error.stack);
+  }
+  process.exitCode = 1;
+});

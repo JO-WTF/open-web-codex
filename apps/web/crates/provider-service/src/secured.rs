@@ -196,6 +196,7 @@ impl SecuredProviderService {
                             .or(persisted_environment_key)
                             .map(|env_key| ProviderCredentialInput::Environment { env_key })
                             .unwrap_or(ProviderCredentialInput::NoCredential),
+                        supports_function_tools: None,
                         select: false,
                     },
                 )

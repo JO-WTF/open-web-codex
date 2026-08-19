@@ -1824,6 +1824,10 @@ pub struct UpsertProviderRequest {
     pub base_url: String,
     pub wire_api: String,
     pub credentials: ProviderCredentialInput,
+    /// Explicit Runtime capability for function-tool calls. Omitted means
+    /// leave an existing value unchanged; new Providers remain disabled.
+    #[serde(default)]
+    pub supports_function_tools: Option<bool>,
     #[serde(default)]
     pub select: bool,
 }

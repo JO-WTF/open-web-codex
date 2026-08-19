@@ -175,6 +175,12 @@ impl ProviderService {
             provider.insert("name".to_string(), json!(name));
             provider.insert("base_url".to_string(), json!(base_url));
             provider.insert("wire_api".to_string(), json!(request.wire_api));
+            if let Some(supports_function_tools) = request.supports_function_tools {
+                provider.insert(
+                    "supports_function_tools".to_string(),
+                    json!(supports_function_tools),
+                );
+            }
             apply_new_credentials(&request.credentials, &mut provider);
             edits.push(config_edit(provider_path.clone(), Value::Object(provider)));
         } else {
@@ -187,6 +193,12 @@ impl ProviderService {
                 format!("{provider_path}.wire_api"),
                 json!(request.wire_api),
             ));
+            if let Some(supports_function_tools) = request.supports_function_tools {
+                edits.push(config_edit(
+                    format!("{provider_path}.supports_function_tools"),
+                    json!(supports_function_tools),
+                ));
+            }
             append_existing_credential_edits(&request.credentials, &provider_path, &mut edits);
         }
         if existing.is_none() || request.select {
@@ -1171,6 +1183,7 @@ mod tests {
                     credentials: ProviderCredentialInput::Direct {
                         api_key: "direct-secret".to_string(),
                     },
+                    supports_function_tools: Some(true),
                     select: true,
                 },
             )
@@ -1193,6 +1206,10 @@ mod tests {
         assert_eq!(
             calls[1].1["edits"][0]["value"]["experimental_bearer_token"],
             "direct-secret"
+        );
+        assert_eq!(
+            calls[1].1["edits"][0]["value"]["supports_function_tools"].as_bool(),
+            Some(true)
         );
         assert!(!serde_json::to_string(&result)
             .expect("serialize Provider catalog")

@@ -1,0 +1,12 @@
+warehouse_id,warehouse_name,warehouse_type,city_id,city_name,province_id,province_name,longitude,latitude,upstream_center_id,is_existing,is_fixed
+WH-CENTER-JAKARTA,Jakarta Center,center,IDN-CITY-001,Jakarta,IDN-PROV-JAKARTA,Jakarta,106.781882,-6.255465,,true,true
+WH-CENTER-PALEMBANG,Palembang Center,center,IDN-CITY-008,Palembang,IDN-PROV-SOUTH-SUMATRA,South Sumatra,104.749826,-2.993686,,true,true
+WH-CENTER-MEDAN,Medan Center,center,IDN-CITY-005,Medan,IDN-PROV-NORTH-SUMATRA,North Sumatra,98.686754,3.617313,,true,true
+WH-CENTER-SURABAYA,Surabaya Center,center,IDN-CITY-002,Surabaya,IDN-PROV-EAST-JAVA,East Java,112.616599,-7.224981,,true,true
+WH-CENTER-MAKASSAR,Makassar Center,center,IDN-CITY-010,Makassar,IDN-PROV-SOUTH-SULAWESI,South Sulawesi,119.530699,-5.086978,,true,true
+WH-CROSS_DOCKING-BEKASI,Bekasi Cross Docking,cross_docking,IDN-CITY-003,Bekasi,IDN-PROV-WEST-JAVA,West Java,106.983834,-6.178947,WH-CENTER-JAKARTA,true,true
+WH-CROSS_DOCKING-BANDUNG,Bandung Cross Docking,cross_docking,IDN-CITY-004,Bandung,IDN-PROV-WEST-JAVA,West Java,107.576190,-6.929437,WH-CENTER-JAKARTA,true,true
+WH-CROSS_DOCKING-DEPOK,Depok Cross Docking,cross_docking,IDN-CITY-006,Depok,IDN-PROV-WEST-JAVA,West Java,106.897137,-6.394783,WH-CENTER-JAKARTA,true,true
+WH-CROSS_DOCKING-TANGERANG,Tangerang Cross Docking,cross_docking,IDN-CITY-007,Tangerang,IDN-PROV-BANTEN,Banten,106.666689,-6.145467,WH-CENTER-JAKARTA,true,true
+WH-CROSS_DOCKING-SEMARANG,Semarang Cross Docking,cross_docking,IDN-CITY-009,Semarang,IDN-PROV-CENTRAL-JAVA,Central Java,110.474234,-7.028734,WH-CENTER-SURABAYA,true,true
+WH-CROSS_DOCKING-SOUTH_TANGERANG,Tangerang Selatan Cross Docking,cross_docking,IDN-CITY-011,Tangerang Selatan,IDN-PROV-BANTEN,Banten,106.684544,-6.280471,WH-CENTER-JAKARTA,true,true

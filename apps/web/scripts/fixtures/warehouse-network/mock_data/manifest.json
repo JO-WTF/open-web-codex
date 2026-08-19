@@ -1,0 +1,44 @@
+{
+  "fixture": "warehouse-network.mock_data",
+  "schema_version": 1,
+  "source_snapshot": "Downloads/mock_data",
+  "excluded_files": [".DS_Store"],
+  "files": [
+    {
+      "path": "administrative-areas.json",
+      "bytes": 12681,
+      "sha256": "edbe45cb0584efbfa8ec6d09db076a3afa89eedeffc3549cc0521691f54b49a7",
+      "role": "ADM2 administrative-area catalog with city coordinates"
+    },
+    {
+      "path": "candidate-warehouses.csv",
+      "bytes": 2302,
+      "sha256": "eec272b6f2d0889b2e3be1b7e7183706bcb635967c7c49427d9babbac4866d44",
+      "role": "candidate cross-docking facilities"
+    },
+    {
+      "path": "demand-cities.csv",
+      "bytes": 6131,
+      "sha256": "a4d63fe6dc78c2d307d7374b1f96f3efc1b3130655a02f0478371daa6f0eb929",
+      "role": "city demand and population inputs"
+    },
+    {
+      "path": "existing-warehouses.csv",
+      "bytes": 1765,
+      "sha256": "10d9e8c1b7932d1d05048c6542113eb9f5048aa20a27e1e37228abd11ce178d4",
+      "role": "existing center and cross-docking facilities"
+    },
+    {
+      "path": "population-snapshot.csv",
+      "bytes": 2081,
+      "sha256": "e56da429bb24100ed4d8cc1d619d2c0e355b5fa99d294a71bb19371f2f775789",
+      "role": "population cross-check input"
+    },
+    {
+      "path": "route-quotes.csv",
+      "bytes": 54591,
+      "sha256": "183fac8cd51d78abb288d097fb568c038565baa1c3c911f0e364804a4d765959",
+      "role": "route facts and travel-time quotes"
+    }
+  ]
+}

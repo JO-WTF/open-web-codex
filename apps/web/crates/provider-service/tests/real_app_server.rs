@@ -83,6 +83,7 @@ fn upsert_request(base_url: String, api_key: &str) -> UpsertProviderRequest {
         credentials: ProviderCredentialInput::Direct {
             api_key: api_key.to_string(),
         },
+        supports_function_tools: None,
         select: true,
     }
 }
@@ -391,6 +392,7 @@ async fn secured_provider_credentials_never_enter_codex_config() {
                 credentials: ProviderCredentialInput::Environment {
                     env_key: external_environment_key.to_string(),
                 },
+                supports_function_tools: None,
                 select: false,
             },
         )

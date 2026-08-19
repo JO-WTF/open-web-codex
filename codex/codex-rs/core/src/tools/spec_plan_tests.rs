@@ -1156,6 +1156,7 @@ async fn chat_provider_omits_hosted_web_search_and_keeps_mcp_functions() {
     .await;
 
     plan.assert_visible_lacks(&["web_search"]);
+    plan.assert_visible_lacks(&["apply_patch"]);
     assert_eq!(
         plan.namespace_function_names("mcp__chat"),
         &["echo".to_string()]
