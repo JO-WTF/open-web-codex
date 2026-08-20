@@ -1,44 +1,49 @@
 # Supply-chain planning contract
 
-## Resource and Artifact lifecycle
+## Prepared input, Resource and Artifact lifecycle
 
-Every calculation starts from immutable MCP Resources:
+Every calculation starts from one create-new `prepared_network_input.v1` file under
+`outputs/warehouse-network/prepared/`. The Data Agent hands off only its exact Workspace-relative
+path, `input_identity`, readiness and bounded quality summaries. The file contains the confirmed
+demand, warehouse, assignment, route-quote and optional provided-route facts; it is not an MCP
+Resource and is never copied into the Agent conversation.
 
-- `normalized_network_input.v1`: the Data Agent's confirmed demand, warehouse,
-  assignment, route-quote and optional provided-route facts.
+Network calculations derived from that exact prepared identity are immutable MCP Resources:
+
 - `route_matrix.v3`: one provider/method, discriminated warehouse scope and exact sorted
   `warehouse_ids`, plus typed origin-city to destination-city
   route rows for an explicit warehouse scope. Multiple demand points in one city reuse
   the same lane.
+- `cost_matrix.v3`: quote-first or explicitly derived costs for the same exact warehouse set,
+  calculation policy and prepared identity.
 - `network_baseline.v2` and `network_scenario.v2`: allocations, issues and metrics for
   one explicit current or candidate facility set.
-- `network_assignment_comparison.v2`: deltas between compatible baseline, scenario and
-  facility-location results.
+- `network_plan_comparison.v2`: deltas between any compatible baseline, scenario and
+  facility-location before/after results.
 - `facility_location_solution.v4`: target, selected candidates, two-stage solver stages,
   assumptions and its assignment reference.
 - `network_comparison_map_bundle.v2` and `network_planning_report_markdown.v2`: the
-  bounded map-card projection and final Markdown delivery contracts.
+  final Workspace map and Markdown delivery contracts.
 
-Copy each returned `data_ref` unchanged. It uses server `supply_chain` and an
-opaque `supply-chain://resources/...` URI. Data Agent handoffs use server
-`supply_chain` and `supply-chain://resources/...`. Publishing is
-content-addressed; changing source facts or assumptions creates a new Resource.
+Copy each returned Network `resource_ref` unchanged. GeoJSON map-data tools return the narrower
+`data_ref`; copy that object unchanged into the Maps Tool. Both use server `supply_chain` and an
+opaque `supply-chain://resources/...` URI. Publishing is content-addressed; changing source facts,
+scope or assumptions creates a new Resource.
 Resource files default to the owning Profile's `CODEX_HOME`; they are not shared
 application or repository state.
 
-For the Data Agent intake path, `inspect_workspace_sources` publishes the
-`source_profile.v1` Resource and `normalize_network_input` accepts that exact
-`ResourceRef` plus explicit confirmed source decisions. The Data MCP loads and
-validates the Resource from its own store before rereading selected Workspace files.
-The source Profile must retain each source's nested `structure`; a flattened
-copy is invalid, and an empty mapping candidate result is a failed Tool call.
-Workspace `source_ref` values are file-inspection references and must not be
-passed to the MCP Resource reader.
+For Data intake, `inspect_workspace_sources` returns a bounded inline `source_profile.v1`, exact
+`preview_sample_count`, `total_count`, `total_count_exact`, `inspection_identity` and inspected
+relative paths. `prepare_network_input` rereads the selected complete files and recomputes the
+identity before writing; a path, byte or selected-set change returns `source_inspection_changed`
+without creating output. Data registers no Resource or Resource template, so callers must not use
+`read_mcp_resource` for the inspection result.
 
-Every Resource-producing Tool also returns `resource_name` in its structured result.
+Every Network Resource-producing Tool also returns `resource_name` in its structured result.
 Use that exact stable name when citing evidence; never expose or relabel the opaque
-Resource URI as a human-readable name. `data_ref` is the Runtime handoff identity,
-whereas `resource_name` is the report citation identity.
+Resource URI as a human-readable name. `resource_ref` is the calculation handoff identity,
+`data_ref` is the GeoJSON-specific handoff identity, and `resource_name` is the report citation
+identity.
 
 The Resource is the Runtime handoff. Intermediate Resource links remain provider-owned
 and are never registered as Task-owned Artifacts. Only an allowlisted final map or report
@@ -54,7 +59,7 @@ Tool may register its explicit Workspace-relative delivery descriptor:
    internal MCP Resource URI.
 
 Artifact registration does not change the calculation contract. A child Agent still
-passes the original `data_ref` unchanged inside Runtime; the Platform Artifact provides
+passes the original `resource_ref` or GeoJSON `data_ref` unchanged inside Runtime; the Platform Artifact provides
 durable product identity, authorization and recovery only for the explicit final file.
 Deleting a producing Run must not delete the Artifact, its Task grant or provenance
 identity. Interactive maps use the separate exact map-card handoff and do not become

@@ -23,9 +23,9 @@ fixture 位于 [indonesia-network/base](../../tools/warehouse-network-planner/ex
 
 ## Agent 分工
 
-Root Thread 先发布 typed 数据需求。Network Agent 持有业务参数，Data Agent 只负责发现和检查 CSV、JSON、XLSX，提出显式字段映射，补充行政区和坐标，并发布 `normalized_network_input.v1`；Network Agent 再从严格 `ResourceRef` 构建路线和成本矩阵，执行覆盖、成本、场景和选址分析。
+Root Thread 先发布 typed 数据需求。Network Agent 持有业务参数，Data Agent 只负责发现和检查 CSV、JSON、XLSX，提出显式字段映射，补充行政区和坐标，并在 `outputs/warehouse-network/prepared/` create-new 写入 `prepared_network_input.v1`。Data Agent 交接精确 Workspace 相对路径和内容身份；Network Agent 再由 Tool 读取该文件，并用严格 ResourceRef 保存路线、成本、覆盖、场景和选址等 provider-owned 计算结果。
 
-Supervisor 不按固定阶段脚本运行。它根据当前 Resource 缺口和依赖决定是否需要另一个 Agent；无依赖任务可以并行，但没有必要输入时不能提前计算。原始表格只由工具在受限范围内读取，Agent 之间只传经校验的 typed `ResourceRef` 和有限摘要。最终报告才由 final Tool 创建为 Workspace Markdown 交付物。
+Supervisor 不按固定阶段脚本运行。它根据当前输入和计算缺口决定是否需要另一个 Agent；无依赖任务可以并行，但没有必要输入时不能提前计算。原始表格只由 Data Tool 在授权范围内读取，Agent 之间只传准备文件的精确相对路径、内容身份、严格 ResourceRef 和有限摘要。最终报告才由 final Tool 创建为 Workspace Markdown 交付物。
 
 ## 四篇教程
 

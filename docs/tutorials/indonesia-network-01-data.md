@@ -21,7 +21,7 @@ flowchart LR
 | Network Agent | 说明本次问题需要需求城市、已有仓库、路线参数和时效目标 |
 | Data Agent | 检查 CSV/JSON/XLSX、生成字段映射、补充行政区和坐标 |
 | `supply_chain` | Data/Network logical provider；发现来源、确认映射、构建矩阵、计算覆盖率并发布报告 |
-| typed ResourceRef | Agent 消息只传经校验的 `source_profile.v1`、`normalized_network_input.v1` 和分析结果引用 |
+| typed handoff | Data Agent 只返回有界的 inline `source_profile.v1`、检查身份，以及准备文件的精确 Workspace 相对路径；Network 计算结果才使用严格 ResourceRef |
 | Artifact | 只保存用户最终需要查看和下载的报告，不承担 Agent 间数据交换 |
 
 本篇只用 `haversine distance × 绕路系数`。它是规划估算，不是导航承诺。导航接口要在后续得到明确许可后批量调用，不能逐个客户调用。
@@ -57,12 +57,12 @@ flowchart LR
 
 ## 预期交互
 
-Root Thread 先发布 typed 数据需求。Data Agent 和 Network Agent 通过同一 `supply_chain` provider 的 `ResourceRef` 协作：
+Root Thread 先发布 typed 数据需求。Data Agent 与 Network Agent 共用同一授权 Workspace，但不把完整数据搬进对话：
 
-1. 发现并检查 Workspace 来源，发布 `source_profile.v1`。
+1. 发现并一次检查用户确认的 Workspace 来源，inline 返回有界 `source_profile.v1`、`preview_sample_count`、`total_count`、`total_count_exact`、`inspection_identity` 和检查过的相对路径；这一步不发布 Resource。
 2. 提出显式字段映射，说明每个源字段如何映射到需求城市、已有仓库和行政区字段。
 3. 如果字段名或城市名有歧义，显示用户输入卡片。`ambiguous` 不能由模型猜测。
-4. 把 `normalized_network_input.v1` 和数据质量状态发布为 Resource，不把数据行带回对话。
+4. `prepare_network_input` 重新校验完整源文件和检查身份，以 create-new 方式写入 `outputs/warehouse-network/prepared/` 下的 `prepared_network_input.v1`；Data Agent 只交接精确相对路径、内容身份和有界质量摘要。
 
 Network Agent 再请求缺失参数。第一次看到输入卡片时选择：
 
@@ -79,7 +79,7 @@ Network Agent 再请求缺失参数。第一次看到输入卡片时选择：
 
 检查以下事实，而不是只看模型的一段总结：
 
-- `normalized_network_input.v1` 为 `ready`，且摘要显示 50 个需求城市和 11 个已有仓。
+- `prepared_network_input.v1` 为 `ready`，位于 `outputs/warehouse-network/prepared/`，且摘要显示 50 个需求城市和 11 个已有仓。
 - `route_matrix.v3` 为 `ready`，方法是 `haversine`，路线数等于 11 × 50 = 550。
 - 路线组件保存绕路系数和平均速度；没有 `navigation` 结果。
 - `network_baseline.v2` 为 `ready`，并由 final Tool 创建 `network_planning_report_markdown.v2` Workspace 交付物；baseline 评估仍使用独立 baseline report bundle 口径，比较报告使用 generic before/after 口径。

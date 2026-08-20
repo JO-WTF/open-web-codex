@@ -53,15 +53,17 @@ Network Agent 会要求绕路系数、平均速度和每日驾驶时长。用输
 
 ## 5. 结果检查
 
-成功运行时，Data/Network Resource 链至少产生以下资源：
+成功运行时，Data/Network 链至少产生以下 typed 结果：
 
 ```text
-source_profile.v1
-normalized_network_input.v1
+inline source_profile.v1 + workspace_source_inspection.v1
+outputs/warehouse-network/prepared/*.json（prepared_network_input.v1）
 route_matrix.v3
 network_baseline.v2
 network_planning_report_markdown.v2（单独 baseline 评估）
 ```
+
+前两项分别是本次检查握手和用户可见的 Workspace 准备文件，不是 Data MCP Resource；路线、基线等 Network 中间计算才使用 provider-owned ResourceRef。
 
 `network_planning_report_markdown.v2` 是 built-in final Tool 创建的 Workspace Markdown 交付物；baseline 评估使用独立 baseline report bundle，前后比较使用 generic before/after bundle。没有 current coverage 时，报告必须使用 `optimized_existing_footprint` 标签。需要实际当前方案时，继续阅读第三篇并上传 `current-coverage.csv`。
 
