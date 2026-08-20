@@ -765,6 +765,26 @@ async function runSelfTests() {
     ])?.invalid_wire_tool_names[0],
     "stale_tool",
   );
+  assert.equal(
+    turnFailureEvent(
+      [{ turn_id: "turn-ok", event_type: "codex.turn.completed", payload: { data: {} } }],
+      "turn-ok",
+    ),
+    undefined,
+  );
+  assert.equal(
+    turnFailureEvent(
+      [
+        {
+          turn_id: "turn-failed",
+          event_type: "codex.turn.completed",
+          payload: { data: { error: { code: "provider_protocol_violation" } } },
+        },
+      ],
+      "turn-failed",
+    )?.event_type,
+    "codex.turn.completed",
+  );
   assert.match(multiAgentTaskPrompt, /Balikpapan/);
   assert.match(multiAgentTaskPrompt, /地图/);
   assert.doesNotMatch(multiAgentTaskPrompt, /agent_type|spawn_agent|mcp|Resource|outputs\//i);
@@ -1694,24 +1714,37 @@ async function attachTimeline(error, record) {
   return error;
 }
 
+function turnFailureEvent(events, turnId) {
+  return events.find((event) => {
+    if (event.turn_id !== turnId) return false;
+    const data = eventData(event);
+    return (
+      event.event_type === "codex.thread.failed" ||
+      data.failureReason !== undefined ||
+      data.artifactDelivery?.state === "failed" ||
+      (event.event_type === "codex.turn.completed" && data.error !== undefined)
+    );
+  });
+}
+
 async function waitForTurn(taskId, turnId, timeoutMs = 300_000) {
   try {
     return await eventually(
       async () => {
         const snapshot = await taskEventsSnapshot(taskId);
         const events = snapshot.events;
-        const failure = events.find(
-          (event) =>
-            event.turn_id === turnId &&
-            (event.event_type === "codex.thread.failed" ||
-              event.payload?.data?.failureReason ||
-              event.payload?.data?.artifactDelivery?.state === "failed"),
-        );
+        const failure = turnFailureEvent(events, turnId);
         if (failure) {
+          const failureData = eventData(failure);
           throw new NativeRuntimeBlocker("provider_or_copilot_turn_failed", {
             turn_id: turnId,
             event_type: failure.event_type,
             canonical_item_type: failure.payload?.itemType,
+            error_code:
+              failureData.error?.code ??
+              failureData.error?.codexErrorInfo ??
+              failureData.code ??
+              "unknown",
           });
         }
         const approval = events.find(
