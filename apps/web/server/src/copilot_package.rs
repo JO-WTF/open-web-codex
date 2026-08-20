@@ -279,15 +279,13 @@ impl CopilotPackageAssets {
             )
         })?;
         for role_id in self.agent_role_ids() {
-            let role_config_file = profile_home
-                .join("agents")
-                .join(format!("{role_id}.toml"));
+            let role_config_file = profile_home.join("agents").join(format!("{role_id}.toml"));
             runtime_config_object.insert(
-                format!("agents.roles.{role_id}.config_file"),
+                format!("agents.{role_id}.config_file"),
                 Value::String(role_config_file.to_string_lossy().into_owned()),
             );
             runtime_config_object.insert(
-                format!("agents.roles.{role_id}.runtime_mcp_projection"),
+                format!("agents.{role_id}.runtime_mcp_projection"),
                 Value::Bool(true),
             );
         }
@@ -1923,7 +1921,7 @@ runtime = "tools/maps/runtime.toml"
             .root_execution_config(&profile)
             .expect("root execution config");
         assert_eq!(
-            root_execution.runtime_config["agents.roles.data_agent.runtime_mcp_projection"],
+            root_execution.runtime_config["agents.data_agent.runtime_mcp_projection"],
             Value::Bool(true),
             "managed Role MCP projection must be carried by typed Runtime config",
         );

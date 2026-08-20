@@ -131,6 +131,21 @@ Runtime 协同或地图投影失败，不能把模型未作出结构化调用解
 MCP 工具名及终态、地图 producer Item 和最后 assistant 文本摘要。它不记录 key、完整 prompt、
 schema 或 arguments；临时 Provider、Run、Workspace、Project 和原始选择均已清理，未伪造业务结果。
 
+### D5b：Role config path 与非法 wire Tool 诊断
+
+D5b 修正了 Copilot package 将 server-owned Role metadata 写成 `agents.roles.<role>.*` 的路径错误。
+原生 `AgentsToml` 使用 flatten Role 合同，正确路径是 `agents.<role>.*`；旧路径会产生
+`agent role roles must define a description` warning。修正后该 warning 消失，Role 的 typed MCP/Skill
+projection 测试与 child cold-resume 测试通过。
+
+同一临时 Provider 的真实门随后确认：Data Turn 已完成并生成 prepared input；Root 的 `wait` Item
+以 `completed` 终态返回，Provider 每个 Chat 请求均为 HTTP 200 且 SSE `done`。Root 下一次采样时
+request 只暴露 12 个基础工具，但 DeepSeek 返回不可见的 `multi_agent_v1__spawn_agent`；Runtime
+公开的 `codex.unknown` error 为 typed `interrupted`，没有 Network child、MCP Network Tool 或地图
+producer。该失败归类为 `provider_tool_call_not_visible`，不是 wait/mailbox、Provider stream 或
+Platform map projection 故障；没有伪造重试或业务结果。确定性 multi-agent gate 在重启后连续两次
+通过，包含完整 Resource schema 与 map provenance。
+
 ## 3. 历史：2026-08-12 clean real Web E4（已被 ADR-023 合同替代）
 
 在当前 Server/Codex、clean DB/Profile、真实 Provider 和一个授权 Workspace 中，使用用户给出的

@@ -140,7 +140,10 @@ with a prompt variant or fabricates a Tool call. The forwarding probe records
 only tool counts/names, `tool_choice`, structured call presence and canonical
 terminal summaries. On a full-gate failure it also emits a bounded timeline of
 thread/Turn, collaboration, MCP and map-producer state without keys, full
-prompts, schemas or arguments. It reuses a registered
+prompts, schemas or arguments. If a Provider returns a Tool name absent from
+that request's visible tool set, the gate reports typed
+`provider_tool_call_not_visible` instead of treating it as a Runtime success.
+It reuses a registered
 credential environment reference through a temporary Provider and removes that
 Provider, Run, Workspace and Project in its terminal cleanup:
 

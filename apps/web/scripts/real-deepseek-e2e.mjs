@@ -218,9 +218,14 @@ function currentChatTurnState(body) {
 function responseToolCalls(text) {
   const names = [];
   let structured = false;
+  let terminal = "eof_without_done";
   for (const line of text.split(/\r?\n/)) {
     const payload = line.startsWith("data: ") ? line.slice(6) : line;
-    if (!payload || payload === "[DONE]") continue;
+    if (!payload) continue;
+    if (payload === "[DONE]") {
+      terminal = "done";
+      continue;
+    }
     try {
       const value = JSON.parse(payload);
       const calls = value?.choices?.flatMap((choice) => choice?.delta?.tool_calls ?? []) ?? [];
@@ -240,7 +245,7 @@ function responseToolCalls(text) {
       // Non-JSON SSE lines are intentionally not retained.
     }
   }
-  return { structured, names };
+  return { structured, names, terminal };
 }
 
 function safeResponseHeaders(headers) {
@@ -356,12 +361,18 @@ class DeepSeekProbeProxy {
     });
     const responseText = await upstream.text();
     const calls = responseToolCalls(responseText);
+    const invalidWireToolNames = isChat
+      ? calls.names.filter((name) => !requestTools.includes(name))
+      : [];
     this.rounds.push({
       ...metadata,
+      http_status: upstream.status,
+      response_terminal: calls.terminal,
       status: upstream.status,
       structured_tool_calls: calls.structured,
       tool_call_count: calls.names.length,
       wire_tool_names: calls.names,
+      invalid_wire_tool_names: invalidWireToolNames,
     });
     if (turnKey && calls.structured) this.structuredTurns.add(turnKey);
     response.writeHead(upstream.status, safeResponseHeaders(upstream.headers));
@@ -405,6 +416,37 @@ function eventSummary(events) {
     item_type: itemType(event),
     tool: eventTool(event) || undefined,
   }));
+}
+
+function safeRuntimeErrors(events) {
+  const errors = [];
+  for (const event of events) {
+    const data = eventData(event);
+    const error = data.error ?? data.turn?.error;
+    const errorObject = error && typeof error === "object" ? error : undefined;
+    const codexErrorInfo =
+      errorObject?.codexErrorInfo ?? data.codexErrorInfo ?? data.failureReason;
+    const code =
+      errorObject?.code ??
+      errorObject?.type ??
+      (typeof codexErrorInfo === "string" ? codexErrorInfo : undefined);
+    const message =
+      errorObject?.message ??
+      data.message ??
+      (typeof data.failureReason === "string" ? data.failureReason : undefined);
+    const sourceType = data.sourceType ?? event.event_type;
+    if (!error && !code && !message && event.event_type !== "codex.unknown") continue;
+    errors.push({
+      event_type: event.event_type,
+      source_type: typeof sourceType === "string" ? sourceType : undefined,
+      thread_id: event.thread_id,
+      turn_id: event.turn_id,
+      item_id: event.item_id,
+      code: typeof code === "string" ? code : undefined,
+      message: boundedAssistantSummary(message),
+    });
+  }
+  return errors.slice(-40);
 }
 
 function boundedAssistantSummary(value) {
@@ -493,6 +535,13 @@ function safeTimeline(events, rounds, agentProjections = []) {
     if (typeof status === "string" && status.trim()) current.status = status.trim();
     threads.set(threadId, current);
   }
+  const lastCollaborationTerminal = collaboration
+    .filter((item) =>
+      /completed|failed|cancelled|interrupted|error/i.test(
+        String(item.event_type) + " " + String(item.status),
+      ),
+    )
+    .at(-1);
   return {
     rounds: rounds.slice(-40).map((round) => ({
       round: round.round,
@@ -507,14 +556,44 @@ function safeTimeline(events, rounds, agentProjections = []) {
       current_turn_has_structured_tool_activity:
         round.current_turn_has_structured_tool_activity,
       current_turn_tool_call_already_seen: round.current_turn_tool_call_already_seen,
+      http_status: round.http_status,
+      response_terminal: round.response_terminal,
+      invalid_wire_tool_names: round.invalid_wire_tool_names,
     })),
     threads: [...threads.values()].slice(-20),
     collaboration: collaboration.slice(-40),
     mailbox: mailbox.slice(-40),
     mcp: mcp.slice(-60),
     map_producers: mapProducers.slice(-20),
+    last_collaboration_terminal: lastCollaborationTerminal,
+    errors: safeRuntimeErrors(events),
     last_assistant_text: lastAssistantText,
   };
+}
+
+function logTimeline(label, timeline) {
+  const rounds = (timeline?.rounds ?? []).map((round) => ({
+    round: round.round,
+    wire_api: round.wire_api,
+    http_status: round.http_status,
+    response_terminal: round.response_terminal,
+    tool_count: round.tool_count,
+    structured_tool_calls: round.structured_tool_calls,
+    wire_tool_names: round.wire_tool_names,
+    invalid_wire_tool_names: round.invalid_wire_tool_names,
+    original_tool_choice: round.original_tool_choice,
+    effective_tool_choice: round.effective_tool_choice,
+    tool_choice_overridden: round.tool_choice_overridden,
+  }));
+  log(`[${label} ROUNDS] ` + JSON.stringify(rounds));
+  log(`[${label} THREADS] ` + JSON.stringify(timeline?.threads ?? []));
+  log(`[${label} COLLABORATION] ` + JSON.stringify(timeline?.collaboration ?? []));
+  log(`[${label} MAILBOX] ` + JSON.stringify(timeline?.mailbox ?? []));
+  log(`[${label} MCP] ` + JSON.stringify(timeline?.mcp ?? []));
+  log(`[${label} MAP_PRODUCERS] ` + JSON.stringify(timeline?.map_producers ?? []));
+  log(`[${label} LAST_COLLAB_TERMINAL] ` + JSON.stringify(timeline?.last_collaboration_terminal));
+  log(`[${label} ERRORS] ` + JSON.stringify(timeline?.errors ?? []));
+  log(`[${label} LAST_ASSISTANT] ` + JSON.stringify(timeline?.last_assistant_text));
 }
 
 function runSelfTests() {
@@ -541,8 +620,23 @@ function runSelfTests() {
   });
   assert.equal(completedToolTurn.has_user_message, true);
   assert.equal(completedToolTurn.has_structured_tool_activity, true);
+  assert.equal(
+    invalidWireToolRound([
+      { wire_api: "chat", invalid_wire_tool_names: ["stale_tool"] },
+    ])?.invalid_wire_tool_names[0],
+    "stale_tool",
+  );
   log("[PASS] real DeepSeek per-model capability self-test");
   log("[PASS] real DeepSeek current-turn tool-choice self-test");
+}
+
+function invalidWireToolRound(rounds) {
+  return rounds.find(
+    (round) =>
+      round.wire_api === "chat" &&
+      Array.isArray(round.invalid_wire_tool_names) &&
+      round.invalid_wire_tool_names.length > 0,
+  );
 }
 
 async function ensureAuthenticated() {
@@ -1143,7 +1237,7 @@ async function runToolSearchGate(provider) {
           items: eventSummary(events).filter((event) => event.turn_id === response.turn_id),
         }),
     );
-    log("[D2 ACTOR TIMELINE] " + JSON.stringify(await diagnosticTimeline(record)));
+    logTimeline("D2 ACTOR TIMELINE", await diagnosticTimeline(record));
     if (!secondEvidence.structured_tool_calls) {
       throw new NativeRuntimeBlocker("provider_tool_call_not_produced", {
         provider_id: provider.id,
@@ -1244,6 +1338,7 @@ async function runGate(provider) {
       visible_tool_names: round.visible_tool_names,
       structured_tool_calls: round.structured_tool_calls,
       wire_tool_names: round.wire_tool_names,
+      invalid_wire_tool_names: round.invalid_wire_tool_names,
     }));
     log("[ROUNDS] " + JSON.stringify(rounds));
     log(
@@ -1255,7 +1350,24 @@ async function runGate(provider) {
           ),
         }),
     );
-    log("[ACTOR TIMELINE] " + JSON.stringify(await diagnosticTimeline(record)));
+    logTimeline("ACTOR TIMELINE", await diagnosticTimeline(record));
+    const invalidRound = invalidWireToolRound(state.proxy.rounds);
+    if (invalidRound) {
+      throw new NativeRuntimeBlocker("provider_tool_call_not_visible", {
+        provider_id: provider.id,
+        model,
+        stage: "current_turn",
+        round: {
+          round: invalidRound.round,
+          visible_tool_count: invalidRound.tool_count,
+          visible_tool_names: invalidRound.visible_tool_names,
+          wire_tool_names: invalidRound.wire_tool_names,
+          invalid_wire_tool_names: invalidRound.invalid_wire_tool_names,
+          original_tool_choice: invalidRound.original_tool_choice,
+          effective_tool_choice: invalidRound.effective_tool_choice,
+        },
+      });
+    }
     const eventText = events.map((event) => sanitize(event.payload)).join("\n");
     if (!/12\s*h|12\s*小时|12-hour/i.test(eventText)) {
       throw new NativeRuntimeBlocker("copilot_chain_incomplete", {
@@ -1366,10 +1478,13 @@ async function main() {
 
 main().catch((error) => {
   if (error instanceof NativeRuntimeBlocker) {
+    const details = error.details ?? {};
+    const { timeline, ...summary } = details;
     log(
       "[TYPED_FAILURE] " +
-        JSON.stringify({ code: error.code, details: error.details }),
+        JSON.stringify({ code: error.code, details: summary }),
     );
+    if (timeline) logTimeline("FAILURE TIMELINE", timeline);
     process.exitCode = 2;
   } else {
     log("[FAIL] " + error.stack);

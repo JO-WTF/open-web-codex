@@ -151,7 +151,7 @@ async fn apply_role_returns_unavailable_for_invalid_user_role_toml() {
 #[tokio::test]
 async fn reapply_role_restores_role_mcp_inventory_and_preserves_runtime_cwd() {
     let (home, mut config) = test_config_with_cli_overrides(vec![(
-        "agents.roles.resource-reader.runtime_mcp_projection".to_string(),
+        "agents.resource-reader.runtime_mcp_projection".to_string(),
         TomlValue::Boolean(true),
     )])
     .await;
@@ -193,7 +193,7 @@ args = []
 #[tokio::test]
 async fn apply_role_restores_managed_role_mcp_projection() {
     let (home, mut config) = test_config_with_cli_overrides(vec![(
-        "agents.roles.managed-resource-reader.runtime_mcp_projection".to_string(),
+        "agents.managed-resource-reader.runtime_mcp_projection".to_string(),
         TomlValue::Boolean(true),
     )])
     .await;

@@ -187,7 +187,6 @@ fn role_runtime_mcp_projection(config: &Config, role_name: &str) -> bool {
             layer
                 .config
                 .get("agents")?
-                .get("roles")?
                 .get(role_name)?
                 .get("runtime_mcp_projection")?
                 .as_bool()
