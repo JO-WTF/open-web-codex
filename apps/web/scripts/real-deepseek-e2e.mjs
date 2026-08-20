@@ -171,6 +171,50 @@ function visibleToolNames(body) {
     .slice(0, 100);
 }
 
+function currentChatTurnState(body) {
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  let userIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      userIndex = index;
+      break;
+    }
+  }
+  if (userIndex < 0) {
+    return {
+      has_user_message: false,
+      has_structured_tool_activity: false,
+      boundary_key: undefined,
+    };
+  }
+  const turnMessages = messages.slice(userIndex);
+  const hasStructuredToolActivity = turnMessages.some((message) => {
+    if (!message || typeof message !== "object") return false;
+    if (message.role === "tool") return true;
+    if (
+      message.role === "assistant" &&
+      ((Array.isArray(message.tool_calls) && message.tool_calls.length > 0) ||
+        (message.function_call && typeof message.function_call === "object"))
+    ) {
+      return true;
+    }
+    return (
+      Array.isArray(message.content) &&
+      message.content.some((item) =>
+        ["tool_call", "tool_result", "tool_use", "tool_output"].includes(item?.type),
+      )
+    );
+  });
+  return {
+    has_user_message: true,
+    has_structured_tool_activity: hasStructuredToolActivity,
+    // The boundary key is an in-process probe key only. It is never logged.
+    boundary_key: createHash("sha256")
+      .update(JSON.stringify(messages[userIndex]))
+      .digest("hex"),
+  };
+}
+
 function responseToolCalls(text) {
   const names = [];
   let structured = false;
@@ -222,6 +266,15 @@ class DeepSeekProbeProxy {
     this.address = undefined;
     this.rounds = [];
     this.errors = [];
+    this.toolChoicePolicy = undefined;
+    this.structuredTurns = new Set();
+  }
+
+  bindExactProviderModel(providerIdValue, modelId) {
+    this.toolChoicePolicy = {
+      provider_id: providerIdValue,
+      model: modelId,
+    };
   }
 
   async start() {
@@ -250,13 +303,43 @@ class DeepSeekProbeProxy {
     }
     const isChat = request.url?.includes("/chat/completions") ?? false;
     const requestTools = visibleToolNames(body);
+    const originalToolChoice = summarizeToolChoice(body.tool_choice);
+    const chatTurn = isChat ? currentChatTurnState(body) : undefined;
+    const turnKey =
+      chatTurn?.boundary_key && body.model === this.toolChoicePolicy?.model
+        ? body.model + ":" + chatTurn.boundary_key
+        : undefined;
+    const policyMatches =
+      isChat &&
+      body.model === this.toolChoicePolicy?.model &&
+      Array.isArray(body.tools) &&
+      body.tools.length > 0;
+    const originalChoiceIsAuto =
+      body.tool_choice === undefined || body.tool_choice === "auto";
+    const turnAlreadyProducedTool = turnKey ? this.structuredTurns.has(turnKey) : false;
+    const shouldRequireToolChoice =
+      policyMatches &&
+      originalChoiceIsAuto &&
+      chatTurn?.has_user_message === true &&
+      chatTurn.has_structured_tool_activity === false &&
+      !turnAlreadyProducedTool;
+    const effectiveBody = shouldRequireToolChoice
+      ? { ...body, tool_choice: "required" }
+      : body;
     const metadata = {
       round: this.rounds.length + 1,
       path: request.url ?? "unknown",
       wire_api: isChat ? "chat" : "responses",
       tools_present: Array.isArray(body.tools) && body.tools.length > 0,
       tool_count: Array.isArray(body.tools) ? body.tools.length : 0,
-      tool_choice: summarizeToolChoice(body.tool_choice),
+      tool_choice: summarizeToolChoice(effectiveBody.tool_choice),
+      original_tool_choice: originalToolChoice,
+      effective_tool_choice: summarizeToolChoice(effectiveBody.tool_choice),
+      tool_choice_overridden: shouldRequireToolChoice,
+      current_turn_has_user_message: chatTurn?.has_user_message ?? false,
+      current_turn_has_structured_tool_activity:
+        chatTurn?.has_structured_tool_activity ?? false,
+      current_turn_tool_call_already_seen: turnAlreadyProducedTool,
       visible_tool_names: requestTools,
     };
     const headers = new Headers();
@@ -264,10 +347,12 @@ class DeepSeekProbeProxy {
       if (value === undefined || ["host", "content-length", "connection"].includes(key)) continue;
       headers.set(key, Array.isArray(value) ? value.join(",") : value);
     }
+    const forwardedBodyText =
+      effectiveBody === body ? bodyText : JSON.stringify(effectiveBody);
     const upstream = await fetch(targetBaseUrl + (request.url ?? "/"), {
       method: request.method,
       headers,
-      body: bodyText || undefined,
+      body: forwardedBodyText || undefined,
     });
     const responseText = await upstream.text();
     const calls = responseToolCalls(responseText);
@@ -278,6 +363,7 @@ class DeepSeekProbeProxy {
       tool_call_count: calls.names.length,
       wire_tool_names: calls.names,
     });
+    if (turnKey && calls.structured) this.structuredTurns.add(turnKey);
     response.writeHead(upstream.status, safeResponseHeaders(upstream.headers));
     response.end(responseText);
   }
@@ -415,6 +501,12 @@ function safeTimeline(events, rounds, agentProjections = []) {
       visible_tool_names: round.visible_tool_names.slice(0, 40),
       structured_tool_calls: round.structured_tool_calls,
       wire_tool_names: round.wire_tool_names,
+      original_tool_choice: round.original_tool_choice,
+      effective_tool_choice: round.effective_tool_choice,
+      tool_choice_overridden: round.tool_choice_overridden,
+      current_turn_has_structured_tool_activity:
+        round.current_turn_has_structured_tool_activity,
+      current_turn_tool_call_already_seen: round.current_turn_tool_call_already_seen,
     })),
     threads: [...threads.values()].slice(-20),
     collaboration: collaboration.slice(-40),
@@ -432,7 +524,25 @@ function runSelfTests() {
   };
   assert.equal(model.modelId, "deepseek-v4-flash");
   assert.equal(model.supportsSearchTool, true);
+  const initialTurn = currentChatTurnState({
+    messages: [{ role: "user", content: "start" }],
+  });
+  assert.equal(initialTurn.has_user_message, true);
+  assert.equal(initialTurn.has_structured_tool_activity, false);
+  const completedToolTurn = currentChatTurnState({
+    messages: [
+      { role: "user", content: "start" },
+      {
+        role: "assistant",
+        tool_calls: [{ id: "call-1", type: "function" }],
+      },
+      { role: "tool", tool_call_id: "call-1", content: "{}" },
+    ],
+  });
+  assert.equal(completedToolTurn.has_user_message, true);
+  assert.equal(completedToolTurn.has_structured_tool_activity, true);
   log("[PASS] real DeepSeek per-model capability self-test");
+  log("[PASS] real DeepSeek current-turn tool-choice self-test");
 }
 
 async function ensureAuthenticated() {
@@ -944,6 +1054,11 @@ async function runToolSearchGate(provider) {
       tools_present: firstRound.tools_present,
       tool_count: firstRound.tool_count,
       tool_choice: firstRound.tool_choice,
+      original_tool_choice: firstRound.original_tool_choice,
+      effective_tool_choice: firstRound.effective_tool_choice,
+      tool_choice_overridden: firstRound.tool_choice_overridden,
+      current_turn_has_structured_tool_activity:
+        firstRound.current_turn_has_structured_tool_activity,
       visible_tool_names: firstRound.visible_tool_names,
       structured_tool_calls: firstRound.structured_tool_calls,
       wire_tool_names: firstRound.wire_tool_names,
@@ -1009,6 +1124,11 @@ async function runToolSearchGate(provider) {
       tools_present: secondRound.tools_present,
       tool_count: secondRound.tool_count,
       tool_choice: secondRound.tool_choice,
+      original_tool_choice: secondRound.original_tool_choice,
+      effective_tool_choice: secondRound.effective_tool_choice,
+      tool_choice_overridden: secondRound.tool_choice_overridden,
+      current_turn_has_structured_tool_activity:
+        secondRound.current_turn_has_structured_tool_activity,
       visible_tool_names: secondRound.visible_tool_names,
       structured_tool_calls: secondRound.structured_tool_calls,
       wire_tool_names: secondRound.wire_tool_names,
@@ -1023,6 +1143,7 @@ async function runToolSearchGate(provider) {
           items: eventSummary(events).filter((event) => event.turn_id === response.turn_id),
         }),
     );
+    log("[D2 ACTOR TIMELINE] " + JSON.stringify(await diagnosticTimeline(record)));
     if (!secondEvidence.structured_tool_calls) {
       throw new NativeRuntimeBlocker("provider_tool_call_not_produced", {
         provider_id: provider.id,
@@ -1076,6 +1197,11 @@ async function runGate(provider) {
       tools_present: firstRound.tools_present,
       tool_count: firstRound.tool_count,
       tool_choice: firstRound.tool_choice,
+      original_tool_choice: firstRound.original_tool_choice,
+      effective_tool_choice: firstRound.effective_tool_choice,
+      tool_choice_overridden: firstRound.tool_choice_overridden,
+      current_turn_has_structured_tool_activity:
+        firstRound.current_turn_has_structured_tool_activity,
       visible_tool_names: firstRound.visible_tool_names,
       structured_tool_calls: firstRound.structured_tool_calls,
       wire_tool_names: firstRound.wire_tool_names,
@@ -1110,6 +1236,11 @@ async function runGate(provider) {
       tools_present: round.tools_present,
       tool_count: round.tool_count,
       tool_choice: round.tool_choice,
+      original_tool_choice: round.original_tool_choice,
+      effective_tool_choice: round.effective_tool_choice,
+      tool_choice_overridden: round.tool_choice_overridden,
+      current_turn_has_structured_tool_activity:
+        round.current_turn_has_structured_tool_activity,
       visible_tool_names: round.visible_tool_names,
       structured_tool_calls: round.structured_tool_calls,
       wire_tool_names: round.wire_tool_names,
@@ -1124,6 +1255,7 @@ async function runGate(provider) {
           ),
         }),
     );
+    log("[ACTOR TIMELINE] " + JSON.stringify(await diagnosticTimeline(record)));
     const eventText = events.map((event) => sanitize(event.payload)).join("\n");
     if (!/12\s*h|12\s*小时|12-hour/i.test(eventText)) {
       throw new NativeRuntimeBlocker("copilot_chain_incomplete", {
@@ -1173,6 +1305,15 @@ async function main() {
     await enableMultiAgent();
     provider = await configureTemporaryProvider();
     taskProviderId = provider.id;
+    state.proxy.bindExactProviderModel(provider.id, model);
+    log(
+      "[TOOL CHOICE POLICY] " +
+        JSON.stringify({
+          provider_id: provider.id,
+          model,
+          mode: "required_until_first_structured_current_turn_tool_activity",
+        }),
+    );
     log(
       "server=" +
         version +
