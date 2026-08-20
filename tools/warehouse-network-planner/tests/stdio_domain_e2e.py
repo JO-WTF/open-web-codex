@@ -240,7 +240,7 @@ async def _run_network_s3_then_s2(
                 {
                     "prepared_input_relative_path": prepared_path,
                     "route_method": "provided",
-                    "warehouse_scope": "existing_only",
+                    "warehouse_scope": {"kind": "existing_only"},
                 },
                 workspace,
             )
@@ -256,6 +256,7 @@ async def _run_network_s3_then_s2(
                 {
                     "prepared_input_relative_path": prepared_path,
                     "route_method": "haversine",
+                    "warehouse_scope": {"kind": "all_warehouses"},
                     "detour_coefficient": 1.2,
                     "average_speed_kph": 42,
                 },
@@ -273,7 +274,7 @@ async def _run_network_s3_then_s2(
                 "plan_cost_matrix",
                 {
                     "prepared_input_relative_path": prepared_path,
-                    "warehouse_scope": "all_warehouses",
+                    "warehouse_scope": {"kind": "all_warehouses"},
                     "cost_policy": {
                         "kind": "explicit",
                         "rules": _cost_policy()["rules"],
@@ -287,6 +288,22 @@ async def _run_network_s3_then_s2(
             assert len(costs["rows"]) == 1168
             assert costs["missing_routes"] == []
 
+            baseline_costs_result = await _call(
+                session,
+                "plan_cost_matrix",
+                {
+                    "prepared_input_relative_path": prepared_path,
+                    "warehouse_scope": {"kind": "existing_only"},
+                    "cost_policy": {
+                        "kind": "explicit",
+                        "rules": _cost_policy()["rules"],
+                    },
+                    "route_matrix_ref": provided_ref,
+                },
+                workspace,
+            )
+            baseline_costs_ref = baseline_costs_result.structuredContent["resource_ref"]
+
             common_trace.append("evaluate_network_baseline")
             baseline_result = await _call(
                 session,
@@ -294,7 +311,7 @@ async def _run_network_s3_then_s2(
                 {
                     "prepared_input_relative_path": prepared_path,
                     "route_matrix_ref": provided_ref,
-                    "cost_matrix_ref": costs_ref,
+                    "cost_matrix_ref": baseline_costs_ref,
                     "objective": "min_cost",
                     "service_targets": [6, 12, 18],
                     "coverage_mode": "actual_current",
@@ -324,7 +341,7 @@ async def _run_network_s3_then_s2(
                 {
                     "prepared_input_relative_path": prepared_path,
                     "route_matrix_ref": provided_ref,
-                    "cost_matrix_ref": costs_ref,
+                    "cost_matrix_ref": baseline_costs_ref,
                     "before_ref": baseline_ref,
                     "scenario": {
                         "add_warehouse_ids": [],

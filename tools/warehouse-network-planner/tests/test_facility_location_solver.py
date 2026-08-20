@@ -10,7 +10,11 @@ from _network_fixtures import (
 )
 from pydantic import ValidationError
 from supply_chain_planner.network.matrix import build_cost_matrix, build_haversine_route_matrix
-from supply_chain_planner.network.matrix_models import CostCalculationPolicy, DemandUnitCostRule
+from supply_chain_planner.network.matrix_models import (
+    AllWarehousesScope,
+    CostCalculationPolicy,
+    DemandUnitCostRule,
+)
 from supply_chain_planner.network.optimization_models import (
     ExactOpeningPolicy,
     PMedianRequest,
@@ -92,7 +96,7 @@ def test_sample2_opens_exactly_two_candidates_with_existing_sites_explicitly_fix
             ]
         ),
         routes,
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
     fixed_existing = {
         warehouse.warehouse_id for warehouse in fixture.warehouses if warehouse.is_existing

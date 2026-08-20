@@ -23,6 +23,8 @@ from supply_chain_planner.network.matrix import (
 )
 from supply_chain_planner.network.matrix_models import (
     CostMatrix,
+    ExistingOnlyWarehouseScope,
+    ExistingPlusCandidatesWarehouseScope,
 )
 from supply_chain_planner.network.matrix_models import (
     RouteMatrix as ComposableRouteMatrix,
@@ -103,11 +105,11 @@ def _load_facility_scenario_inputs(
     prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
     routes = _runtime().load_model(
         route_matrix_ref,
-        "route_matrix.v2",
+        "route_matrix.v3",
         ComposableRouteMatrix,
     )
     costs = (
-        _runtime().load_model(cost_matrix_ref, "cost_matrix.v2", CostMatrix)
+        _runtime().load_model(cost_matrix_ref, "cost_matrix.v3", CostMatrix)
         if cost_matrix_ref is not None
         else None
     )
@@ -229,6 +231,22 @@ def assess_facility_change(
         raise McpResourceContractError("scenario_remove_requires_active_warehouse")
     if add_ids & before_active_ids:
         raise McpResourceContractError("scenario_add_requires_inactive_warehouse")
+    existing_ids = {
+        warehouse.warehouse_id for warehouse in prepared.warehouses if warehouse.is_existing
+    }
+    scoped_candidate_ids = sorted((before_active_ids - existing_ids) | add_ids)
+    expected_scope = (
+        ExistingPlusCandidatesWarehouseScope(candidate_ids=scoped_candidate_ids)
+        if scoped_candidate_ids
+        else ExistingOnlyWarehouseScope()
+    )
+    expected_warehouse_ids = sorted(existing_ids | set(scoped_candidate_ids))
+    if routes.warehouse_scope != expected_scope or routes.warehouse_ids != expected_warehouse_ids:
+        raise McpResourceContractError("scenario_route_scope_mismatch")
+    if costs is not None and (
+        costs.warehouse_scope != expected_scope or costs.warehouse_ids != expected_warehouse_ids
+    ):
+        raise McpResourceContractError("scenario_cost_scope_mismatch")
     after = _evaluate_facility_change(
         prepared,
         input_identity,
@@ -370,12 +388,12 @@ def solve_p_median(
     prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
     routes = _runtime().load_model(
         route_matrix_ref,
-        "route_matrix.v2",
+        "route_matrix.v3",
         ComposableRouteMatrix,
     )
     costs = _runtime().load_model(
         cost_matrix_ref,
-        "cost_matrix.v2",
+        "cost_matrix.v3",
         CostMatrix,
     )
     try:
@@ -390,7 +408,14 @@ def solve_p_median(
     )
     if not route_validation.valid:
         raise McpResourceContractError("p_median_route_matrix_incomplete")
-    if costs.warehouse_scope != "all_warehouses" or costs.missing_routes:
+    all_warehouse_ids = sorted(warehouse.warehouse_id for warehouse in prepared.warehouses)
+    if (
+        routes.warehouse_scope.kind != "all_warehouses"
+        or costs.warehouse_scope.kind != "all_warehouses"
+        or routes.warehouse_ids != all_warehouse_ids
+        or costs.warehouse_ids != all_warehouse_ids
+        or costs.missing_routes
+    ):
         raise McpResourceContractError("p_median_cost_matrix_incomplete")
     constraints = [
         (constraint.target_hours, constraint.minimum_coverage)

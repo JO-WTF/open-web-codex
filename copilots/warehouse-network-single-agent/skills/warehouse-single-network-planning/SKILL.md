@@ -13,7 +13,7 @@ metadata:
 
 - 优先使用 `provided` 路线事实。只有用户确认绕路系数和平均速度后才用 haversine。
 - 导航先生成 request，展示调用量和费用风险，取得原生许可后执行并导入。
-- 同一任务既要基线又要候选仓方案时，第一次按 `all_warehouses` 准备路线，后续复用同一引用。
+- 基线的路线与成本 `warehouse_scope` 必须是 `{kind:"existing_only"}`；单一设施变化使用 `{kind:"existing_plus_candidates",candidate_ids:[...]}`，候选 ID 必须覆盖 before 中仍启用候选与本次新增候选；全量 p-median 才使用 `{kind:"all_warehouses"}`。不同 scope 不复用同一矩阵。
 - 成本优先使用报价。按完整报价均值外推时调用 `plan_cost_matrix` 的 `observed_quote_mean`；Planner 负责完整数据聚合和证据校验，不能从 preview 推算，也不能把均值改写成另一份 explicit 事实。
 - 只有用户明确要求“用脚本计算”时，才可对 exact prepared input 执行有界 Python/shell 统计；脚本不是标准化数据 owner，也不能替代路线或求解 Tool。此时必须在 `outputs/warehouse-network/calculations/` 下 create-new 一个 `.py` 和一个 `.json`，JSON 与脚本结果必须共同满足下面的唯一 evidence 合同；不要把合同复制到 Root Role 或其他 Skill。
 

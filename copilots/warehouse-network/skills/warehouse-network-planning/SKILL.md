@@ -14,7 +14,7 @@ metadata:
 - 优先使用输入中已确认的 `provided` 路线事实。
 - 只有用户确认绕路系数和平均速度后才用 haversine。
 - 需要导航时先调用 `create_navigation_matrix_request`，展示调用量和费用风险；取得原生许可后执行并导入路线结果。
-- 同一任务既要基线又要候选仓方案时，第一次按 `all_warehouses` 准备路线，后续复用同一引用。
+- 基线的路线与成本 `warehouse_scope` 必须是 `{kind:"existing_only"}`；单一设施变化使用 `{kind:"existing_plus_candidates",candidate_ids:[...]}`，候选 ID 必须覆盖 before 中仍启用候选与本次新增候选；全量 p-median 才使用 `{kind:"all_warehouses"}`。不同 scope 不复用同一矩阵。
 - 成本优先使用报价。用户授权按完整报价均值外推时，调用 `plan_cost_matrix` 的 `cost_policy.kind=observed_quote_mean`；Planner 返回完整报价总数、分层数量、币种、公式、均值和证据。Network Agent 不从 preview 或脚本自行计算。
 - 多 Agent 没有 shell/脚本能力；不要假装生成脚本。已有授权的 `warehouse_quote_mean_calculation.v1` 证据必须交给 Planner 校验，不能再改写成另一份 explicit 规则。
 - 报价均值外推是敏感性方案；缺少仓租、建设、容量或吞吐成本时，不称为经济意义上的全局最优。

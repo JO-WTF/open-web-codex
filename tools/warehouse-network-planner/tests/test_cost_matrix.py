@@ -18,6 +18,7 @@ from supply_chain_planner.network.matrix import (
     derive_observed_quote_mean_cost_policy,
 )
 from supply_chain_planner.network.matrix_models import (
+    AllWarehousesScope,
     CostCalculationPolicy,
     CostMatrix,
     DemandUnitCostRule,
@@ -78,7 +79,7 @@ def test_cost_matrix_preserves_linehaul_quotes_and_reports_missing_last_mile() -
         case.warehouses,
         quotes,
         None,
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
 
     assert ("center-a", "cross-b", "linehaul") not in matrix.missing_routes
@@ -94,7 +95,7 @@ def test_cost_matrix_calculates_missing_quote_only_from_explicit_rule() -> None:
         [],
         _cost_policy(),
         route_matrix(case),
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
 
     assert matrix.missing_routes == []
@@ -111,7 +112,7 @@ def test_cost_reuse_is_pair_exact_and_currency_mismatch_is_rejected() -> None:
         [],
         _cost_policy(),
         routes,
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
     exact = original.rows[0]
     stale = original.rows[1].model_copy(update={"tool_version": "distance-unit-cost.v0"})
@@ -137,7 +138,7 @@ def test_cost_reuse_is_pair_exact_and_currency_mismatch_is_rejected() -> None:
         _cost_policy(),
         routes,
         [exact, stale, stale_route_fact, stale_cost, unrelated],
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
 
     assert rebuilt.stats.reused_pair_count == 1
@@ -160,7 +161,7 @@ def test_cost_reuse_is_pair_exact_and_currency_mismatch_is_rejected() -> None:
             [quote],
             _cost_policy("IDR"),
             routes,
-            warehouse_scope="all_warehouses",
+            warehouse_scope=AllWarehousesScope(),
         )
 
 
@@ -181,7 +182,7 @@ def test_unrelated_quote_is_ignored_without_invalidating_required_pairs() -> Non
         [extra],
         _cost_policy(),
         route_matrix(case),
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
 
     assert matrix.missing_routes == []
@@ -207,7 +208,7 @@ def test_linehaul_without_quote_or_explicit_layer_rule_is_typed_missing() -> Non
         [],
         policy,
         route_matrix(case),
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
 
     assert ("center-a", "cross-b", "linehaul") in matrix.missing_routes
@@ -223,7 +224,7 @@ def test_conflicting_prior_cost_rows_are_rejected_per_pair() -> None:
         [],
         _cost_policy(),
         routes,
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
 
     with pytest.raises(ValueError, match="cost_prior_duplicate_pair"):
@@ -234,13 +235,13 @@ def test_conflicting_prior_cost_rows_are_rejected_per_pair() -> None:
             _cost_policy(),
             routes,
             [original.rows[0], original.rows[0]],
-            warehouse_scope="all_warehouses",
+            warehouse_scope=AllWarehousesScope(),
         )
 
 
 def test_cost_currency_has_no_hidden_default() -> None:
     with pytest.raises(ValidationError):
-        CostMatrix(warehouse_scope="all_warehouses", rows=[])
+        CostMatrix(warehouse_scope=AllWarehousesScope(), rows=[])
     with pytest.raises(ValidationError):
         CostMatrix(currency="IDR", rows=[])
 
@@ -255,7 +256,7 @@ def test_indonesia_extra_linehaul_quotes_do_not_invalidate_required_pairs() -> N
         indonesia_route_quotes(),
         _cost_policy(),
         routes,
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
 
     assert matrix.missing_routes == []

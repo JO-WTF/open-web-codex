@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from maps_mcp import server
 
 
@@ -20,12 +19,13 @@ def _context(workspace) -> SimpleNamespace:
 
 def _request() -> dict[str, object]:
     return {
-        "schema_version": "navigation_matrix_request.v1",
+        "schema_version": "navigation_matrix_request.v2",
         "input_identity": {
             "schema_version": "prepared_network_input.v1",
             "content_sha256": "0" * 64,
         },
-        "warehouse_scope": "all_warehouses",
+        "warehouse_scope": {"kind": "all_warehouses"},
+        "warehouse_ids": ["CENTER-1"],
         "estimated_billable_elements": 2,
         "routes": [
             {
@@ -65,8 +65,18 @@ def test_execute_navigation_matrix_writes_typed_workspace_facts(tmp_path, monkey
             return {
                 "provider": "mapbox",
                 "entries": [
-                    {"originIndex": 0, "destinationIndex": 0, "distanceMeters": 1_200, "durationSeconds": 300},
-                    {"originIndex": 0, "destinationIndex": 1, "distanceMeters": None, "durationSeconds": None},
+                    {
+                        "originIndex": 0,
+                        "destinationIndex": 0,
+                        "distanceMeters": 1_200,
+                        "durationSeconds": 300,
+                    },
+                    {
+                        "originIndex": 0,
+                        "destinationIndex": 1,
+                        "distanceMeters": None,
+                        "durationSeconds": None,
+                    },
                 ],
             }
 
@@ -85,7 +95,9 @@ def test_execute_navigation_matrix_writes_typed_workspace_facts(tmp_path, monkey
     assert result.ready_pair_count == 1
     assert result.unreachable_pair_count == 1
     payload = json.loads(result_path.read_text())
-    assert payload["schema_version"] == "navigation_matrix_result.v1"
+    assert payload["schema_version"] == "navigation_matrix_result.v2"
+    assert payload["warehouse_scope"] == {"kind": "all_warehouses"}
+    assert payload["warehouse_ids"] == ["CENTER-1"]
     assert payload["rows"][0]["distance_km"] == 1.2
     assert payload["rows"][1]["status"] == "unreachable"
 
@@ -96,6 +108,13 @@ def test_execute_navigation_matrix_writes_typed_workspace_facts(tmp_path, monkey
                 "navigation-result.json",
                 _context(tmp_path),
             )
+        )
+
+
+def test_navigation_contract_rejects_noncanonical_warehouse_ids() -> None:
+    with pytest.raises(ValueError, match="warehouse_ids_not_canonical"):
+        server.NavigationMatrixRequest.model_validate(
+            {**_request(), "warehouse_ids": ["CENTER-1", "CENTER-1"]}
         )
 
 

@@ -23,15 +23,22 @@ from supply_chain_planner.network import (
     tool_runtime,
 )
 from supply_chain_planner.network.matrix_models import (
+    AllWarehousesScope,
     CostCalculationPolicy,
     CostMatrix,
     DemandUnitCostRule,
+    ExistingOnlyWarehouseScope,
+    ExistingPlusCandidatesWarehouseScope,
     ExplicitCostPolicy,
     ObservedQuoteMeanCostEvidence,
     ObservedQuoteMeanCostPolicy,
 )
+from supply_chain_planner.network.matrix_models import (
+    RouteMatrix as ComposableRouteMatrix,
+)
 from supply_chain_planner.network.models import RouteQuoteRecord
 from supply_chain_planner.network.optimization_models import (
+    ExactOpeningPolicy,
     KeepAllExistingWarehousePolicy,
     MinimumFeasibleOpeningPolicy,
     ScenarioSpec,
@@ -150,6 +157,91 @@ def test_comparable_loader_rejects_facility_without_assignment(monkeypatch) -> N
         tool_runtime._load_comparable_resource(ref)
 
 
+def test_route_prior_requires_exact_method_scope_and_parameters(tmp_path: Path, monkeypatch) -> None:
+    workspace, _store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    prepared_path = _prepared_input(workspace)
+    prior = _ref(
+        route_tools.prepare_route_matrix(
+            prepared_path,
+            "haversine",
+            ctx,
+            warehouse_scope=AllWarehousesScope(),
+            detour_coefficient=1.2,
+            average_speed_kph=42,
+        )
+    )
+    prior_matrix = tool_runtime._runtime().load_model(
+        prior,
+        "route_matrix.v3",
+        ComposableRouteMatrix,
+    )
+
+    def publish_prior(value: ComposableRouteMatrix) -> ResourceRef:
+        return _ref(tool_runtime._runtime().publish(value.schema_version, value, "test prior"))
+
+    identity_mismatch = publish_prior(
+        prior_matrix.model_copy(
+            update={
+                "input_identity": prior_matrix.input_identity.model_copy(
+                    update={"content_sha256": "f" * 64}
+                )
+            }
+        )
+    )
+    with pytest.raises(ProviderContractError, match="route_prior_input_identity_mismatch"):
+        route_tools.prepare_route_matrix(
+            prepared_path,
+            "haversine",
+            ctx,
+            warehouse_scope=AllWarehousesScope(),
+            detour_coefficient=1.2,
+            average_speed_kph=42,
+            prior_route_matrix_ref=identity_mismatch,
+        )
+    warehouse_set_mismatch = publish_prior(
+        prior_matrix.model_copy(update={"warehouse_ids": prior_matrix.warehouse_ids[:-1]})
+    )
+    with pytest.raises(ProviderContractError, match="route_prior_warehouse_set_mismatch"):
+        route_tools.prepare_route_matrix(
+            prepared_path,
+            "haversine",
+            ctx,
+            warehouse_scope=AllWarehousesScope(),
+            detour_coefficient=1.2,
+            average_speed_kph=42,
+            prior_route_matrix_ref=warehouse_set_mismatch,
+        )
+    with pytest.raises(ProviderContractError, match="route_prior_method_mismatch"):
+        route_tools.prepare_route_matrix(
+            prepared_path,
+            "provided",
+            ctx,
+            warehouse_scope=AllWarehousesScope(),
+            prior_route_matrix_ref=prior,
+        )
+    with pytest.raises(ProviderContractError, match="route_prior_scope_mismatch"):
+        route_tools.prepare_route_matrix(
+            prepared_path,
+            "haversine",
+            ctx,
+            warehouse_scope=ExistingOnlyWarehouseScope(),
+            detour_coefficient=1.2,
+            average_speed_kph=42,
+            prior_route_matrix_ref=prior,
+        )
+    with pytest.raises(ProviderContractError, match="route_prior_parameters_mismatch"):
+        route_tools.prepare_route_matrix(
+            prepared_path,
+            "haversine",
+            ctx,
+            warehouse_scope=AllWarehousesScope(),
+            detour_coefficient=1.3,
+            average_speed_kph=42,
+            prior_route_matrix_ref=prior,
+        )
+
+
 def test_plan_cost_matrix_derives_bounded_full_quote_means(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -161,7 +253,7 @@ def test_plan_cost_matrix_derives_bounded_full_quote_means(
             prepared_path,
             "haversine",
             ctx,
-            warehouse_scope="all_warehouses",
+            warehouse_scope=AllWarehousesScope(),
             detour_coefficient=1.2,
             average_speed_kph=42,
         )
@@ -171,7 +263,7 @@ def test_plan_cost_matrix_derives_bounded_full_quote_means(
     calculation_dir.mkdir(parents=True)
     derived = cost_tools.plan_cost_matrix(
         prepared_path,
-        "all_warehouses",
+        AllWarehousesScope(),
         ctx,
         cost_policy=ObservedQuoteMeanCostPolicy(),
         route_matrix_ref=routes,
@@ -185,7 +277,7 @@ def test_plan_cost_matrix_derives_bounded_full_quote_means(
 
     result = cost_tools.plan_cost_matrix(
         prepared_path,
-        "all_warehouses",
+        AllWarehousesScope(),
         ctx,
         cost_policy=ObservedQuoteMeanCostPolicy(),
         route_matrix_ref=routes,
@@ -204,11 +296,76 @@ def test_plan_cost_matrix_derives_bounded_full_quote_means(
         "last_mile": 550,
         "linehaul": 30,
     }
-    matrix = tool_runtime._runtime().load_model(_ref(result), "cost_matrix.v2", CostMatrix)
+    matrix = tool_runtime._runtime().load_model(_ref(result), "cost_matrix.v3", CostMatrix)
     assert matrix.missing_routes == []
     assert matrix.calculation_rule_source == "observed_quote_mean"
     assert matrix.calculation_rule_evidence_path == evidence_path
     assert matrix.calculation_rule_evidence == ObservedQuoteMeanCostEvidence.model_validate(evidence)
+
+    second_evidence_path = "outputs/warehouse-network/calculations/quote-means-copy.json"
+    (workspace / second_evidence_path).write_text(
+        json.dumps(derived.structuredContent["calculation_rule_evidence"]),
+        encoding="utf-8",
+    )
+    reused = cost_tools.plan_cost_matrix(
+        prepared_path,
+        AllWarehousesScope(),
+        ctx,
+        cost_policy=ObservedQuoteMeanCostPolicy(),
+        route_matrix_ref=routes,
+        prior_cost_matrix_ref=_ref(result),
+        quote_mean_evidence_relative_path=second_evidence_path,
+    )
+    assert reused.structuredContent is not None
+    assert reused.structuredContent["reused_pair_count"] == 1168
+    prior_matrix = tool_runtime._runtime().load_model(
+        _ref(result),
+        "cost_matrix.v3",
+        CostMatrix,
+    )
+
+    def publish_cost_prior(value: CostMatrix) -> ResourceRef:
+        return _ref(tool_runtime._runtime().publish(value.schema_version, value, "test prior"))
+
+    identity_mismatch = publish_cost_prior(
+        prior_matrix.model_copy(
+            update={
+                "input_identity": prior_matrix.input_identity.model_copy(
+                    update={"content_sha256": "e" * 64}
+                )
+            }
+        )
+    )
+    with pytest.raises(ProviderContractError, match="cost_prior_input_identity_mismatch"):
+        cost_tools.plan_cost_matrix(
+            prepared_path,
+            AllWarehousesScope(),
+            ctx,
+            cost_policy=ObservedQuoteMeanCostPolicy(),
+            route_matrix_ref=routes,
+            prior_cost_matrix_ref=identity_mismatch,
+        )
+    warehouse_set_mismatch = publish_cost_prior(
+        prior_matrix.model_copy(update={"warehouse_ids": prior_matrix.warehouse_ids[:-1]})
+    )
+    with pytest.raises(ProviderContractError, match="cost_prior_warehouse_set_mismatch"):
+        cost_tools.plan_cost_matrix(
+            prepared_path,
+            AllWarehousesScope(),
+            ctx,
+            cost_policy=ObservedQuoteMeanCostPolicy(),
+            route_matrix_ref=routes,
+            prior_cost_matrix_ref=warehouse_set_mismatch,
+        )
+    with pytest.raises(ProviderContractError, match="cost_prior_rule_mismatch"):
+        cost_tools.plan_cost_matrix(
+            prepared_path,
+            AllWarehousesScope(),
+            ctx,
+            cost_policy=ExplicitCostPolicy(rules=_cost_policy().rules),
+            route_matrix_ref=routes,
+            prior_cost_matrix_ref=_ref(result),
+        )
 
 
 def test_plan_cost_matrix_rejects_unbound_quote_mean_evidence(
@@ -222,14 +379,14 @@ def test_plan_cost_matrix_rejects_unbound_quote_mean_evidence(
             prepared_path,
             "haversine",
             ctx,
-            warehouse_scope="all_warehouses",
+            warehouse_scope=AllWarehousesScope(),
             detour_coefficient=1.2,
             average_speed_kph=42,
         )
     )
     derived = cost_tools.plan_cost_matrix(
         prepared_path,
-        "all_warehouses",
+        AllWarehousesScope(),
         ctx,
         cost_policy=ObservedQuoteMeanCostPolicy(),
         route_matrix_ref=routes,
@@ -244,7 +401,7 @@ def test_plan_cost_matrix_rejects_unbound_quote_mean_evidence(
     with pytest.raises(ProviderContractError, match="cost_evidence_mismatch"):
         cost_tools.plan_cost_matrix(
             prepared_path,
-            "all_warehouses",
+            AllWarehousesScope(),
             ctx,
             cost_policy=ObservedQuoteMeanCostPolicy(),
             route_matrix_ref=routes,
@@ -263,14 +420,14 @@ def test_plan_cost_matrix_rejects_duplicate_quote_mean_layers(
             prepared_path,
             "haversine",
             ctx,
-            warehouse_scope="all_warehouses",
+            warehouse_scope=AllWarehousesScope(),
             detour_coefficient=1.2,
             average_speed_kph=42,
         )
     )
     derived = cost_tools.plan_cost_matrix(
         prepared_path,
-        "all_warehouses",
+        AllWarehousesScope(),
         ctx,
         cost_policy=ObservedQuoteMeanCostPolicy(),
         route_matrix_ref=routes,
@@ -285,7 +442,7 @@ def test_plan_cost_matrix_rejects_duplicate_quote_mean_layers(
     with pytest.raises(ProviderContractError, match="cost_evidence_mismatch"):
         cost_tools.plan_cost_matrix(
             prepared_path,
-            "all_warehouses",
+            AllWarehousesScope(),
             ctx,
             cost_policy=ObservedQuoteMeanCostPolicy(),
             route_matrix_ref=routes,
@@ -306,7 +463,7 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
             prepared_path,
             "haversine",
             ctx,
-            warehouse_scope="all_warehouses",
+            warehouse_scope=AllWarehousesScope(),
             detour_coefficient=1.2,
             average_speed_kph=42,
         )
@@ -314,13 +471,43 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
     costs = _ref(
         cost_tools.plan_cost_matrix(
             prepared_path,
-            "all_warehouses",
+            AllWarehousesScope(),
             ctx,
             cost_policy=ExplicitCostPolicy(rules=_cost_policy().rules),
             route_matrix_ref=routes,
         )
     )
+    baseline_routes = _ref(
+        route_tools.prepare_route_matrix(
+            prepared_path,
+            "haversine",
+            ctx,
+            warehouse_scope=ExistingOnlyWarehouseScope(),
+            detour_coefficient=1.2,
+            average_speed_kph=42,
+        )
+    )
+    baseline_costs = _ref(
+        cost_tools.plan_cost_matrix(
+            prepared_path,
+            ExistingOnlyWarehouseScope(),
+            ctx,
+            cost_policy=ExplicitCostPolicy(rules=_cost_policy().rules),
+            route_matrix_ref=baseline_routes,
+        )
+    )
     baseline = _ref(
+        analysis_tools.evaluate_network_baseline(
+            prepared_path,
+            baseline_routes,
+            "min_cost",
+            [6, 12, 18],
+            ctx,
+            coverage_mode="actual_current",
+            cost_matrix_ref=baseline_costs,
+        )
+    )
+    with pytest.raises(ProviderContractError, match="baseline_route_scope_mismatch"):
         analysis_tools.evaluate_network_baseline(
             prepared_path,
             routes,
@@ -330,7 +517,6 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
             coverage_mode="actual_current",
             cost_matrix_ref=costs,
         )
-    )
     facility_result = facility_tools.solve_p_median(
         prepared_path,
         routes,
@@ -357,6 +543,106 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
         18.0,
     ]
     facility = _ref(facility_result)
+    facility_comparable = ComparableNetworkResultRef.model_validate(
+        facility.model_dump(mode="json")
+    )
+    prepared_payload = json.loads((workspace / prepared_path).read_text(encoding="utf-8"))
+    existing_ids = {
+        item["warehouse_id"] for item in prepared_payload["warehouses"] if item["is_existing"]
+    }
+    facility_view = tool_runtime._load_comparable_resource(facility)
+    before_candidate_ids = sorted(set(facility_view.active_warehouse_ids) - existing_ids)
+    new_candidate_id = next(
+        item["warehouse_id"]
+        for item in prepared_payload["warehouses"]
+        if not item["is_existing"] and item["warehouse_id"] not in before_candidate_ids
+    )
+    exact_candidate_ids = sorted([*before_candidate_ids, new_candidate_id])
+    exact_scope = ExistingPlusCandidatesWarehouseScope(candidate_ids=exact_candidate_ids)
+    missing_scope = ExistingPlusCandidatesWarehouseScope(candidate_ids=[new_candidate_id])
+    exact_routes = _ref(
+        route_tools.prepare_route_matrix(
+            prepared_path,
+            "haversine",
+            ctx,
+            warehouse_scope=exact_scope,
+            detour_coefficient=1.2,
+            average_speed_kph=42,
+        )
+    )
+    exact_costs = _ref(
+        cost_tools.plan_cost_matrix(
+            prepared_path,
+            exact_scope,
+            ctx,
+            cost_policy=ExplicitCostPolicy(rules=_cost_policy().rules),
+            route_matrix_ref=exact_routes,
+        )
+    )
+    missing_routes = _ref(
+        route_tools.prepare_route_matrix(
+            prepared_path,
+            "haversine",
+            ctx,
+            warehouse_scope=missing_scope,
+            detour_coefficient=1.2,
+            average_speed_kph=42,
+        )
+    )
+    missing_costs = _ref(
+        cost_tools.plan_cost_matrix(
+            prepared_path,
+            missing_scope,
+            ctx,
+            cost_policy=ExplicitCostPolicy(rules=_cost_policy().rules),
+            route_matrix_ref=missing_routes,
+        )
+    )
+    scenario = {
+        "add_warehouse_ids": [new_candidate_id],
+        "remove_warehouse_ids": [],
+        "relocations": [],
+        "objective": "min_cost",
+        "service_targets": [12],
+    }
+    with pytest.raises(ProviderContractError, match="scenario_route_scope_mismatch"):
+        facility_tools.assess_facility_change(
+            prepared_path,
+            routes,
+            facility_comparable,
+            ScenarioSpec.model_validate(scenario),
+            ctx,
+            cost_matrix_ref=costs,
+        )
+    with pytest.raises(ProviderContractError, match="scenario_route_scope_mismatch"):
+        facility_tools.assess_facility_change(
+            prepared_path,
+            missing_routes,
+            facility_comparable,
+            ScenarioSpec.model_validate(scenario),
+            ctx,
+            cost_matrix_ref=missing_costs,
+        )
+    assessed = facility_tools.assess_facility_change(
+        prepared_path,
+        exact_routes,
+        facility_comparable,
+        ScenarioSpec.model_validate(scenario),
+        ctx,
+        cost_matrix_ref=exact_costs,
+    )
+    assert assessed.structuredContent is not None
+    with pytest.raises(ProviderContractError, match="p_median_cost_matrix_incomplete"):
+        facility_tools.solve_p_median(
+            prepared_path,
+            exact_routes,
+            exact_costs,
+            ExactOpeningPolicy(number_to_open=0),
+            KeepAllExistingWarehousePolicy(),
+            [12],
+            30,
+            ctx,
+        )
     comparison = _ref(
         analysis_tools.compare_network_scenarios(
             prepared_path,
@@ -401,7 +687,7 @@ def test_minimum_feasible_requires_service_constraints(tmp_path: Path, monkeypat
             prepared_path,
             "haversine",
             ctx,
-            warehouse_scope="all_warehouses",
+            warehouse_scope=AllWarehousesScope(),
             detour_coefficient=1.2,
             average_speed_kph=42,
         )
@@ -409,7 +695,7 @@ def test_minimum_feasible_requires_service_constraints(tmp_path: Path, monkeypat
     costs = _ref(
         cost_tools.plan_cost_matrix(
             prepared_path,
-            "all_warehouses",
+            AllWarehousesScope(),
             ctx,
             cost_policy=ExplicitCostPolicy(rules=_cost_policy().rules),
             route_matrix_ref=routes,
@@ -435,7 +721,7 @@ def test_scenario_validation_stops_before_loading_missing_workspace_inputs() -> 
     unknown = ResourceRef(
         server="supply_chain",
         uri="supply-chain://resources/not-loaded",
-        resource_schema="route_matrix.v2",
+        resource_schema="route_matrix.v3",
     )
     fake_context = SimpleNamespace(
         request_context=SimpleNamespace(meta=SimpleNamespace(model_extra={}))

@@ -8,6 +8,7 @@ from typing import Literal
 
 from supply_chain_planner.network.geo import haversine_km
 from supply_chain_planner.network.matrix_models import (
+    AllWarehousesScope,
     CostCalculationPolicy,
     CostMatrix,
     CostMatrixRow,
@@ -44,6 +45,36 @@ OBSERVED_QUOTE_MEAN_TOOL_VERSION = "observed-quote-mean.v1"
 PROVIDED_INPUT_TOOL_VERSION = "provided-input.v1"
 
 
+def resolve_warehouse_scope(
+    warehouses: list[WarehouseRecord],
+    scope: WarehouseScope,
+) -> list[WarehouseRecord]:
+    """Resolve one typed scope against the complete prepared warehouse set."""
+    warehouse_by_id = {warehouse.warehouse_id: warehouse for warehouse in warehouses}
+    if len(warehouse_by_id) != len(warehouses):
+        raise ValueError("warehouse_id_duplicate")
+    existing = {warehouse.warehouse_id for warehouse in warehouses if warehouse.is_existing}
+    if scope.kind == "existing_only":
+        selected = existing
+    elif scope.kind == "all_warehouses":
+        selected = set(warehouse_by_id)
+    else:
+        candidates = set(scope.candidate_ids)
+        unknown = candidates - set(warehouse_by_id)
+        if unknown:
+            raise ValueError("warehouse_scope_candidate_unknown:" + ",".join(sorted(unknown)))
+        existing_candidates = candidates & existing
+        if existing_candidates:
+            raise ValueError(
+                "warehouse_scope_candidate_must_be_non_existing:"
+                + ",".join(sorted(existing_candidates))
+            )
+        selected = existing | candidates
+    if not selected:
+        raise ValueError("warehouse_scope_resolves_empty")
+    return [warehouse_by_id[warehouse_id] for warehouse_id in sorted(selected)]
+
+
 def plan_route_matrix(
     demand_cities: list[DemandCityRecord],
     warehouses: list[WarehouseRecord],
@@ -51,13 +82,13 @@ def plan_route_matrix(
     detour_coefficient: float | None,
     average_speed_kph: float | None,
     *,
+    warehouse_scope: WarehouseScope,
     input_identity: PlanningInputIdentity,
 ) -> RouteMatrixPlan:
     if method == "haversine" and (detour_coefficient is None or average_speed_kph is None):
         raise ValueError("haversine_requires_detour_coefficient_and_average_speed")
-    if not demand_cities or not warehouses:
-        raise ValueError("route_matrix_requires_demand_and_warehouses")
-    expected = _expected_route_pairs(demand_cities, warehouses)
+    scoped_warehouses = resolve_warehouse_scope(warehouses, warehouse_scope)
+    expected = _expected_route_pairs(demand_cities, scoped_warehouses)
     return RouteMatrixPlan(
         origin_count=len({origin for origin, _, _ in expected}),
         destination_count=len({destination for _, destination, _ in expected}),
@@ -66,6 +97,8 @@ def plan_route_matrix(
         detour_coefficient=detour_coefficient,
         average_speed_kph=average_speed_kph,
         estimated_billable_calls=(len(expected) if method == "navigation" else 0),
+        warehouse_scope=warehouse_scope,
+        warehouse_ids=[warehouse.warehouse_id for warehouse in scoped_warehouses],
         input_identity=input_identity,
     )
 
@@ -78,6 +111,7 @@ def build_navigation_matrix_request(
     input_identity: PlanningInputIdentity,
 ) -> NavigationMatrixRequest:
     """Materialize exactly the lanes that one navigation provider may bill for."""
+    warehouses = resolve_warehouse_scope(warehouses, warehouse_scope)
     warehouse_by_id = {warehouse.warehouse_id: warehouse for warehouse in warehouses}
     demand_by_id = {demand.city_id: demand for demand in demand_cities}
     routes: list[NavigationRouteRequest] = []
@@ -109,6 +143,7 @@ def build_navigation_matrix_request(
     return NavigationMatrixRequest(
         input_identity=input_identity,
         warehouse_scope=warehouse_scope,
+        warehouse_ids=[warehouse.warehouse_id for warehouse in warehouses],
         routes=routes,
         estimated_billable_elements=len(routes),
     )
@@ -120,6 +155,7 @@ def build_haversine_route_matrix(
     detour_coefficient: float,
     average_speed_kph: float,
     *,
+    warehouse_scope: WarehouseScope = AllWarehousesScope(),
     input_identity: PlanningInputIdentity,
 ) -> RouteMatrix:
     return build_route_matrix_with_reuse(
@@ -128,7 +164,7 @@ def build_haversine_route_matrix(
         [],
         detour_coefficient,
         average_speed_kph,
-        warehouse_scope="all_warehouses",
+        warehouse_scope=warehouse_scope,
         input_identity=input_identity,
     )
 
@@ -143,6 +179,7 @@ def build_provided_route_matrix(
 ) -> RouteMatrix:
     """Materialize exact uploaded distance/duration facts for expected route pairs."""
 
+    warehouses = resolve_warehouse_scope(warehouses, warehouse_scope)
     expected = _expected_route_pairs(demand_cities, warehouses)
     expected_set = set(expected)
     supplied: dict[tuple[str, str, NetworkLayer], ProvidedRouteFactRecord] = {}
@@ -177,6 +214,7 @@ def build_provided_route_matrix(
     return RouteMatrix(
         method="provided",
         warehouse_scope=warehouse_scope,
+        warehouse_ids=[warehouse.warehouse_id for warehouse in warehouses],
         rows=rows,
         missing_routes=missing,
         stats=ProvidedRouteMatrixStats(
@@ -205,6 +243,7 @@ def build_route_matrix_with_reuse(
 
     if detour_coefficient <= 0 or average_speed_kph <= 0:
         raise ValueError("route_parameters_must_be_positive")
+    warehouses = resolve_warehouse_scope(warehouses, warehouse_scope)
     expected = _expected_route_pairs(demand_cities, warehouses)
     expected_set = set(expected)
     existing_index: dict[tuple[str, str, NetworkLayer], list[RouteMatrixRow]] = {}
@@ -283,6 +322,7 @@ def build_route_matrix_with_reuse(
     return RouteMatrix(
         method="haversine",
         warehouse_scope=warehouse_scope,
+        warehouse_ids=[warehouse.warehouse_id for warehouse in warehouses],
         rows=rows,
         missing_routes=missing,
         stats=HaversineRouteMatrixStats(
@@ -397,6 +437,7 @@ def register_navigation_route_matrix(
     warehouse_scope: WarehouseScope,
     input_identity: PlanningInputIdentity,
 ) -> RouteMatrix:
+    warehouses = resolve_warehouse_scope(warehouses, warehouse_scope)
     expected = set(_expected_route_pairs(demand_cities, warehouses))
     warehouse_by_id = {warehouse.warehouse_id: warehouse for warehouse in warehouses}
     demand_by_id = {demand.city_id: demand for demand in demand_cities}
@@ -438,6 +479,7 @@ def register_navigation_route_matrix(
     return RouteMatrix(
         method="navigation",
         warehouse_scope=warehouse_scope,
+        warehouse_ids=[warehouse.warehouse_id for warehouse in warehouses],
         rows=rows,
         missing_routes=missing,
         stats=NavigationRouteMatrixStats(
@@ -483,12 +525,24 @@ def validate_route_matrix(
     warehouses: list[WarehouseRecord],
     matrix: RouteMatrix,
 ) -> RouteMatrixValidation:
-    expected = set(_expected_route_pairs(demand_cities, warehouses))
+    errors: list[str] = []
+    try:
+        scoped_warehouses = resolve_warehouse_scope(warehouses, matrix.warehouse_scope)
+    except ValueError as error:
+        return RouteMatrixValidation(
+            valid=False,
+            errors=[str(error)],
+            missing_routes=[],
+            route_count=len(matrix.rows),
+        )
+    expected = set(_expected_route_pairs(demand_cities, scoped_warehouses))
+    expected_warehouse_ids = [warehouse.warehouse_id for warehouse in scoped_warehouses]
+    if matrix.warehouse_ids != expected_warehouse_ids:
+        errors.append("warehouse_ids_mismatch")
     supplied = {(row.origin_id, row.destination_id, row.layer) for row in matrix.rows}
     unknown = sorted(supplied - expected)
     duplicate_count = len(matrix.rows) - len(supplied)
     missing = sorted(expected - supplied)
-    errors: list[str] = []
     if unknown:
         errors.append(f"unknown_routes:{len(unknown)}")
     if duplicate_count:
@@ -515,6 +569,7 @@ def build_cost_matrix(
     calculation_rule_evidence: ObservedQuoteMeanCostEvidence | None = None,
     calculation_rule_evidence_path: str | None = None,
 ) -> CostMatrix:
+    warehouses = resolve_warehouse_scope(warehouses, warehouse_scope)
     expected = _expected_route_pairs(demand_cities, warehouses)
     expected_set = set(expected)
     quote_index: dict[tuple[str, str, NetworkLayer], RouteCostQuote | RouteQuoteRecord] = {}
@@ -634,6 +689,7 @@ def build_cost_matrix(
     return CostMatrix(
         currency=currency,
         warehouse_scope=warehouse_scope,
+        warehouse_ids=[warehouse.warehouse_id for warehouse in warehouses],
         rows=rows,
         missing_routes=missing,
         calculation_rule=policy,

@@ -7,8 +7,7 @@ import json
 import math
 import os
 import stat
-from pathlib import Path
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 from uuid import uuid4
 
@@ -24,7 +23,7 @@ from open_web_codex_provider import (
     ensure_workspace_directory,
     trusted_workspace_root,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .clients import GoogleMapsClient, MapboxMapsClient
 from .credential_prompt import LoopbackCredentialPrompt
@@ -111,14 +110,60 @@ class NavigationRouteRequest(BaseModel):
     destination_latitude: float = Field(ge=-90, le=90)
 
 
+class ExistingOnlyWarehouseScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["existing_only"] = "existing_only"
+
+
+class ExistingPlusCandidatesWarehouseScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["existing_plus_candidates"] = "existing_plus_candidates"
+    candidate_ids: list[str] = Field(min_length=1, max_length=256)
+
+    @field_validator("candidate_ids")
+    @classmethod
+    def normalize_candidate_ids(cls, values: list[str]) -> list[str]:
+        if any(not value for value in values):
+            raise ValueError("warehouse_scope_candidate_id_invalid")
+        if len(values) != len(set(values)):
+            raise ValueError("warehouse_scope_candidate_ids_duplicate")
+        return sorted(values)
+
+
+class AllWarehousesScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["all_warehouses"] = "all_warehouses"
+
+
+WarehouseScope = Annotated[
+    ExistingOnlyWarehouseScope | ExistingPlusCandidatesWarehouseScope | AllWarehousesScope,
+    Field(discriminator="kind"),
+]
+
+
 class NavigationMatrixRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["navigation_matrix_request.v1"]
+    schema_version: Literal["navigation_matrix_request.v2"]
     input_identity: NavigationInputIdentity
-    warehouse_scope: Literal["existing_only", "all_warehouses"]
+    warehouse_scope: WarehouseScope
+    warehouse_ids: list[str] = Field(min_length=1, max_length=256)
     routes: list[NavigationRouteRequest] = Field(min_length=1, max_length=2_500)
     estimated_billable_elements: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_warehouse_ids(self):
+        if self.warehouse_ids != sorted(set(self.warehouse_ids)):
+            raise ValueError("warehouse_ids_not_canonical")
+        keys = [(route.origin_id, route.destination_id, route.layer) for route in self.routes]
+        if len(keys) != len(set(keys)):
+            raise ValueError("navigation_route_duplicate_pair")
+        if any(route.origin_id not in self.warehouse_ids for route in self.routes):
+            raise ValueError("navigation_route_origin_outside_warehouse_set")
+        return self
 
 
 class NavigationRouteRow(BaseModel):
@@ -143,10 +188,22 @@ class NavigationRouteRow(BaseModel):
 class NavigationMatrixResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["navigation_matrix_result.v1"] = "navigation_matrix_result.v1"
+    schema_version: Literal["navigation_matrix_result.v2"] = "navigation_matrix_result.v2"
     input_identity: NavigationInputIdentity
-    warehouse_scope: Literal["existing_only", "all_warehouses"]
+    warehouse_scope: WarehouseScope
+    warehouse_ids: list[str] = Field(min_length=1, max_length=256)
     rows: list[NavigationRouteRow] = Field(min_length=1, max_length=2_500)
+
+    @model_validator(mode="after")
+    def validate_warehouse_ids(self):
+        if self.warehouse_ids != sorted(set(self.warehouse_ids)):
+            raise ValueError("warehouse_ids_not_canonical")
+        keys = [(row.origin_id, row.destination_id, row.layer) for row in self.rows]
+        if len(keys) != len(set(keys)):
+            raise ValueError("navigation_route_duplicate_pair")
+        if any(row.origin_id not in self.warehouse_ids for row in self.rows):
+            raise ValueError("navigation_route_origin_outside_warehouse_set")
+        return self
 
 
 class NavigationExecutionToolResult(BaseModel):
@@ -266,7 +323,9 @@ async def _client(ctx: Context[ServerSession, None]):
     return MapboxMapsClient(credential.api_key)
 
 
-def _workspace_json_path(ctx: Context[ServerSession, None], relative_path: str) -> tuple[Path, Path]:
+def _workspace_json_path(
+    ctx: Context[ServerSession, None], relative_path: str
+) -> tuple[Path, Path]:
     """Resolve one model-visible Workspace JSON path without symlink traversal."""
     try:
         workspace = trusted_workspace_root(ctx.request_context.meta)
@@ -275,7 +334,11 @@ def _workspace_json_path(ctx: Context[ServerSession, None], relative_path: str) 
     if not isinstance(relative_path, str) or not relative_path or "\\" in relative_path:
         raise ValueError("workspace_path_invalid")
     relative = PurePosixPath(relative_path)
-    if relative.is_absolute() or not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+    if (
+        relative.is_absolute()
+        or not relative.parts
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
         raise ValueError("workspace_path_invalid")
     path = workspace
     for part in relative.parts:
@@ -329,7 +392,11 @@ def _matrix_row(
     item = entry if isinstance(entry, dict) else {}
     distance = item.get("distanceMeters")
     duration = _duration_seconds(item.get("durationSeconds") or item.get("duration"))
-    valid_distance = isinstance(distance, (int, float)) and math.isfinite(float(distance)) and float(distance) >= 0
+    valid_distance = (
+        isinstance(distance, (int, float))
+        and math.isfinite(float(distance))
+        and float(distance) >= 0
+    )
     condition = str(item.get("condition") or "").upper()
     if valid_distance and duration is not None:
         status: Literal["ready", "unreachable", "error"] = "ready"
@@ -422,7 +489,10 @@ async def publish_workspace_geojson(
         raise ValueError("workspace_geojson_polygons_required")
     return _resource_result(
         "workspace",
-        f"Published {profile.feature_count} Workspace GeoJSON features from {workspace_relative_path}.",
+        (
+            f"Published {profile.feature_count} Workspace GeoJSON features from "
+            f"{workspace_relative_path}."
+        ),
         geojson,
     )
 
@@ -1139,6 +1209,7 @@ async def execute_navigation_matrix(
     matrix = NavigationMatrixResult(
         input_identity=request.input_identity,
         warehouse_scope=request.warehouse_scope,
+        warehouse_ids=request.warehouse_ids,
         rows=rows,
     )
     try:

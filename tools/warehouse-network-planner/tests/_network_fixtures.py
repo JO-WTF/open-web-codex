@@ -6,6 +6,7 @@ from pathlib import Path
 
 from supply_chain_planner.network.matrix import build_haversine_route_matrix
 from supply_chain_planner.network.matrix_models import (
+    AllWarehousesScope,
     CostMatrix,
     CostMatrixRow,
     CostMatrixStats,
@@ -212,7 +213,8 @@ def complete_cost_matrix(case: NetworkFixture) -> CostMatrix:
     }
     return CostMatrix(
         currency="IDR",
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
+        warehouse_ids=sorted(warehouse.warehouse_id for warehouse in case.warehouses),
         rows=[
             CostMatrixRow(
                 origin_id=origin,

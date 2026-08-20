@@ -25,6 +25,7 @@ from supply_chain_planner.data.workspace_intake import (
 from supply_chain_planner.network.matrix import (
     build_navigation_matrix_request,
     build_route_matrix_with_reuse,
+    resolve_warehouse_scope,
 )
 from supply_chain_planner.network.matrix import (
     build_provided_route_matrix as _build_provided_route_matrix,
@@ -33,7 +34,9 @@ from supply_chain_planner.network.matrix import (
     register_navigation_route_matrix as _register_composable_navigation_matrix,
 )
 from supply_chain_planner.network.matrix_models import (
+    HaversineRouteMatrixStats,
     NavigationMatrixResult,
+    WarehouseScope,
 )
 from supply_chain_planner.network.matrix_models import (
     RouteMatrix as ComposableRouteMatrix,
@@ -61,7 +64,7 @@ from .tool_runtime import (
 
 def create_navigation_matrix_request(
     prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
-    warehouse_scope: Literal["existing_only", "all_warehouses"],
+    warehouse_scope: WarehouseScope,
     output_relative_path: Annotated[
         str,
         Field(
@@ -82,12 +85,9 @@ def create_navigation_matrix_request(
         WorkspaceOutputKind.NAVIGATION_REQUEST,
     )
     prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
-    warehouses = prepared.warehouses
-    if warehouse_scope == "existing_only":
-        warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
     request = build_navigation_matrix_request(
         prepared.demand_cities,
-        warehouses,
+        prepared.warehouses,
         warehouse_scope=warehouse_scope,
         input_identity=input_identity,
     )
@@ -95,7 +95,7 @@ def create_navigation_matrix_request(
     if prior_route_matrix_ref is not None:
         prior = _runtime().load_model(
             prior_route_matrix_ref,
-            "route_matrix.v2",
+            "route_matrix.v3",
             ComposableRouteMatrix,
         )
         try:
@@ -104,6 +104,10 @@ def create_navigation_matrix_request(
             raise McpResourceContractError("navigation_prior_input_identity_mismatch") from error
         if prior.warehouse_scope != warehouse_scope:
             raise McpResourceContractError("navigation_route_matrix_scope_mismatch")
+        if prior.method != "navigation":
+            raise McpResourceContractError("navigation_prior_method_mismatch")
+        if prior.warehouse_ids != request.warehouse_ids:
+            raise McpResourceContractError("navigation_route_matrix_warehouse_set_mismatch")
         reused_rows = [
             row for row in prior.rows if row.method == "navigation" and row.status == "ready"
         ]
@@ -131,6 +135,7 @@ def create_navigation_matrix_request(
             navigation_request_relative_path=None,
             input_identity=input_identity,
             warehouse_scope=warehouse_scope,
+            warehouse_ids=request.warehouse_ids,
             route_count=0,
             estimated_billable_elements=0,
         )
@@ -142,7 +147,8 @@ def create_navigation_matrix_request(
     )
     return NavigationMatrixRequestToolResult(
         summary=(
-            f"Prepared {len(request.routes)} exact navigation lanes for {warehouse_scope}; "
+            f"Prepared {len(request.routes)} exact navigation lanes for "
+            f"{_scope_summary(warehouse_scope, len(request.warehouse_ids))}; "
             f"{len(reused_rows)} exact navigation facts reused, estimated billable route elements: "
             f"{request.estimated_billable_elements}."
         ),
@@ -150,6 +156,7 @@ def create_navigation_matrix_request(
         navigation_request_relative_path=created.relative_path,
         input_identity=input_identity,
         warehouse_scope=warehouse_scope,
+        warehouse_ids=request.warehouse_ids,
         route_count=len(request.routes),
         estimated_billable_elements=request.estimated_billable_elements,
     )
@@ -167,7 +174,7 @@ def prepare_route_matrix(
         ),
     ],
     ctx: Context,
-    warehouse_scope: Literal["existing_only", "all_warehouses"] = "all_warehouses",
+    warehouse_scope: WarehouseScope,
     detour_coefficient: Annotated[
         float | None,
         Field(description=("Required when route_method is haversine; omit for provided routes.")),
@@ -180,22 +187,42 @@ def prepare_route_matrix(
 ) -> Annotated[CallToolResult, RouteMatrixPreparationToolResult]:
     """Prepare one provided or explicitly assumed haversine route matrix."""
     prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
-    warehouses = prepared.warehouses
-    if warehouse_scope == "existing_only":
-        warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
     prior = (
         _runtime().load_model(
             prior_route_matrix_ref,
-            "route_matrix.v2",
+            "route_matrix.v3",
             ComposableRouteMatrix,
         )
         if prior_route_matrix_ref is not None
         else None
     )
+    if prior is not None:
+        try:
+            require_matching_input(input_identity, prior.input_identity)
+        except ValueError as error:
+            raise McpResourceContractError("route_prior_input_identity_mismatch") from error
+        if prior.method != route_method:
+            raise McpResourceContractError("route_prior_method_mismatch")
+        expected_warehouse_ids = [
+            warehouse.warehouse_id
+            for warehouse in resolve_warehouse_scope(prepared.warehouses, warehouse_scope)
+        ]
+        if prior.warehouse_scope != warehouse_scope:
+            raise McpResourceContractError("route_prior_scope_mismatch")
+        if prior.warehouse_ids != expected_warehouse_ids:
+            raise McpResourceContractError("route_prior_warehouse_set_mismatch")
+        if route_method == "haversine":
+            if not isinstance(prior.stats, HaversineRouteMatrixStats):
+                raise McpResourceContractError("route_prior_stats_invalid")
+            if (
+                prior.stats.detour_coefficient != detour_coefficient
+                or prior.stats.average_speed_kph != average_speed_kph
+            ):
+                raise McpResourceContractError("route_prior_parameters_mismatch")
     if route_method == "provided":
         matrix = _build_provided_route_matrix(
             prepared.demand_cities,
-            warehouses,
+            prepared.warehouses,
             prepared.provided_route_facts,
             warehouse_scope=warehouse_scope,
             input_identity=input_identity,
@@ -205,7 +232,7 @@ def prepare_route_matrix(
             raise McpResourceContractError("haversine_route_parameters_required")
         matrix = build_route_matrix_with_reuse(
             prepared.demand_cities,
-            warehouses,
+            prepared.warehouses,
             prior.rows if prior is not None else [],
             detour_coefficient,
             average_speed_kph,
@@ -216,7 +243,7 @@ def prepare_route_matrix(
     result = _runtime().publish(
         matrix.schema_version,
         matrix,
-        f"Prepared {route_method} route matrix for {warehouse_scope}; "
+        f"Prepared {route_method} route matrix for {warehouse_scope.kind}; "
         f"{getattr(stats, 'reused_pair_count', 0)} reused, "
         f"{getattr(stats, 'computed_pair_count', getattr(stats, 'provided_pair_count', 0))} "
         f"materialized, and {stats.missing_pair_count} missing pairs.",
@@ -224,6 +251,7 @@ def prepare_route_matrix(
     if result.structuredContent is None:
         raise McpResourceContractError("route_matrix_result_missing")
     result.structuredContent["state"] = "ready"
+    result.structuredContent["warehouse_ids"] = matrix.warehouse_ids
     return result
 
 
@@ -251,7 +279,7 @@ def import_navigation_matrix(
     prior = (
         _runtime().load_model(
             prior_route_matrix_ref,
-            "route_matrix.v2",
+            "route_matrix.v3",
             ComposableRouteMatrix,
         )
         if prior_route_matrix_ref is not None
@@ -264,13 +292,24 @@ def import_navigation_matrix(
             raise McpResourceContractError("navigation_prior_input_identity_mismatch") from error
         if prior.warehouse_scope != supplied.warehouse_scope:
             raise McpResourceContractError("navigation_route_matrix_scope_mismatch")
-    warehouses = prepared.warehouses
-    if supplied.warehouse_scope == "existing_only":
-        warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
-    prior_rows = prior.rows if prior is not None else []
+        if prior.method != "navigation":
+            raise McpResourceContractError("navigation_prior_method_mismatch")
+        if prior.warehouse_ids != supplied.warehouse_ids:
+            raise McpResourceContractError("navigation_route_matrix_warehouse_set_mismatch")
+    expected_warehouse_ids = [
+        warehouse.warehouse_id
+        for warehouse in resolve_warehouse_scope(prepared.warehouses, supplied.warehouse_scope)
+    ]
+    if supplied.warehouse_ids != expected_warehouse_ids:
+        raise McpResourceContractError("navigation_matrix_warehouse_set_mismatch")
+    prior_rows = (
+        [row for row in prior.rows if row.method == "navigation" and row.status == "ready"]
+        if prior is not None
+        else []
+    )
     matrix = _register_composable_navigation_matrix(
         prepared.demand_cities,
-        warehouses,
+        prepared.warehouses,
         [*prior_rows, *supplied.rows],
         warehouse_scope=supplied.warehouse_scope,
         input_identity=input_identity,
@@ -295,6 +334,12 @@ def import_navigation_matrix(
         f"Registered navigation matrix with {len(prior_rows)} reused and "
         f"{len(supplied.rows)} provider-executed pair facts.",
     )
+
+
+def _scope_summary(scope: WarehouseScope, warehouse_count: int) -> str:
+    if scope.kind == "existing_plus_candidates":
+        return f"{scope.kind} ({len(scope.candidate_ids)} candidates, {warehouse_count} warehouses)"
+    return f"{scope.kind} ({warehouse_count} warehouses)"
 
 
 def register_tools(mcp, *, phase: str = "all") -> None:

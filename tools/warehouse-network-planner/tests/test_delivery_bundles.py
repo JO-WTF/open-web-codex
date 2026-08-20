@@ -25,7 +25,11 @@ from supply_chain_planner.delivery.report_service import (
 )
 from supply_chain_planner.delivery.schemas import model_schema
 from supply_chain_planner.network.matrix import build_cost_matrix, build_haversine_route_matrix
-from supply_chain_planner.network.matrix_models import CostCalculationPolicy, DemandUnitCostRule
+from supply_chain_planner.network.matrix_models import (
+    AllWarehousesScope,
+    CostCalculationPolicy,
+    DemandUnitCostRule,
+)
 from supply_chain_planner.network.models import NormalizedInputBatch
 from supply_chain_planner.network.optimization_models import (
     AssignmentComparison,
@@ -115,7 +119,7 @@ def sample2_delivery() -> Sample2Delivery:
             ]
         ),
         routes,
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
     existing_ids = {
         warehouse.warehouse_id for warehouse in fixture.warehouses if warehouse.is_existing

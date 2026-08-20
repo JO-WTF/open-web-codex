@@ -12,6 +12,7 @@ from _network_fixtures import (
 )
 from supply_chain_planner.network.matrix import build_cost_matrix, build_haversine_route_matrix
 from supply_chain_planner.network.matrix_models import (
+    AllWarehousesScope,
     CostCalculationPolicy,
     CostMatrix,
     DemandUnitCostRule,
@@ -97,7 +98,8 @@ def test_min_cost_includes_crossdock_upstream_linehaul() -> None:
         route_matrix(case),
         CostMatrix(
             currency="IDR",
-            warehouse_scope="all_warehouses",
+            warehouse_scope=AllWarehousesScope(),
+            warehouse_ids=sorted(warehouse.warehouse_id for warehouse in case.warehouses),
             rows=adjusted,
             stats=costs.stats,
             input_identity=TEST_INPUT_IDENTITY,
@@ -227,7 +229,7 @@ def test_real_indonesia_sample3_only_closes_bekasi_without_candidates() -> None:
             ]
         ),
         routes,
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
     before_active = {
         warehouse.warehouse_id

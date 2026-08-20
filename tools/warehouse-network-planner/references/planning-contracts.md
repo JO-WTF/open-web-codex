@@ -6,7 +6,8 @@ Every calculation starts from immutable MCP Resources:
 
 - `normalized_network_input.v1`: the Data Agent's confirmed demand, warehouse,
   assignment, route-quote and optional provided-route facts.
-- `route_matrix.v2`: one provider/method and typed origin-city to destination-city
+- `route_matrix.v3`: one provider/method, discriminated warehouse scope and exact sorted
+  `warehouse_ids`, plus typed origin-city to destination-city
   route rows for an explicit warehouse scope. Multiple demand points in one city reuse
   the same lane.
 - `network_baseline.v2` and `network_scenario.v2`: allocations, issues and metrics for

@@ -199,7 +199,7 @@ mod tests {
             "result": {"content": [{
                 "type": "resource_link",
                 "name": "route-matrix",
-                "title": "route_matrix.v2",
+                "title": "route_matrix.v3",
                 "uri": "supply-chain://resources/route-matrix"
             }]}
         });
@@ -208,7 +208,7 @@ mod tests {
             vec![ResourceRefCandidate {
                 server: "supply_chain".to_string(),
                 uri: "supply-chain://resources/route-matrix".to_string(),
-                resource_schema: "route_matrix.v2".to_string(),
+                resource_schema: "route_matrix.v3".to_string(),
                 display_name: "route-matrix".to_string(),
                 producer_tool: "prepare_route_matrix".to_string(),
             }]

@@ -4,21 +4,55 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from supply_chain_planner.network.models import PlanningInputIdentity
 
 
 class MatrixModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    @model_validator(mode="after")
+    def validate_canonical_warehouse_ids(self):
+        values = getattr(self, "warehouse_ids", None)
+        if values is not None and (not values or values != sorted(set(values))):
+            raise ValueError("warehouse_ids_not_canonical")
+        return self
+
 
 RouteMethod = Literal["haversine", "navigation", "provided"]
 NetworkLayer = Literal["linehaul", "last_mile"]
-WarehouseScope = Literal["existing_only", "all_warehouses"]
+
+
+class ExistingOnlyWarehouseScope(MatrixModel):
+    kind: Literal["existing_only"] = "existing_only"
+
+
+class ExistingPlusCandidatesWarehouseScope(MatrixModel):
+    kind: Literal["existing_plus_candidates"] = "existing_plus_candidates"
+    candidate_ids: list[str] = Field(min_length=1, max_length=256)
+
+    @field_validator("candidate_ids")
+    @classmethod
+    def normalize_candidate_ids(cls, values: list[str]) -> list[str]:
+        if any(not value for value in values):
+            raise ValueError("warehouse_scope_candidate_id_invalid")
+        if len(values) != len(set(values)):
+            raise ValueError("warehouse_scope_candidate_ids_duplicate")
+        return sorted(set(values))
+
+
+class AllWarehousesScope(MatrixModel):
+    kind: Literal["all_warehouses"] = "all_warehouses"
+
+
+WarehouseScope = Annotated[
+    ExistingOnlyWarehouseScope | ExistingPlusCandidatesWarehouseScope | AllWarehousesScope,
+    Field(discriminator="kind"),
+]
 
 
 class RouteMatrixPlan(MatrixModel):
-    schema_version: Literal["route_matrix_plan.v2"] = "route_matrix_plan.v2"
+    schema_version: Literal["route_matrix_plan.v3"] = "route_matrix_plan.v3"
     origin_count: int = Field(ge=1)
     destination_count: int = Field(ge=1)
     route_count: int = Field(ge=1)
@@ -26,6 +60,8 @@ class RouteMatrixPlan(MatrixModel):
     detour_coefficient: float | None = Field(default=None, gt=0)
     average_speed_kph: float | None = Field(default=None, gt=0)
     estimated_billable_calls: int = Field(ge=0)
+    warehouse_scope: WarehouseScope
+    warehouse_ids: list[str] = Field(min_length=1, max_length=256)
     input_identity: PlanningInputIdentity
 
 
@@ -95,20 +131,36 @@ class NavigationRouteRequest(MatrixModel):
 class NavigationMatrixRequest(MatrixModel):
     """Exact lane set approved for one billable navigation execution."""
 
-    schema_version: Literal["navigation_matrix_request.v1"] = "navigation_matrix_request.v1"
+    schema_version: Literal["navigation_matrix_request.v2"] = "navigation_matrix_request.v2"
     input_identity: PlanningInputIdentity
     warehouse_scope: WarehouseScope
+    warehouse_ids: list[str] = Field(min_length=1, max_length=256)
     routes: list[NavigationRouteRequest] = Field(default_factory=list)
     estimated_billable_elements: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_route_keys(self):
+        keys = [(route.origin_id, route.destination_id, route.layer) for route in self.routes]
+        if len(keys) != len(set(keys)):
+            raise ValueError("navigation_route_duplicate_pair")
+        return self
 
 
 class NavigationMatrixResult(MatrixModel):
     """Provider-produced lane facts awaiting planner-side import and validation."""
 
-    schema_version: Literal["navigation_matrix_result.v1"] = "navigation_matrix_result.v1"
+    schema_version: Literal["navigation_matrix_result.v2"] = "navigation_matrix_result.v2"
     input_identity: PlanningInputIdentity
     warehouse_scope: WarehouseScope
+    warehouse_ids: list[str] = Field(min_length=1, max_length=256)
     rows: list[RouteMatrixRow] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_route_keys(self):
+        keys = [(row.origin_id, row.destination_id, row.layer) for row in self.rows]
+        if len(keys) != len(set(keys)):
+            raise ValueError("navigation_route_duplicate_pair")
+        return self
 
 
 RouteMatrixStats = Annotated[
@@ -118,13 +170,20 @@ RouteMatrixStats = Annotated[
 
 
 class RouteMatrix(MatrixModel):
-    schema_version: Literal["route_matrix.v2"] = "route_matrix.v2"
+    schema_version: Literal["route_matrix.v3"] = "route_matrix.v3"
     method: RouteMethod
     warehouse_scope: WarehouseScope
+    warehouse_ids: list[str] = Field(min_length=1, max_length=256)
     rows: list[RouteMatrixRow] = Field(default_factory=list)
     missing_routes: list[tuple[str, str, NetworkLayer]] = Field(default_factory=list)
     stats: RouteMatrixStats
     input_identity: PlanningInputIdentity
+
+    @model_validator(mode="after")
+    def validate_method_stats(self):
+        if self.method != self.stats.kind:
+            raise ValueError("route_matrix_stats_method_mismatch")
+        return self
 
 
 class RouteCostQuote(MatrixModel):
@@ -238,9 +297,10 @@ class CostMatrixStats(MatrixModel):
 
 
 class CostMatrix(MatrixModel):
-    schema_version: Literal["cost_matrix.v2"] = "cost_matrix.v2"
+    schema_version: Literal["cost_matrix.v3"] = "cost_matrix.v3"
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     warehouse_scope: WarehouseScope
+    warehouse_ids: list[str] = Field(min_length=1, max_length=256)
     rows: list[CostMatrixRow] = Field(default_factory=list)
     missing_routes: list[tuple[str, str, NetworkLayer]] = Field(default_factory=list)
     calculation_rule: CostCalculationPolicy | None = None

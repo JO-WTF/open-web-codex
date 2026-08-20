@@ -828,11 +828,11 @@ class DeterministicModelServer {
         return network("network:route", "prepare_route_matrix", {
           prepared_input_relative_path: preparedPath,
           route_method: "provided",
-          warehouse_scope: "existing_only",
+          warehouse_scope: { kind: "existing_only" },
         });
       }
-      const routeRef = findResourceRef(body, "route_matrix.v2");
-      if (!routeRef) throw new Error("deterministic model could not find route_matrix.v2");
+      const routeRef = findResourceRef(body, "route_matrix.v3");
+      if (!routeRef) throw new Error("deterministic model could not find route_matrix.v3");
       if (!has("network:baseline")) {
         return network("network:baseline", "evaluate_network_baseline", {
           prepared_input_relative_path: preparedPath,
@@ -1447,7 +1447,7 @@ async function runCase(index) {
     const refs = await api("/tasks/" + record.task.id + "/resource-refs");
     const schemas = new Set(refs.map((ref) => ref.resourceSchema ?? ref.resource_schema));
     for (const schema of [
-      "route_matrix.v2",
+      "route_matrix.v3",
       "network_baseline.v2",
       "network_coverage_geojson.v1",
     ]) {

@@ -245,7 +245,7 @@ Server 在 Turn 前重验所有字段。
 
 用户输入中的完整路线距离、时长和来源方法由 Data Tool 保存在同一个
 `prepared_network_input.v1` Workspace 文件中；Network provider 按明确仓库范围将其物化为
-`route_matrix.v2`，矩阵与验证器共享其 typed `warehouse_scope`，并对该范围内缺失、重复和范围外
+`route_matrix.v3`，矩阵与验证器共享其 discriminated `warehouse_scope` 与精确 `warehouse_ids`，并对该范围内缺失、重复和范围外
 pair 给出显式验证结果。覆盖口径及未覆盖城市由
 Network Tool 确定性计算，同时区分城市数量和需求量加权指标；这些领域事实不进入 Platform
 DTO、数据库工作流或 Skill 中的案例规则。

@@ -20,6 +20,7 @@ from pydantic import (
 )
 from supply_chain_planner.network.matrix_models import (
     CostMatrix,
+    ExistingOnlyWarehouseScope,
 )
 from supply_chain_planner.network.matrix_models import (
     RouteMatrix as ComposableRouteMatrix,
@@ -183,11 +184,11 @@ def evaluate_network_baseline(
     prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
     routes = _runtime().load_model(
         route_matrix_ref,
-        "route_matrix.v2",
+        "route_matrix.v3",
         ComposableRouteMatrix,
     )
     costs = (
-        _runtime().load_model(cost_matrix_ref, "cost_matrix.v2", CostMatrix)
+        _runtime().load_model(cost_matrix_ref, "cost_matrix.v3", CostMatrix)
         if cost_matrix_ref is not None
         else None
     )
@@ -197,11 +198,19 @@ def evaluate_network_baseline(
             require_matching_input(input_identity, costs.input_identity)
     except ValueError as error:
         raise McpResourceContractError("baseline_input_identity_mismatch") from error
+    existing_ids = sorted(
+        warehouse.warehouse_id for warehouse in prepared.warehouses if warehouse.is_existing
+    )
+    existing_scope = ExistingOnlyWarehouseScope()
+    if routes.warehouse_scope != existing_scope or routes.warehouse_ids != existing_ids:
+        raise McpResourceContractError("baseline_route_scope_mismatch")
+    if costs is not None and (
+        costs.warehouse_scope != existing_scope or costs.warehouse_ids != existing_ids
+    ):
+        raise McpResourceContractError("baseline_cost_scope_mismatch")
     if objective == "min_cost" and costs is None:
         raise McpResourceContractError("min_cost_baseline_requires_cost_matrix")
-    active_ids = {
-        warehouse.warehouse_id for warehouse in prepared.warehouses if warehouse.is_existing
-    }
+    active_ids = set(existing_ids)
     resolved_coverage_mode = (
         "actual_current"
         if coverage_mode == "auto" and prepared.current_assignments

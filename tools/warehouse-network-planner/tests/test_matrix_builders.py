@@ -15,7 +15,12 @@ from supply_chain_planner.network.matrix import (
     register_navigation_route_matrix,
     validate_route_matrix,
 )
-from supply_chain_planner.network.matrix_models import RouteMatrixRow
+from supply_chain_planner.network.matrix_models import (
+    AllWarehousesScope,
+    ExistingOnlyWarehouseScope,
+    ExistingPlusCandidatesWarehouseScope,
+    RouteMatrixRow,
+)
 
 
 def _with_identity(function):
@@ -35,7 +40,14 @@ register_navigation_route_matrix = _with_identity(register_navigation_route_matr
 
 def test_haversine_plan_and_matrix_use_explicit_parameters() -> None:
     case = network_case()
-    plan = plan_route_matrix(case.demand, case.warehouses, "haversine", 1.2, 40)
+    plan = plan_route_matrix(
+        case.demand,
+        case.warehouses,
+        "haversine",
+        1.2,
+        40,
+        warehouse_scope=AllWarehousesScope(),
+    )
     matrix = build_haversine_route_matrix(case.demand, case.warehouses, 1.2, 40)
 
     assert plan.route_count == 8
@@ -48,7 +60,50 @@ def test_haversine_plan_and_matrix_use_explicit_parameters() -> None:
 def test_haversine_requires_speed_and_detour_coefficient() -> None:
     with pytest.raises(ValueError, match="haversine_requires"):
         case = network_case()
-        plan_route_matrix(case.demand, case.warehouses, "haversine", None, 40)
+        plan_route_matrix(
+            case.demand,
+            case.warehouses,
+            "haversine",
+            None,
+            40,
+            warehouse_scope=AllWarehousesScope(),
+        )
+
+
+def test_existing_plus_candidates_scope_is_exact_and_canonical() -> None:
+    case = network_case()
+    scope = ExistingPlusCandidatesWarehouseScope(candidate_ids=["candidate-c"])
+    matrix = build_haversine_route_matrix(
+        case.demand,
+        case.warehouses,
+        1.2,
+        40,
+        warehouse_scope=scope,
+    )
+    assert matrix.warehouse_scope == scope
+    assert matrix.warehouse_ids == ["candidate-c", "center-a", "cross-b"]
+    with pytest.raises(ValueError, match="warehouse_scope_candidate_ids_duplicate"):
+        ExistingPlusCandidatesWarehouseScope(candidate_ids=["candidate-c", "candidate-c"])
+
+
+def test_existing_plus_candidates_rejects_existing_or_unknown_ids() -> None:
+    case = network_case()
+    with pytest.raises(ValueError, match="must_be_non_existing"):
+        build_haversine_route_matrix(
+            case.demand,
+            case.warehouses,
+            1.2,
+            40,
+            warehouse_scope=ExistingPlusCandidatesWarehouseScope(candidate_ids=["center-a"]),
+        )
+    with pytest.raises(ValueError, match="candidate_unknown"):
+        build_haversine_route_matrix(
+            case.demand,
+            case.warehouses,
+            1.2,
+            40,
+            warehouse_scope=ExistingPlusCandidatesWarehouseScope(candidate_ids=["missing"]),
+        )
 
 
 def test_provided_route_matrix_materializes_exact_existing_scope() -> None:
@@ -59,7 +114,7 @@ def test_provided_route_matrix_materializes_exact_existing_scope() -> None:
         fixture.demand,
         existing,
         indonesia_provided_route_facts(),
-        warehouse_scope="existing_only",
+        warehouse_scope=ExistingOnlyWarehouseScope(),
     )
 
     assert matrix.method == "provided"
@@ -100,7 +155,7 @@ def test_navigation_registration_reports_missing_routes_without_filling_them() -
         case.demand,
         case.warehouses,
         rows,
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
     validation = validate_route_matrix(case.demand, case.warehouses, matrix)
 
@@ -113,14 +168,14 @@ def test_navigation_registration_reports_missing_routes_without_filling_them() -
             case.demand,
             case.warehouses,
             [rows[0], rows[0]],
-            warehouse_scope="all_warehouses",
+            warehouse_scope=AllWarehousesScope(),
         )
     with pytest.raises(ValueError, match="navigation_route_unknown_pair"):
         register_navigation_route_matrix(
             case.demand,
             case.warehouses,
             [rows[0].model_copy(update={"destination_id": "not-required"})],
-            warehouse_scope="all_warehouses",
+            warehouse_scope=AllWarehousesScope(),
         )
 
     haversine = build_haversine_route_matrix(case.demand, case.warehouses, 1.2, 40)
@@ -142,7 +197,7 @@ def test_navigation_registration_reports_missing_routes_without_filling_them() -
             case.demand,
             case.warehouses,
             mixed_provenance,
-            warehouse_scope="all_warehouses",
+            warehouse_scope=AllWarehousesScope(),
         )
 
 
@@ -167,7 +222,7 @@ def test_route_reuse_is_exact_per_pair_and_ignores_unrelated_prior_rows() -> Non
         [exact, stale_version, stale_coordinates, stale_distance, unrelated],
         detour_coefficient=1.2,
         average_speed_kph=40,
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
 
     assert rebuilt.stats.reused_pair_count == 1
@@ -206,7 +261,7 @@ def test_indonesia_route_reuse_only_computes_two_removed_round_sensitive_pairs()
         ],
         1.2,
         42,
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
 
     assert len(original.rows) == 1168
@@ -254,7 +309,7 @@ def test_conflicting_prior_route_rows_are_rejected_per_pair() -> None:
             [original.rows[0], original.rows[0]],
             1.2,
             40,
-            warehouse_scope="all_warehouses",
+            warehouse_scope=AllWarehousesScope(),
         )
 
 
@@ -278,7 +333,7 @@ def test_haversine_builder_does_not_mislabel_navigation_prior_fact() -> None:
         [navigation],
         1.2,
         40,
-        warehouse_scope="all_warehouses",
+        warehouse_scope=AllWarehousesScope(),
     )
 
     assert rebuilt.method == "haversine"

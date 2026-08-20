@@ -10,7 +10,13 @@ from _network_fixtures import network_case
 from open_web_codex_provider import ProviderContractError, ResourceRef, ResourceStore
 from supply_chain_planner.network import analysis_tools, route_tools, server, tool_runtime
 from supply_chain_planner.network.matrix import RouteMatrix as ComposableRouteMatrix
-from supply_chain_planner.network.matrix_models import NavigationMatrixResult, RouteMatrixRow
+from supply_chain_planner.network.matrix_models import (
+    AllWarehousesScope,
+    ExistingOnlyWarehouseScope,
+    NavigationMatrixResult,
+    NavigationRouteMatrixStats,
+    RouteMatrixRow,
+)
 from supply_chain_planner.network.models import CurrentAssignmentRecord
 from supply_chain_planner.network.optimization_models import BaselineResult
 from supply_chain_planner.shared.models import PreparedNetworkResource
@@ -112,13 +118,13 @@ def test_network_rejects_matrix_from_another_prepared_workspace_input(
         first_path,
         "haversine",
         ctx,
-        warehouse_scope="existing_only",
+        warehouse_scope=ExistingOnlyWarehouseScope(),
         detour_coefficient=1.2,
         average_speed_kph=40,
     )
     route_ref = _result_ref(routes)
     stored_routes = tool_runtime._runtime().load_model(
-        route_ref, "route_matrix.v2", ComposableRouteMatrix
+        route_ref, "route_matrix.v3", ComposableRouteMatrix
     )
     _prepared, expected_identity = load_prepared_network_input(workspace, first_path)
     assert stored_routes.input_identity == expected_identity
@@ -147,7 +153,7 @@ def test_baseline_auto_uses_optimized_existing_when_assignments_are_absent(
         prepared_path,
         "haversine",
         ctx,
-        warehouse_scope="existing_only",
+        warehouse_scope=ExistingOnlyWarehouseScope(),
         detour_coefficient=1.2,
         average_speed_kph=40,
     )
@@ -172,7 +178,7 @@ def test_workspace_input_mutation_invalidates_existing_matrix(tmp_path, monkeypa
         prepared_path,
         "haversine",
         ctx,
-        warehouse_scope="existing_only",
+        warehouse_scope=ExistingOnlyWarehouseScope(),
         detour_coefficient=1.2,
         average_speed_kph=40,
     )
@@ -199,17 +205,22 @@ def test_navigation_request_and_import_use_exact_workspace_contract(tmp_path, mo
     prepared_path = _write_prepared_input(workspace, "prepared.json")
     request_result = route_tools.create_navigation_matrix_request(
         prepared_path,
-        "existing_only",
+        ExistingOnlyWarehouseScope(),
         "outputs/warehouse-network/requests/navigation-request.json",
         ctx,
     )
     request_payload = json.loads(
         (workspace / request_result.navigation_request_relative_path).read_text()
     )
-    assert request_payload["schema_version"] == "navigation_matrix_request.v1"
+    assert request_payload["schema_version"] == "navigation_matrix_request.v2"
+    assert request_payload["warehouse_scope"] == {"kind": "existing_only"}
+    assert request_payload["warehouse_ids"] == sorted(
+        item["warehouse_id"] for item in json.loads((workspace / "prepared.json").read_text())["warehouses"] if item["is_existing"]
+    )
     result = NavigationMatrixResult(
         input_identity=request_result.input_identity,
-        warehouse_scope="existing_only",
+        warehouse_scope=ExistingOnlyWarehouseScope(),
+        warehouse_ids=request_payload["warehouse_ids"],
         rows=[
             RouteMatrixRow(
                 origin_id=item["origin_id"],
@@ -237,7 +248,140 @@ def test_navigation_request_and_import_use_exact_workspace_contract(tmp_path, mo
     )
     route_ref = _result_ref(imported)
     route_matrix = tool_runtime._runtime().load_model(
-        route_ref, "route_matrix.v2", ComposableRouteMatrix
+        route_ref, "route_matrix.v3", ComposableRouteMatrix
     )
     assert route_matrix.method == "navigation"
     assert route_matrix.input_identity == request_result.input_identity
+
+    partial_prior = route_matrix.model_copy(
+        update={
+            "rows": [
+                route_matrix.rows[0],
+                route_matrix.rows[1].model_copy(update={"status": "error"}),
+            ],
+            "stats": route_matrix.stats.model_copy(
+                update={"reused_pair_count": 1, "registered_pair_count": 1, "complete": False}
+            ),
+        }
+    )
+    partial_prior_ref = _result_ref(
+        tool_runtime._runtime().publish(partial_prior.schema_version, partial_prior, "partial prior")
+    )
+    request_again = route_tools.create_navigation_matrix_request(
+        prepared_path,
+        ExistingOnlyWarehouseScope(),
+        "outputs/warehouse-network/requests/navigation-request-again.json",
+        ctx,
+        prior_route_matrix_ref=partial_prior_ref,
+    )
+    request_again_payload = json.loads(
+        (workspace / request_again.navigation_request_relative_path).read_text()
+    )
+    supplied_again = NavigationMatrixResult(
+        input_identity=request_again.input_identity,
+        warehouse_scope=ExistingOnlyWarehouseScope(),
+        warehouse_ids=request_again_payload["warehouse_ids"],
+        rows=[
+            RouteMatrixRow(
+                origin_id=item["origin_id"],
+                destination_id=item["destination_id"],
+                layer=item["layer"],
+                distance_km=1,
+                duration_hours=0.1,
+                method="navigation",
+                tool_version="test-navigation.v1",
+                origin_longitude=item["origin_longitude"],
+                origin_latitude=item["origin_latitude"],
+                destination_longitude=item["destination_longitude"],
+                destination_latitude=item["destination_latitude"],
+                navigation_provider="test-provider",
+                navigation_profile="driving",
+            )
+            for item in request_again_payload["routes"]
+        ],
+    )
+    (workspace / "navigation-result-again.json").write_text(
+        supplied_again.model_dump_json(), encoding="utf-8"
+    )
+    imported_again = route_tools.import_navigation_matrix(
+        prepared_path,
+        "navigation-result-again.json",
+        ctx,
+        prior_route_matrix_ref=partial_prior_ref,
+    )
+    imported_again_matrix = tool_runtime._runtime().load_model(
+        _result_ref(imported_again), "route_matrix.v3", ComposableRouteMatrix
+    )
+    assert imported_again_matrix.stats.reused_pair_count == 1
+    assert imported_again_matrix.stats.registered_pair_count == len(request_again_payload["routes"])
+
+
+def test_navigation_prior_requires_navigation_identity_and_warehouse_set(
+    tmp_path, monkeypatch
+) -> None:
+    workspace, _store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    prepared_path = _write_prepared_input(workspace, "prepared.json")
+    prior = _result_ref(
+        route_tools.prepare_route_matrix(
+            prepared_path,
+            "haversine",
+            ctx,
+            warehouse_scope=AllWarehousesScope(),
+            detour_coefficient=1.2,
+            average_speed_kph=42,
+        )
+    )
+    with pytest.raises(ProviderContractError, match="navigation_prior_method_mismatch"):
+        route_tools.create_navigation_matrix_request(
+            prepared_path,
+            AllWarehousesScope(),
+            "outputs/warehouse-network/requests/navigation-prior-method.json",
+            ctx,
+            prior_route_matrix_ref=prior,
+        )
+    prior_matrix = tool_runtime._runtime().load_model(prior, "route_matrix.v3", ComposableRouteMatrix)
+
+    def publish_prior(value: ComposableRouteMatrix) -> ResourceRef:
+        return _result_ref(tool_runtime._runtime().publish(value.schema_version, value, "test prior"))
+
+    identity_mismatch = publish_prior(
+        prior_matrix.model_copy(
+            update={
+                "input_identity": prior_matrix.input_identity.model_copy(
+                    update={"content_sha256": "e" * 64}
+                )
+            }
+        )
+    )
+    with pytest.raises(ProviderContractError, match="navigation_prior_input_identity_mismatch"):
+        route_tools.create_navigation_matrix_request(
+            prepared_path,
+            AllWarehousesScope(),
+            "outputs/warehouse-network/requests/navigation-prior-identity.json",
+            ctx,
+            prior_route_matrix_ref=identity_mismatch,
+        )
+    warehouse_set_mismatch = publish_prior(
+        prior_matrix.model_copy(
+            update={
+                "method": "navigation",
+                "stats": NavigationRouteMatrixStats(
+                    route_count=len(prior_matrix.rows),
+                    reused_pair_count=0,
+                    registered_pair_count=len(prior_matrix.rows),
+                    missing_pair_count=0,
+                    complete=True,
+                ),
+                "warehouse_ids": prior_matrix.warehouse_ids[:-1],
+            }
+        )
+    )
+    with pytest.raises(ProviderContractError, match="navigation_route_matrix_warehouse_set_mismatch"):
+        route_tools.create_navigation_matrix_request(
+            prepared_path,
+            AllWarehousesScope(),
+            "outputs/warehouse-network/requests/navigation-prior-set.json",
+            ctx,
+            prior_route_matrix_ref=warehouse_set_mismatch,
+        )

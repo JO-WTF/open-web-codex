@@ -6,7 +6,6 @@ from pathlib import (
 )
 from typing import (
     Annotated,
-    Literal,
 )
 
 from mcp.server.fastmcp import (
@@ -30,6 +29,7 @@ from supply_chain_planner.network.matrix import (
 )
 from supply_chain_planner.network.matrix import (
     derive_observed_quote_mean_cost_policy,
+    resolve_warehouse_scope,
 )
 from supply_chain_planner.network.matrix_models import (
     CostCalculationPolicy,
@@ -38,6 +38,7 @@ from supply_chain_planner.network.matrix_models import (
     ExplicitCostPolicy,
     ObservedQuoteMeanCostEvidence,
     ObservedQuoteMeanCostPolicy,
+    WarehouseScope,
 )
 from supply_chain_planner.network.matrix_models import (
     RouteMatrix as ComposableRouteMatrix,
@@ -119,7 +120,7 @@ def _quote_mean_evidence_matches(
 
 def plan_cost_matrix(
     prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
-    warehouse_scope: Literal["existing_only", "all_warehouses"],
+    warehouse_scope: WarehouseScope,
     ctx: Context,
     cost_policy: CostPolicySelection | None = None,
     route_matrix_ref: ResourceRef | None = None,
@@ -128,9 +129,8 @@ def plan_cost_matrix(
 ) -> Annotated[CallToolResult, CostMatrixPlanningToolResult]:
     """Build quote-first costs with explicit or full-quote-mean fallback policy."""
     prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
-    warehouses = prepared.warehouses
-    if warehouse_scope == "existing_only":
-        warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
+    warehouses = resolve_warehouse_scope(prepared.warehouses, warehouse_scope)
+    warehouse_ids = [warehouse.warehouse_id for warehouse in warehouses]
     calculation_policy = None
     calculation_rule_source = None
     calculation_rule_evidence = None
@@ -173,7 +173,7 @@ def plan_cost_matrix(
     route_matrix = (
         _runtime().load_model(
             route_matrix_ref,
-            "route_matrix.v2",
+            "route_matrix.v3",
             ComposableRouteMatrix,
         )
         if route_matrix_ref is not None
@@ -184,15 +184,36 @@ def plan_cost_matrix(
             require_matching_input(input_identity, route_matrix.input_identity)
         except ValueError as error:
             raise McpResourceContractError("cost_route_input_identity_mismatch") from error
+        if route_matrix.warehouse_scope != warehouse_scope:
+            raise McpResourceContractError("cost_route_scope_mismatch")
+        if route_matrix.warehouse_ids != warehouse_ids:
+            raise McpResourceContractError("cost_route_warehouse_set_mismatch")
     prior = (
         _runtime().load_model(
             prior_cost_matrix_ref,
-            "cost_matrix.v2",
+            "cost_matrix.v3",
             CostMatrix,
         )
         if prior_cost_matrix_ref is not None
         else None
     )
+    if prior is not None:
+        if route_matrix is not None and not _prior_route_facts_match(prior, route_matrix):
+            raise McpResourceContractError("cost_prior_route_mismatch")
+        try:
+            require_matching_input(input_identity, prior.input_identity)
+        except ValueError as error:
+            raise McpResourceContractError("cost_prior_input_identity_mismatch") from error
+        if prior.warehouse_scope != warehouse_scope:
+            raise McpResourceContractError("cost_prior_scope_mismatch")
+        if prior.warehouse_ids != warehouse_ids:
+            raise McpResourceContractError("cost_prior_warehouse_set_mismatch")
+        if (
+            prior.calculation_rule != calculation_policy
+            or prior.calculation_rule_source != calculation_rule_source
+            or prior.calculation_rule_evidence != calculation_rule_evidence
+        ):
+            raise McpResourceContractError("cost_prior_rule_mismatch")
     matrix = _build_composable_cost_matrix(
         prepared.demand_cities,
         warehouses,
@@ -239,9 +260,40 @@ def plan_cost_matrix(
         reused_pair_count=stats.reused_pair_count,
         computed_pair_count=stats.computed_pair_count,
         missing_pair_count=stats.missing_pair_count,
+        warehouse_ids=warehouse_ids,
     )
     published.structuredContent = result.model_dump(mode="json")
     return published
+
+
+def _prior_route_facts_match(
+    prior: CostMatrix,
+    route_matrix: ComposableRouteMatrix,
+) -> bool:
+    current = {
+        (row.origin_id, row.destination_id, row.layer): row for row in route_matrix.rows
+    }
+    for row in prior.rows:
+        fact = row.route_fact
+        if fact is None:
+            continue
+        route = current.get((row.origin_id, row.destination_id, row.layer))
+        if route is None:
+            return False
+        if (
+            route.method != fact.method
+            or route.tool_version != fact.tool_version
+            or route.origin_longitude != fact.origin_longitude
+            or route.origin_latitude != fact.origin_latitude
+            or route.destination_longitude != fact.destination_longitude
+            or route.destination_latitude != fact.destination_latitude
+            or route.detour_coefficient != fact.detour_coefficient
+            or route.average_speed_kph != fact.average_speed_kph
+            or route.navigation_provider != fact.navigation_provider
+            or route.navigation_profile != fact.navigation_profile
+        ):
+            return False
+    return True
 
 
 def register_tools(mcp, *, phase: str = "all") -> None:

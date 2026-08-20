@@ -13,7 +13,7 @@ from supply_chain_planner.data.mapping import (
     SourceRole,
     TransformKind,
 )
-from supply_chain_planner.network.matrix_models import ObservedQuoteMeanCostEvidence
+from supply_chain_planner.network.matrix_models import ObservedQuoteMeanCostEvidence, WarehouseScope
 from supply_chain_planner.network.models import (
     CurrentAssignmentRecord,
     DataQualityIssue,
@@ -36,6 +36,13 @@ from supply_chain_planner.network.optimization_models import (
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    @model_validator(mode="after")
+    def validate_canonical_warehouse_ids(self):
+        values = getattr(self, "warehouse_ids", None)
+        if values is not None and (not values or values != sorted(set(values))):
+            raise ValueError("warehouse_ids_not_canonical")
+        return self
 
 
 class PreparedNetworkResource(StrictModel):
@@ -147,11 +154,12 @@ class RouteMatrixPreparationToolResult(StrictModel):
     state: Literal["ready"]
     summary: str
     resource_ref: _ResourceRef
+    warehouse_ids: list[str] = Field(min_length=1, max_length=256)
 
     @model_validator(mode="after")
     def validate_state_schema(self) -> RouteMatrixPreparationToolResult:
-        if self.resource_ref.resource_schema != "route_matrix.v2":
-            raise ValueError("ready requires route_matrix.v2")
+        if self.resource_ref.resource_schema != "route_matrix.v3":
+            raise ValueError("ready requires route_matrix.v3")
         return self
 
 
@@ -168,6 +176,7 @@ class CostMatrixPlanningToolResult(StrictModel):
     reused_pair_count: int = Field(ge=0)
     computed_pair_count: int = Field(ge=0)
     missing_pair_count: int = Field(ge=0)
+    warehouse_ids: list[str] = Field(min_length=1, max_length=256)
 
 
 class PMedianSolutionToolResult(StrictModel):
@@ -193,7 +202,8 @@ class NavigationMatrixRequestToolResult(StrictModel):
     state: Literal["execution_required", "ready"]
     navigation_request_relative_path: str | None = Field(default=None, max_length=1024)
     input_identity: PlanningInputIdentity
-    warehouse_scope: Literal["existing_only", "all_warehouses"]
+    warehouse_scope: WarehouseScope
+    warehouse_ids: list[str] = Field(min_length=1, max_length=256)
     route_count: int = Field(ge=0)
     estimated_billable_elements: int = Field(ge=0)
 
