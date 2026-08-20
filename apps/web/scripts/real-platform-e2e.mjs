@@ -1309,18 +1309,23 @@ async function runCase(index) {
           })),
       });
     }
+    const planningHeadingPresent = networkRequestText.includes("# 仓网规划");
+    const planningCostSemanticsPresent = networkRequestText.includes("observed_quote_mean");
+    const planningSearchSemanticsPresent = networkRequestText.includes("minimum_feasible");
+    const mapHeadingPresent = networkRequestText.includes("# 仓网地图与交付");
     if (
-      !networkRequestText.includes("# 仓网地图与交付") ||
-      !networkRequestText.includes("# 路线与成本矩阵") ||
-      !networkRequestText.includes("# 仓网规划")
+      !planningHeadingPresent ||
+      !planningCostSemanticsPresent ||
+      !planningSearchSemanticsPresent ||
+      !mapHeadingPresent
     ) {
       throw new NativeRuntimeBlocker("child_skill_body_not_injected", {
         role: "network_agent",
-        catalog_mentions_planning: networkRequestText.includes("warehouse-network-planning"),
-        catalog_mentions_map: networkRequestText.includes("warehouse-map-delivery"),
-        explicit_mentions_preserved:
-          networkRequestText.includes("$warehouse-network-planning") &&
-          networkRequestText.includes("$warehouse-map-delivery"),
+        planning_heading_present: planningHeadingPresent,
+        planning_cost_semantics_present: planningCostSemanticsPresent,
+        planning_search_semantics_present: planningSearchSemanticsPresent,
+        map_heading_present: mapHeadingPresent,
+        request_text_length: networkRequestText.length,
       });
     }
     const spawnCalls = modelCalls.filter((call) => call.name === "spawn_agent");

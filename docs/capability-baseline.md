@@ -16,11 +16,10 @@
 当前 checkout 已从 clean DB/Profile、真实 Web Task 入口、真实 Codex Runtime 和真实 Provider
 完成多 Agent 仓网 Copilot 的阶段一正常业务闭环。这个结论不代表 Web Studio、Marketplace、
 多用户产品或完整 hardening 矩阵已经完成。独立单 Agent 包已有静态组合、共享 Tool、package-keyed
-Root config 和 Web 显式选择的 E1/E2 证据；本轮又从真实 Task/Workspace、真实 Codex Runtime 和
-既有真实 DeepSeek E3 曾证明同一 Root 无 child 地准备数据、创建并执行全量报价脚本、构建成本
-矩阵并达到 12h 需求加权覆盖 90.0521%；本次将成本证据收敛为 typed schema、将选址收敛为一次
-`minimum_feasible` 有界求解，新的付费复跑仍待完成，不能用旧 E3 结果替代新合同证据。该门复用
-既有 Profile，不把它扩大成 clean Profile E4。
+Root config 和 Web 显式选择的 E1/E2 证据；本轮将真实 DeepSeek 入口拆为多 Agent 业务、单 Agent
+业务和独立 Tool capability 三个门，并将成本证据收敛为 typed schema、选址收敛为
+`minimum_feasible` 有界求解。新的单 Agent typed-evidence 付费复跑仍待完成，不能用旧 E3 结果替代
+新合同证据；该门复用既有 Profile，不把它扩大成 clean Profile E4。
 
 阶段二 Copilot SDK 已提供 `copilot init` 源码脚手架和 `copilot validate` 静态组合
 验证；`copilot dev` 提供隔离 discovery probe：通过官方 app-server 握手、
@@ -62,7 +61,7 @@ SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，�
 | 维度 | 当前等级 |
 | --- | --- |
 | 真实多 Agent 运行 | 多 Agent 仓网包的阶段一 normal path 已通过真实 Web E2E |
-| 单 Agent 仓网运行 | 独立 package、Root config、共享 Tool 与 Web 选择合同已通过静态/focused gate；旧真实 DeepSeek Task/Workspace 业务 E3 已通过，本次 typed evidence/one-call 合同待付费复跑，clean Profile E4 未运行 |
+| 单 Agent 仓网运行 | 独立 package、Root config、共享 Tool 与 Web 选择合同已通过静态/focused gate；当前入口与 typed evidence/`minimum_feasible` 合同已收敛，付费真实复跑待完成，clean Profile E4 未运行 |
 | Root 用户输入与 execution projection | 阶段一 normal path 可用；pending approval 刷新恢复已通过 |
 | Tool/Skill SDK 与 Studio | Copilot 源码 `init`/`validate`、通用环境 `prepare`、隔离 `dev` 与本地 fixture `test` 存在；旧 Web Studio 已删除 |
 | Agent/Supervisor 创作 | 旧 Web authoring 已删除；阶段一仅直接编辑 Profile Skill/Role |
@@ -87,20 +86,21 @@ clean Profile/Workspace 的真实验收。多用户、完整失败/竞态矩阵�
 
 ### 2026-08-20 当前真实 DeepSeek 生产门
 
-`apps/web/scripts/real-deepseek-e2e.mjs` 默认使用 `observe` 模式，不改写任何
-`tool_choice`。当前 exact `deepseek-v4-flash` 已通过正式 typed model metadata 获得
-`supportsSearchTool=true`，最小门完成结构化 `tool_search → spawn_agent`；完整门从真实
-`warehouse-network-copilot` Task 上传 6 个 fixture，完成结构化 child Skill 选择、Data
-`discover/inspect/read/prepare_network_input`、Network `prepare_route_matrix →
-evaluate_network_baseline(auto) → assess_facility_change(Balikpapan) →
-prepare_network_coverage_map → create_network_map_card`。Data 与 Network 均由 Root 以声明 Role
-直接创建，没有 default 或嵌套业务 child；同一份 `all_warehouses` 路线矩阵只生成一次并由基线与
-增仓场景复用。当前 fixture 的 12h 基线为城市口径 66.0%、需求加权口径 81.5%；只新增
-`WH-CANDIDATE-BALIKPAPAN` 后两种变化率都为 0，该零变化是完整 Tool 计算结果而不是失败或缺值。
-关键业务 MCP canonical Item 均单次 completed；地图 producer 返回
-`open-web-artifact/inline-visualization.v1` 和 `map_card_spec.v1` provenance。确定性门冷启动连续两次
-通过；真实门未出现 Resource 枚举、失败 MCP、地图后的额外报告或不可见 wire Tool。临时 Provider、
-Run、Workspace、Project 与原 Provider 选择在终态清理。
+`apps/web/scripts/real-deepseek-e2e.mjs` 只运行多 Agent 业务门，默认使用 `observe` 模式，不改写任何
+`tool_choice`；`real-deepseek-single-agent-e2e.mjs` 只运行单 Agent 业务门；
+`real-deepseek-tool-capability-e2e.mjs` 是独立的原生 `tool_search → spawn_agent` 诊断门，不由业务门
+默认调用。三者共享 `scripts/real-deepseek/harness.mjs` 的 Provider、fixture、Task/Run、bounded
+timeline 和终态清理，并在 `E2E_REAL_DEEPSEEK_SELF_TEST=1` 时不访问网络。
+
+当前 exact `deepseek-v4-flash` 已通过正式 typed model metadata 获得 `supportsSearchTool=true`。
+多 Agent 业务门从真实 `warehouse-network-copilot` Task 上传 6 个 fixture，验收 typed Data/Network
+child、准备输入交接、12h baseline、只新增 `WH-CANDIDATE-BALIKPAPAN` 的城市与需求加权变化率以及
+完成地图。单 Agent 业务门验收无 child、完整报价数量与 `warehouse_quote_mean_calculation.v1`
+证据绑定，以及 `minimum_feasible` 的 90% 需求加权覆盖结果。真实业务门不要求模型采用固定 Tool
+次数或顺序；invalid wire Tool、Tool 后流断开、权限/身份/服务器失败和清理失败保持 typed terminal
+failure。严格的 Tool 次数、顺序、Network Resource inventory 和 topology 只属于
+`real-platform-e2e.mjs` 的 fake/deterministic 合同门。临时 Provider、Run、Workspace、Project 与原
+Provider 选择在终态清理。
 
 Chat 与 Responses 共用同一个 Thread/Turn/ToolRouter/Agent/Skill/MCP 主干。Chat 仅在 wire 边界把
 canonical Responses request 转为 Chat Completions，并把 SSE 恢复为 `ResponseEvent`；当前 Turn 的
@@ -218,22 +218,17 @@ deterministic multi-agent gate 在 clean service restart 后连续两次通过�
 #### D7：真实 DeepSeek 单 Agent 全量报价与 90% 选址门（合同已更新，付费复跑待完成）
 
 `test:e2e:real-deepseek-single-agent` 固定选择 `warehouse-network-single-agent`，不运行或允许
-`spawn_agent`。真实门在一次 Root Turn 中完成 `discover_workspace_sources → inspect_workspace_sources →
+`spawn_agent`。旧 E3 记录曾在一次 Root Turn 中完成 `discover_workspace_sources → inspect_workspace_sources →
 prepare_network_input → prepare_route_matrix → plan_cost_matrix → solve_p_median`，collaboration 与
-mailbox timeline 均为空。Agent 在 `outputs/warehouse-network/calculations/` create-new 并执行 Python
-脚本，留下 `compute_quote_mean.py` 与 `warehouse_quote_mean_calculation.v1.json`；准备输入位于 prepared 目录，
-没有生成到 Workspace 根或 `mock_data`。
+mailbox timeline 均为空，并在 `outputs/warehouse-network/calculations/` create-new 执行 Python
+脚本；这些是历史证据，不替代当前入口的付费复跑。
 
 成本 Tool 以 `warehouse_quote_mean_calculation.v1` typed evidence 校验并绑定 `observed_quote_mean`；
-p-median 只调用一次 `opening_policy.kind=minimum_feasible`，返回新增仓数 0、1 的 typed `infeasible` 尝试和 2 的
-`optimal` 结果，选择 `WH-CANDIDATE-BALIKPAPAN` 与 `WH-CANDIDATE-JAMBI`，12h 需求加权覆盖率为
+业务门验收 `opening_policy.kind=minimum_feasible` 的 typed 结果和 90% 目标，不把模型采用的
+Tool 次数或顺序当作业务成功条件。此前一次结果选择 `WH-CANDIDATE-BALIKPAPAN` 与 `WH-CANDIDATE-JAMBI`，12h 需求加权覆盖率为
 `0.9005214995572174`。门禁从 `solve_p_median` 的 bounded typed `coverage` 断言数值，不读取最终
-Assistant 文本判定成功。旧门共 27 个 Chat 工具轮次，未出现不可见 wire Tool；本次 typed evidence/one-call
-合同改动已于 2026-08-20 用 `deepseek-v4-flash` 完成真实付费复跑：24 个有效工具轮次，完整读取
-580 条报价，选择 Balikpapan 与 Jambi，12h 需求加权覆盖率 `0.9005214995572174`，未出现不可见 wire Tool。临时
-Provider、Run、Workspace 与 Project 均完成清理。该次门在第一次准备输入参数校验失败后按原始 typed
-错误修正，成本矩阵与 Planner 的 0/1/2 有界搜索随后各只调用一次；因此当前证明完整业务结果和可恢复输入
-纠正，不把它描述为零失败 golden path。成本均值外推是敏感性方案，缺少仓租、建设、容量和吞吐成本时不称为经济全局最优。首次启用或 source revision 变化仍需要正式冷启动，
+Assistant 文本判定成功。旧门的付费运行记录与本次合同变更分开保存；当前 typed evidence/入口拆分的
+真实复跑仍待完成，不能把旧门的结果当作新门通过。成本均值外推是敏感性方案，缺少仓租、建设、容量和吞吐成本时不称为经济全局最优。首次启用或 source revision 变化仍需要正式冷启动，
 测试在 `restartRequired=true` 时报告 typed `copilot_restart_required`，不会继续到 Task 503。单 Agent
 没有可预先 spawn 的 child Role，因此安装投影在 Task 前保持 `Configured`；当前 revision 且
 状态保持 `Configured` 时允许创建 Task，Root/child 的真实 MCP 执行能力由随后完整业务 Turn 证明，

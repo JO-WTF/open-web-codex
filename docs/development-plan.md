@@ -390,14 +390,14 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
    `CaseRepository`、`NetworkSnapshot`、`ArtifactRef`、旧 services/models/tests 与 Demo launcher
    surface，不保留兼容双路径；Data4 与 Network active `ResourceRef` surface 不回退为 aliases。
 
-真实 DeepSeek 生产门当前已关闭：fresh local session 通过正式 Provider API 为 exact
-`deepseek-v4-flash` 持久化 `supportsSearchTool=true`，配置只保存 env ref。`observe` 模式不改写
-`tool_choice`，最小门完成结构化 `tool_search → spawn_agent`；完整门完成原生结构化 Skill 选择、
-`spawnAgent → wait → Data discover/inspect/read/prepare → Network route/baseline(auto)/coverage →
-create_network_map_card`。Data 高层 Tool 对无歧义 profile 自动物化 mappings，并在同一次调用中完成
-geography；Network baseline 由 Tool 根据 current assignments 自动选择口径。所有关键 MCP Tool 的
-canonical Item 均单次 completed，地图结果为 `open-web-artifact/inline-visualization.v1`，临时
-Provider、Run、Workspace 和 Project 终态清理。deterministic multi-agent gate 冷启动连续两次通过。
+真实 DeepSeek 生产门当前已拆为两个业务门和一个独立诊断门：fresh local session 通过正式 Provider API
+为 exact `deepseek-v4-flash` 持久化 `supportsSearchTool=true`，配置只保存 env ref。多 Agent 业务门只
+验收 typed child、Data→Network 准备输入交接、12h baseline、Balikpapan 两种变化率和地图；单 Agent
+业务门验收完整报价 typed evidence、无 child 和 `minimum_feasible` 的 90% coverage；独立诊断门才运行
+`tool_search → spawn_agent`。业务门不把固定 Tool 次数或顺序当作成功条件，协议/权限/身份/服务器/清理
+失败均为 typed terminal failure。`observe` 模式不改写 `tool_choice`；所有门共享 bounded timeline 和
+终态清理，deterministic multi-agent gate 的严格 topology、Tool 顺序与 Resource inventory 仍只属于
+`real-platform-e2e.mjs`。
 浏览器响应、日志、Workspace 与普通 Profile 文件均不得出现 Secret 明文；不写 `model_catalog_json`、
 不按模型名推断、不重试提示词、不回退 single-agent。后续真实空目录故障已用窄 follow-up 收口：Codex 只增加 exact
 Provider 的 fresh typed catalog，Platform 不切换 current Provider，只在非空成功后持久化目标目录并在
