@@ -4,7 +4,7 @@ display_name = "Warehouse Network · Multi-Agent"
 
 [root]
 skill = "warehouse-supervisor"
-task_skills = "none"
+task_skills = "all"
 agent = "warehouse_supervisor_root"
 
 [[skills]]

@@ -1580,6 +1580,11 @@ mod tests {
         assert!(SUPERVISOR_SKILL.contains("不得省略后退回默认 `all`"));
         assert!(!SUPERVISOR_SKILL.contains("`list_agents`"));
         assert!(!SUPERVISOR_SKILL.contains("`followup_task`"));
+        assert!(SUPERVISOR_SKILL.contains("`$warehouse-data`"));
+        assert!(SUPERVISOR_SKILL.contains("`$warehouse-route-planning`"));
+        assert!(SUPERVISOR_SKILL.contains("`$warehouse-network-analysis`"));
+        assert!(SUPERVISOR_SKILL.contains("`$warehouse-map-delivery`"));
+        assert!(SUPERVISOR_SKILL.contains("`$warehouse-network-optimization`"));
     }
 
     #[test]
@@ -1953,6 +1958,11 @@ runtime = "tools/maps/runtime.toml"
             Value::Bool(false),
             "warehouse Root must disable shell tools through native config",
         );
+        assert_eq!(
+            root_execution.runtime_config["features.multi_agent_v2"],
+            Value::Bool(false),
+            "warehouse Root must use the V1 collaboration contract that supports structured Skill items",
+        );
         let root = assets
             .render_role("warehouse_supervisor_root", &profile)
             .expect("Root Role");
@@ -2036,7 +2046,7 @@ runtime = "tools/maps/runtime.toml"
         let data_instructions = data["developer_instructions"]
             .as_str()
             .expect("data instructions");
-        assert!(data_instructions.contains("exact Host `SKILL.md` path"));
+        assert!(data_instructions.contains("structured `$warehouse-data` Skill selection"));
         assert!(data_instructions
             .contains("do not use shell, Workspace command, Git, jq, or ad-hoc Python"));
         assert!(network["mcp_servers"]["supply_chain"].get("cwd").is_none());
@@ -2192,7 +2202,7 @@ runtime = "tools/maps/runtime.toml"
         assert!(network["developer_instructions"]
             .as_str()
             .expect("network instructions")
-            .contains("Use Codex's native Skill catalog"));
+            .contains("structured `$warehouse-*` task Skill selections"));
         assert!(network["developer_instructions"]
             .as_str()
             .expect("network instructions")

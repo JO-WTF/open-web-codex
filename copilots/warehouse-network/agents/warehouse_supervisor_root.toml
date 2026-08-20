@@ -16,5 +16,6 @@ do not continue with exploratory tools or request a second approval.
 
 [features]
 shell_tool = false
+multi_agent_v2 = false
 
 [plugins]

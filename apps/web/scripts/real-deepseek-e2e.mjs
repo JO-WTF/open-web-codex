@@ -30,6 +30,8 @@ const copilotPackageId =
   process.env.E2E_COPILOT_PACKAGE_ID ?? "warehouse-network-copilot";
 const providerSourceId = process.env.E2E_REAL_DEEPSEEK_SOURCE_PROVIDER_ID ?? "deepseek-e2e";
 const model = process.env.E2E_REAL_DEEPSEEK_MODEL ?? "deepseek-v4-flash";
+const toolChoiceMode =
+  process.env.E2E_REAL_DEEPSEEK_TOOL_CHOICE_MODE ?? "observe";
 const useExistingProvider =
   (process.env.E2E_REAL_DEEPSEEK_USE_EXISTING ?? "0") === "1";
 const targetBaseUrl = (
@@ -260,7 +262,7 @@ function safeResponseHeaders(headers) {
 }
 
 class DeepSeekProbeProxy {
-  constructor() {
+  constructor(mode) {
     this.server = createServer((request, response) => {
       this.forward(request, response).catch((error) => {
         response.writeHead(502, { "content-type": "application/json" });
@@ -272,6 +274,7 @@ class DeepSeekProbeProxy {
     this.rounds = [];
     this.errors = [];
     this.toolChoicePolicy = undefined;
+    this.toolChoiceMode = mode;
     this.structuredTurns = new Set();
   }
 
@@ -323,6 +326,7 @@ class DeepSeekProbeProxy {
       body.tool_choice === undefined || body.tool_choice === "auto";
     const turnAlreadyProducedTool = turnKey ? this.structuredTurns.has(turnKey) : false;
     const shouldRequireToolChoice =
+      this.toolChoiceMode === "force_first_tool" &&
       policyMatches &&
       originalChoiceIsAuto &&
       chatTurn?.has_user_message === true &&
@@ -695,6 +699,92 @@ function invalidWireToolRound(rounds) {
       Array.isArray(round.invalid_wire_tool_names) &&
       round.invalid_wire_tool_names.length > 0,
   );
+}
+
+const GOLDEN_COMPLETED_TOOLS = [
+  "prepare_network_input",
+  "prepare_route_matrix",
+  "evaluate_network_baseline",
+  "prepare_network_coverage_map",
+  "create_network_map_card",
+];
+
+function completedMcpToolCounts(timeline) {
+  const counts = new Map();
+  for (const item of timeline?.mcp ?? []) {
+    if (item.event_type !== "codex.item.completed" || item.status !== "completed") continue;
+    counts.set(item.tool, (counts.get(item.tool) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function assertGoldenTimeline(timeline, rounds, providerIdValue) {
+  const failedMcp = (timeline?.mcp ?? []).filter(
+    (item) =>
+      item.event_type === "codex.item.completed" &&
+      /failed|cancelled|interrupted|error/i.test(String(item.status)),
+  );
+  if (failedMcp.length > 0) {
+    throw new NativeRuntimeBlocker("golden_chain_contains_failed_mcp", {
+      provider_id: providerIdValue,
+      failed_mcp: failedMcp,
+    });
+  }
+
+  const counts = completedMcpToolCounts(timeline);
+  const wrongCounts = GOLDEN_COMPLETED_TOOLS.flatMap((tool) => {
+    const count = counts.get(tool) ?? 0;
+    return count === 1 ? [] : [{ tool, completed_count: count }];
+  });
+  if (wrongCounts.length > 0) {
+    throw new NativeRuntimeBlocker("golden_chain_critical_tool_count_invalid", {
+      provider_id: providerIdValue,
+      invalid_counts: wrongCounts,
+    });
+  }
+
+  const roleByThread = new Map(
+    (timeline?.threads ?? []).map((thread) => [thread.thread_id, thread.role]),
+  );
+  const resourceReads = (timeline?.mcp ?? []).filter(
+    (item) => item.tool === "read_mcp_resource" && item.event_type === "codex.item.completed",
+  );
+  if (
+    resourceReads.length < 1 ||
+    resourceReads.length > 2 ||
+    resourceReads.some(
+      (item) => item.status !== "completed" || roleByThread.get(item.thread_id) !== "data_agent",
+    )
+  ) {
+    throw new NativeRuntimeBlocker("golden_chain_resource_read_invalid", {
+      provider_id: providerIdValue,
+      resource_reads: resourceReads,
+    });
+  }
+
+  const mapIndex = (timeline?.mcp ?? []).findIndex(
+    (item) =>
+      item.tool === "create_network_map_card" &&
+      item.event_type === "codex.item.completed" &&
+      item.status === "completed",
+  );
+  const postMapTools = mapIndex < 0 ? [] : (timeline?.mcp ?? []).slice(mapIndex + 1);
+  if (postMapTools.length > 0) {
+    throw new NativeRuntimeBlocker("golden_chain_tool_after_map", {
+      provider_id: providerIdValue,
+      post_map_tools: postMapTools,
+    });
+  }
+
+  if (toolChoiceMode === "observe") {
+    const overriddenRounds = rounds.filter((round) => round.tool_choice_overridden);
+    if (overriddenRounds.length > 0) {
+      throw new NativeRuntimeBlocker("observe_mode_modified_tool_choice", {
+        provider_id: providerIdValue,
+        rounds: overriddenRounds.map((round) => round.round),
+      });
+    }
+  }
 }
 
 async function ensureAuthenticated() {
@@ -1190,6 +1280,23 @@ async function cleanupRun(runId) {
     30_000,
     500,
   ).catch(() => undefined);
+  await eventually(
+    async () => {
+      try {
+        const agents = await api("/runs/" + runId + "/agents");
+        return agents.every((agent) =>
+          !/active|running|working|starting|queued/i.test(
+            String(agent.status_type ?? agent.statusType ?? agent.status ?? ""),
+          ),
+        );
+      } catch {
+        return true;
+      }
+    },
+    "Agent cleanup",
+    30_000,
+    500,
+  ).catch(() => undefined);
 }
 
 async function cleanupCase(record) {
@@ -1307,7 +1414,15 @@ async function runToolSearchGate(provider) {
       wire_tool_names: secondRound.wire_tool_names,
     };
     log("[D2 ROUND 2] " + JSON.stringify(secondEvidence));
-    const events = await taskEventsAll(record.task.id).catch(() => []);
+    const events = await eventually(
+      async () => {
+        const current = await taskEventsAll(record.task.id).catch(() => []);
+        return nativeToolNames(current).includes("spawnAgent") ? current : undefined;
+      },
+      "D2 canonical spawnAgent projection",
+      30_000,
+      250,
+    ).catch(() => taskEventsAll(record.task.id).catch(() => []));
     const nativeNames = nativeToolNames(events);
     log(
       "[D2 CANONICAL] " +
@@ -1433,7 +1548,8 @@ async function runGate(provider) {
             .slice(-80),
         }),
     );
-    logTimeline("ACTOR TIMELINE", await diagnosticTimeline(record));
+    const timeline = await diagnosticTimeline(record);
+    logTimeline("ACTOR TIMELINE", timeline);
     const invalidRound = invalidWireToolRound(state.proxy.rounds);
     if (invalidRound) {
       throw new NativeRuntimeBlocker("provider_tool_call_not_visible", {
@@ -1473,6 +1589,7 @@ async function runGate(provider) {
         native_tool_names: nativeNames,
       });
     }
+    assertGoldenTimeline(timeline, rounds, provider.id);
     return {
       status: "passed",
       provider_id: provider.id,
@@ -1501,8 +1618,14 @@ async function main() {
     log("[SKIP] real DeepSeek gate is opt-in; set E2E_REAL_DEEPSEEK=1");
     return;
   }
+  if (!new Set(["observe", "force_first_tool"]).has(toolChoiceMode)) {
+    throw new NativeRuntimeBlocker("invalid_tool_choice_mode", {
+      mode: toolChoiceMode,
+      supported: ["observe", "force_first_tool"],
+    });
+  }
   state.manifest = await readFixtureManifest();
-  state.proxy = await new DeepSeekProbeProxy().start();
+  state.proxy = await new DeepSeekProbeProxy(toolChoiceMode).start();
   let provider;
   try {
     const version = await ensureAuthenticated();
@@ -1516,7 +1639,7 @@ async function main() {
         JSON.stringify({
           provider_id: provider.id,
           model,
-          mode: "required_until_first_structured_current_turn_tool_activity",
+          mode: toolChoiceMode,
         }),
     );
     log(

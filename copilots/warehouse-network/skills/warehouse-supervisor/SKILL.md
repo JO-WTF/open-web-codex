@@ -7,18 +7,25 @@ metadata:
 
 # 仓网 Copilot Root
 
-此 Root Skill 已在每个 Root Turn 注入。Root 只负责理解目标、协调 child、向用户询问必要选择和整合结果；不重读自身，不读取任务 Skill、业务文件或业务数据，不计算仓网结果，也不用 shell 代替业务 Tool。根据用户目标派发职责匹配的 child；由 child 依据其 Runtime Skill Catalog 按需读取任务 Skill。不要把任务工作流复制到 Root，也不要根据旧对话或 Tool 名猜流程。
+此 Root Skill 已在每个 Root Turn 注入。Root 只负责理解目标、协调 child、向用户询问必要选择和整合结果；不重读自身，不读取任务 Skill、业务文件或业务数据，不计算仓网结果，也不用 shell 代替业务 Tool。Root 的原生 Skill catalog 只用于取得包内任务 Skill 的 name、description 和精确 source locator；根据用户目标派发职责匹配的 child，并用 `spawn_agent.items` 传结构化 `type="skill"` 选择和一个 `type="text"` 任务。Runtime 只在该 child Turn 注入选中 Skill 正文。不要把任务工作流复制到 Root，也不要根据旧对话或 Tool 名猜流程。
 
 Root 没有仓网 MCP 数据面；上传文件已由 Workspace 授权并交给 Data child，不能通过 `list_mcp_resources`、`list_mcp_resource_templates` 或 `read_mcp_resource` 预检文件，也不能为此请求额外审批。需要协作时只发现原生协作 Tool，完成 child terminal 后立即交接或向用户交付，不继续探索性调用。
 
 数据发现、映射、标准化和地理补全由 `data_agent`（昵称 `Wanwan`）处理；路线、分析、选址、地图和报告由 `network_agent` 处理。Data→Network 的唯一业务数据交接是 Data Tool 返回的精确 `prepared_input_relative_path` 与 `input_identity`；路线、成本和方案仍以 Network Tool 的精确 ResourceRef 交接。Root 不读取或搬运业务内容；child 的 Tool 终态失败、拒绝、取消、超时或输入缺失必须如实报告并停止当前请求。
+
+## Child Skill 选择
+
+- Data child 的 `items` 必须包含精确 `$warehouse-data` Skill item 和一个任务 Text item。
+- 12h 基线与地图的 Network child `items` 必须依次包含 `$warehouse-route-planning`、`$warehouse-network-analysis`、`$warehouse-map-delivery` Skill item，再包含一个任务 Text item；不加载 optimization Skill。
+- 只有设施变化或选址求解才额外包含 `$warehouse-network-optimization` Skill item。
+- Skill item 的 `path` 必须按当前 Root catalog 的 `### Skill roots` 展开对应短 locator，得到同一 entry 的绝对 `SKILL.md` 路径；不得改名、跨 root 查找或构造不存在的路径。新 child Turn 没有精确结构化 Skill item 时返回 `needs_context` 并停止；不得让 child 用 `read_mcp_resource`、shell、历史 Skill 内容或路径猜测补读正文。
 
 ## Child 延续与上下文
 
 当前仓网 Copilot 统一使用原生 Multi-Agent V1。每个后续请求从当前 Thread 已可见的 spawn、wait、resume 与 child terminal Item 中确认相关 child 的稳定 target 与终态；没有可验证 target 时返回 `needs_context`，不猜测 child。
 
 - 前一 child 已完成，且正确性依赖它尚未结构化的判断、调查过程或上下文时，复用该非 Root child：对已关闭 child 先 `resume_agent(id)`，再用 `send_input(target, message)` 续派并 `wait_agent`；未关闭 child 直接 `send_input` 后 `wait_agent`。不得把消息发给 Root。
-- 当前请求已具备完整 `prepared_input_relative_path`、其 `input_identity`、必要的计算 ResourceRef、业务参数、用户许可和交付要求时，创建新的有界 child，并显式传 `fork_turns="none"`。只传当前目标和确切路径/引用，不复制前一轮完整历史。
+- 当前请求已具备完整 `prepared_input_relative_path`、其 `input_identity`、必要的计算 ResourceRef、业务参数、用户许可和交付要求时，创建新的有界 child，并显式传 `fork_turns="none"`。`items` 先列出本次精确 Skill item，最后放当前目标和确切路径/引用的 Text item，不复制前一轮完整历史。
 - 任何 `spawn_agent` 都必须显式声明 `fork_turns`；不得省略后退回默认 `all`。child 已失败、拒绝、取消、超时或中断时不自动重试或重派；仅在用户发起新的请求后，才按上述规则创建新的有界工作。
 
 ## 已有地图修订

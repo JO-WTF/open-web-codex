@@ -241,6 +241,84 @@ enabled = true
 }
 
 #[tokio::test]
+async fn managed_role_can_enable_a_root_disabled_host_skill_by_name() {
+    let root_skill_config: TomlValue = toml::from_str(
+        r#"config = [
+  { name = "warehouse-data", enabled = false },
+  { name = "warehouse-supervisor", enabled = true },
+]"#,
+    )
+    .expect("parse root skill config");
+    let root_skill_config = root_skill_config
+        .get("config")
+        .cloned()
+        .expect("root skill config array");
+    let (home, mut config) = test_config_with_cli_overrides(vec![
+        ("skills.config".to_string(), root_skill_config),
+        (
+            "agents.data-agent.runtime_mcp_projection".to_string(),
+            TomlValue::Boolean(true),
+        ),
+    ])
+    .await;
+    let skill_dir = home.path().join("skills").join("warehouse-data");
+    fs::create_dir_all(&skill_dir).expect("create managed skill dir");
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: warehouse-data\ndescription: Prepare data.\n---\n\n# Data body\n",
+    )
+    .expect("write managed skill");
+    let role_path = write_role_config(
+        &home,
+        "data-role.toml",
+        r#"[[skills.config]]
+name = "warehouse-data"
+enabled = true
+"#,
+    )
+    .await;
+    config.agent_roles.insert(
+        "data-agent".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    apply_role_to_config(&mut config, Some("data-agent"))
+        .await
+        .expect("managed data role should apply");
+
+    let plugins_manager = Arc::new(plugins_manager_for_config(
+        &config,
+        auth_manager_from_optional_auth(/*auth*/ None),
+    ));
+    let skills_service =
+        HostSkillsService::new(home.path().abs(), /*bundled_skills_enabled*/ true);
+    let plugins_input = config.plugins_config_input();
+    let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
+    let skills_input =
+        skills_load_input_from_config(&config, plugin_outcome.effective_plugin_skill_roots())
+            .with_plugin_skill_snapshots(
+                plugins_manager.plugin_skill_snapshots_for_config(&plugins_input),
+            );
+    let snapshot = skills_service
+        .snapshot_for_config(
+            &skills_input,
+            Some(Arc::clone(&codex_exec_server::LOCAL_FS)),
+        )
+        .await;
+    let skill = snapshot
+        .outcome()
+        .skills
+        .iter()
+        .find(|skill| skill.name == "warehouse-data")
+        .expect("managed skill should be discovered");
+    assert!(snapshot.outcome().is_skill_enabled(skill));
+}
+
+#[tokio::test]
 async fn apply_role_rejects_legacy_runtime_projection_marker() {
     let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
     let role_path = write_role_config(

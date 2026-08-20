@@ -655,12 +655,17 @@ class DeterministicModelServer {
       bodyText.match(/OWC_DETERMINISTIC_E2E:([A-Za-z0-9_-]+)/) ??
       bodyText.match(/E2E_AGENT=(?:data_agent|network_agent):([A-Za-z0-9_-]+)/);
     const runId = markerMatch?.[1] ?? "unknown";
-    const latestUserText = Array.isArray(body.messages)
-      ? [...body.messages]
-          .reverse()
-          .find((message) => message?.role === "user")
-          ?.content
-      : undefined;
+    const reversedUserMessages = Array.isArray(body.messages)
+      ? [...body.messages].reverse().filter((message) => message?.role === "user")
+      : [];
+    const latestUserText =
+      reversedUserMessages.find((message) =>
+        /E2E_AGENT=(?:data_agent|network_agent):/.test(
+          typeof message?.content === "string"
+            ? message.content
+            : JSON.stringify(message?.content ?? ""),
+        ),
+      )?.content ?? reversedUserMessages[0]?.content;
     const latestUserTextString =
       typeof latestUserText === "string"
         ? latestUserText
@@ -691,6 +696,7 @@ class DeterministicModelServer {
         namespace: plan.spec.namespace,
         name: plan.spec.name,
         id: plan.spec.id,
+        arguments: plan.spec.arguments,
       });
     }
     if (request.url?.includes("/chat/completions")) {
@@ -792,6 +798,7 @@ class DeterministicModelServer {
           confirmed_sources: confirmedSources(),
           country_code: "ID",
           output_relative_path: "prepared_network_input.json",
+          administrative_catalog_relative_path: "mock_data/administrative-areas.json",
         });
       }
       const preparedPath = findPreparedPath(body) ?? "prepared_network_input.json";
@@ -822,23 +829,12 @@ class DeterministicModelServer {
       }
       const routeRef = findResourceRef(body, "route_matrix.v2");
       if (!routeRef) throw new Error("deterministic model could not find route_matrix.v2");
-      if (!has("network:cost")) {
-        return network("network:cost", "plan_cost_matrix", {
-          prepared_input_relative_path: preparedPath,
-          warehouse_scope: "existing_only",
-          route_matrix_ref: routeRef,
-        });
-      }
-      const costRef = findResourceRef(body, "cost_matrix.v2");
-      if (!costRef) throw new Error("deterministic model could not find cost_matrix.v2");
       if (!has("network:baseline")) {
         return network("network:baseline", "evaluate_network_baseline", {
           prepared_input_relative_path: preparedPath,
           route_matrix_ref: routeRef,
-          cost_matrix_ref: costRef,
           objective: "min_time",
           service_targets: [12],
-          coverage_mode: "optimized_existing_footprint",
         });
       }
       const baselineRef = findResourceRef(body, "network_baseline.v2");
@@ -872,14 +868,26 @@ class DeterministicModelServer {
       return toolSearch("root:search", "spawn data_agent and network_agent for warehouse planning");
     }
     if (!has("root:spawn-data")) {
+      const task = [
+        "E2E_AGENT=data_agent:" + runId,
+        "清理并核验 Workspace mock_data 文件，使用 native tool_search 后调用 Data MCP，",
+        "返回精确 prepared_input_relative_path 与 input_identity。",
+      ].join(" ");
       return collaboration("root:spawn-data", "spawn_agent", {
-        message: [
-          "E2E_AGENT=data_agent:" + runId,
-          "清理并核验 Workspace mock_data 文件，使用 native tool_search 后调用 Data MCP，",
-          "返回精确 prepared_input_relative_path 与 input_identity。",
-        ].join(" "),
         agent_type: "data_agent",
-        ...(v2 ? { task_name: "data_agent" } : { fork_context: false }),
+        ...(v2
+          ? { message: task, task_name: "data_agent" }
+          : {
+              items: [
+                {
+                  type: "skill",
+                  name: "warehouse-data",
+                  path: exactSkillPath(text, "warehouse-data"),
+                },
+                { type: "text", text: task },
+              ],
+              fork_context: false,
+            }),
       });
     }
     if (
@@ -908,14 +916,36 @@ class DeterministicModelServer {
     if (!has("root:spawn-network")) {
       const preparedPath = findPreparedPath(body);
       if (!preparedPath) throw new Error("deterministic model could not find prepared input path");
+      const task = [
+        "E2E_AGENT=network_agent:" + runId,
+        "Use this exact prepared_input_relative_path unchanged: " + preparedPath,
+        "Continue with native tool_search, route matrix, 12h baseline and map delivery.",
+      ].join(" ");
       return collaboration("root:spawn-network", "spawn_agent", {
-        message: [
-          "E2E_AGENT=network_agent:" + runId,
-          "Use this exact prepared_input_relative_path unchanged: " + preparedPath,
-          "Continue with native tool_search, route matrix, 12h baseline and map delivery.",
-        ].join(" "),
         agent_type: "network_agent",
-        ...(v2 ? { task_name: "network_agent" } : { fork_context: false }),
+        ...(v2
+          ? { message: task, task_name: "network_agent" }
+          : {
+              items: [
+                {
+                  type: "skill",
+                  name: "warehouse-route-planning",
+                  path: exactSkillPath(text, "warehouse-route-planning"),
+                },
+                {
+                  type: "skill",
+                  name: "warehouse-network-analysis",
+                  path: exactSkillPath(text, "warehouse-network-analysis"),
+                },
+                {
+                  type: "skill",
+                  name: "warehouse-map-delivery",
+                  path: exactSkillPath(text, "warehouse-map-delivery"),
+                },
+                { type: "text", text: task },
+              ],
+              fork_context: false,
+            }),
       });
     }
     if (!has("root:wait-network")) {
@@ -936,67 +966,40 @@ class DeterministicModelServer {
 }
 
 function confirmedSources() {
-  const transform = (sourceField, targetField, kind) => ({
-    source_field: sourceField,
-    target_field: targetField,
-    transform: kind,
-  });
-  const demand = [
-    ["city_id", "city_id", "normalize_identifier"],
-    ["city_name", "city_name", "trim"],
-    ["province_id", "province_id", "normalize_identifier"],
-    ["province_name", "province_name", "trim"],
-    ["demand_quantity", "demand_quantity", "parse_integer"],
-    ["longitude", "longitude", "parse_decimal"],
-    ["latitude", "latitude", "parse_decimal"],
-  ].map((row) => transform(...row));
-  const warehouse = [
-    ["warehouse_id", "warehouse_id", "normalize_identifier"],
-    ["warehouse_name", "warehouse_name", "trim"],
-    ["warehouse_type", "warehouse_type", "normalize_warehouse_type"],
-    ["city_id", "city_id", "normalize_identifier"],
-    ["city_name", "city_name", "trim"],
-    ["province_id", "province_id", "normalize_identifier"],
-    ["province_name", "province_name", "trim"],
-    ["longitude", "longitude", "parse_decimal"],
-    ["latitude", "latitude", "parse_decimal"],
-    ["upstream_center_id", "upstream_center_id", "normalize_identifier"],
-    ["is_fixed", "is_fixed", "parse_boolean"],
-  ].map((row) => transform(...row));
-  const route = [
-    ["origin_id", "origin_id", "normalize_identifier"],
-    ["destination_id", "destination_id", "normalize_identifier"],
-    ["destination_name", "destination_name", "trim"],
-    ["layer", "layer", "trim"],
-    ["distance_km", "distance_km", "parse_decimal"],
-    ["duration_hours", "duration_hours", "parse_decimal"],
-    ["price_per_vehicle", "price_per_vehicle", "parse_decimal"],
-    ["currency", "currency", "trim"],
-    ["vehicle_capacity", "vehicle_capacity", "parse_decimal"],
-    ["method", "method", "trim"],
-  ].map((row) => transform(...row));
   return [
     {
       relative_path: "mock_data/demand-cities.csv",
       role: "demand",
-      mappings: demand,
     },
     {
       relative_path: "mock_data/existing-warehouses.csv",
       role: "existing_warehouse",
-      mappings: warehouse,
     },
     {
       relative_path: "mock_data/candidate-warehouses.csv",
       role: "candidate_warehouse",
-      mappings: warehouse,
     },
     {
       relative_path: "mock_data/route-quotes.csv",
       role: "route_quote",
-      mappings: route,
     },
   ];
+}
+
+function exactSkillPath(text, skillName) {
+  const escaped = skillName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = text.match(
+    new RegExp(`(?:r\\d+|/[^"\\\\]*)/${escaped}/SKILL\\.md`),
+  );
+  if (!match) throw new Error("deterministic model could not find Skill path for " + skillName);
+  const skillPath = match[0];
+  const alias = skillPath.split("/", 1)[0];
+  if (!/^r\d+$/.test(alias)) return skillPath;
+  const rootMatch = text.match(
+    new RegExp("- `" + alias + "` = `([^`]+)`"),
+  );
+  if (!rootMatch) throw new Error("deterministic model could not expand Skill root " + alias);
+  return rootMatch[1].replace(/\/$/, "") + skillPath.slice(alias.length);
 }
 
 async function ensureAuthenticated() {
@@ -1215,7 +1218,172 @@ async function runCase(index) {
       (request) => request.runId === runId,
     );
     const modelCalls = state.modelServer.calls.filter((call) => call.runId === runId);
+    const dataRequestText = JSON.stringify(
+      modelRequests.find((request) => request.role === "data")?.body ?? {},
+    );
+    const networkRequestText = JSON.stringify(
+      modelRequests.find((request) => request.role === "network")?.body ?? {},
+    );
+    if (!dataRequestText.includes("# 准备仓网数据")) {
+      throw new NativeRuntimeBlocker("child_skill_body_not_injected", {
+        role: "data_agent",
+        catalog_mentions_skill: dataRequestText.includes("warehouse-data"),
+        explicit_mention_preserved: dataRequestText.includes("$warehouse-data"),
+        spawn_input: modelCalls
+          .filter((call) => call.role === "root" && call.name === "spawn_agent")
+          .map((call) => ({
+            has_message: typeof call.arguments?.message === "string",
+            item_types: Array.isArray(call.arguments?.items)
+              ? call.arguments.items.map((item) => item?.type)
+              : [],
+            skill_names: Array.isArray(call.arguments?.items)
+              ? call.arguments.items
+                  .filter((item) => item?.type === "skill")
+                  .map((item) => item.name)
+              : [],
+          })),
+        request_messages: (modelRequests.find((request) => request.role === "data")?.body
+          ?.messages ?? [])
+          .slice(-12)
+          .map((message) => ({
+            role: message?.role,
+            content: String(message?.content ?? "").replace(/\s+/g, " ").slice(0, 180),
+          })),
+        request_inputs: (modelRequests.find((request) => request.role === "data")?.body
+          ?.input ?? [])
+          .slice(-20)
+          .map((item) => ({
+            type: item?.type,
+            role: item?.role,
+            content: JSON.stringify(item?.content ?? item?.text ?? "")
+              .replace(/\s+/g, " ")
+              .slice(0, 220),
+          })),
+        request_keys: Object.keys(
+          modelRequests.find((request) => request.role === "data")?.body ?? {},
+        ),
+        request_path: modelRequests.find((request) => request.role === "data")?.path,
+        request_roles: modelRequests.map((request) => ({
+          role: request.role,
+          path: request.path,
+        })),
+        canonical_items: events
+          .filter((event) => /item|thread|turn/i.test(event.event_type ?? ""))
+          .slice(-30)
+          .map((event) => ({
+            event_type: event.event_type,
+            item_type: itemType(event),
+            tool: eventTool(event),
+            status: event.payload?.data?.status,
+            message: String(
+              event.payload?.data?.error?.message ??
+                event.payload?.data?.message ??
+                "",
+            )
+              .replace(/\s+/g, " ")
+              .slice(0, 200),
+          })),
+        runtime_errors: events
+          .filter(
+            (event) =>
+              event.event_type === "codex.unknown" ||
+              /error|failed/i.test(event.event_type ?? ""),
+          )
+          .slice(-20)
+          .map((event) => ({
+            event_type: event.event_type,
+            source_type: event.payload?.data?.sourceType,
+            code: event.payload?.data?.code,
+            message: String(
+              event.payload?.data?.message ??
+                event.payload?.data?.error?.message ??
+                "",
+            )
+              .replace(/\s+/g, " ")
+              .slice(0, 300),
+          })),
+        skill_warnings: events
+          .filter((event) =>
+            /skill/i.test(JSON.stringify(event.payload?.data ?? event.payload ?? {})),
+          )
+          .slice(-10)
+          .map((event) => ({
+            event_type: event.event_type,
+            summary: String(event.payload?.data?.message ?? event.payload?.message ?? "")
+              .replace(/\s+/g, " ")
+              .slice(0, 240),
+          })),
+      });
+    }
+    if (
+      !networkRequestText.includes("# 仓网地图与交付") ||
+      !networkRequestText.includes("# 路线与成本矩阵") ||
+      !networkRequestText.includes("# 仓网分析")
+    ) {
+      throw new NativeRuntimeBlocker("child_skill_body_not_injected", {
+        role: "network_agent",
+        catalog_mentions_route: networkRequestText.includes("warehouse-route-planning"),
+        catalog_mentions_analysis: networkRequestText.includes("warehouse-network-analysis"),
+        catalog_mentions_map: networkRequestText.includes("warehouse-map-delivery"),
+        explicit_mentions_preserved:
+          networkRequestText.includes("$warehouse-route-planning") &&
+          networkRequestText.includes("$warehouse-network-analysis") &&
+          networkRequestText.includes("$warehouse-map-delivery"),
+      });
+    }
     const spawnCalls = modelCalls.filter((call) => call.name === "spawn_agent");
+    const expectedSingleCalls = [
+      "prepare_network_input",
+      "prepare_route_matrix",
+      "evaluate_network_baseline",
+      "prepare_network_coverage_map",
+      "create_network_map_card",
+    ];
+    for (const toolName of expectedSingleCalls) {
+      assert.equal(
+        modelCalls.filter((call) => call.name === toolName).length,
+        1,
+        toolName + " must be called exactly once in the golden path",
+      );
+    }
+    for (const forbiddenTool of [
+      "prepare_network_geography",
+      "read_mcp_resource",
+      "list_mcp_resources",
+      "list_mcp_resource_templates",
+    ]) {
+      assert.equal(
+        modelCalls.filter((call) => call.name === forbiddenTool).length,
+        0,
+        forbiddenTool + " is not part of the golden path",
+      );
+    }
+    assert.equal(spawnCalls.length, 2, "golden path must spawn exactly Data and Network");
+    assert.deepEqual(
+      spawnCalls.map((call) =>
+        (call.arguments?.items ?? [])
+          .filter((item) => item?.type === "skill")
+          .map((item) => item.name),
+      ),
+      [
+        ["warehouse-data"],
+        [
+          "warehouse-route-planning",
+          "warehouse-network-analysis",
+          "warehouse-map-delivery",
+        ],
+      ],
+      "child spawn must use exact structured Skill selections",
+    );
+    const failedMcpItems = events.filter(
+      (event) =>
+        itemType(event) === "mcpToolCall" &&
+        event.event_type === "codex.item.completed" &&
+        /failed|cancelled|interrupted|error/i.test(
+          String(event.payload?.data?.status ?? ""),
+        ),
+    );
+    assert.deepEqual(failedMcpItems, [], "golden path must not contain failed MCP Items");
     const projectedCollaboration = events.some(
       (event) =>
         itemType(event) === "collabAgentToolCall" &&
