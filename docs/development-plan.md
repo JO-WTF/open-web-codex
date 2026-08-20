@@ -284,7 +284,7 @@ Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。
    或 Codex built-in roles。Profile Host 的普通 startup file 只为 clean Profile seed 默认文件
    并保留已存在内容；仓网三项内置 Skill 与两项内置 Role 是显式 managed 保留 ID，部署升级
    在 Runtime 启动前更新到当前 checked-in 内容，不覆盖其他用户 Skill/Role。Server 绑定经过
-   校验的 prepared descriptor；Runtime 不扫描 process cwd、Workspace 或源码树。缺少 runtime
+校验的 prepared descriptor；Server 还要求 command/dependency 全部落在明确配置的 shared build store 同一 fingerprint build 内；Runtime 不扫描 process cwd、Workspace 或源码树。缺少 runtime
    声明、lock、prepared transport 或 host adapter 时明确 unavailable。
 3. Root 只暴露原生多 Agent 面，不配置全局仓网 MCP；Data/Network Role 通过原生 Role
    config 启用各自 Skill、MCP server、deferred Tool discovery 和精确 Tool approval policy。Data4 全部

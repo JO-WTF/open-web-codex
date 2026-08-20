@@ -37,6 +37,7 @@ pub(crate) struct CopilotPackageSource {
     pub id: String,
     pub package_root: PathBuf,
     pub prepared_descriptor: PathBuf,
+    pub build_store_root: PathBuf,
 }
 
 #[derive(Clone, Default)]
@@ -54,6 +55,7 @@ impl CopilotSourceRegistry {
     pub(crate) fn discover(
         packages_root: &std::path::Path,
         prepared_root: &std::path::Path,
+        build_store_root: &std::path::Path,
     ) -> Result<Self, CopilotInstallationError> {
         let packages_root = packages_root.canonicalize().map_err(|error| {
             CopilotInstallationError::InvalidSource(format!(
@@ -63,6 +65,11 @@ impl CopilotSourceRegistry {
         let prepared_root = prepared_root.canonicalize().map_err(|error| {
             CopilotInstallationError::InvalidSource(format!(
                 "Copilot prepared directory is unavailable: {error}"
+            ))
+        })?;
+        let build_store_root = build_store_root.canonicalize().map_err(|error| {
+            CopilotInstallationError::InvalidSource(format!(
+                "Copilot build store directory is unavailable: {error}"
             ))
         })?;
         let mut roots = std::fs::read_dir(&packages_root)
@@ -89,6 +96,7 @@ impl CopilotSourceRegistry {
                 prepared_descriptor: prepared_root
                     .join(id)
                     .join("copilot-sdk/prepared-tools.v1.json"),
+                build_store_root: build_store_root.clone(),
             });
         }
         Self::load(sources)
@@ -109,6 +117,7 @@ impl CopilotSourceRegistry {
             let loaded = match CopilotPackageAssets::resolve(
                 &source.package_root,
                 &source.prepared_descriptor,
+                &source.build_store_root,
             ) {
                 Ok(assets) if assets.id() == source.id => {
                     RegisteredSource::Available(Arc::new(assets))
@@ -925,10 +934,14 @@ mod tests {
             .expect("repository root")
             .to_path_buf();
         let prepared = tempfile::tempdir().expect("empty prepared root");
+        let build_store = tempfile::tempdir().expect("empty build store root");
 
-        let registry =
-            CopilotSourceRegistry::discover(&repository.join("copilots"), prepared.path())
-                .expect("discover trusted Copilot root");
+        let registry = CopilotSourceRegistry::discover(
+            &repository.join("copilots"),
+            prepared.path(),
+            build_store.path(),
+        )
+        .expect("discover trusted Copilot root");
         let ids = registry
             .summaries()
             .into_iter()

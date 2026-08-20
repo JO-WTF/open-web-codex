@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
-import copy
 import shutil
 import stat
 import tempfile
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import tomllib
 
 from .copilot_manifest import CopilotPackageSummary, validate_copilot_package
 from .tool_environment import (
@@ -25,7 +26,6 @@ from .tool_environment import (
     prepare_tool_composition,
 )
 from .tool_runtime_manifest import load_tool_runtime_manifest
-
 
 OWNER_MARKER = ".copilot-dev-profile.json"
 TOOL_ENVIRONMENT_CACHE_DIR = "open-web-codex/copilot-sdk/tool-environments"
@@ -320,11 +320,13 @@ def prepare_dev_tool_composition(
     *,
     host_environment: dict[str, str] | None = None,
     output_root: Path | None = None,
+    build_store_root: Path | None = None,
 ) -> MaterializedToolComposition:
     """Prepare generic Tool environments, then project their transport into Roles."""
 
     composition = prepared.composition
     environment_root = output_root or default_tool_environment_root(composition)
+    shared_build_store_root = build_store_root or default_tool_build_store_root(composition)
     try:
         prepared_tools = prepare_tool_composition(
             source_root=composition.source_root,
@@ -340,6 +342,7 @@ def prepare_dev_tool_composition(
                 for tool in composition.tools
             ),
             output_root=environment_root,
+            build_store_root=shared_build_store_root,
             composition_descriptor_sha256=(
                 composition.summary.composition_descriptor_sha256
             ),
@@ -407,6 +410,22 @@ def default_tool_environment_root(composition: DevComposition) -> Path:
     source_identity = _owner_marker(composition)["sourceIdentitySha256"]
     assert isinstance(source_identity, str)
     return cache_home / TOOL_ENVIRONMENT_CACHE_DIR / source_identity
+
+
+def default_tool_build_store_root(composition: DevComposition) -> Path:
+    """Return one stable build store shared by all Copilot compositions."""
+
+    del composition
+    configured_cache = os.environ.get("XDG_CACHE_HOME")
+    cache_home = Path(configured_cache) if configured_cache else Path.home() / ".cache"
+    if not cache_home.is_absolute():
+        _error(
+            "EnvironmentUnavailable",
+            "tool-environment",
+            "XDG_CACHE_HOME",
+            "must be an absolute path when set",
+        )
+    return cache_home / "open-web-codex" / "copilot-tool-builds"
 
 
 def _owner_marker(composition: DevComposition) -> dict[str, Any]:
@@ -686,4 +705,3 @@ def _error(
     code: str, stage: str, path: str, message: str, cause: str | None = None
 ) -> None:
     raise CopilotDevError(code, stage, path, message, cause)
-    materialize_capability_roots,

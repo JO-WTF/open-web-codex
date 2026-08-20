@@ -70,8 +70,9 @@ snapshot/binding、definition/revision/release 和 continuation 六表；它们�
 typed 校验官方 `initialize` 的四字段，并只对 `codexHome` 执行 Profile owner 安全校验。
 
 当前开发者 Copilot 包不经过旧 Catalog/Draft/Release 路径。部署者显式配置可信
-`--copilots-root` 与 `--copilot-prepared-root`；Server 只枚举 Copilot 根的一级子目录和其中严格的
-`copilot.toml`，package ID 来自 manifest，descriptor 只按该 ID 从 prepared root 解析。Browser
+`--copilots-root`、`--copilot-prepared-root` 与 `--copilot-build-store-root`；Server 只枚举 Copilot 根的一级子目录和其中严格的
+`copilot.toml`，package ID 来自 manifest，descriptor 只按该 ID 从 prepared root 解析，所有 command/dependency
+binding 还必须来自同一 trusted shared build fingerprint。Browser
 只接收/提交 package ID，不能提交服务器路径。存在可用包时，新建 Thread 必须显式选择一个包；
 没有默认包、Prompt 分类或显示名推断。Task 持久该选择，Run 与 Turn 复用它。
 

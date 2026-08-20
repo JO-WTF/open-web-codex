@@ -3,28 +3,32 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
-from importlib.resources import files
 import json
 import re
 import shutil
 import sys
 import time
+from dataclasses import asdict
+from importlib.resources import files
 from pathlib import Path
 
-from .copilot_manifest import CopilotPackageError, validate_copilot_package
 from .app_server_client import AppServerClient, AppServerClientError
+from .copilot_manifest import CopilotPackageError, validate_copilot_package
 from .dev_profile import (
     CopilotDevError,
     load_dev_composition,
-    prepared_deliveries,
     prepare_dev_profile,
     prepare_dev_tool_composition,
+    prepared_deliveries,
     validate_workspace,
 )
 from .test_runner import CopilotTestError, run_copilot_tests
-from .tool_environment import ToolEnvironmentError, ToolRuntimeSource, prepare_tool_composition
-
+from .tool_environment import (
+    ToolEnvironmentError,
+    ToolRuntimeSource,
+    garbage_collect_tool_builds,
+    prepare_tool_composition,
+)
 
 COPILOT_TEMPLATE_FILES = {
     "copilot.toml": "copilot.toml",
@@ -181,7 +185,9 @@ def _run_dev_probe(args: argparse.Namespace) -> dict[str, object]:
     runtime_deadline: float | None = None
     try:
         prepared_tools = prepare_dev_tool_composition(
-            prepared, output_root=args.tool_environment_root
+            prepared,
+            output_root=args.tool_environment_root,
+            build_store_root=args.build_store_root,
         )
         environment: dict[str, str] = {}
         client = AppServerClient.launch(
@@ -374,6 +380,7 @@ def _run_prepare(args: argparse.Namespace) -> dict[str, object]:
                 for tool in composition.tools
             ),
             output_root=args.output_root,
+            build_store_root=args.build_store_root,
             composition_descriptor_sha256=(
                 composition.summary.composition_descriptor_sha256
             ),
@@ -406,6 +413,25 @@ def _run_prepare(args: argparse.Namespace) -> dict[str, object]:
             for root in prepared.capability_roots
         ],
     }
+
+
+def _run_gc(args: argparse.Namespace) -> dict[str, object]:
+    try:
+        result = garbage_collect_tool_builds(
+            prepared_root=args.prepared_root,
+            build_store_root=args.build_store_root,
+            packages_root=args.packages_root,
+            active_package_ids=args.active_package_id,
+        )
+    except ToolEnvironmentError as error:
+        raise CopilotDevError(
+            error.code,
+            "tool-gc",
+            error.path,
+            "shared Tool build garbage collection failed",
+            error.cause,
+        ) from error
+    return {"ok": True, "state": "builds_collected", **result}
 
 
 def _print_prepare_result(payload: dict[str, object], *, as_json: bool) -> None:
@@ -454,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
     dev_copilot.add_argument("--keep-profile", action="store_true")
     dev_copilot.add_argument("--codex-bin", type=Path)
     dev_copilot.add_argument("--tool-environment-root", type=Path)
+    dev_copilot.add_argument("--build-store-root", type=Path)
     dev_copilot.add_argument("--timeout-seconds", type=float, default=90.0)
     dev_copilot.add_argument("--json", action="store_true")
 
@@ -464,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
     test_copilot.add_argument("--tool-registry-root", type=Path)
     test_copilot.add_argument("--codex-bin", type=Path)
     test_copilot.add_argument("--tool-environment-root", type=Path)
+    test_copilot.add_argument("--build-store-root", type=Path)
     test_copilot.add_argument("--timeout-seconds", type=float, default=45.0)
     test_copilot.add_argument("--json", action="store_true")
 
@@ -472,7 +500,15 @@ def main(argv: list[str] | None = None) -> int:
     prepare_copilot.add_argument("--manifest", type=Path, default=Path("copilot.toml"))
     prepare_copilot.add_argument("--tool-registry-root", type=Path)
     prepare_copilot.add_argument("--output-root", type=Path, required=True)
+    prepare_copilot.add_argument("--build-store-root", type=Path, required=True)
     prepare_copilot.add_argument("--json", action="store_true")
+
+    gc_copilot = subparsers.add_parser("gc-builds")
+    gc_copilot.add_argument("--prepared-root", type=Path, required=True)
+    gc_copilot.add_argument("--build-store-root", type=Path, required=True)
+    gc_copilot.add_argument("--packages-root", type=Path, required=True)
+    gc_copilot.add_argument("--active-package-id", action="append", required=True)
+    gc_copilot.add_argument("--json", action="store_true")
 
     args = parser.parse_args(argv)
     try:
@@ -501,12 +537,20 @@ def main(argv: list[str] | None = None) -> int:
                 _resolve_codex_bin(args.codex_bin),
                 timeout_seconds=args.timeout_seconds,
                 tool_environment_root=args.tool_environment_root,
+                build_store_root=args.build_store_root,
                 tool_registry_root=args.tool_registry_root,
             )
             _print_test_result(payload, as_json=args.json)
             return 0
         if args.resource == "prepare":
             _print_prepare_result(_run_prepare(args), as_json=args.json)
+            return 0
+        if args.resource == "gc-builds":
+            gc_result = _run_gc(args)
+            if args.json:
+                print(json.dumps(gc_result, ensure_ascii=False, indent=2))
+            else:
+                print("Tool builds collected.")
             return 0
     except CopilotPackageError as error:
         if getattr(args, "json", False):

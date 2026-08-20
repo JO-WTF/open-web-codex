@@ -8,16 +8,26 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import stat
 import subprocess
 import tempfile
+import time
 import zipfile
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+
+import tomllib
+
+try:  # pragma: no cover - the supported launcher platforms are POSIX.
+    import fcntl
+except ImportError:  # pragma: no cover
+    fcntl = None
 
 from .platform_packages import (
     ResolvedPlatformPackage,
@@ -27,6 +37,12 @@ from .tool_runtime_manifest import ToolRuntimeManifest, load_tool_runtime_manife
 
 PREPARED_DESCRIPTOR = Path("copilot-sdk/prepared-tools.v1.json")
 OWNER_MARKER = ".copilot-tool-environment.json"
+BUILD_DESCRIPTOR = Path(".copilot-tool-build.v1.json")
+BUILD_DIRECTORY = Path("builds")
+BUILD_STAGING_DIRECTORY = Path(".staging")
+BUILD_LOCK_DIRECTORY = Path(".locks")
+BUILD_CACHE_DIRECTORY = Path("cache")
+PACKAGE_ID_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,94}[a-z0-9])?$")
 ADAPTER_FINGERPRINT_VERSION = "tool-environment-v2"
 EXCLUDED_SOURCE_ENTRY_NAMES = frozenset(
     {
@@ -130,6 +146,7 @@ def prepare_tool_composition(
     source_root: Path,
     tools: Sequence[ToolRuntimeSource],
     output_root: Path,
+    build_store_root: Path,
     composition_descriptor_sha256: str,
     deliveries: Sequence[PreparedDelivery] = (),
     host_environment: Mapping[str, str] | None = None,
@@ -137,7 +154,12 @@ def prepare_tool_composition(
     executable_identity_resolver: ExecutableIdentityResolver | None = None,
     platform_package_resolver: PlatformPackageResolver | None = None,
 ) -> PreparedToolComposition:
-    """Prepare declared dependencies once and emit an unresolved internal descriptor."""
+    """Prepare dependencies in one shared immutable build store.
+
+    ``output_root`` owns only the package-specific descriptor and marker. The
+    actual dependency environments are keyed by fingerprint below
+    ``build_store_root`` so multiple Copilots can reuse one verified build.
+    """
 
     source_root = source_root.resolve(strict=True)
     environment = dict(os.environ if host_environment is None else host_environment)
@@ -198,6 +220,7 @@ def prepare_tool_composition(
         ) from error
     fingerprint = _preparation_fingerprint(declared, identities, platform_packages)
     output_root, existing_marker = _inspect_owned_output_root(output_root, source_root)
+    build_store_root = _absolute_directory(build_store_root, "build store root")
     if (
         existing_marker is not None
         and existing_marker.get("preparationFingerprint") == fingerprint
@@ -207,18 +230,22 @@ def prepare_tool_composition(
             existing_marker.get("compositionDescriptorSha256"),
         )
         if reused is not None:
-            _write_owner_marker(
-                output_root,
-                source_root,
-                composition_descriptor_sha256,
-                fingerprint,
-            )
+            try:
+                _validate_roots_in_build_store(reused.capability_roots, build_store_root, fingerprint)
+            except ToolEnvironmentError:
+                if not _roots_are_legacy_output(reused.capability_roots, output_root, fingerprint):
+                    raise
+                # An owned descriptor from the pre-shared-store layout is a
+                # cache miss. It is never used as a runtime fallback.
+                reused = None
+        if reused is not None:
             _write_prepared_descriptor(
                 output_root / PREPARED_DESCRIPTOR,
                 composition_descriptor_sha256,
                 reused.capability_roots,
                 deliveries,
             )
+            _write_owner_marker(output_root, source_root, composition_descriptor_sha256, fingerprint)
             return PreparedToolComposition(
                 output_root / PREPARED_DESCRIPTOR,
                 reused.capability_roots,
@@ -226,57 +253,304 @@ def prepare_tool_composition(
                 tuple(deliveries),
             )
 
-    _write_owner_marker(
-        output_root,
-        source_root,
-        composition_descriptor_sha256,
-        fingerprint,
+    _, prepared_roots, build_state = _ensure_shared_build(
+        declared=declared,
+        identities=identities,
+        platform_packages=platform_packages,
+        fingerprint=fingerprint,
+        build_store_root=build_store_root,
+        environment=environment,
+        runner=runner,
     )
     descriptor_path = output_root / PREPARED_DESCRIPTOR
-    descriptor_path.unlink(missing_ok=True)
-    build_root = output_root / "builds" / fingerprint
-    if build_root.exists():
-        shutil.rmtree(build_root)
-    build_root.mkdir(parents=True)
-    prepared_roots: list[PreparedCapabilityRoot] = []
-    try:
-        for tool, manifest in declared:
-            prepared_roots.append(
-                _prepare_tool(
-                    tool,
-                    manifest,
-                    build_root,
-                    environment,
-                    runner,
-                    {name: identity[0] for name, identity in identities.items()},
-                    platform_packages,
-                )
-            )
+    if existing_marker is None:
+        # A fresh output root has no ownership marker yet. Publish the marker
+        # first so a descriptor-write interruption remains repairable on the
+        # next invocation without accepting an unowned directory.
+        _write_owner_marker(output_root, source_root, composition_descriptor_sha256, fingerprint)
         _write_prepared_descriptor(
             descriptor_path,
             composition_descriptor_sha256,
             tuple(prepared_roots),
             deliveries,
         )
-    except Exception:
-        shutil.rmtree(build_root, ignore_errors=True)
-        raise
+    else:
+        # For an owned root, keep the old marker until the new descriptor has
+        # been atomically written. A marker failure then leaves a recoverable
+        # old/new mismatch instead of two stale claims.
+        _write_prepared_descriptor(
+            descriptor_path,
+            composition_descriptor_sha256,
+            tuple(prepared_roots),
+            deliveries,
+        )
+        _write_owner_marker(output_root, source_root, composition_descriptor_sha256, fingerprint)
     return PreparedToolComposition(
-        output_root / PREPARED_DESCRIPTOR, tuple(prepared_roots), "built", tuple(deliveries)
+        descriptor_path, tuple(prepared_roots), build_state, tuple(deliveries)
     )
+
+
+def _roots_are_legacy_output(
+    roots: Sequence[PreparedCapabilityRoot], output_root: Path, fingerprint: str
+) -> bool:
+    legacy_root = output_root / BUILD_DIRECTORY / fingerprint
+    paths: list[Path] = []
+    for root in roots:
+        for server in root.servers:
+            paths.append(server.command)
+            paths.extend(
+                Path(binding["resolvedRoot"])
+                for binding in server.env_bindings
+                if "resolvedRoot" in binding
+            )
+    return bool(paths) and all(
+        path.is_absolute() and path.is_relative_to(legacy_root) for path in paths
+    )
+
+
+def _ensure_shared_build(
+    *,
+    declared: Sequence[tuple[ToolRuntimeSource, ToolRuntimeManifest]],
+    identities: Mapping[str, tuple[Path, int, int]],
+    platform_packages: Mapping[str, ResolvedPlatformPackage],
+    fingerprint: str,
+    build_store_root: Path,
+    environment: Mapping[str, str],
+    runner: CommandRunner,
+) -> tuple[Path, tuple[PreparedCapabilityRoot, ...], Literal["built", "reused"]]:
+    builds_root = build_store_root / BUILD_DIRECTORY
+    staging_root = build_store_root / BUILD_STAGING_DIRECTORY
+    builds_root.mkdir(parents=True, exist_ok=True)
+    staging_root.mkdir(parents=True, exist_ok=True)
+    target = builds_root / fingerprint
+    lock_path = build_store_root / BUILD_LOCK_DIRECTORY / f"{fingerprint}.lock"
+    with _build_lock(lock_path):
+        if os.path.lexists(target):
+            if target.is_symlink() or not target.is_dir():
+                raise ToolEnvironmentError(
+                    "OutputConflict", str(target), "shared build target must be a directory"
+                )
+            prepared_roots = _load_build_manifest(target, fingerprint)
+            return target, prepared_roots, "reused"
+
+        staging = Path(tempfile.mkdtemp(prefix=f"{fingerprint}-", dir=staging_root))
+        try:
+            prepared_roots: list[PreparedCapabilityRoot] = []
+            cache_root = build_store_root / BUILD_CACHE_DIRECTORY
+            cache_root.mkdir(parents=True, exist_ok=True)
+            for tool, manifest in declared:
+                prepared_roots.append(
+                    _prepare_tool(
+                        tool,
+                        manifest,
+                        staging,
+                        cache_root,
+                        environment,
+                        runner,
+                        {name: identity[0] for name, identity in identities.items()},
+                        platform_packages,
+                    )
+                )
+            _validate_roots_under_root(prepared_roots, staging, require_exists=True)
+            final_roots = _rewrite_prepared_roots(tuple(prepared_roots), staging, target)
+            _write_build_manifest(staging, fingerprint, final_roots)
+            _validate_roots_under_root(final_roots, target, require_exists=False)
+            try:
+                os.replace(staging, target)
+            except OSError as error:
+                # A process that did not share the lock may have published the
+                # winner between our check and rename. Never overwrite it.
+                if not os.path.lexists(target) or target.is_symlink() or not target.is_dir():
+                    raise
+                try:
+                    winner = _load_build_manifest(target, fingerprint)
+                except ToolEnvironmentError:
+                    raise error
+                shutil.rmtree(staging, ignore_errors=True)
+                return target, winner, "reused"
+            return target, final_roots, "built"
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+
+
+@contextmanager
+def _build_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if fcntl is not None:
+        with path.open("a+") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+
+    # Windows has no fcntl. Use an atomic mkdir lock with a bounded wait so
+    # concurrent losers still observe and reuse the winner's build.
+    lock_directory = path.with_suffix(path.suffix + ".d")
+    for _ in range(300):
+        try:
+            lock_directory.mkdir()
+            break
+        except FileExistsError:
+            time.sleep(0.01)
+    else:
+        raise ToolEnvironmentError("EnvironmentUnavailable", str(path), "shared build lock timed out")
+    try:
+        yield
+    finally:
+        lock_directory.rmdir()
+
+
+def _rewrite_prepared_roots(
+    roots: Sequence[PreparedCapabilityRoot], old_root: Path, new_root: Path
+) -> tuple[PreparedCapabilityRoot, ...]:
+    def rewrite(path: Path) -> Path:
+        try:
+            relative = path.relative_to(old_root)
+        except ValueError as error:
+            raise ToolEnvironmentError(
+                "UnsafePath", str(path), "prepared path escapes the staging build"
+            ) from error
+        return new_root / relative
+
+    return tuple(
+        PreparedCapabilityRoot(
+            root.id,
+            tuple(
+                PreparedToolServer(
+                    server.id,
+                    rewrite(server.command),
+                    server.args,
+                    tuple(
+                        {
+                            **binding,
+                            **(
+                                {"resolvedRoot": str(rewrite(Path(binding["resolvedRoot"])))}
+                                if "resolvedRoot" in binding
+                                else {}
+                            ),
+                        }
+                        for binding in server.env_bindings
+                    ),
+                    server.startup_timeout_sec,
+                    server.tool_timeout_sec,
+                )
+                for server in root.servers
+            ),
+        )
+        for root in roots
+    )
+
+
+def _validate_roots_in_build_store(
+    roots: Sequence[PreparedCapabilityRoot], build_store_root: Path, fingerprint: str
+) -> None:
+    build_root = build_store_root / BUILD_DIRECTORY / fingerprint
+    _validate_roots_under_root(roots, build_root, require_exists=True)
+
+
+def _validate_roots_under_root(
+    roots: Sequence[PreparedCapabilityRoot], build_root: Path, *, require_exists: bool
+) -> None:
+    try:
+        canonical_build_root = build_root.resolve(strict=False)
+    except OSError as error:
+        raise ToolEnvironmentError("UnsafePath", str(build_root), "build root is invalid") from error
+    for root in roots:
+        if not root.id or Path(root.id).name != root.id:
+            raise ToolEnvironmentError("UnsafePath", str(build_root), "capability root id is invalid")
+        for server in root.servers:
+            _validate_owned_build_path(
+                server.command,
+                canonical_build_root,
+                require_exists=require_exists,
+                expect_directory=False,
+            )
+            for binding in server.env_bindings:
+                resolved = binding.get("resolvedRoot")
+                if resolved is not None:
+                    _validate_owned_build_path(
+                        Path(resolved),
+                        canonical_build_root,
+                        require_exists=require_exists,
+                        expect_directory=True,
+                    )
+
+
+def _validate_owned_build_path(
+    path: Path,
+    build_root: Path,
+    *,
+    require_exists: bool,
+    expect_directory: bool,
+) -> None:
+    if not path.is_absolute():
+        raise ToolEnvironmentError("UnsafePath", str(path), "build reference must be absolute")
+    try:
+        relative = path.relative_to(build_root)
+    except ValueError as error:
+        raise ToolEnvironmentError("UnsafePath", str(path), "build reference escapes build root") from error
+    current = build_root
+    for component in relative.parts:
+        current = current / component
+        if os.path.lexists(current):
+            mode = current.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                raise ToolEnvironmentError("UnsafePath", str(current), "build reference contains a symlink")
+    if require_exists:
+        if not path.is_file() and not expect_directory:
+            raise ToolEnvironmentError("EnvironmentUnavailable", str(path), "build command is missing")
+        if not path.is_dir() and expect_directory:
+            raise ToolEnvironmentError("EnvironmentUnavailable", str(path), "build dependency root is missing")
+
+
+def _write_build_manifest(
+    build_root: Path, fingerprint: str, capability_roots: Sequence[PreparedCapabilityRoot]
+) -> None:
+    _write_json_atomic(
+        build_root / BUILD_DESCRIPTOR,
+        {
+            "schemaVersion": 1,
+            "preparationFingerprint": fingerprint,
+            "capabilityRoots": [_descriptor_root(root) for root in capability_roots],
+        },
+    )
+
+
+def _load_build_manifest(build_root: Path, fingerprint: str) -> tuple[PreparedCapabilityRoot, ...]:
+    descriptor = build_root / BUILD_DESCRIPTOR
+    if descriptor.is_symlink() or not descriptor.is_file():
+        raise ToolEnvironmentError("OutputConflict", str(descriptor), "shared build marker is missing")
+    try:
+        payload = json.loads(descriptor.read_text(encoding="utf-8"))
+        if (
+            payload.get("schemaVersion") != 1
+            or payload.get("preparationFingerprint") != fingerprint
+        ):
+            raise ValueError("shared build marker does not match fingerprint")
+        roots = _parse_capability_roots(payload)
+        _validate_roots_under_root(roots, build_root, require_exists=True)
+        return roots
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        if isinstance(error, ToolEnvironmentError):
+            raise
+        raise ToolEnvironmentError("OutputConflict", str(descriptor), "shared build marker is malformed") from error
 
 
 def _prepare_tool(
     source: ToolRuntimeSource,
     manifest: ToolRuntimeManifest,
-    output_root: Path,
+    build_root: Path,
+    cache_root: Path,
     host_environment: Mapping[str, str],
     run_command: CommandRunner,
     executables: Mapping[str, Path],
     platform_packages: Mapping[str, ResolvedPlatformPackage],
 ) -> PreparedCapabilityRoot:
     tool_root = source.root.resolve(strict=True)
-    managed_root = output_root / "tool-environments" / source.id
+    managed_root = build_root / "tool-environments" / source.id
     dependency_roots: dict[str, Path] = {}
     python_commands: dict[str, Path] = {}
     for dependency in manifest.dependencies:
@@ -289,7 +563,7 @@ def _prepare_tool(
                 dependency.manifest,
                 dependency.lock,
                 dependency_root,
-                output_root,
+                cache_root,
                 run_command,
                 host_environment,
                 executables["python3"],
@@ -300,7 +574,7 @@ def _prepare_tool(
                 dependency.manifest,
                 dependency.lock,
                 dependency_root,
-                output_root,
+                cache_root,
                 run_command,
                 host_environment,
                 executables["npm"],
@@ -337,18 +611,23 @@ def _prepare_python_dependency(
     manifest: Path,
     lock: Path,
     dependency_root: Path,
-    process_data: Path,
+    cache_root: Path,
     run_command: CommandRunner,
     host_environment: Mapping[str, str],
     python: Path,
     platform_packages: Sequence[ResolvedPlatformPackage],
 ) -> Path:
     venv = dependency_root / "venv"
-    run_command((str(python), "-m", "venv", str(venv)), tool_root, host_environment)
+    run_command(
+        (str(python), "-m", "venv", "--copies", str(venv)),
+        tool_root,
+        host_environment,
+    )
     venv_python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     pip_env = dict(host_environment)
-    pip_env.update({"PIP_CACHE_DIR": str(process_data / "pip-cache"), "TMPDIR": str(process_data / "tmp")})
-    (process_data / "tmp").mkdir(parents=True, exist_ok=True)
+    pip_env.update({"PIP_CACHE_DIR": str(cache_root / "pip"), "TMPDIR": str(cache_root / "tmp")})
+    (cache_root / "pip").mkdir(parents=True, exist_ok=True)
+    (cache_root / "tmp").mkdir(parents=True, exist_ok=True)
     run_command(
         (str(venv_python), "-m", "pip", "install", "--require-hashes", "-r", str(lock)),
         tool_root,
@@ -363,7 +642,7 @@ def _prepare_python_dependency(
             tool_root,
             pip_env,
         )
-    build_source = Path(tempfile.mkdtemp(prefix="tool-build-", dir=process_data / "tmp"))
+    build_source = Path(tempfile.mkdtemp(prefix="tool-build-", dir=cache_root / "tmp"))
     wheel_dir = dependency_root / "wheel"
     wheel_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -401,7 +680,7 @@ def _prepare_node_dependency(
     manifest: Path,
     lock: Path,
     dependency_root: Path,
-    process_data: Path,
+    cache_root: Path,
     run_command: CommandRunner,
     host_environment: Mapping[str, str],
     npm: Path,
@@ -409,8 +688,13 @@ def _prepare_node_dependency(
     shutil.copy2(manifest, dependency_root / "package.json")
     shutil.copy2(lock, dependency_root / "package-lock.json")
     env = dict(host_environment)
-    env["npm_config_cache"] = str(process_data / "npm-cache")
-    run_command((str(npm), "ci", "--ignore-scripts"), dependency_root, env)
+    env["npm_config_cache"] = str(cache_root / "npm")
+    (cache_root / "npm").mkdir(parents=True, exist_ok=True)
+    run_command(
+        (str(npm), "ci", "--prefer-offline", "--no-audit", "--no-fund", "--ignore-scripts"),
+        dependency_root,
+        env,
+    )
 
 
 def _copy_source_tree(source: Path, destination: Path) -> None:
@@ -533,6 +817,8 @@ def _absolute_directory(path: Path, label: str) -> Path:
     path = Path(path)
     if not path.is_absolute():
         raise ToolEnvironmentError("InvalidPath", str(path), f"{label} must be absolute")
+    if os.path.lexists(path) and path.is_symlink():
+        raise ToolEnvironmentError("UnsafePath", str(path), f"{label} must not be a symlink")
     path.mkdir(parents=True, exist_ok=True)
     return path.resolve(strict=True)
 
@@ -552,6 +838,9 @@ def _inspect_owned_output_root(
             marker = path / OWNER_MARKER
             if not marker.is_file() or marker.is_symlink():
                 raise ToolEnvironmentError("OutputConflict", str(path), "output root is not owned by this composition")
+            descriptor = path / PREPARED_DESCRIPTOR
+            if descriptor.is_symlink():
+                raise ToolEnvironmentError("UnsafePath", str(descriptor), "prepared descriptor is a symlink")
             try:
                 actual = json.loads(marker.read_text(encoding="utf-8"))
             except (OSError, UnicodeError, json.JSONDecodeError) as error:
@@ -576,9 +865,7 @@ def _write_owner_marker(
         "compositionDescriptorSha256": composition_descriptor_sha256,
         "preparationFingerprint": fingerprint,
     }
-    (root / OWNER_MARKER).write_text(
-        json.dumps(expected, sort_keys=True, indent=2) + "\n", encoding="utf-8"
-    )
+    _write_json_atomic(root / OWNER_MARKER, expected)
 
 
 def _resolve_executable_identity(
@@ -692,10 +979,101 @@ def _digest_item(digest: Any, value: bytes) -> None:
     digest.update(value)
 
 
+def _parse_capability_roots(payload: Mapping[str, Any]) -> tuple[PreparedCapabilityRoot, ...]:
+    raw_roots = payload.get("capabilityRoots")
+    if not isinstance(raw_roots, list):
+        raise TypeError("capabilityRoots must be a list")
+    roots: list[PreparedCapabilityRoot] = []
+    for raw_root in raw_roots:
+        if not isinstance(raw_root, dict) or set(raw_root) != {"id", "servers"}:
+            raise TypeError("capability root descriptor is malformed")
+        root_id = raw_root["id"]
+        raw_servers = raw_root["servers"]
+        if not isinstance(root_id, str) or not isinstance(raw_servers, list):
+            raise TypeError("capability root descriptor is malformed")
+        servers: list[PreparedToolServer] = []
+        for raw_server in raw_servers:
+            if not isinstance(raw_server, dict):
+                raise TypeError("server descriptor is malformed")
+            allowed = {
+                "id",
+                "transport",
+                "command",
+                "args",
+                "envBindings",
+                "startupTimeoutSec",
+                "toolTimeoutSec",
+            }
+            if set(raw_server) - allowed or raw_server.get("transport") != "stdio":
+                raise TypeError("server descriptor is malformed")
+            server_id = raw_server.get("id")
+            command = raw_server.get("command")
+            args = raw_server.get("args")
+            bindings = raw_server.get("envBindings", [])
+            if (
+                not isinstance(server_id, str)
+                or not isinstance(command, str)
+                or not isinstance(args, list)
+                or not all(isinstance(item, str) for item in args)
+                or not isinstance(bindings, list)
+            ):
+                raise TypeError("server descriptor is malformed")
+            normalized_bindings: list[dict[str, str]] = []
+            for binding in bindings:
+                if not isinstance(binding, dict):
+                    raise TypeError("environment binding is malformed")
+                if set(binding) - {"name", "source", "dependency", "resolvedRoot"}:
+                    raise TypeError("environment binding is malformed")
+                if not isinstance(binding.get("name"), str) or not isinstance(
+                    binding.get("source"), str
+                ):
+                    raise TypeError("environment binding is malformed")
+                if binding["source"] not in {
+                    "profile_home",
+                    "tool_state_root",
+                    "dependency_root",
+                    "host",
+                }:
+                    raise ValueError("environment binding source is invalid")
+                normalized = {"name": binding["name"], "source": binding["source"]}
+                for key in ("dependency", "resolvedRoot"):
+                    if key in binding:
+                        if not isinstance(binding[key], str):
+                            raise TypeError("environment binding is malformed")
+                        normalized[key] = binding[key]
+                if normalized["source"] == "dependency_root" and "resolvedRoot" not in normalized:
+                    raise ValueError("dependency binding has no resolved root")
+                normalized_bindings.append(normalized)
+            startup_timeout = raw_server.get("startupTimeoutSec")
+            tool_timeout = raw_server.get("toolTimeoutSec")
+            if startup_timeout is not None and (
+                not isinstance(startup_timeout, int) or isinstance(startup_timeout, bool)
+            ):
+                raise TypeError("server timeout is malformed")
+            if tool_timeout is not None and (
+                not isinstance(tool_timeout, int) or isinstance(tool_timeout, bool)
+            ):
+                raise TypeError("server timeout is malformed")
+            servers.append(
+                PreparedToolServer(
+                    id=server_id,
+                    command=Path(command),
+                    args=tuple(args),
+                    env_bindings=tuple(normalized_bindings),
+                    startup_timeout_sec=startup_timeout,
+                    tool_timeout_sec=tool_timeout,
+                )
+            )
+        roots.append(PreparedCapabilityRoot(root_id, tuple(servers)))
+    return tuple(roots)
+
+
 def _load_prepared_composition(
     descriptor_path: Path,
     expected_composition_descriptor_sha256: object,
 ) -> PreparedToolComposition | None:
+    if descriptor_path.is_symlink():
+        raise ToolEnvironmentError("UnsafePath", str(descriptor_path), "prepared descriptor is a symlink")
     try:
         payload = json.loads(descriptor_path.read_text(encoding="utf-8"))
         if payload.get("schemaVersion") != 1:
@@ -706,29 +1084,17 @@ def _load_prepared_composition(
             != expected_composition_descriptor_sha256
         ):
             return None
-        roots: list[PreparedCapabilityRoot] = []
-        for root in payload["capabilityRoots"]:
-            servers: list[PreparedToolServer] = []
-            for server in root["servers"]:
-                command = Path(server["command"])
-                bindings = tuple(server.get("envBindings", []))
-                if not command.is_file():
+        roots = _parse_capability_roots(payload)
+        for root in roots:
+            for server in root.servers:
+                if not server.command.is_file() or server.command.is_symlink():
                     return None
-                for binding in bindings:
+                for binding in server.env_bindings:
                     resolved = binding.get("resolvedRoot")
-                    if resolved is not None and not Path(resolved).is_dir():
+                    if resolved is not None and (
+                        not Path(resolved).is_dir() or Path(resolved).is_symlink()
+                    ):
                         return None
-                servers.append(
-                    PreparedToolServer(
-                        server["id"],
-                        command,
-                        tuple(server["args"]),
-                        bindings,
-                        server.get("startupTimeoutSec"),
-                        server.get("toolTimeoutSec"),
-                    )
-                )
-            roots.append(PreparedCapabilityRoot(root["id"], tuple(servers)))
         deliveries = tuple(
             PreparedDelivery(
                 id=item["id"],
@@ -742,7 +1108,7 @@ def _load_prepared_composition(
             )
             for item in payload.get("deliveries", [])
         )
-        return PreparedToolComposition(descriptor_path, tuple(roots), "reused", deliveries)
+        return PreparedToolComposition(descriptor_path, roots, "reused", deliveries)
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError):
         return None
 
@@ -776,12 +1142,254 @@ def _write_prepared_descriptor(
             for delivery in deliveries
         ],
     }
-    descriptor_temp = descriptor_path.with_suffix(".tmp")
-    descriptor_temp.write_text(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-        encoding="utf-8",
+    _write_json_atomic(descriptor_path, payload, ensure_ascii=False)
+
+
+def _write_json_atomic(path: Path, payload: Mapping[str, Any], *, ensure_ascii: bool = True) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor_fd, descriptor_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )
-    descriptor_temp.replace(descriptor_path)
+    os.close(descriptor_fd)
+    descriptor_temp = Path(descriptor_name)
+    try:
+        descriptor_temp.write_text(
+            json.dumps(payload, ensure_ascii=ensure_ascii, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(descriptor_temp, path)
+    finally:
+        descriptor_temp.unlink(missing_ok=True)
+
+
+def garbage_collect_tool_builds(
+    *,
+    prepared_root: Path,
+    build_store_root: Path,
+    packages_root: Path,
+    active_package_ids: Sequence[str],
+) -> dict[str, int]:
+    """Collect only builds referenced by the current authoritative package set."""
+
+    prepared_root = _absolute_directory(prepared_root, "prepared root")
+    build_store_root = _absolute_directory(build_store_root, "build store root")
+    packages_root = _absolute_directory(packages_root, "packages root")
+    active_ids = _validated_active_package_ids(active_package_ids)
+    current_packages = _current_package_sources(packages_root)
+    missing_current = sorted(set(active_ids) - set(current_packages))
+    if missing_current:
+        raise ToolEnvironmentError(
+            "OutputConflict",
+            str(packages_root),
+            f"active package manifest is missing: {', '.join(missing_current)}",
+        )
+
+    builds_root = build_store_root / BUILD_DIRECTORY
+    builds_root.mkdir(parents=True, exist_ok=True)
+    referenced: set[str] = set()
+    active_package_roots: list[Path] = []
+    legacy_removed_entries = 0
+    legacy_removed_bytes = 0
+
+    # Validate every active package before changing any package or build path.
+    for package_id in active_ids:
+        package_root = prepared_root / package_id
+        if package_root.is_symlink() or not package_root.is_dir():
+            raise ToolEnvironmentError("UnsafePath", str(package_root), "active package output is unsafe")
+        descriptor_path = package_root / PREPARED_DESCRIPTOR
+        marker_path = package_root / OWNER_MARKER
+        if descriptor_path.is_symlink() or marker_path.is_symlink():
+            raise ToolEnvironmentError("UnsafePath", str(package_root), "active package marker or descriptor is a symlink")
+        if not descriptor_path.is_file() or not marker_path.is_file():
+            raise ToolEnvironmentError("OutputConflict", str(package_root), "active package output is incomplete")
+        try:
+            payload = json.loads(descriptor_path.read_text(encoding="utf-8"))
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            composition_sha = payload.get("compositionDescriptorSha256")
+            fingerprint = marker.get("preparationFingerprint")
+            if (
+                payload.get("schemaVersion") != 1
+                or not isinstance(composition_sha, str)
+                or len(composition_sha) != 64
+                or any(char not in "0123456789abcdef" for char in composition_sha)
+                or marker.get("schemaVersion") != 1
+                or not isinstance(fingerprint, str)
+                or len(fingerprint) != 64
+                or any(char not in "0123456789abcdef" for char in fingerprint)
+            ):
+                raise ValueError("active package marker or descriptor schema is invalid")
+            source_root = marker.get("sourceRoot")
+            if not isinstance(source_root, str) or Path(source_root).resolve(strict=True) != current_packages[package_id]:
+                raise ValueError("active package source root is not authoritative")
+            roots = _parse_capability_roots(payload)
+            build_root = builds_root / fingerprint
+            _validate_roots_under_root(roots, build_root, require_exists=True)
+            _load_build_manifest(build_root, fingerprint)
+        except ToolEnvironmentError:
+            raise
+        except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+            raise ToolEnvironmentError("OutputConflict", str(descriptor_path), "active package descriptor is malformed") from error
+        referenced.add(fingerprint)
+        active_package_roots.append(package_root)
+
+    for package_root in active_package_roots:
+        removed_entries, removed_bytes = _cleanup_legacy_package_entries(package_root)
+        legacy_removed_entries += removed_entries
+        legacy_removed_bytes += removed_bytes
+
+    stale_removed_entries = 0
+    stale_removed_bytes = 0
+    unknown_skipped_entries = 0
+    active_set = set(active_ids)
+    for package_root in sorted(prepared_root.iterdir(), key=lambda item: item.name):
+        if package_root.name in active_set:
+            continue
+        mode = package_root.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise ToolEnvironmentError("UnsafePath", str(package_root), "prepared package is a symlink")
+        if not stat.S_ISDIR(mode) or not _is_superseded_package_output(
+            package_root, current_packages, active_set
+        ):
+            unknown_skipped_entries += 1
+            continue
+        stale_removed_bytes += _tree_size_without_symlinks(package_root)
+        shutil.rmtree(package_root)
+        stale_removed_entries += 1
+
+    removed = 0
+    for build in sorted(builds_root.iterdir(), key=lambda item: item.name):
+        if build.is_symlink() or not build.is_dir():
+            raise ToolEnvironmentError("UnsafePath", str(build), "shared build entry is unsafe")
+        if len(build.name) != 64 or any(char not in "0123456789abcdef" for char in build.name):
+            raise ToolEnvironmentError("OutputConflict", str(build), "shared build fingerprint is invalid")
+        _load_build_manifest(build, build.name)
+        if build.name not in referenced:
+            shutil.rmtree(build)
+            removed += 1
+    return {
+        "descriptors": len(active_package_roots),
+        "referenced": len(referenced),
+        "removed": removed,
+        "legacyRemovedEntries": legacy_removed_entries,
+        "legacyRemovedBytes": legacy_removed_bytes,
+        "staleRemovedEntries": stale_removed_entries,
+        "staleRemovedBytes": stale_removed_bytes,
+        "unknownSkippedEntries": unknown_skipped_entries,
+    }
+
+
+def _validated_active_package_ids(active_package_ids: Sequence[str]) -> tuple[str, ...]:
+    if not active_package_ids:
+        raise ToolEnvironmentError("InvalidPath", "active_package_ids", "active package set must not be empty")
+    if len(set(active_package_ids)) != len(active_package_ids):
+        raise ToolEnvironmentError("InvalidPath", "active_package_ids", "active package IDs must be unique")
+    if any(not isinstance(package_id, str) or not PACKAGE_ID_PATTERN.fullmatch(package_id) for package_id in active_package_ids):
+        raise ToolEnvironmentError("InvalidPath", "active_package_ids", "active package ID is invalid")
+    return tuple(active_package_ids)
+
+
+def _current_package_sources(packages_root: Path) -> dict[str, Path]:
+    packages: dict[str, Path] = {}
+    for package_root in sorted(packages_root.iterdir(), key=lambda item: item.name):
+        mode = package_root.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise ToolEnvironmentError("UnsafePath", str(package_root), "trusted package root contains a symlink")
+        if not stat.S_ISDIR(mode):
+            continue
+        manifest = package_root / "copilot.toml"
+        if not os.path.lexists(manifest):
+            continue
+        if manifest.is_symlink() or not manifest.is_file():
+            raise ToolEnvironmentError("UnsafePath", str(manifest), "trusted package manifest is unsafe")
+        try:
+            payload = tomllib.loads(manifest.read_text(encoding="utf-8"))
+            package_id = payload.get("id")
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError) as error:
+            raise ToolEnvironmentError("OutputConflict", str(manifest), "trusted package manifest is malformed") from error
+        if not isinstance(package_id, str) or not PACKAGE_ID_PATTERN.fullmatch(package_id):
+            raise ToolEnvironmentError("OutputConflict", str(manifest), "trusted package ID is invalid")
+        if package_id in packages:
+            raise ToolEnvironmentError("OutputConflict", str(manifest), "trusted package ID is duplicated")
+        packages[package_id] = package_root.resolve(strict=True)
+    return packages
+
+
+def _is_superseded_package_output(
+    package_root: Path, current_packages: Mapping[str, Path], active_ids: set[str]
+) -> bool:
+    marker_path = package_root / OWNER_MARKER
+    if marker_path.is_symlink() or not marker_path.is_file():
+        return False
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        source_root = marker.get("sourceRoot")
+        if marker.get("schemaVersion") != 1 or not isinstance(source_root, str):
+            return False
+        canonical_source = Path(source_root).resolve(strict=True)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return False
+    current_id = next(
+        (package_id for package_id, source in current_packages.items() if source == canonical_source),
+        None,
+    )
+    return current_id in active_ids and current_id != package_root.name
+
+
+def _iter_prepared_descriptors(root: Path) -> list[Path]:
+    descriptors: list[Path] = []
+    for package_root in sorted(root.iterdir(), key=lambda item: item.name):
+        mode = package_root.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise ToolEnvironmentError("UnsafePath", str(package_root), "prepared package is a symlink")
+        if not stat.S_ISDIR(mode):
+            continue
+        descriptor_path = package_root / PREPARED_DESCRIPTOR
+        if descriptor_path.is_symlink():
+            raise ToolEnvironmentError("UnsafePath", str(descriptor_path), "prepared descriptor is a symlink")
+        if os.path.lexists(descriptor_path):
+            if not descriptor_path.is_file():
+                raise ToolEnvironmentError("UnsafePath", str(descriptor_path), "prepared descriptor is unsafe")
+            marker_path = package_root / OWNER_MARKER
+            if marker_path.is_symlink():
+                raise ToolEnvironmentError("UnsafePath", str(marker_path), "prepared owner marker is a symlink")
+            descriptors.append(descriptor_path)
+    return descriptors
+
+
+def _cleanup_legacy_package_entries(package_root: Path) -> tuple[int, int]:
+    removed_entries = 0
+    removed_bytes = 0
+    for name in ("builds", "pip-cache", "npm-cache", "tmp"):
+        entry = package_root / name
+        if not os.path.lexists(entry):
+            continue
+        mode = entry.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            raise ToolEnvironmentError("UnsafePath", str(entry), "legacy build entry is a symlink")
+        if not stat.S_ISDIR(mode):
+            raise ToolEnvironmentError("OutputConflict", str(entry), "legacy build entry is not a directory")
+        removed_bytes += _tree_size_without_symlinks(entry)
+        shutil.rmtree(entry)
+        removed_entries += 1
+    return removed_entries, removed_bytes
+
+
+def _tree_size_without_symlinks(root: Path) -> int:
+    total = 0
+    for entry in root.iterdir():
+        mode = entry.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            # Symlinks are disposable entries inside an owned legacy root.
+            # Count only the link itself and never follow its target.
+            total += entry.lstat().st_size
+            continue
+        if stat.S_ISDIR(mode):
+            total += _tree_size_without_symlinks(entry)
+        elif stat.S_ISREG(mode):
+            total += entry.stat().st_size
+        else:
+            raise ToolEnvironmentError("OutputConflict", str(entry), "legacy build tree contains an unsupported entry")
+    return total
 
 
 def _descriptor_root(root: PreparedCapabilityRoot) -> dict[str, Any]:

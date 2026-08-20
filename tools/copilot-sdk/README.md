@@ -51,8 +51,10 @@ Role，因此 `roleSpawn` 和 `modelAcceptance` 明确保持 `not_run`。
 `--profile DIR` 使用并保留显式目录，但只接受空目录或由同一 source identity 创建的目录。
 app-server 的 HOME 和进程 cwd 使用 Profile 外的另一临时目录，并始终删除。可用
 `--manifest REL`、`--codex-bin PATH` 和 `--json` 覆盖默认值或取得有界机器输出。Tool
-依赖环境默认位于 SDK 的本机持久缓存；`--tool-environment-root DIR` 可让 `dev`、`test`
-和显式 `prepare` 复用同一个缓存。Profile 与 Runtime 状态仍保持临时隔离。
+依赖环境默认位于 SDK 的本机持久缓存；`--build-store-root DIR` 指定稳定的共享 build store，
+`--tool-environment-root DIR`（`dev`/`test`）或 `--output-root DIR`（`prepare`）只指定当前 package 的 descriptor 输出根。相同 Tool fingerprint
+的不同 Copilot 组合共享一套 immutable build；pip/npm cache 位于 build store 的稳定 `cache/`
+根，不进入 fingerprint build 目录。Profile 与 Runtime 状态仍保持临时隔离。
 
 ## 原生正常链验收
 
@@ -71,7 +73,7 @@ ID、绝对路径或原始请求。
 `init` 生成的 Python Tool 自带 `pyproject.toml`、带 SHA-256 的 `requirements.lock` 和
 `runtime.toml`。Python 依赖由 SDK 用 `pip --require-hashes` 安装，Tool source 经 staged wheel
 构建后以 `--no-deps` 非 editable 安装；声明的 Node 项目由 SDK 在外置环境执行
-`npm ci --ignore-scripts`。`dev` 和 `test` 复用同一套通用 provisioner；Runtime 启动和 MCP
+`npm ci --prefer-offline --no-audit --no-fund --ignore-scripts`。`dev` 和 `test` 复用同一套通用 provisioner；Runtime 启动和 MCP
 握手阶段不安装依赖。组合中只修改 Skill、Agent 或提示词时，缓存会更新组合描述，但不会
 重新安装未变化的 Tool 依赖。
 
@@ -84,15 +86,23 @@ Tool 若需要平台提供的领域无关 provider primitives，必须同时在 
 
 ```bash
 copilot prepare copilots/warehouse-network \
-  --output-root /absolute/platform-data/copilot-environment
+  --output-root /absolute/platform-data/copilot-environment \
+  --build-store-root /absolute/platform-data/tool-builds
 ```
 
 `prepare` 只返回有界的 Copilot、capability-root 与 server 标识，并在给定的 SDK-owned output
-root 写入内部 `copilot-sdk/prepared-tools.v1.json`。该描述符包含已准备的 stdio transport、参数
+root 写入内部 `copilot-sdk/prepared-tools.v1.json`；实际依赖环境写入统一的 build store。该描述符包含已准备的 stdio transport、参数
 和 typed 环境绑定，以及 `copilot.toml` 已验证的 delivery 声明，供 Platform Server 在具体 Profile
 下解析；它不固定 MCP server cwd，Runtime
 会使用 Thread 已授权的 Workspace cwd。该描述符不是 Browser DTO，也不包含
 安装命令、安装日志或 Secret。
+
+所有 package prepare 成功后，launcher 才调用 `copilot gc-builds`，传入本次成功 prepare 的全部
+`--active-package-id` 和可信 `--packages-root`；GC 只把 active package 的 exact descriptor 当作引用真相，
+只保留命令/依赖实际引用的 fingerprint build，并清理被当前 manifest ID 明确取代的旧 package
+环境；未知目录保留并计数。任一 prepare 失败都会停止并跳过 GC。GC 会拒绝
+越界、symlink、marker 不匹配或 malformed descriptor。Windows 没有 `fcntl` 时使用 bounded
+mkdir lock；遇到 stale lock 会返回 typed `EnvironmentUnavailable`，不会默默删除或绕过锁。
 
 `[[deliveries]]` 用精确 MCP `server`/`tool` 声明显式交付。目前只有固定 envelope 的
 `workspace_artifact`（JSON Schema 或 Markdown marker 验证）与 `inline_geojson_map_card`；

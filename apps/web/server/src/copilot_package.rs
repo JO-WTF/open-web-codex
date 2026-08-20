@@ -172,10 +172,11 @@ impl CopilotPackageAssets {
     pub(crate) fn resolve(
         package_root: &Path,
         descriptor_path: &Path,
+        build_store_root: &Path,
     ) -> Result<Self, CopilotPackageError> {
         let package = load_copilot_package(package_root)?;
         let (source_revision, capability_roots, deliveries) =
-            load_prepared_descriptor(descriptor_path)?;
+            load_prepared_descriptor(descriptor_path, build_store_root)?;
         let prepared_ids = capability_roots.keys().cloned().collect::<BTreeSet<_>>();
         if prepared_ids != package.tool_ids {
             return Err(unavailable_message(
@@ -770,6 +771,7 @@ fn package_directory(
 
 fn load_prepared_descriptor(
     descriptor_path: &Path,
+    build_store_root: &Path,
 ) -> Result<
     (
         String,
@@ -780,16 +782,7 @@ fn load_prepared_descriptor(
 > {
     const COMPONENT: &str = "prepared Copilot descriptor";
     let descriptor_path = canonical_regular_file(COMPONENT, descriptor_path, false)?;
-    let prepared_output_root = descriptor_path
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| {
-            unavailable_message(
-                COMPONENT,
-                "descriptor path does not identify a prepared output root".to_string(),
-            )
-        })?
-        .to_path_buf();
+    let build_store_root = canonical_directory(COMPONENT, build_store_root)?;
     if fs::metadata(&descriptor_path)
         .map_err(|error| unavailable(COMPONENT, error))?
         .len()
@@ -837,6 +830,7 @@ fn load_prepared_descriptor(
     }
     let mut capability_roots = BTreeMap::new();
     let mut all_server_ids = BTreeSet::new();
+    let mut build_fingerprint: Option<String> = None;
     for root in document.capability_roots {
         require_stable_identifier(COMPONENT, "capability root", &root.id)?;
         if root.servers.is_empty() {
@@ -866,7 +860,12 @@ fn load_prepared_descriptor(
                     ),
                 ));
             }
-            let command = prepared_command(COMPONENT, &server.command, &prepared_output_root)?;
+            let command = prepared_command(
+                COMPONENT,
+                &server.command,
+                &build_store_root,
+                &mut build_fingerprint,
+            )?;
             let startup_timeout_sec = positive_timeout(
                 COMPONENT,
                 &root.id,
@@ -925,7 +924,12 @@ fn load_prepared_descriptor(
                         })?;
                         PreparedEnvironmentBinding::DependencyRoot {
                             name: binding.name,
-                            root: canonical_directory(COMPONENT, resolved_root)?,
+                            root: prepared_dependency_root(
+                                COMPONENT,
+                                resolved_root,
+                                &build_store_root,
+                                &mut build_fingerprint,
+                            )?,
                         }
                     }
                     "host" => {
@@ -1162,7 +1166,7 @@ fn canonical_regular_file(
     Ok(path)
 }
 
-/// Validate a launcher emitted by the trusted preparation output without
+/// Validate a launcher emitted by the trusted shared build store without
 /// replacing it with its resolved executable target. Python virtual
 /// environments intentionally use a final `bin/python` symlink; launching the
 /// resolved system interpreter would discard the virtual-environment prefix
@@ -1170,10 +1174,11 @@ fn canonical_regular_file(
 fn prepared_command(
     component: &'static str,
     path: &Path,
-    prepared_output_root: &Path,
+    build_store_root: &Path,
+    build_fingerprint: &mut Option<String>,
 ) -> Result<PathBuf, CopilotPackageError> {
     let path = require_absolute_path(component, path)?;
-    let prepared_output_root = prepared_output_root
+    let build_store_root = build_store_root
         .canonicalize()
         .map_err(|error| unavailable(component, error))?;
     if path
@@ -1188,6 +1193,8 @@ fn prepared_command(
             ),
         ));
     }
+    let (build_root, fingerprint) = shared_build_root(component, &path, &build_store_root)?;
+    require_matching_build_fingerprint(component, build_fingerprint, &fingerprint)?;
     let parent = path.parent().ok_or_else(|| {
         unavailable_message(
             component,
@@ -1197,13 +1204,10 @@ fn prepared_command(
     let parent = parent
         .canonicalize()
         .map_err(|error| unavailable(component, error))?;
-    if !parent.starts_with(&prepared_output_root) {
+    if !parent.starts_with(&build_root) {
         return Err(unavailable_message(
             component,
-            format!(
-                "prepared MCP command is outside the prepared output root: {}",
-                path.display()
-            ),
+            "prepared command escapes shared build".into(),
         ));
     }
     let entry = fs::symlink_metadata(&path).map_err(|error| unavailable(component, error))?;
@@ -1226,7 +1230,138 @@ fn prepared_command(
             ),
         ));
     }
+    let target_path = path
+        .canonicalize()
+        .map_err(|error| unavailable(component, error))?;
+    if !target_path.starts_with(&build_root) {
+        return Err(unavailable_message(
+            component,
+            "prepared command symlink escapes shared build".into(),
+        ));
+    }
     Ok(path)
+}
+
+fn prepared_dependency_root(
+    component: &'static str,
+    path: &Path,
+    build_store_root: &Path,
+    build_fingerprint: &mut Option<String>,
+) -> Result<PathBuf, CopilotPackageError> {
+    let path = require_absolute_path(component, path)?;
+    let (build_root, fingerprint) = shared_build_root(component, &path, build_store_root)?;
+    require_matching_build_fingerprint(component, build_fingerprint, &fingerprint)?;
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| unavailable(component, error))?;
+    if !canonical.starts_with(&build_root) || !canonical.is_dir() {
+        return Err(unavailable_message(
+            component,
+            "dependency root escapes shared build".into(),
+        ));
+    }
+    Ok(canonical)
+}
+
+fn shared_build_root(
+    component: &'static str,
+    path: &Path,
+    build_store_root: &Path,
+) -> Result<(PathBuf, String), CopilotPackageError> {
+    let builds_root = build_store_root.join("builds");
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|error| unavailable(component, error))?;
+    let relative = canonical_path.strip_prefix(&builds_root).map_err(|_| {
+        unavailable_message(
+            component,
+            "prepared path is outside the shared build store".into(),
+        )
+    })?;
+    let mut components = relative.components();
+    let fingerprint = components
+        .next()
+        .and_then(|component| match component {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            unavailable_message(component, "prepared path has no build fingerprint".into())
+        })?;
+    if fingerprint.len() != 64
+        || !fingerprint
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(unavailable_message(
+            component,
+            "build fingerprint is invalid".into(),
+        ));
+    }
+    let build_root = builds_root.join(fingerprint);
+    let metadata =
+        fs::symlink_metadata(&build_root).map_err(|error| unavailable(component, error))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(unavailable_message(
+            component,
+            "build fingerprint root is unsafe".into(),
+        ));
+    }
+    let canonical = build_root
+        .canonicalize()
+        .map_err(|error| unavailable(component, error))?;
+    if canonical != build_root {
+        return Err(unavailable_message(
+            component,
+            "build fingerprint root is not canonical".into(),
+        ));
+    }
+    let marker_path = canonical.join(".copilot-tool-build.v1.json");
+    let marker_metadata =
+        fs::symlink_metadata(&marker_path).map_err(|error| unavailable(component, error))?;
+    if marker_metadata.file_type().is_symlink() || !marker_metadata.is_file() {
+        return Err(unavailable_message(
+            component,
+            "shared build marker is unsafe".into(),
+        ));
+    }
+    let marker: serde_json::Value = serde_json::from_slice(
+        &fs::read(&marker_path).map_err(|error| unavailable(component, error))?,
+    )
+    .map_err(|error| unavailable(component, error))?;
+    if marker
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+        || marker
+            .get("preparationFingerprint")
+            .and_then(serde_json::Value::as_str)
+            != Some(fingerprint)
+    {
+        return Err(unavailable_message(
+            component,
+            "shared build marker does not match fingerprint".into(),
+        ));
+    }
+    Ok((canonical, fingerprint.to_string()))
+}
+
+fn require_matching_build_fingerprint(
+    component: &'static str,
+    current: &mut Option<String>,
+    fingerprint: &str,
+) -> Result<(), CopilotPackageError> {
+    if let Some(existing) = current {
+        if existing != fingerprint {
+            return Err(unavailable_message(
+                component,
+                "descriptor mixes shared build fingerprints".into(),
+            ));
+        }
+    } else {
+        *current = Some(fingerprint.to_string());
+    }
+    Ok(())
 }
 
 fn canonical_directory(
@@ -1654,10 +1789,13 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, CopilotPackageAssets, PathBuf, PathBuf) {
         let temp = tempfile::tempdir().expect("temp dir");
         let prepared = temp.path().join("prepared 运行态");
-        let supply_python = prepared.join("dependencies/supply python/bin/python");
-        let maps_python = prepared.join("dependencies/maps python/bin/python");
-        let system_python = temp.path().join("system python");
-        let style_spec = prepared.join("dependencies/map style spec");
+        let build_store = temp.path().join("tool-builds");
+        let build_root = build_store
+            .join("builds/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let supply_python = build_root.join("tool-environments/supply_chain/venv/bin/python");
+        let maps_python = build_root.join("tool-environments/map_utils/venv/bin/python");
+        let system_python = build_root.join("system-python");
+        let style_spec = build_root.join("tool-environments/map_utils/dependencies/style-spec");
         let profile = temp.path().join("profile 用户");
         let package = temp.path().join("copilot package");
         for directory in [&profile, &style_spec] {
@@ -1784,6 +1922,16 @@ runtime = "tools/maps/runtime.toml"
         #[cfg(not(unix))]
         write_file(&supply_python, "#!/bin/sh\n", true);
         write_file(&maps_python, "#!/bin/sh\n", true);
+        write_file(
+            &build_root.join(".copilot-tool-build.v1.json"),
+            &serde_json::to_string_pretty(&serde_json::json!({
+                "schemaVersion": 1,
+                "preparationFingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "capabilityRoots": []
+            }))
+            .expect("serialize build marker"),
+            false,
+        );
         let descriptor = prepared.join("copilot-sdk/prepared-tools.v1.json");
         write_file(
             &descriptor,
@@ -1872,7 +2020,8 @@ runtime = "tools/maps/runtime.toml"
             false,
         );
 
-        let assets = CopilotPackageAssets::resolve(&package, &descriptor).expect("resolve assets");
+        let assets = CopilotPackageAssets::resolve(&package, &descriptor, &build_store)
+            .expect("resolve assets");
         (temp, assets, profile, descriptor)
     }
 
@@ -1992,9 +2141,9 @@ runtime = "tools/maps/runtime.toml"
                 "warehouse Root and child Roles must disable shell tools through native config",
             );
         }
-        let supply_python = _temp
-            .path()
-            .join("prepared 运行态/dependencies/supply python/bin/python");
+        let supply_python = _temp.path().join(
+            "tool-builds/builds/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/tool-environments/supply_chain/venv/bin/python",
+        );
         assert_eq!(
             data["mcp_servers"]["supply_chain_data"]["command"].as_str(),
             supply_python.to_str(),
@@ -2363,18 +2512,21 @@ runtime = "tools/maps/runtime.toml"
     fn rejects_missing_or_relative_prepared_descriptor_as_unavailable() {
         let temp = tempfile::tempdir().expect("temp dir");
         assert!(matches!(
-            load_prepared_descriptor(Path::new("relative")),
+            load_prepared_descriptor(Path::new("relative"), &temp.path().join("tool-builds")),
             Err(CopilotPackageError::Unavailable { .. })
         ));
         assert!(matches!(
-            load_prepared_descriptor(&temp.path().join("missing")),
+            load_prepared_descriptor(
+                &temp.path().join("missing"),
+                &temp.path().join("tool-builds"),
+            ),
             Err(CopilotPackageError::Unavailable { .. })
         ));
     }
 
     #[test]
     fn rejects_unknown_fields_and_duplicate_prepared_capability_roots() {
-        let (_temp, _assets, _profile, descriptor) = fixture();
+        let (temp, _assets, _profile, descriptor) = fixture();
         let mut document: serde_json::Value =
             serde_json::from_slice(&fs::read(&descriptor).expect("read descriptor"))
                 .expect("parse descriptor fixture");
@@ -2385,7 +2537,7 @@ runtime = "tools/maps/runtime.toml"
         )
         .expect("write unknown field fixture");
         assert!(matches!(
-            load_prepared_descriptor(&descriptor),
+            load_prepared_descriptor(&descriptor, &temp.path().join("tool-builds")),
             Err(CopilotPackageError::Unavailable { .. })
         ));
 
@@ -2401,7 +2553,7 @@ runtime = "tools/maps/runtime.toml"
         )
         .expect("write obsolete cwd fixture");
         assert!(matches!(
-            load_prepared_descriptor(&descriptor),
+            load_prepared_descriptor(&descriptor, &temp.path().join("tool-builds")),
             Err(CopilotPackageError::Unavailable { .. })
         ));
 
@@ -2420,14 +2572,14 @@ runtime = "tools/maps/runtime.toml"
         )
         .expect("write duplicate root fixture");
         assert!(matches!(
-            load_prepared_descriptor(&descriptor),
+            load_prepared_descriptor(&descriptor, &temp.path().join("tool-builds")),
             Err(CopilotPackageError::Unavailable { .. })
         ));
     }
 
     #[test]
     fn rejects_prepared_host_binding_outside_proxy_capability() {
-        let (_temp, _assets, _profile, descriptor) = fixture();
+        let (temp, _assets, _profile, descriptor) = fixture();
         let mut document: serde_json::Value =
             serde_json::from_slice(&fs::read(&descriptor).expect("read descriptor"))
                 .expect("parse descriptor fixture");
@@ -2440,7 +2592,7 @@ runtime = "tools/maps/runtime.toml"
         .expect("write host binding fixture");
 
         assert!(matches!(
-            load_prepared_descriptor(&descriptor),
+            load_prepared_descriptor(&descriptor, &temp.path().join("tool-builds")),
             Err(CopilotPackageError::Unavailable { .. })
         ));
     }
@@ -2451,16 +2603,35 @@ runtime = "tools/maps/runtime.toml"
         use std::os::unix::fs::symlink;
 
         let temp = tempfile::tempdir().expect("temp dir");
-        let prepared = temp.path().join("prepared");
-        let bin = prepared.join("builds/revision/tool/venv/bin");
+        let build_store = temp.path().join("tool-builds");
+        let build = build_store.join(
+            "builds/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/tool/venv/bin",
+        );
+        let marker = build_store.join(
+            "builds/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/.copilot-tool-build.v1.json",
+        );
+        write_file(
+            &marker,
+            r#"{"schemaVersion":1,"preparationFingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","capabilityRoots":[]}"#,
+            false,
+        );
+        let bin = build;
         fs::create_dir_all(&bin).expect("prepared bin");
-        let system_python = temp.path().join("system-python");
+        let system_python = build_store.join(
+            "builds/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/system-python",
+        );
         write_file(&system_python, "#!/bin/sh\n", true);
         let launcher = bin.join("python");
         symlink(&system_python, &launcher).expect("virtual-environment launcher");
+        let mut valid_fingerprint = None;
         assert_eq!(
-            prepared_command("prepared command", &launcher, &prepared)
-                .expect("valid virtual-environment launcher"),
+            prepared_command(
+                "prepared command",
+                &launcher,
+                &build_store,
+                &mut valid_fingerprint,
+            )
+            .expect("valid virtual-environment launcher"),
             launcher,
             "validation must preserve the final launcher symlink path",
         );
@@ -2469,7 +2640,7 @@ runtime = "tools/maps/runtime.toml"
         fs::create_dir_all(&outside).expect("outside directory");
         let outside_command = outside.join("command");
         write_file(&outside_command, "#!/bin/sh\n", true);
-        let escaped_parent = prepared.join("escaped");
+        let escaped_parent = bin.join("escaped");
         symlink(&outside, &escaped_parent).expect("escaping parent symlink");
 
         let broken = bin.join("broken");
@@ -2477,6 +2648,7 @@ runtime = "tools/maps/runtime.toml"
         let non_executable = bin.join("non-executable");
         write_file(&non_executable, "#!/bin/sh\n", false);
         let dot_dot = bin.join("../bin/python");
+        let mut fingerprint = None;
 
         for rejected in [
             outside_command,
@@ -2487,7 +2659,12 @@ runtime = "tools/maps/runtime.toml"
         ] {
             assert!(
                 matches!(
-                    prepared_command("prepared command", &rejected, &prepared),
+                    prepared_command(
+                        "prepared command",
+                        &rejected,
+                        &build_store,
+                        &mut fingerprint
+                    ),
                     Err(CopilotPackageError::Unavailable { .. })
                 ),
                 "unsafe prepared command was accepted: {}",

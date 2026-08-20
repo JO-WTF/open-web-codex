@@ -84,6 +84,9 @@ struct Cli {
     /// discovered Copilot package id.
     #[arg(long, env = "OPEN_WEB_CODEX_COPILOT_PREPARED_ROOT")]
     copilot_prepared_root: Option<PathBuf>,
+    /// Trusted shared Tool build store used by every prepared Copilot package.
+    #[arg(long, env = "OPEN_WEB_CODEX_COPILOT_BUILD_STORE_ROOT")]
+    copilot_build_store_root: Option<PathBuf>,
     /// Private root for server-owned repository mirrors and managed Workspaces.
     #[arg(
         long,
@@ -171,12 +174,17 @@ async fn main() -> anyhow::Result<()> {
         match (
             cli.copilots_root.as_deref(),
             cli.copilot_prepared_root.as_deref(),
+            cli.copilot_build_store_root.as_deref(),
         ) {
-            (Some(packages), Some(prepared)) => {
-                copilot_installation::CopilotSourceRegistry::discover(packages, prepared)?
+            (Some(packages), Some(prepared), Some(build_store)) => {
+                copilot_installation::CopilotSourceRegistry::discover(
+                    packages,
+                    prepared,
+                    build_store,
+                )?
             }
             _ => anyhow::bail!(
-                "--copilots-root and --copilot-prepared-root are both required in real Codex mode"
+                "--copilots-root, --copilot-prepared-root, and --copilot-build-store-root are all required in real Codex mode"
             ),
         }
     };
@@ -927,12 +935,18 @@ mod tests {
             "/trusted/copilots",
             "--copilot-prepared-root",
             "/trusted/prepared",
+            "--copilot-build-store-root",
+            "/trusted/tool-builds",
         ])
         .expect("parse trusted discovery roots");
         assert_eq!(cli.copilots_root, Some(PathBuf::from("/trusted/copilots")));
         assert_eq!(
             cli.copilot_prepared_root,
             Some(PathBuf::from("/trusted/prepared"))
+        );
+        assert_eq!(
+            cli.copilot_build_store_root,
+            Some(PathBuf::from("/trusted/tool-builds"))
         );
     }
 

@@ -404,7 +404,8 @@ Profile seed 与显式应用资产 composition：
   `tools/warehouse-network-planner`/`tools/warehouse-network-maps`；SDK 从 Tool package manifest、
   runtime、direct manifest/hash lock 生成外置依赖环境和
   `prepared-tools.v1.json`；Server typed 校验 capability root、server、stdio transport 和 env
-  binding，不从 cwd、Workspace、`CARGO_MANIFEST_DIR` 或源码树扫描 fallback；
+  binding，并要求 command/dependency 全部落在同一 trusted shared build fingerprint 及其严格 build marker 内，
+  不从 cwd、Workspace、`CARGO_MANIFEST_DIR` 或源码树扫描 fallback；
 - Profile 不复制 Tool、venv、Node dependency、Mock、cache 或 test。Copilot Root 只显式加载小型常驻 Skill；
   多 Agent Root 不发现任务 Skill，单 Agent Root 与 child Role 按其显式 scope 通过 Runtime Catalog 渐进发现并按原生选择读取。Role source 持有精确 MCP server scope
   与 Tool 级 approval policy；server 内 Tool 通过 Runtime deferred discovery 暴露，Server 从 prepared descriptor 投影

@@ -258,6 +258,10 @@ fn prepared_network_copilot_descriptor(repository: &Path) -> PathBuf {
     )
 }
 
+fn prepared_network_copilot_build_store(repository: &Path) -> PathBuf {
+    repository.join(".local/open-web-codex/tool-builds")
+}
+
 fn warehouse_copilot_package(repository: &Path) -> PathBuf {
     repository.join("copilots/warehouse-network")
 }
@@ -1290,6 +1294,7 @@ async fn copilot_package_clean_profile_runtime_gate() {
     let assets = CopilotPackageAssets::resolve(
         &warehouse_copilot_package(&repository),
         &prepared_network_copilot_descriptor(&repository),
+        &prepared_network_copilot_build_store(&repository),
     )
     .expect("resolve configured package assets");
 
@@ -1805,6 +1810,7 @@ async fn copilot_package_child_mcp_form_bridge_gate() {
     let assets = CopilotPackageAssets::resolve(
         &warehouse_copilot_package(&repository),
         &prepared_network_copilot_descriptor(&repository),
+        &prepared_network_copilot_build_store(&repository),
     )
     .expect("resolve configured package assets");
 
@@ -2141,6 +2147,7 @@ async fn copilot_package_malformed_role_is_unavailable() {
     let assets = CopilotPackageAssets::resolve(
         &warehouse_copilot_package(&repository),
         &prepared_network_copilot_descriptor(&repository),
+        &prepared_network_copilot_build_store(&repository),
     )
     .expect("resolve configured package assets");
 

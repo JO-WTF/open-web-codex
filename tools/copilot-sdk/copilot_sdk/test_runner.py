@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,6 +66,7 @@ def run_copilot_tests(
     *,
     timeout_seconds: float = 45.0,
     tool_environment_root: Path | None = None,
+    build_store_root: Path | None = None,
     tool_registry_root: Path | None = None,
 ) -> dict[str, Any]:
     try:
@@ -98,7 +98,9 @@ def run_copilot_tests(
     try:
         try:
             prepared_tools = prepare_dev_tool_composition(
-                prepared, output_root=tool_environment_root
+                prepared,
+                output_root=tool_environment_root,
+                build_store_root=build_store_root,
             )
         except CopilotDevError as error:
             raise _test_error_from_dev(error) from error

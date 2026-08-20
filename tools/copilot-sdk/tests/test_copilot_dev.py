@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import io
+import json
 import os
 import sys
 import tempfile
@@ -10,12 +10,12 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from copilot_sdk.cli import main
-from copilot_sdk.cli import _safe_expected_mcp_statuses
 from copilot_sdk.app_server_client import AppServerClient
+from copilot_sdk.cli import _safe_expected_mcp_statuses, main
 from copilot_sdk.dev_profile import (
-    CopilotDevError,
     OWNER_MARKER,
+    CopilotDevError,
+    default_tool_build_store_root,
     default_tool_environment_root,
     load_dev_composition,
     prepare_dev_profile,
@@ -90,7 +90,7 @@ class CopilotDevProfileTests(unittest.TestCase):
         )
         (root / "copilot.toml").write_text(
             'schema_version = 1\nid = "sample"\ndisplay_name = "Sample"\n'
-            '[root]\nskill = "supervisor"\n'
+            '[root]\nskill = "supervisor"\ntask_skills = "all"\n'
             '[[skills]]\nid = "supervisor"\npath = "skills/supervisor"\n'
             '[[agents]]\nid = "worker"\nrole = "agents/worker.toml"\n'
             '[[tools]]\nid = "native"\nroot = "tools/native"\n'
@@ -158,6 +158,21 @@ class CopilotDevProfileTests(unittest.TestCase):
 
             self.assertEqual(before, after)
             self.assertTrue(before.is_relative_to(cache_home))
+
+    def test_default_build_store_is_shared_across_skill_only_composition_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self.make_source(root)
+            cache_home = root / "cache"
+            with patch.dict(os.environ, {"XDG_CACHE_HOME": str(cache_home)}):
+                before = default_tool_build_store_root(load_dev_composition(source))
+                skill = source / "skills/supervisor/SKILL.md"
+                skill.write_text(skill.read_text(encoding="utf-8") + "Prompt update.\n")
+                after = default_tool_build_store_root(load_dev_composition(source))
+
+            self.assertEqual(before, after)
+            self.assertTrue(before.is_relative_to(cache_home))
+            self.assertEqual(before.name, "copilot-tool-builds")
 
     def test_source_mcp_transport_is_not_role_projection_truth(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -238,9 +253,8 @@ class CopilotDevProfileTests(unittest.TestCase):
             with patch(
                 "copilot_sdk.dev_profile.tempfile.mkdtemp",
                 side_effect=make_process_root,
-            ):
-                with self.assertRaises(CopilotDevError):
-                    prepare_dev_profile(load_dev_composition(source), profile)
+            ), self.assertRaises(CopilotDevError):
+                prepare_dev_profile(load_dev_composition(source), profile)
 
             self.assertFalse(process_root.exists())
             self.assertEqual(profile.read_text(encoding="utf-8"), "not a directory")
@@ -308,8 +322,9 @@ class CopilotDevCliTests(unittest.TestCase):
     def invoke(self, *arguments: str) -> tuple[int, str, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
-        def fake_prepare(prepared, *, output_root=None):
+        def fake_prepare(prepared, *, output_root=None, build_store_root=None):
             self.assertIsNone(output_root)
+            self.assertIsNone(build_store_root)
             projection = prepared.process_data / "capability-roots/native"
             projection.mkdir(parents=True, exist_ok=True)
             return MaterializedToolComposition(

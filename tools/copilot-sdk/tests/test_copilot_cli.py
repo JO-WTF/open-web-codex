@@ -150,6 +150,8 @@ class CopilotCliTests(unittest.TestCase):
                     str(root),
                     "--output-root",
                     str(output),
+                    "--build-store-root",
+                    str(Path(directory) / "build-store"),
                     "--json",
                 )
 
@@ -160,6 +162,10 @@ class CopilotCliTests(unittest.TestCase):
             self.assertNotIn(str(output), stdout)
             self.assertNotIn(str(root), stdout)
             self.assertEqual(prepare.call_args.kwargs["output_root"], output)
+            self.assertEqual(
+                prepare.call_args.kwargs["build_store_root"],
+                Path(directory) / "build-store",
+            )
 
     def test_prepare_error_does_not_expose_internal_path_or_cause(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -174,7 +180,13 @@ class CopilotCliTests(unittest.TestCase):
                 ),
             ):
                 result, stdout, stderr = self.invoke(
-                    "prepare", str(root), "--output-root", str(output), "--json"
+                    "prepare",
+                    str(root),
+                    "--output-root",
+                    str(output),
+                    "--build-store-root",
+                    str(Path(directory) / "build-store"),
+                    "--json",
                 )
 
             self.assertEqual(result, 2)

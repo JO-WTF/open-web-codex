@@ -487,6 +487,7 @@ mkdir -p "$run_dir" "$log_dir" "$profile_home" "$runner_root"
 copilots_root="$repo_root/copilots"
 copilot_tool_registry_root="$repo_root/tools"
 copilot_prepared_root="$data_dir/tool-environments"
+copilot_build_store_root="$data_dir/tool-builds"
 copilot_sdk_environment_root="$data_dir/sdk-environments/copilot"
 copilot_sdk_python="$copilot_sdk_environment_root/bin/python"
 copilot_sdk_source_marker="$copilot_sdk_environment_root/source-fingerprint"
@@ -739,11 +740,14 @@ prepare_copilot_environment() {
   "$copilot_sdk_python" -m copilot_sdk prepare "$package_root" \
     --tool-registry-root "$copilot_tool_registry_root" \
     --output-root "$environment_root" \
+    --build-store-root "$copilot_build_store_root" \
     --json
 }
 
 prepare_copilot_environments() {
   local manifest package_root package_id environment_root prepared_count=0
+  local existing_id
+  local -a active_package_ids
   while IFS= read -r -d '' manifest; do
     package_root="$(dirname "$manifest")"
     package_id="$(
@@ -761,12 +765,32 @@ prepare_copilot_environments() {
       error "Copilot prepared descriptor is missing for $package_id"
       return 1
     }
+    if ((prepared_count > 0)); then
+      for existing_id in "${active_package_ids[@]}"; do
+        if [[ "$existing_id" == "$package_id" ]]; then
+          error "duplicate active Copilot package id: $package_id"
+          return 1
+        fi
+      done
+    fi
+    active_package_ids[$prepared_count]="$package_id"
     prepared_count=$((prepared_count + 1))
   done < <(find "$copilots_root" -mindepth 2 -maxdepth 2 -type f -name copilot.toml -print0 | sort -z)
   ((prepared_count > 0)) || {
     error "no Copilot packages were discovered under $copilots_root"
     return 1
   }
+  local -a gc_args=(
+    -m copilot_sdk gc-builds
+    --prepared-root "$copilot_prepared_root"
+    --build-store-root "$copilot_build_store_root"
+    --packages-root "$copilots_root"
+  )
+  for package_id in "${active_package_ids[@]}"; do
+    gc_args+=(--active-package-id "$package_id")
+  done
+  gc_args+=(--json)
+  "$copilot_sdk_python" "${gc_args[@]}"
 }
 
 rebuild_development_database() {
@@ -835,6 +859,7 @@ if [[ "$codex_mode" == "real" ]]; then
     --codex-bin "$codex_bin"
     --copilots-root "$copilots_root"
     --copilot-prepared-root "$copilot_prepared_root"
+    --copilot-build-store-root "$copilot_build_store_root"
   )
 fi
 
