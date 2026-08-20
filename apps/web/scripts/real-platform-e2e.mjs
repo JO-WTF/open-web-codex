@@ -328,6 +328,34 @@ function findFirstKey(value, keys) {
   return undefined;
 }
 
+function findLatestKey(value, keys, predicate) {
+  const parsed = parseStructuredText(value);
+  if (parsed !== undefined) {
+    return findLatestKey(parsed, keys, predicate);
+  }
+  if (!value || typeof value !== "object") return undefined;
+  if (Array.isArray(value)) {
+    for (const child of [...value].reverse()) {
+      const found = findLatestKey(child, keys, predicate);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  for (const child of Object.values(value).reverse()) {
+    const found = findLatestKey(child, keys, predicate);
+    if (found !== undefined) return found;
+  }
+  for (const key of keys) {
+    if (
+      Object.prototype.hasOwnProperty.call(value, key) &&
+      predicate(value[key])
+    ) {
+      return value[key];
+    }
+  }
+  return undefined;
+}
+
 function parseStructuredText(value) {
   if (typeof value !== "string") return undefined;
   const candidates = [
@@ -412,10 +440,11 @@ function findDataRef(value) {
 }
 
 function findPreparedPath(body) {
-  const value = findFirstKey(body, [
-    "prepared_input_relative_path",
-    "preparedInputRelativePath",
-  ]);
+  const value = findLatestKey(
+    body,
+    ["prepared_input_relative_path", "preparedInputRelativePath"],
+    (candidate) => typeof candidate === "string" && candidate.length > 0,
+  );
   if (typeof value === "string") return value;
   const match = JSON.stringify(body).match(
     /prepared_input_relative_path[=:]\\?"?([A-Za-z0-9_./-]+)/,
@@ -612,6 +641,7 @@ class DeterministicModelServer {
   constructor() {
     this.server = createServer((request, response) => {
       this.handle(request, response).catch((error) => {
+        log("[MODEL_SERVER_ERROR] " + String(error?.stack ?? error));
         response.statusCode = 500;
         response.setHeader("content-type", "application/json");
         response.end(JSON.stringify({ error: String(error.message ?? error) }));
@@ -683,7 +713,6 @@ class DeterministicModelServer {
     if (toolSearchOutput) {
       this.toolSearchOutputs.push({ runId, role, count: toolSearchOutput.length });
     }
-    const plan = this.responseFor(body, text, runId, role, isChat, toolSearchOutput);
     this.requests.push({
       path: request.url,
       runId,
@@ -691,6 +720,7 @@ class DeterministicModelServer {
       body,
       visibleTools: visibleToolNames(body),
     });
+    const plan = this.responseFor(body, text, runId, role, isChat, toolSearchOutput);
     if (plan.spec) {
       this.calls.push({
         runId,
@@ -791,9 +821,21 @@ class DeterministicModelServer {
         });
       }
       if (!has("data:prepare")) {
-        const inspectionIdentity = findFirstKey(body, ["inspection_identity"]);
-        const inspectedRelativePaths = findFirstKey(body, ["inspected_relative_paths"]);
-        if (!inspectionIdentity || !Array.isArray(inspectedRelativePaths)) {
+        const inspectionIdentity = findLatestKey(
+          body,
+          ["inspection_identity"],
+          (value) =>
+            value?.schemaVersion === "workspace_source_inspection.v1" &&
+            typeof value?.content_sha256 === "string" &&
+            Number.isInteger(value?.source_count),
+        );
+        const inspectedRelativePaths = findLatestKey(
+          body,
+          ["inspected_relative_paths"],
+          (value) =>
+            Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string"),
+        );
+        if (!inspectionIdentity || !inspectedRelativePaths) {
           throw new Error("deterministic model could not find inline source inspection identity");
         }
         return mcp("data:prepare", "prepare_network_input", {
@@ -806,7 +848,15 @@ class DeterministicModelServer {
         });
       }
       const preparedPath = findPreparedPath(body) ?? preparedOutputPath;
-      const identity = findFirstKey(body, ["input_identity"]) ?? {};
+      const identity =
+        findLatestKey(
+          body,
+          ["input_identity"],
+          (value) =>
+            (value?.schema_version === "prepared_network_input.v1" ||
+              value?.schemaVersion === "prepared_network_input.v1") &&
+            typeof value?.content_sha256 === "string",
+        ) ?? {};
       return message(
         "data:done",
         "E2E data_agent completed native cleanup. prepared_input_relative_path=" +
@@ -1328,6 +1378,54 @@ async function runCase(index) {
         planning_search_semantics_present: planningSearchSemanticsPresent,
         map_heading_present: mapHeadingPresent,
         request_text_length: networkRequestText.length,
+        call_sequence: modelCalls.map((call) => ({
+          role: call.role,
+          name: call.name,
+          id: call.id,
+        })),
+        request_roles: modelRequests.map((request) => request.role),
+        data_request_lengths: modelRequests
+          .filter((request) => request.role === "data")
+          .map((request) => JSON.stringify(request.body).length),
+        last_data_tail: (
+          modelRequests.filter((request) => request.role === "data").at(-1)?.body?.messages ?? []
+        )
+          .slice(-4)
+          .map((message) => ({
+            role: message?.role,
+            content_length: String(message?.content ?? "").length,
+            content_head: String(message?.content ?? "")
+              .replace(/\s+/g, " ")
+              .slice(0, 180),
+            content_tail: String(message?.content ?? "")
+              .replace(/\s+/g, " ")
+              .slice(-240),
+          })),
+        root_tail: (
+          modelRequests.filter((request) => request.role === "root").at(-1)?.body?.messages ?? []
+        )
+          .slice(-12)
+          .map((message) => ({
+            role: message?.role,
+            content: String(message?.content ?? "")
+              .replace(/\s+/g, " ")
+              .slice(0, 240),
+          })),
+        terminal_events: events
+          .filter((event) => /completed|failed|cancelled|interrupted|error/i.test(event.event_type ?? ""))
+          .slice(-20)
+          .map((event) => ({
+            event_type: event.event_type,
+            item_type: itemType(event),
+            tool: eventTool(event),
+            status: event.payload?.data?.status,
+            code: event.payload?.data?.code ?? event.payload?.data?.error?.code,
+            message: String(
+              event.payload?.data?.error?.message ?? event.payload?.data?.message ?? "",
+            )
+              .replace(/\s+/g, " ")
+              .slice(0, 300),
+          })),
       });
     }
     const spawnCalls = modelCalls.filter((call) => call.name === "spawn_agent");
