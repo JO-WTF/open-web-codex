@@ -26,11 +26,11 @@ not a zero-diff Codex subtree.
 ## Current state
 
 The integrated delivery freeze is
-`3b45c29062ff0e76e71c91b6753290400e7fa8da`; observed official main is
-`f6950546e5eaaf8c25031f1450920a6c0e43e103`, with 10 official commits intentionally
-deferred to the next synchronization stage. The current raw comparison contains
-171 paths: 74 upstream-only, 94 local-only, and 3 diverged retained-seam paths,
-with no missing local paths.
+`3b45c29062ff0e76e71c91b6753290400e7fa8da`. Later official commits are
+intentionally deferred to the next dedicated synchronization stage. Because
+official main can move independently of this repository, live pending-commit
+and raw-difference counts come only from the status scripts below, not from a
+number embedded in this document.
 
 All current product-specific differences are classified under the retained
 seams and decisions below. Generated app-server artifacts are derived from the
@@ -41,9 +41,10 @@ required post-sync gate. Machine-readable evidence is in
 Use `scripts/codex-customization-status.sh` as the inventory input. It compares
 `HEAD:codex` directly with the current `codex-upstream/main` tree; this
 repository's `main` branch is never the convergence baseline.
-`.sync/codex-customization-inventory.json` records the latest comparison
-commit, counts, and classification progress. Refresh it whenever the inventory
-is updated or an official sync changes the target tree.
+`.sync/codex-customization-inventory.json` records a timestamped comparison
+commit, counts, and classification progress for audit. Refresh it whenever the
+inventory is deliberately updated or an official sync changes the integrated
+tree; do not treat that snapshot as a live upstream counter.
 
 The script separates the raw tree difference into:
 
@@ -71,11 +72,12 @@ The script separates the raw tree difference into:
 
 ## Current inventory classification
 
-The current comparison against `codex-upstream/main` contains 74 upstream-only,
-94 local-only, and 3 diverged paths. The diverged paths are the already classified
-app-server request dispatch, Agent spawn, and ThreadManager retained seams. The
-integrated delivery freeze remains `3b45c29062ff0e76e71c91b6753290400e7fa8da`;
-generated artifacts, tests, and snapshots follow their owning source seam.
+The integrated delivery freeze remains
+`3b45c29062ff0e76e71c91b6753290400e7fa8da`. The timestamped inventory records
+the comparison used for this classification; live counts must be regenerated
+with `scripts/codex-customization-status.sh`. Any newly diverged path must be
+reviewed during the next dedicated sync before a retained seam is replayed.
+Generated artifacts, tests, and snapshots follow their owning source seam.
 
 | Classification | Source paths | Decision and reason |
 | --- | --- | --- |
@@ -97,8 +99,8 @@ generated artifacts, tests, and snapshots follow their owning source seam.
 
 ## Current convergence analysis
 
-The integrated `3b45c29062ff` structure has no unresolved tree conflicts and
-matches the observed official main. On the synchronized base,
+The integrated `3b45c29062ff` structure has no unresolved tree conflicts. On
+that frozen synchronized base,
 `codex-api/src/common.rs` matches the official object exactly. Chat request
 DTOs and owned Responses-to-Chat conversion live in `chat_translate.rs`; the
 Core client calls that converter immediately before the Chat endpoint. The

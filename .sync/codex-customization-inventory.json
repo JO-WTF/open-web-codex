@@ -5,7 +5,7 @@
     "upstreamRef": "codex-upstream/main",
     "upstreamCommit": "f6950546e5eaaf8c25031f1450920a6c0e43e103",
     "comparisonLocalTree": "HEAD:codex",
-    "comparisonSnapshotScope": "DeepSeek warehouse closure on the frozen integrated upstream 3b45c29062ff, compared with current official main without accepting the 10 pending commits.",
+    "comparisonSnapshotScope": "Timestamped DeepSeek warehouse closure snapshot on frozen integrated upstream 3b45c29062ff; this is not a live official-main counter.",
     "comparisonObservedAt": "2026-08-20T05:43:00Z",
     "differenceCount": 171,
     "addedLocally": 25,
@@ -36,8 +36,8 @@
       "temporaryUpstreamedFixes": 0
     },
     "completed": [
-      "The Codex subtree delivery freeze remains 3b45c29062ff; current official main is 10 commits ahead and will be handled only by the next dedicated sync stage.",
-      "The current committed HEAD comparison has 74 upstream-only, 94 local-only, and 3 classified diverged retained-seam paths, with no missing local paths.",
+      "The Codex subtree delivery freeze remains 3b45c29062ff; later official commits will be handled only by the next dedicated sync stage.",
+      "This timestamped comparison has 74 upstream-only, 94 local-only, and 3 classified diverged retained-seam paths, with no missing local paths.",
       "Profile lifecycle, encrypted credentials, authorization, durable approvals, Git workspaces, Run leases, browser DTOs, and event delivery are owned by apps/web.",
       "The browser uses typed REST and authenticated WebSocket transport; Tauri, desktop sidecars, raw browser RPC, desktop release chains, and desktop build dependencies are absent.",
       "Provider configuration, event payloads, model context and onboarding implementation live in dedicated TUI Provider modules; high-churn upstream parent files retain only narrow attachments.",
@@ -56,6 +56,6 @@
     "validatedAgainstIntegratedUpstream": "3b45c29062ff0e76e71c91b6753290400e7fa8da",
     "validationWorktreeBaseCommit": "d546b35d9",
     "validationScope": "Stage 5.5 synchronized Runtime tree with refreshed generated stable/experimental schema fixtures, typed Chat/Provider seams, and official initialize/thread-list smoke.",
-    "nextAction": "Keep the verified 3b45c29062ff delivery freeze; accept the 10 pending official commits only on the next dedicated synchronization branch."
+    "nextAction": "Keep the verified 3b45c29062ff delivery freeze; use the status scripts for live upstream counts and accept later official commits only on the next dedicated synchronization branch."
   }
 }
