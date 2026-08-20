@@ -6,7 +6,7 @@ after an official subtree update. Generated schemas, TypeScript definitions,
 fixtures, and snapshots are derivatives of the source seams and are not
 independent custom behavior.
 
-The integrated official base is `d1d51f6315f84a1737c655cb4d78104d030d5102`.
+The integrated official base is `3b45c29062ff0e76e71c91b6753290400e7fa8da`.
 The target is a small, explicit set of Provider Runtime and TUI seams; it is
 not a zero-diff Codex subtree.
 
@@ -25,10 +25,12 @@ not a zero-diff Codex subtree.
 
 ## Current state
 
-The integrated base and observed official main are both
-`d1d51f6315f84a1737c655cb4d78104d030d5102`; no official commits are pending.
-The current raw comparison contains 77 local-only paths: 25 added locally and
-52 modified, with no upstream-only, missing, or diverged paths.
+The integrated delivery freeze is
+`3b45c29062ff0e76e71c91b6753290400e7fa8da`; observed official main is
+`f6950546e5eaaf8c25031f1450920a6c0e43e103`, with 10 official commits intentionally
+deferred to the next synchronization stage. The current raw comparison contains
+171 paths: 74 upstream-only, 94 local-only, and 3 diverged retained-seam paths,
+with no missing local paths.
 
 All current product-specific differences are classified under the retained
 seams and decisions below. Generated app-server artifacts are derived from the
@@ -69,11 +71,11 @@ The script separates the raw tree difference into:
 
 ## Current inventory classification
 
-The current comparison against `codex-upstream/main` contains 77 local-only
-paths: 25 added locally and 52 modified, with no upstream-only or diverged
-paths. The integrated base is synchronized through
-`d1d51f6315f84a1737c655cb4d78104d030d5102`. Generated artifacts, tests, and
-snapshots follow their owning source seam.
+The current comparison against `codex-upstream/main` contains 74 upstream-only,
+94 local-only, and 3 diverged paths. The diverged paths are the already classified
+app-server request dispatch, Agent spawn, and ThreadManager retained seams. The
+integrated delivery freeze remains `3b45c29062ff0e76e71c91b6753290400e7fa8da`;
+generated artifacts, tests, and snapshots follow their owning source seam.
 
 | Classification | Source paths | Decision and reason |
 | --- | --- | --- |
@@ -95,7 +97,7 @@ snapshots follow their owning source seam.
 
 ## Current convergence analysis
 
-The integrated `d1d51f6315f8` structure has no unresolved tree conflicts and
+The integrated `3b45c29062ff` structure has no unresolved tree conflicts and
 matches the observed official main. On the synchronized base,
 `codex-api/src/common.rs` matches the official object exactly. Chat request
 DTOs and owned Responses-to-Chat conversion live in `chat_translate.rs`; the

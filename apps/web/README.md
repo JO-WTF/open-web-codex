@@ -149,6 +149,7 @@ Provider, Run, Workspace and Project in its terminal cleanup:
 
 ```bash
 E2E_REAL_DEEPSEEK=1 \
+E2E_REAL_DEEPSEEK_TOOL_CHOICE_MODE=observe \
 E2E_BASE_URL=http://127.0.0.1:4810 \
 E2E_REAL_DEEPSEEK_SOURCE_PROVIDER_ID=deepseek \
 npm run test:e2e:real-deepseek
@@ -168,11 +169,12 @@ missing canonical business Tool is returned as a typed failure. The Provider
 capability, Run, Workspace and Project are restored or removed in terminal
 cleanup.
 
-The Chat bridge keeps the typed current-Turn metadata needed to retain deferred
-Tool targets across same-Turn Agent mailbox messages; this metadata is consumed
-locally and never serialized into Chat `messages`. The D5c real gate verified
-the complete native chain through Data preparation, Network route/12h
-calculation and `create_network_map_card` delivery.
+The default `observe` mode never rewrites `tool_choice`; the optional
+`force_first_tool` mode is diagnostic only. The Chat bridge keeps the typed
+current-Turn metadata needed to translate deferred tools, consumes it locally,
+and never serializes it into Chat `messages`. The production gate verifies
+structured Skill selection, Data preparation, Network route/12h calculation
+and completed `create_network_map_card` delivery with canonical provenance.
 
 The D6 warehouse package gate disables `shell_tool` in the native Root, Data
 and Network Role configs only; it does not change the Profile-wide capability

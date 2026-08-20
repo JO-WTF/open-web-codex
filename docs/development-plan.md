@@ -388,18 +388,14 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
    `CaseRepository`、`NetworkSnapshot`、`ArtifactRef`、旧 services/models/tests 与 Demo launcher
    surface，不保留兼容双路径；Data4 与 Network active `ResourceRef` surface 不回退为 aliases。
 
-R2/D3/D4/D5b/D5c 真实门当前状态：fresh local session 可添加并列出 DeepSeek Provider；配置只保存 env ref，Platform
-Secret 可注入同一密钥；D3 已提供 exact per-model capability 的 Runtime/Platform 配置路径和 refresh
-保留测试。真实最小门已证明同一临时 Provider 通过正式 API 配置
-`deepseek-v4-flash.supportsSearchTool=true` 后产生结构化 `tool_search → spawn_agent`。D5b 同时修正
-了 package Role metadata 的原生路径：`agents.<role>.*`，消除了 `agent role roles must define a
-description` warning。最新完整门已完成 Data Turn 和 Root `wait`，但 Root 后续 request 只暴露基础
-工具而模型返回不可见的 `multi_agent_v1__spawn_agent`；该终态为 typed `provider_tool_call_not_visible`，
-不是 Runtime wait/mailbox 或地图投影故障。Provider 请求均 HTTP 200/SSE done；没有 Network/map 交付，
-仍不能声称完整 Provider E4。D5c 修复 Chat current-Turn mailbox boundary 与非 OpenAI Chat metadata
-保留后，最新真实门已完整通过 `spawnAgent → wait → Data MCP → Workspace prepared input → Network
-route/baseline/coverage → create_network_map_card`；地图 Tool Item completed，Provider round 全部
-HTTP 200/SSE done。确定性 multi-agent gate 重启后 Gate 1/2 也连续通过。
+真实 DeepSeek 生产门当前已关闭：fresh local session 通过正式 Provider API 为 exact
+`deepseek-v4-flash` 持久化 `supportsSearchTool=true`，配置只保存 env ref。`observe` 模式不改写
+`tool_choice`，最小门完成结构化 `tool_search → spawn_agent`；完整门完成原生结构化 Skill 选择、
+`spawnAgent → wait → Data discover/inspect/read/prepare → Network route/baseline(auto)/coverage →
+create_network_map_card`。Data 高层 Tool 对无歧义 profile 自动物化 mappings，并在同一次调用中完成
+geography；Network baseline 由 Tool 根据 current assignments 自动选择口径。所有关键 MCP Tool 的
+canonical Item 均单次 completed，地图结果为 `open-web-artifact/inline-visualization.v1`，临时
+Provider、Run、Workspace 和 Project 终态清理。deterministic multi-agent gate 冷启动连续两次通过。
 浏览器响应、日志、Workspace 与普通 Profile 文件均不得出现 Secret 明文；不写 `model_catalog_json`、
 不按模型名推断、不重试提示词、不回退 single-agent。后续真实空目录故障已用窄 follow-up 收口：Codex 只增加 exact
 Provider 的 fresh typed catalog，Platform 不切换 current Provider，只在非空成功后持久化目标目录并在

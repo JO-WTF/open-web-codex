@@ -84,7 +84,28 @@ Tool 单元/合同证据（E1）；下方旧 E4 记录适用于被替代的 Data
 合同的 E4 声明。单 Agent 与多 Agent 都必须按新的 Workspace 输入、导航确认、地图和报告路径重新通过
 clean Profile/Workspace 的真实验收。多用户、完整失败/竞态矩阵、a11y 和视觉细节仍属于后续 hardening。
 
-### 2026-08-20 真实 DeepSeek 工具能力门
+### 2026-08-20 当前真实 DeepSeek 生产门
+
+`apps/web/scripts/real-deepseek-e2e.mjs` 默认使用 `observe` 模式，不改写任何
+`tool_choice`。当前 exact `deepseek-v4-flash` 已通过正式 typed model metadata 获得
+`supportsSearchTool=true`，最小门完成结构化 `tool_search → spawn_agent`；完整门从真实
+`warehouse-network-copilot` Task 上传 6 个 fixture，完成结构化 child Skill 选择、Data
+`discover/inspect/read/prepare_network_input`、Network `prepare_route_matrix →
+evaluate_network_baseline(auto) → prepare_network_coverage_map → create_network_map_card`。
+关键业务 MCP canonical Item 均单次 completed；地图 producer 返回
+`open-web-artifact/inline-visualization.v1` 和 `map_card_spec.v1` provenance。确定性门冷启动连续两次
+通过；临时 Provider、Run、Workspace、Project 与原 Provider 选择在终态清理。
+
+Chat 与 Responses 共用同一个 Thread/Turn/ToolRouter/Agent/Skill/MCP 主干。Chat 仅在 wire 边界把
+canonical Responses request 转为 Chat Completions，并把 SSE 恢复为 `ResponseEvent`；当前 Turn 的
+completed ToolSearch schema 只做 request-scoped Chat function 转译，不进入 Core registry、缓存或
+cold-resume state。Data Tool 对无歧义 source profile 自动物化字段 mapping 并原子完成 geography；
+baseline Tool 的 `coverage_mode=auto` 根据标准输入是否存在 current assignments 决定实际或优化现有
+仓口径，模型不再猜测后重试。
+
+### 历史验证过程（不代表当前能力结论）
+
+#### 早期真实 DeepSeek 工具能力门
 
 使用 `apps/web/scripts/real-deepseek-e2e.mjs` 的 opt-in 门，从真实
 `warehouse-network-copilot` Task 入口创建临时 Project/Workspace，上传仓网 6 个 fixture
@@ -107,7 +128,7 @@ schema 或工具参数；临时 Provider、Run、Workspace 和 Project 在终态
 脚本验证 `tool_search → spawn_agent → Data/Network MCP → 12h/map` canonical 链。不能按模型名
 或 DeepSeek 的普通 `/models` 响应推断该能力。
 
-### D3：per-model ToolSearch capability 与真实仓网门
+#### D3：per-model ToolSearch capability 与真实仓网门
 
 Provider model 配置已收敛到 Runtime `ModelProviderInfo.models` 的 typed
 `ProviderModelConfig`。配置按 exact `model_id` 合并到 `ModelsManager` 产生的原生
@@ -131,7 +152,7 @@ Runtime 协同或地图投影失败，不能把模型未作出结构化调用解
 MCP 工具名及终态、地图 producer Item 和最后 assistant 文本摘要。它不记录 key、完整 prompt、
 schema 或 arguments；临时 Provider、Run、Workspace、Project 和原始选择均已清理，未伪造业务结果。
 
-### D5b：Role config path 与非法 wire Tool 诊断
+#### D5b：Role config path 与非法 wire Tool 诊断
 
 D5b 修正了 Copilot package 将 server-owned Role metadata 写成 `agents.roles.<role>.*` 的路径错误。
 原生 `AgentsToml` 使用 flatten Role 合同，正确路径是 `agents.<role>.*`；旧路径会产生
@@ -146,7 +167,7 @@ producer。该失败归类为 `provider_tool_call_not_visible`，不是 wait/mai
 Platform map projection 故障；没有伪造重试或业务结果。确定性 multi-agent gate 在重启后连续两次
 通过，包含完整 Resource schema 与 map provenance。
 
-### D5c：Chat current-Turn mailbox boundary 与真实完整门
+#### D5c：Chat current-Turn mailbox boundary 与真实完整门
 
 Chat bridge 现在以最新 user-role item 携带的 exact `turn_id` 作为当前 Turn 身份，并扫描同一
 `turn_id` 的 ToolSearch call/output；同一 Turn 后追加的 Agent completion user-role mailbox 不会
@@ -160,7 +181,7 @@ create_network_map_card → closeAgent`；地图 Tool Item 为 completed，Provi
 done。临时 Provider、Run、Workspace、Project 均清理。确定性 multi-agent gate 重启后 Gate 1/2
 连续通过并保留 `route_matrix.v2`、`network_baseline.v2`、`map_card_spec.v1` 等 provenance。
 
-### D6：仓网 Agent 执行面与地图交付终态
+#### D6：仓网 Agent 执行面与地图交付终态
 
 仓网多 Agent package 现在通过 native Role 的 typed `[features] shell_tool = false` 关闭 Root、
 `data_agent` 和 `network_agent` 的 shell/code 执行面；该设置只属于仓网 package 的三个 Role，
