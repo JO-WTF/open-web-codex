@@ -77,6 +77,25 @@ pub struct ModelProvider {
     pub supports_standalone_web_search: bool,
     #[prost(bool, optional, tag = "19")]
     pub supports_function_tools: ::core::option::Option<bool>,
+    #[prost(message, repeated, tag = "20")]
+    pub models: ::prost::alloc::vec::Vec<ProviderModelConfig>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProviderModelConfig {
+    #[prost(string, tag = "1")]
+    pub model_id: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "2")]
+    pub model_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int64, optional, tag = "3")]
+    pub max_token_len: ::core::option::Option<i64>,
+    #[prost(int64, optional, tag = "4")]
+    pub max_output_tokens: ::core::option::Option<i64>,
+    #[prost(bool, tag = "5")]
+    pub show_in_picker: bool,
+    #[prost(int64, optional, tag = "6")]
+    pub context_window: ::core::option::Option<i64>,
+    #[prost(bool, tag = "7")]
+    pub supports_search_tool: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StringMap {

@@ -1308,10 +1308,21 @@ export class PlatformClient {
     );
   }
 
-  updateProviderModel(providerId: string, modelId: string, contextWindow: number) {
+  updateProviderModel(
+    providerId: string,
+    modelId: string,
+    contextWindow: number,
+    supportsSearchTool?: boolean,
+  ) {
     return this.request<ProviderCatalog>(
       `/api/providers/${encodeURIComponent(providerId)}/models/${encodeURIComponent(modelId)}`,
-      { method: "PATCH", body: JSON.stringify({ contextWindow }) },
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          contextWindow,
+          ...(supportsSearchTool === undefined ? {} : { supportsSearchTool }),
+        }),
+      },
     );
   }
 

@@ -453,6 +453,7 @@ async fn secured_provider_credentials_never_enter_codex_config() {
             "provider-one-model",
             UpdateProviderModelRequest {
                 context_window: 256_000,
+                supports_search_tool: None,
             },
         )
         .await

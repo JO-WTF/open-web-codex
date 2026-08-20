@@ -43,6 +43,10 @@
         },
         "showInPicker": {
           "type": "boolean"
+        },
+        "supportsSearchTool": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "required": [

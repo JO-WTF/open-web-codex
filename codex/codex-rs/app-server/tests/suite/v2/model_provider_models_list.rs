@@ -116,6 +116,7 @@ request_max_retries = 0
                 max_output_tokens: None,
                 show_in_picker: true,
                 context_window: None,
+                supports_search_tool: false,
             }]
         }
     );

@@ -315,6 +315,7 @@ mod tests {
             supports_websockets: true,
             supports_standalone_web_search: true,
             supports_function_tools: false,
+            models: Vec::new(),
         }
     }
 }

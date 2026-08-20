@@ -772,6 +772,55 @@ async fn get_model_info_uses_custom_catalog() {
 }
 
 #[tokio::test]
+async fn provider_model_config_applies_tool_search_by_exact_model_id() {
+    let config = ModelsManagerConfig::default();
+    let configured = remote_model("deepseek-v4-flash", "DeepSeek V4 Flash", 0);
+    let mut unconfigured = remote_model("deepseek-v4-pro", "DeepSeek V4 Pro", 1);
+    unconfigured.supports_search_tool = true;
+    let manager = StaticModelsManager::new_with_model_configs(
+        /*auth_manager*/ None,
+        ModelsResponse {
+            models: vec![configured, unconfigured],
+        },
+        vec![ProviderModelConfig {
+            model_id: "deepseek-v4-flash".to_string(),
+            supports_search_tool: true,
+            ..ProviderModelConfig::default()
+        }],
+    );
+
+    let configured_model = manager.get_model_info("deepseek-v4-flash", &config).await;
+    let unconfigured_model = manager.get_model_info("deepseek-v4-pro", &config).await;
+
+    assert!(configured_model.supports_search_tool);
+    assert!(!unconfigured_model.supports_search_tool);
+}
+
+#[tokio::test]
+async fn provider_model_config_adds_an_exact_model_missing_from_remote_catalog() {
+    let manager = StaticModelsManager::new_with_model_configs(
+        /*auth_manager*/ None,
+        ModelsResponse { models: Vec::new() },
+        vec![ProviderModelConfig {
+            model_id: "deepseek-v4-flash".to_string(),
+            model_name: Some("DeepSeek V4 Flash".to_string()),
+            context_window: Some(128_000),
+            supports_search_tool: true,
+            ..ProviderModelConfig::default()
+        }],
+    );
+
+    let model = manager
+        .get_model_info("deepseek-v4-flash", &ModelsManagerConfig::default())
+        .await;
+
+    assert_eq!(model.display_name, "DeepSeek V4 Flash");
+    assert_eq!(model.context_window, Some(128_000));
+    assert!(model.supports_search_tool);
+    assert!(!model.used_fallback_model_metadata);
+}
+
+#[tokio::test]
 async fn get_model_info_matches_namespaced_suffix() {
     let config = ModelsManagerConfig::default();
     let mut remote = remote_model("gpt-image", "Image", /*priority*/ 0);

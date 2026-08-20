@@ -47,6 +47,7 @@ pub struct ProviderModelSummary {
     pub max_output_tokens: Option<i64>,
     pub show_in_picker: bool,
     pub context_window: Option<i64>,
+    pub supports_search_tool: bool,
 }
 
 /// Body-free failure classification for a Provider-owned catalog request.
@@ -193,12 +194,12 @@ impl OpenAiModelsEndpoint {
         request_telemetry.record_catalog_result(catalog_result.as_ref().map(|_| ()));
         let catalog = catalog_result?;
 
-        match catalog {
-            ModelsCatalog::Rich(models) => Ok(models
+        let mut summaries: Vec<ProviderModelSummary> = match catalog {
+            ModelsCatalog::Rich(models) => models
                 .into_iter()
                 .map(provider_model_summary_from_rich)
-                .collect()),
-            ModelsCatalog::OpenAiCompatible(model_ids) => Ok(model_ids
+                .collect(),
+            ModelsCatalog::OpenAiCompatible(model_ids) => model_ids
                 .into_iter()
                 .map(|model_id| ProviderModelSummary {
                     model_id,
@@ -207,9 +208,19 @@ impl OpenAiModelsEndpoint {
                     max_output_tokens: None,
                     show_in_picker: true,
                     context_window: None,
+                    supports_search_tool: false,
                 })
-                .collect()),
+                .collect(),
+        };
+        for model in &mut summaries {
+            model.supports_search_tool = self
+                .provider_info
+                .models
+                .iter()
+                .find(|config| config.model_id == model.model_id)
+                .is_some_and(|config| config.supports_search_tool);
         }
+        Ok(summaries)
     }
 
     fn auth_env(&self) -> AuthEnvTelemetry {
@@ -262,6 +273,7 @@ fn provider_model_summary_from_rich(
             codex_protocol::openai_models::ModelVisibility::List
         ) && model.supported_in_api,
         context_window,
+        supports_search_tool: false,
     }
 }
 
@@ -697,6 +709,7 @@ mod tests {
                 max_output_tokens: None,
                 show_in_picker: true,
                 context_window: None,
+                supports_search_tool: false,
             }]
         );
     }

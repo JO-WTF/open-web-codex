@@ -140,6 +140,7 @@ fn model_provider_models_success(
             max_output_tokens: model.max_output_tokens,
             show_in_picker: model.show_in_picker,
             context_window: model.context_window,
+            supports_search_tool: model.supports_search_tool,
         })
         .collect::<Vec<_>>();
     if models.is_empty() {
@@ -829,6 +830,7 @@ mod tests {
             max_output_tokens: None,
             show_in_picker: true,
             context_window: None,
+            supports_search_tool: false,
         }]);
         assert!(matches!(
             result,

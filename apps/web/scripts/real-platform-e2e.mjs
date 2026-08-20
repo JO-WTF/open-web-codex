@@ -719,7 +719,11 @@ class DeterministicModelServer {
     // the request `tools` list, so infer neither version from wire JSON.
     const v2 = !isChat && !text.includes('"multi_agent_v1"');
     const id = (suffix) => "e2e:" + runId + ":" + suffix;
-    const has = (suffix) => hasCall(text, id(suffix));
+    const has = (suffix) =>
+      hasCall(text, id(suffix)) ||
+      this.calls.some(
+        (call) => call.runId === runId && call.role === role && call.id === id(suffix),
+      );
     const toolSearch = (suffix, query) => ({
       responseId: id("response:" + suffix),
       spec: toolSearchSpec(id(suffix), query),
@@ -1118,6 +1122,36 @@ async function cleanupRun(runId) {
     30_000,
     500,
   ).catch(() => undefined);
+  let previousAgentSnapshot;
+  await eventually(
+    async () => {
+      try {
+        const [agents, activities] = await Promise.all([
+          api("/runs/" + runId + "/agents"),
+          api("/runs/" + runId + "/agent-activities"),
+        ]);
+        const active = agents.filter((agent) =>
+          ["starting", "pending", "running", "active", "in_progress", "reconnecting"]
+            .includes(String(agent.status_type ?? agent.statusType ?? "").toLowerCase()),
+        );
+        const snapshot = JSON.stringify({
+          agents: agents.map((agent) => ({
+            thread_id: agent.thread_id ?? agent.threadId,
+            status_type: agent.status_type ?? agent.statusType,
+          })),
+          activity_count: activities.length,
+        });
+        const stable = snapshot === previousAgentSnapshot;
+        previousAgentSnapshot = snapshot;
+        return active.length === 0 && stable ? true : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    "Runtime Agent projection cleanup",
+    30_000,
+    250,
+  ).catch(() => undefined);
 }
 
 async function cleanupCase(record) {
@@ -1208,28 +1242,42 @@ async function runCase(index) {
       });
     }
     assert(/12\s*h|12\s*小时|12-hour/i.test(eventText), "12h result was not reported");
-    assert(
-      events.some(
-        (event) =>
-          itemType(event) === "collabAgentToolCall" &&
-          /spawn|wait/i.test(String(eventTool(event))),
-      ),
-      "native collaboration Item was not projected",
-    );
+    if (!events.some(
+      (event) =>
+        itemType(event) === "collabAgentToolCall" &&
+        /spawn|wait/i.test(String(eventTool(event))),
+    )) {
+      throw new NativeRuntimeBlocker("native_collaboration_item_not_projected", {
+        model_calls: modelCalls,
+        spawn_call_count: spawnCalls.length,
+        visible_tools_after_search: modelRequests[1]?.visibleTools ?? [],
+        canonical_items: events
+          .filter((event) => event.event_type === "codex.item.completed")
+          .map((event) => ({
+            item_type: itemType(event),
+            tool: eventTool(event),
+            turn_id: event.turn_id,
+          })),
+      });
+    }
     assert(
       /data_agent/.test(eventText) && /network_agent/.test(eventText),
       "data_agent/network_agent Role provenance was not projected",
     );
-    assert(
-      events.some(
-        (event) =>
-          itemType(event) === "mcpToolCall" &&
-          /inspect_workspace_sources|prepare_network_input|prepare_route_matrix|evaluate_network_baseline|create_network_map_card/.test(
-            String(eventTool(event)),
-          ),
-      ),
-      "domain MCP Tool Items were not projected",
-    );
+    if (!events.some(
+      (event) =>
+        itemType(event) === "mcpToolCall" &&
+        /inspect_workspace_sources|prepare_network_input|prepare_route_matrix|evaluate_network_baseline|create_network_map_card/.test(
+          String(eventTool(event)),
+        ),
+    )) {
+      throw new NativeRuntimeBlocker("domain_mcp_items_not_projected", {
+        model_calls: modelCalls,
+        projected_items: events
+          .filter((event) => event.event_type === "codex.item.completed")
+          .map((event) => ({ item_type: itemType(event), tool: eventTool(event) })),
+      });
+    }
     const refs = await api("/tasks/" + record.task.id + "/resource-refs");
     const schemas = new Set(refs.map((ref) => ref.resourceSchema ?? ref.resource_schema));
     for (const schema of [

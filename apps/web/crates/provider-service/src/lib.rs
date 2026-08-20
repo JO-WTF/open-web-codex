@@ -6,6 +6,7 @@
 
 pub mod secured;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -283,13 +284,25 @@ impl ProviderService {
                 "Provider '{id}' uses a bundled model catalog"
             )));
         }
+        let configured_search_capabilities = provider
+            .models
+            .iter()
+            .map(|model| (model.model_id.as_str(), model.supports_search_tool))
+            .collect::<BTreeMap<_, _>>();
 
         let response = self
             .transport
             .request("modelProvider/models/list", json!({ "providerId": id }))
             .await
             .map_err(ProviderServiceError::Runtime)?;
-        let models = parse_model_provider_models_list(response)?;
+        let mut models = parse_model_provider_models_list(response)?;
+        for model in &mut models {
+            if let Some(supports_search_tool) =
+                configured_search_capabilities.get(model.model_id.as_str())
+            {
+                model.supports_search_tool = *supports_search_tool;
+            }
+        }
         let persisted_models = models
             .iter()
             .filter_map(provider_model_config_from_catalog)
@@ -334,8 +347,12 @@ impl ProviderService {
                 "built-in model metadata cannot be edited".to_string(),
             ));
         }
-        let models =
-            upsert_provider_model_context(&provider.models, model_id, request.context_window);
+        let models = upsert_provider_model_context(
+            &provider.models,
+            model_id,
+            request.context_window,
+            request.supports_search_tool,
+        );
         self.write_config(vec![config_edit(
             format!("{}.models", provider_path(provider_id)?),
             json!(models),
@@ -476,6 +493,7 @@ impl Default for InMemoryProviderService {
             max_output_tokens: None,
             show_in_picker: true,
             context_window: Some(200_000),
+            supports_search_tool: false,
         };
         let mock_model = ProviderModelSummary {
             model_id: "mock-codex".to_string(),
@@ -484,6 +502,7 @@ impl Default for InMemoryProviderService {
             max_output_tokens: Some(8_192),
             show_in_picker: true,
             context_window: Some(64_000),
+            supports_search_tool: false,
         };
         Self {
             catalog: Arc::new(RwLock::new(ProviderCatalog {
@@ -685,6 +704,9 @@ impl ProviderOperations for InMemoryProviderService {
             .find(|model| model.model_id == model_id)
         {
             model.context_window = Some(request.context_window);
+            if let Some(supports_search_tool) = request.supports_search_tool {
+                model.supports_search_tool = supports_search_tool;
+            }
         } else {
             provider.models.push(ProviderModelSummary {
                 model_id: model_id.to_string(),
@@ -693,6 +715,7 @@ impl ProviderOperations for InMemoryProviderService {
                 max_output_tokens: None,
                 show_in_picker: true,
                 context_window: Some(request.context_window),
+                supports_search_tool: request.supports_search_tool.unwrap_or(false),
             });
         }
         provider.model_count = provider.models.len();
@@ -899,6 +922,10 @@ fn provider_model_config_from_catalog(model: &ProviderModelSummary) -> Option<Va
         json!(model.model_name.as_deref().unwrap_or(model_id)),
     );
     persisted.insert("show_in_picker".to_string(), json!(model.show_in_picker));
+    persisted.insert(
+        "supports_search_tool".to_string(),
+        json!(model.supports_search_tool),
+    );
     if let Some(value) = model.max_token_len {
         persisted.insert("max_token_len".to_string(), json!(value));
     }
@@ -915,6 +942,7 @@ fn upsert_provider_model_context(
     raw_models: &[ProviderModelSummary],
     model_id: &str,
     context_window: i64,
+    supports_search_tool: Option<bool>,
 ) -> Vec<Value> {
     let mut found = false;
     let mut models = raw_models
@@ -926,6 +954,11 @@ fn upsert_provider_model_context(
             } else {
                 model.context_window
             };
+            let next_supports_search_tool = if model.model_id == model_id {
+                supports_search_tool.unwrap_or(model.supports_search_tool)
+            } else {
+                model.supports_search_tool
+            };
             let mut persisted = Map::new();
             persisted.insert("model_id".to_string(), json!(model.model_id));
             persisted.insert(
@@ -933,6 +966,10 @@ fn upsert_provider_model_context(
                 json!(model.model_name.as_deref().unwrap_or(&model.model_id)),
             );
             persisted.insert("show_in_picker".to_string(), json!(model.show_in_picker));
+            persisted.insert(
+                "supports_search_tool".to_string(),
+                json!(next_supports_search_tool),
+            );
             if let Some(value) = model.max_token_len {
                 persisted.insert("max_token_len".to_string(), json!(value));
             }
@@ -951,6 +988,7 @@ fn upsert_provider_model_context(
             "model_name": model_id,
             "show_in_picker": true,
             "context_window": context_window,
+            "supports_search_tool": supports_search_tool.unwrap_or(false),
         }));
     }
     models
@@ -1088,6 +1126,7 @@ mod tests {
             max_output_tokens: None,
             show_in_picker: true,
             context_window: None,
+            supports_search_tool: false,
         })
         .expect("valid Provider model");
 
@@ -1106,6 +1145,7 @@ mod tests {
                 max_output_tokens: None,
                 show_in_picker: true,
                 context_window: None,
+                supports_search_tool: false,
             })
             .is_none());
         }
@@ -1117,6 +1157,7 @@ mod tests {
             max_output_tokens: None,
             show_in_picker: true,
             context_window: None,
+            supports_search_tool: false,
         })
         .expect("valid Provider model");
         assert_eq!(persisted["model_id"], "deepseek-v4-flash");
@@ -1130,6 +1171,7 @@ mod tests {
                 max_output_tokens: None,
                 show_in_picker: true,
                 context_window: None,
+                supports_search_tool: false,
             })
             .is_none());
         }
@@ -1144,13 +1186,16 @@ mod tests {
             max_output_tokens: Some(8_192),
             show_in_picker: true,
             context_window: Some(64_000),
+            supports_search_tool: false,
         }];
-        let models = upsert_provider_model_context(&existing, "deepseek-v4-flash", 128_000);
+        let models =
+            upsert_provider_model_context(&existing, "deepseek-v4-flash", 128_000, Some(true));
 
         assert_eq!(models[0]["model_name"], "DeepSeek V4 Flash");
         assert_eq!(models[0]["max_token_len"], 64_000);
         assert_eq!(models[0]["max_output_tokens"], 8_192);
         assert_eq!(models[0]["context_window"], 128_000);
+        assert_eq!(models[0]["supports_search_tool"], true);
     }
 
     #[tokio::test]
@@ -1230,7 +1275,19 @@ mod tests {
             "provider-a",
             json!([
                 provider("provider-a", true, provider_a_models.clone()),
-                provider("provider-b", false, json!([])),
+                provider(
+                    "provider-b",
+                    false,
+                    json!([{
+                        "modelId": "b-model",
+                        "modelName": "B model",
+                        "maxTokenLen": null,
+                        "maxOutputTokens": null,
+                        "showInPicker": true,
+                        "contextWindow": null,
+                        "supportsSearchTool": true,
+                    }]),
+                ),
             ]),
         );
         // Codex owns Provider discovery, but its modelProvider/list projection
@@ -1257,6 +1314,7 @@ mod tests {
                         "maxOutputTokens": null,
                         "showInPicker": true,
                         "contextWindow": null,
+                        "supportsSearchTool": false,
                     }]
                 }
             }),
@@ -1273,6 +1331,7 @@ mod tests {
         assert_eq!(result.current_provider_id, "provider-a");
         assert_eq!(result.data[0].models[0].model_id, "a-model");
         assert_eq!(result.data[1].models[0].model_id, "b-model");
+        assert!(result.data[1].models[0].supports_search_tool);
         let calls = transport.calls.lock().await;
         assert_eq!(
             calls.iter().map(|call| call.0.as_str()).collect::<Vec<_>>(),
@@ -1287,6 +1346,10 @@ mod tests {
         assert_eq!(
             calls[2].1["edits"][0]["keyPath"],
             "model_providers.\"provider-b\".models"
+        );
+        assert_eq!(
+            calls[2].1["edits"][0]["value"][0]["supports_search_tool"],
+            true
         );
         assert!(!calls[2].1["edits"]
             .as_array()

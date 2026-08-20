@@ -21,6 +21,7 @@ base_url = "http://localhost:11434/v1"
         aws: None,
         wire_api: WireApi::Responses,
         supports_function_tools: false,
+        models: Vec::new(),
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -55,6 +56,7 @@ query_params = { api-version = "2025-04-01-preview" }
         aws: None,
         wire_api: WireApi::Responses,
         supports_function_tools: false,
+        models: Vec::new(),
         query_params: Some(maplit::hashmap! {
             "api-version".to_string() => "2025-04-01-preview".to_string(),
         }),
@@ -93,6 +95,7 @@ supports_standalone_web_search = true
         aws: None,
         wire_api: WireApi::Responses,
         supports_function_tools: false,
+        models: Vec::new(),
         query_params: None,
         http_headers: Some(maplit::hashmap! {
             "X-Example-Header".to_string() => "example-value".to_string(),
@@ -111,6 +114,32 @@ supports_standalone_web_search = true
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
     assert_eq!(expected_provider, provider);
+}
+
+#[test]
+fn test_deserialize_exact_per_model_tool_search_capability() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "DeepSeek"
+base_url = "https://example.com/v1"
+
+[[models]]
+model_id = "deepseek-v4-flash"
+model_name = "DeepSeek V4 Flash"
+context_window = 128000
+supports_search_tool = true
+"#,
+    )
+    .expect("per-model Provider config should deserialize");
+
+    assert_eq!(provider.models.len(), 1);
+    assert_eq!(provider.models[0].model_id, "deepseek-v4-flash");
+    assert_eq!(
+        provider.models[0].model_name.as_deref(),
+        Some("DeepSeek V4 Flash")
+    );
+    assert_eq!(provider.models[0].context_window, Some(128_000));
+    assert!(provider.models[0].supports_search_tool);
 }
 
 #[test]
@@ -279,6 +308,7 @@ fn test_create_amazon_bedrock_provider() {
             }),
             wire_api: WireApi::Responses,
             supports_function_tools: true,
+            models: Vec::new(),
             query_params: None,
             http_headers: Some(maplit::hashmap! {
                 AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string() =>

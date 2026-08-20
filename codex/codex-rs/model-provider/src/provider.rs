@@ -446,19 +446,21 @@ impl ModelProvider for ConfiguredModelProvider {
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
         match config_model_catalog {
-            Some(model_catalog) => Arc::new(StaticModelsManager::new(
+            Some(model_catalog) => Arc::new(StaticModelsManager::new_with_model_configs(
                 self.auth_manager.clone(),
                 model_catalog,
+                self.info.models.clone(),
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new(
+                Arc::new(OpenAiModelsManager::new_with_model_configs(
                     codex_home,
                     endpoint,
                     self.auth_manager.clone(),
+                    self.info.models.clone(),
                 ))
             }
         }
@@ -469,18 +471,20 @@ impl ModelProvider for ConfiguredModelProvider {
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
         match config_model_catalog {
-            Some(model_catalog) => Arc::new(StaticModelsManager::new(
+            Some(model_catalog) => Arc::new(StaticModelsManager::new_with_model_configs(
                 self.auth_manager.clone(),
                 model_catalog,
+                self.info.models.clone(),
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new_without_cache(
+                Arc::new(OpenAiModelsManager::new_without_cache_with_model_configs(
                     endpoint,
                     self.auth_manager.clone(),
+                    self.info.models.clone(),
                 ))
             }
         }
@@ -492,19 +496,21 @@ impl ModelProvider for ConfiguredModelProvider {
         cache: Arc<dyn ModelsCache>,
     ) -> SharedModelsManager {
         match config_model_catalog {
-            Some(model_catalog) => Arc::new(StaticModelsManager::new(
+            Some(model_catalog) => Arc::new(StaticModelsManager::new_with_model_configs(
                 self.auth_manager.clone(),
                 model_catalog,
+                self.info.models.clone(),
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new_with_cache(
+                Arc::new(OpenAiModelsManager::new_with_cache_and_model_configs(
                     cache,
                     endpoint,
                     self.auth_manager.clone(),
+                    self.info.models.clone(),
                 ))
             }
         }
@@ -588,6 +594,7 @@ mod tests {
             aws: None,
             wire_api: WireApi::Responses,
             supports_function_tools: false,
+            models: Vec::new(),
             query_params: None,
             http_headers: None,
             env_http_headers: None,

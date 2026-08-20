@@ -210,6 +210,7 @@ impl SecuredProviderService {
                         &model.model_id,
                         UpdateProviderModelRequest {
                             context_window: model.context_window.unwrap_or(128_000),
+                            supports_search_tool: Some(model.supports_search_tool),
                         },
                     )
                     .await?;
@@ -301,6 +302,49 @@ impl SecuredProviderService {
             provider.models = models;
         }
         Ok(catalog)
+    }
+
+    async fn persisted_models(
+        &self,
+        profile_id: Uuid,
+        provider_id: &str,
+    ) -> Result<Vec<ProviderModelSummary>, AuthorizedProviderError> {
+        let row = sqlx::query(
+            "SELECT models FROM profile_provider_definitions \
+             WHERE profile_id = $1 AND provider_id = $2",
+        )
+        .bind(profile_id)
+        .bind(provider_id)
+        .fetch_optional(&self.db)
+        .await?;
+        row.map(|row| {
+            serde_json::from_value(row.get("models"))
+                .map_err(|error| ProviderServiceError::InvalidResponse(error.to_string()).into())
+        })
+        .transpose()
+        .map(|models| models.unwrap_or_default())
+    }
+
+    fn merge_persisted_model_capabilities(
+        catalog: &mut ProviderCatalog,
+        provider_id: &str,
+        persisted_models: &[ProviderModelSummary],
+    ) {
+        let Some(provider) = catalog
+            .data
+            .iter_mut()
+            .find(|provider| provider.id == provider_id)
+        else {
+            return;
+        };
+        for model in &mut provider.models {
+            if let Some(persisted) = persisted_models
+                .iter()
+                .find(|candidate| candidate.model_id == model.model_id)
+            {
+                model.supports_search_tool = persisted.supports_search_tool;
+            }
+        }
     }
 
     async fn authorize(
@@ -581,7 +625,9 @@ impl AuthorizedProviderOperations for SecuredProviderService {
     ) -> Result<ProviderCatalog, AuthorizedProviderError> {
         let _operation = self.operation.lock().await;
         let profile = self.authorize(actor).await?;
-        let catalog = self.runtime.refresh_models(id).await?;
+        let persisted_models = self.persisted_models(profile.id, id).await?;
+        let mut catalog = self.runtime.refresh_models(id).await?;
+        Self::merge_persisted_model_capabilities(&mut catalog, id, &persisted_models);
         self.persist_catalog_provider(
             profile.id,
             &catalog,
@@ -605,10 +651,51 @@ impl AuthorizedProviderOperations for SecuredProviderService {
     ) -> Result<ProviderCatalog, AuthorizedProviderError> {
         let _operation = self.operation.lock().await;
         let profile = self.authorize(actor).await?;
-        let catalog = self
+        let persisted_models = self.persisted_models(profile.id, provider_id).await?;
+        let context_window = request.context_window;
+        let supports_search_tool = request.supports_search_tool;
+        let mut catalog = self
             .runtime
             .update_model(provider_id, model_id, request)
             .await?;
+        let has_runtime_models = catalog
+            .data
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .is_some_and(|provider| !provider.models.is_empty());
+        if has_runtime_models {
+            Self::merge_persisted_model_capabilities(&mut catalog, provider_id, &persisted_models);
+        }
+        if let Some(provider) = catalog
+            .data
+            .iter_mut()
+            .find(|provider| provider.id == provider_id)
+        {
+            if provider.models.is_empty() && !persisted_models.is_empty() {
+                provider.models = persisted_models.clone();
+            }
+            if let Some(model) = provider
+                .models
+                .iter_mut()
+                .find(|model| model.model_id == model_id)
+            {
+                model.context_window = Some(context_window);
+                if let Some(supports_search_tool) = supports_search_tool {
+                    model.supports_search_tool = supports_search_tool;
+                }
+            } else {
+                provider.models.push(ProviderModelSummary {
+                    model_id: model_id.to_string(),
+                    model_name: Some(model_id.to_string()),
+                    max_token_len: None,
+                    max_output_tokens: None,
+                    show_in_picker: true,
+                    context_window: Some(context_window),
+                    supports_search_tool: supports_search_tool.unwrap_or(false),
+                });
+            }
+            provider.model_count = provider.models.len();
+        }
         self.persist_catalog_provider(
             profile.id,
             &catalog,

@@ -743,6 +743,14 @@ export class CodexMonitorWebClient {
         Number(input.contextWindow),
       );
     }
+    if (action === "capability") {
+      return await this.platform.updateProviderModel(
+        id,
+        String(input.modelId ?? ""),
+        Number(input.contextWindow),
+        input.supportsSearchTool === true,
+      );
+    }
     const credentialMode = typeof input.credentialMode === "string"
       ? input.credentialMode
       : "preserve";

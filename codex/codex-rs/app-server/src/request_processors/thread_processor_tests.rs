@@ -599,6 +599,7 @@ mod thread_processor_behavior_tests {
             aws: None,
             wire_api: WireApi::Responses,
             supports_function_tools: false,
+            models: Vec::new(),
             query_params: None,
             http_headers: None,
             env_http_headers: None,

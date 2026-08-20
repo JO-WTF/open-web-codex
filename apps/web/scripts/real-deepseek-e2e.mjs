@@ -8,16 +8,14 @@
 // full prompts/tool schemas.  The temporary Provider is removed in finally.
 
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "../../..");
 const fixtureDir = path.join(scriptDir, "fixtures", "warehouse-network", "mock_data");
 const fixtureManifestPath = path.join(
   scriptDir,
@@ -34,11 +32,6 @@ const providerSourceId = process.env.E2E_REAL_DEEPSEEK_SOURCE_PROVIDER_ID ?? "de
 const model = process.env.E2E_REAL_DEEPSEEK_MODEL ?? "deepseek-v4-flash";
 const useExistingProvider =
   (process.env.E2E_REAL_DEEPSEEK_USE_EXISTING ?? "0") === "1";
-const d1Mode = process.env.E2E_REAL_DEEPSEEK_D1 === "1";
-const profileHome =
-  process.env.E2E_CODEX_HOME ??
-  process.env.CODEX_HOME ??
-  path.join(repoRoot, ".local", "open-web-codex", "profiles", "default");
 const targetBaseUrl = (
   process.env.E2E_REAL_DEEPSEEK_TARGET_BASE_URL ?? "https://api.deepseek.com"
 ).replace(/\/$/, "");
@@ -54,7 +47,7 @@ const state = {
   token: undefined,
   manifest: undefined,
   proxy: undefined,
-  d1: undefined,
+  cleanupErrors: [],
 };
 
 class ApiError extends Error {
@@ -328,128 +321,14 @@ function eventSummary(events) {
   }));
 }
 
-function setTopLevelTomlString(content, key, value) {
-  const separator = content.includes("\r\n") ? "\r\n" : "\n";
-  const lines = content.split(/\r?\n/);
-  let inTable = false;
-  let replaced = false;
-  const next = lines.map((line) => {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("[") && !trimmed.startsWith("[[")) {
-      inTable = true;
-    }
-    if (!inTable && new RegExp("^" + key + "\\s*=").test(trimmed)) {
-      replaced = true;
-      return key + " = " + JSON.stringify(value);
-    }
-    return line;
-  });
-  if (!replaced) next.unshift(key + " = " + JSON.stringify(value));
-  return next.join(separator);
-}
-
-async function buildD1ModelCatalog() {
-  const bundledPath = path.join(repoRoot, "codex", "codex-rs", "models-manager", "models.json");
-  const bundled = JSON.parse(await readFile(bundledPath, "utf8"));
-  const template = bundled.models?.find((candidate) => candidate.slug === "gpt-5.4");
-  if (!template) {
-    throw new NativeRuntimeBlocker("d1_model_catalog_template_unavailable", {
-      required_model: "gpt-5.4",
-    });
-  }
-  const modelInfo = {
-    ...template,
-    slug: model,
-    display_name: "DeepSeek V4 Flash (D1)",
-    supports_search_tool: true,
-    used_fallback_model_metadata: false,
-  };
-  assert.equal(modelInfo.slug, model);
-  assert.equal(modelInfo.supports_search_tool, true);
-  return { models: [modelInfo] };
-}
-
-async function installD1ModelCatalog() {
-  if (!d1Mode) return;
-  const profile = await api("/profile/files/config");
-  if (!profile.exists || profile.truncated) {
-    throw new NativeRuntimeBlocker("d1_profile_config_unavailable", {
-      exists: profile.exists,
-      truncated: profile.truncated,
-    });
-  }
-  const catalogPath = path.join(
-    profileHome,
-    ".open-web-codex-d1-model-catalog-" + stamp + ".json",
-  );
-  const catalog = await buildD1ModelCatalog();
-  state.d1 = {
-    originalConfig: profile.content,
-    catalogPath,
-  };
-  try {
-    await writeFile(catalogPath, JSON.stringify(catalog, null, 2) + "\n", {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    await api("/profile/files/config", {
-      method: "PUT",
-      body: { content: setTopLevelTomlString(profile.content, "model_catalog_json", catalogPath) },
-    });
-    // The existing typed Agent settings mutation uses the official
-    // config/batchWrite reloadUserConfig path. It is only a reload trigger;
-    // the D1 catalog itself is owned by native model_catalog_json.
-    await enableMultiAgent();
-  } catch (error) {
-    await restoreD1ModelCatalog();
-    throw error;
-  }
-}
-
-async function restoreD1ModelCatalog() {
-  const d1 = state.d1;
-  if (!d1) return;
-  try {
-    await api("/profile/files/config", {
-      method: "PUT",
-      body: { content: d1.originalConfig },
-    });
-    // Restore the exact bytes once more after the reload trigger so the
-    // user-owned Profile file is byte-for-byte back to its original state.
-    await enableMultiAgent().catch(() => undefined);
-    await api("/profile/files/config", {
-      method: "PUT",
-      body: { content: d1.originalConfig },
-    });
-  } finally {
-    await rm(d1.catalogPath, { force: true }).catch(() => undefined);
-    state.d1 = undefined;
-  }
-}
-
-async function restartLocalServiceForD1() {
-  await new Promise((resolve, reject) => {
-    const child = spawn(path.join(repoRoot, "scripts", "run-local.sh"), ["--restart", "--no-build"], {
-      cwd: repoRoot,
-      env: process.env,
-      stdio: "ignore",
-    });
-    child.once("error", reject);
-    child.once("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error("local service restart failed with exit code " + code));
-    });
-  });
-}
-
 function runSelfTests() {
-  const original = 'model = "gpt-5.4"\n[model_providers.deepseek]\nwire_api = "chat"\n';
-  const catalogPath = "/tmp/d1-model-catalog.json";
-  const patched = setTopLevelTomlString(original, "model_catalog_json", catalogPath);
-  assert.equal((patched.match(/^model_catalog_json\s*=/gm) ?? []).length, 1);
-  assert(patched.indexOf('model_catalog_json = "/tmp/d1-model-catalog.json"') >= 0);
-  assert.equal(setTopLevelTomlString(patched, "model_catalog_json", catalogPath), patched);
-  log("[PASS] real DeepSeek D1 config/catalog self-test");
+  const model = {
+    modelId: "deepseek-v4-flash",
+    supportsSearchTool: true,
+  };
+  assert.equal(model.modelId, "deepseek-v4-flash");
+  assert.equal(model.supportsSearchTool, true);
+  log("[PASS] real DeepSeek per-model capability self-test");
 }
 
 async function ensureAuthenticated() {
@@ -522,6 +401,66 @@ async function enableMultiAgent() {
   assert.equal(settings.multiAgentEnabled ?? settings.multi_agent_enabled, true);
 }
 
+async function configureModelToolSearch(providerIdValue) {
+  const refreshed = await api(
+    "/providers/" + encodeURIComponent(providerIdValue) + "/models/refresh",
+    { method: "POST" },
+  );
+  const refreshedProvider = providerId(refreshed, providerIdValue);
+  const refreshedModel = refreshedProvider?.models?.find(
+    (entry) => entry.modelId === model,
+  );
+  if (!refreshedModel) {
+    throw new NativeRuntimeBlocker("model_not_returned_by_provider_catalog", {
+      provider_id: providerIdValue,
+      model,
+      available_model_count: refreshedProvider?.models?.length ?? 0,
+    });
+  }
+  const configured = await api(
+    "/providers/" +
+      encodeURIComponent(providerIdValue) +
+      "/models/" +
+      encodeURIComponent(model),
+    {
+      method: "PATCH",
+      body: {
+        contextWindow: refreshedModel.contextWindow ?? 128_000,
+        supportsSearchTool: true,
+      },
+    },
+  );
+  const configuredProvider = providerId(configured, providerIdValue);
+  const configuredModel = configuredProvider?.models?.find(
+    (entry) => entry.modelId === model,
+  );
+  if (!configuredModel || configuredModel.supportsSearchTool !== true) {
+    throw new NativeRuntimeBlocker("model_tool_search_capability_not_persisted", {
+      provider_id: providerIdValue,
+      model,
+      response_provider_ids: Array.isArray(configured?.data)
+        ? configured.data.map((entry) => entry?.id).filter((id) => typeof id === "string")
+        : [],
+      response_keys: configured && typeof configured === "object"
+        ? Object.keys(configured)
+        : [],
+      configured: configuredModel
+        ? { supports_search_tool: configuredModel.supportsSearchTool === true }
+        : null,
+    });
+  }
+  const profileConfig = await api("/profile/files/config");
+  const runtimeConfigCapability =
+    typeof profileConfig.content === "string" &&
+    profileConfig.content.includes(`model_id = "${model}"`) &&
+    profileConfig.content.includes("supports_search_tool = true");
+  log("[CONFIG CAPABILITY] " + JSON.stringify({ runtime_config_capability: runtimeConfigCapability }));
+  return {
+    originalModel: refreshedModel,
+    configuredModel,
+  };
+}
+
 async function configureTemporaryProvider() {
   const catalog = await api("/providers");
   const source = providerId(catalog, providerSourceId);
@@ -559,7 +498,7 @@ async function configureTemporaryProvider() {
         select: false,
       },
     });
-    return {
+    const record = {
       id: source.id,
       source,
       restoreExisting: true,
@@ -567,7 +506,15 @@ async function configureTemporaryProvider() {
       originalBaseUrl: source.baseUrl,
       originalWireApi: source.wireApi,
       originalName: source.name,
+      originalModel: source.models?.find((entry) => entry.modelId === model),
     };
+    try {
+      const modelCapability = await configureModelToolSearch(source.id);
+      return { ...record, configuredModel: modelCapability.configuredModel };
+    } catch (error) {
+      await removeTemporaryProvider(record);
+      throw error;
+    }
   }
   const temporaryId = "deepseek-real-e2e-" + stamp.toLowerCase();
   const envKey = source.envKey ?? source.env_key;
@@ -589,49 +536,88 @@ async function configureTemporaryProvider() {
   // the task's Provider from the current config, and the original selection
   // is restored immediately before deleting the temporary Provider.
   const restoreProviderId = catalog.currentProviderId ?? catalog.current_provider_id;
-  return {
+  const record = {
     id: temporaryId,
     source,
     modelProviderCatalog: result,
     restoreProviderId,
     restoreModelId: catalog.currentModelId ?? catalog.current_model_id,
   };
+  try {
+    const modelCapability = await configureModelToolSearch(temporaryId);
+    return { ...record, configuredModel: modelCapability.configuredModel };
+  } catch (error) {
+    await removeTemporaryProvider(record);
+    throw error;
+  }
 }
 
 async function removeTemporaryProvider(provider) {
   if (!provider?.id) return;
+  const cleanupCall = async (label, operation) => {
+    try {
+      return await operation();
+    } catch (error) {
+      state.cleanupErrors.push(label + ": " + sanitize(error?.message ?? error));
+      return undefined;
+    }
+  };
   if (provider.restoreExisting) {
-    await api("/providers/" + encodeURIComponent(provider.id), {
-      method: "PUT",
-      body: {
-        name: provider.originalName,
-        baseUrl: provider.originalBaseUrl,
-        wireApi: provider.originalWireApi,
-        supportsFunctionTools: provider.originalSupportsFunctionTools,
-        credentials: { mode: "preserve" },
-        select: false,
+    await cleanupCall("restore existing Provider", () => api(
+      "/providers/" + encodeURIComponent(provider.id),
+      {
+        method: "PUT",
+        body: {
+          name: provider.originalName,
+          baseUrl: provider.originalBaseUrl,
+          wireApi: provider.originalWireApi,
+          supportsFunctionTools: provider.originalSupportsFunctionTools,
+          credentials: { mode: "preserve" },
+          select: false,
+        },
       },
-    }).catch(() => undefined);
+    ));
+    if (provider.originalModel) {
+      await cleanupCall("restore existing model capability", () => api(
+        "/providers/" +
+            encodeURIComponent(provider.id) +
+            "/models/" +
+            encodeURIComponent(model),
+        {
+          method: "PATCH",
+          body: {
+            contextWindow: provider.originalModel.contextWindow ?? 128_000,
+            supportsSearchTool: provider.originalModel.supportsSearchTool === true,
+          },
+        },
+      ));
+    }
     return;
   }
   if (provider.restoreProviderId) {
-    await api("/providers/" + encodeURIComponent(provider.restoreProviderId) + "/select", {
-      method: "POST",
-    }).catch(() => undefined);
+    await cleanupCall("restore Provider selection", () => api(
+      "/providers/" + encodeURIComponent(provider.restoreProviderId) + "/select",
+      { method: "POST" },
+    ));
     if (provider.restoreModelId) {
-      await api(
+      await cleanupCall("restore model selection", () => api(
         "/providers/" +
           encodeURIComponent(provider.restoreProviderId) +
           "/models/" +
           encodeURIComponent(provider.restoreModelId) +
           "/select",
         { method: "POST" },
-      ).catch(() => undefined);
+      ));
     }
   }
-  await api("/providers/" + encodeURIComponent(provider.id), { method: "DELETE" }).catch(
-    () => undefined,
-  );
+  await cleanupCall("delete temporary Provider", () => api(
+    "/providers/" + encodeURIComponent(provider.id),
+    { method: "DELETE" },
+  ));
+  const catalog = await cleanupCall("verify temporary Provider deletion", () => api("/providers"));
+  if (catalog && providerId(catalog, provider.id)) {
+    state.cleanupErrors.push("temporary Provider remains after deletion");
+  }
 }
 
 async function createTaskAndRun(providerIdValue, title) {
@@ -692,8 +678,8 @@ async function createTaskAndRun(providerIdValue, title) {
   }
 }
 
-async function send(taskId) {
-  const text = d1Mode
+async function send(taskId, minimal = false) {
+  const text = minimal
     ? [
         "这是一次最小 Provider 能力验证，不执行业务分析。",
         "第一步必须调用原生 tool_search，查询可用的 multi-agent spawn_agent 工具。",
@@ -724,37 +710,53 @@ async function taskEvents(taskId) {
 }
 
 async function waitForTurn(taskId, turnId, timeoutMs = 300_000) {
-  return eventually(
-    async () => {
-      const events = await taskEvents(taskId);
-      const failure = events.find(
-        (event) =>
-          event.turn_id === turnId &&
-          (event.event_type === "codex.thread.failed" ||
-            event.payload?.data?.failureReason ||
-            event.payload?.data?.artifactDelivery?.state === "failed"),
-      );
-      if (failure) throw new Error("Turn failed: " + sanitize(failure.event_type));
-      const approval = events.find(
-        (event) =>
-          event.turn_id === turnId && event.event_type === "platform.approval.requested",
-      );
-      if (approval) {
-        throw new NativeRuntimeBlocker("approval_required", {
-          canonical_item_id: approval.item_id,
-          canonical_item_type: approval.payload?.itemType,
-        });
-      }
-      return events.some(
-        (event) => event.turn_id === turnId && event.event_type === "codex.turn.completed",
-      )
-        ? events
-        : undefined;
-    },
-    "Real DeepSeek Turn completion",
-    timeoutMs,
-    500,
-  );
+  try {
+    return await eventually(
+      async () => {
+        const events = await taskEvents(taskId);
+        const failure = events.find(
+          (event) =>
+            event.turn_id === turnId &&
+            (event.event_type === "codex.thread.failed" ||
+              event.payload?.data?.failureReason ||
+              event.payload?.data?.artifactDelivery?.state === "failed"),
+        );
+        if (failure) {
+          throw new NativeRuntimeBlocker("provider_or_copilot_turn_failed", {
+            turn_id: turnId,
+            event_type: failure.event_type,
+            canonical_item_type: failure.payload?.itemType,
+          });
+        }
+        const approval = events.find(
+          (event) =>
+            event.turn_id === turnId && event.event_type === "platform.approval.requested",
+        );
+        if (approval) {
+          throw new NativeRuntimeBlocker("approval_required", {
+            canonical_item_id: approval.item_id,
+            canonical_item_type: approval.payload?.itemType,
+          });
+        }
+        return events.some(
+          (event) => event.turn_id === turnId && event.event_type === "codex.turn.completed",
+        )
+          ? events
+          : undefined;
+      },
+      "Real DeepSeek Turn completion",
+      timeoutMs,
+      500,
+    );
+  } catch (error) {
+    if (error instanceof NativeRuntimeBlocker) throw error;
+    const events = await taskEvents(taskId).catch(() => []);
+    throw new NativeRuntimeBlocker("provider_or_copilot_turn_incomplete", {
+      turn_id: turnId,
+      reason: "turn_completion_timeout",
+      canonical_items: eventSummary(events).filter((event) => event.turn_id === turnId),
+    });
+  }
 }
 
 async function cleanupRun(runId) {
@@ -798,14 +800,17 @@ async function cleanupCase(record) {
 
 let taskProviderId;
 
-async function runD1Gate(provider) {
-  const record = await createTaskAndRun(provider.id, "Real DeepSeek D1 tool-search " + stamp);
+async function runToolSearchGate(provider) {
+  const record = await createTaskAndRun(provider.id, "Real DeepSeek D2 tool-search " + stamp);
   try {
-    const response = await send(record.task.id);
+    const roundStart = state.proxy.rounds.length;
+    const response = await send(record.task.id, true);
     assert(response.turn_id);
     const firstRound = await eventually(
-      async () => state.proxy.rounds.find((round) => round.wire_api === "chat"),
-      "D1 first real Chat request",
+      async () => state.proxy.rounds.find(
+        (round) => round.round > roundStart && round.wire_api === "chat",
+      ),
+      "D2 first real Chat request",
       300_000,
       250,
     );
@@ -821,9 +826,9 @@ async function runD1Gate(provider) {
         firstRound.visible_tool_names.includes("tool_search"),
     };
     const firstEvents = await taskEvents(record.task.id).catch(() => []);
-    log("[D1 ROUND 1] " + JSON.stringify(firstEvidence));
+    log("[D2 ROUND 1] " + JSON.stringify(firstEvidence));
     if (!firstEvidence.tools_present || !firstEvidence.model_supports_native_tool_search) {
-      throw new NativeRuntimeBlocker("d1_model_catalog_not_applied", {
+      throw new NativeRuntimeBlocker("model_tool_search_capability_not_applied", {
         provider_id: provider.id,
         model,
         evidence: firstEvidence,
@@ -859,7 +864,7 @@ async function runD1Gate(provider) {
         state.proxy.rounds.find(
           (round) => round.wire_api === "chat" && round.round > firstRound.round,
         ),
-      "D1 spawn_agent follow-up request",
+      "D2 spawn_agent follow-up request",
       120_000,
       250,
     ).catch(() => undefined);
@@ -883,11 +888,11 @@ async function runD1Gate(provider) {
       structured_tool_calls: secondRound.structured_tool_calls,
       wire_tool_names: secondRound.wire_tool_names,
     };
-    log("[D1 ROUND 2] " + JSON.stringify(secondEvidence));
+    log("[D2 ROUND 2] " + JSON.stringify(secondEvidence));
     const events = await taskEvents(record.task.id).catch(() => []);
     const nativeNames = nativeToolNames(events);
     log(
-      "[D1 CANONICAL] " +
+      "[D2 CANONICAL] " +
         JSON.stringify({
           native_tool_names: nativeNames,
           items: eventSummary(events).filter((event) => event.turn_id === response.turn_id),
@@ -928,10 +933,13 @@ async function runD1Gate(provider) {
 async function runGate(provider) {
   const record = await createTaskAndRun(provider.id, "Real DeepSeek 12h network " + stamp);
   try {
+    const roundStart = state.proxy.rounds.length;
     const response = await send(record.task.id);
     assert(response.turn_id);
     const firstRound = await eventually(
-      async () => state.proxy.rounds.find((round) => round.wire_api === "chat"),
+      async () => state.proxy.rounds.find(
+        (round) => round.round > roundStart && round.wire_api === "chat",
+      ),
       "first real Chat request",
       180_000,
       250,
@@ -970,7 +978,7 @@ async function runGate(provider) {
 
     const events = await waitForTurn(record.task.id, response.turn_id);
     const nativeNames = nativeToolNames(events);
-    const rounds = state.proxy.rounds.map((round) => ({
+    const rounds = state.proxy.rounds.filter((round) => round.round > roundStart).map((round) => ({
       round: round.round,
       tools_present: round.tools_present,
       tool_count: round.tool_count,
@@ -1033,33 +1041,8 @@ async function main() {
   try {
     const version = await ensureAuthenticated();
     await ensureCopilotActive();
-    if (d1Mode) {
-      await installD1ModelCatalog();
-    } else {
-      await enableMultiAgent();
-    }
+    await enableMultiAgent();
     provider = await configureTemporaryProvider();
-    if (d1Mode) {
-      // model_catalog_json is loaded into the native ModelsManager when the
-      // Profile Host starts. Restart the existing service process rather than
-      // adding a second Runtime reload or a test-only catalog cache.
-      await restartLocalServiceForD1();
-      await ensureAuthenticated();
-      // Profile startup restores the previously selected Provider from the
-      // durable catalog. Select the temporary Provider again so the new
-      // Thread uses the exact temporary Chat endpoint and capability flag.
-      await api("/providers/" + encodeURIComponent(provider.id) + "/select", {
-        method: "POST",
-      });
-      await api(
-        "/providers/" +
-          encodeURIComponent(provider.id) +
-          "/models/" +
-          encodeURIComponent(model) +
-          "/select",
-        { method: "POST" },
-      );
-    }
     taskProviderId = provider.id;
     log(
       "server=" +
@@ -1071,17 +1054,22 @@ async function main() {
     );
     const started = Date.now();
     try {
-      const details = d1Mode ? await runD1Gate(provider) : await runGate(provider);
-      const name = d1Mode
-        ? "real DeepSeek D1 native tool gate"
-        : "real DeepSeek multi-agent gate";
+      const minimal = await runToolSearchGate(provider);
+      results.push({
+        name: "real DeepSeek D2 native tool gate",
+        ...minimal,
+        durationMs: Date.now() - started,
+      });
+      log("[PASS] real DeepSeek D2 native tool gate");
+      const details = await runGate(provider);
+      const name = "real DeepSeek multi-agent gate";
       results.push({ name, ...details, durationMs: Date.now() - started });
       log("[PASS] " + name);
     } catch (error) {
       if (error instanceof NativeRuntimeBlocker) {
-        const name = d1Mode
-          ? "real DeepSeek D1 native tool gate"
-          : "real DeepSeek multi-agent gate";
+        const name = results.length > 0
+          ? "real DeepSeek multi-agent gate"
+          : "real DeepSeek D2 native tool gate";
         results.push({
           name,
           status: "typed_failure",
@@ -1095,12 +1083,12 @@ async function main() {
     }
   } finally {
     await removeTemporaryProvider(provider);
-    await restoreD1ModelCatalog();
-    if (d1Mode && state.d1 === undefined) {
-      await restartLocalServiceForD1().catch(() => undefined);
-      await ensureAuthenticated().catch(() => undefined);
-    }
     await state.proxy.close();
+  }
+  if (state.cleanupErrors.length > 0) {
+    throw new NativeRuntimeBlocker("cleanup_incomplete", {
+      errors: state.cleanupErrors,
+    });
   }
   log("Real DeepSeek E2E summary");
   for (const result of results) log("- " + JSON.stringify(result));

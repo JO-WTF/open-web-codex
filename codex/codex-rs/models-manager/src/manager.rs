@@ -7,6 +7,7 @@ use crate::model_info;
 use chrono::Utc;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
+use codex_model_provider_info::ProviderModelConfig;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::Result as CoreResult;
@@ -221,6 +222,7 @@ pub struct OpenAiModelsManager {
     cache: Option<Arc<dyn ModelsCache>>,
     endpoint_client: SharedModelsEndpointClient,
     auth_manager: Option<Arc<AuthManager>>,
+    model_configs: Vec<ProviderModelConfig>,
 }
 
 /// Static model manager backed by an authoritative in-process catalog.
@@ -237,6 +239,17 @@ impl OpenAiModelsManager {
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
+        Self::new_with_model_configs(codex_home, endpoint_client, auth_manager, Vec::new())
+    }
+
+    /// Construct an OpenAI-compatible model manager with explicit per-model
+    /// Provider capability configuration.
+    pub fn new_with_model_configs(
+        codex_home: PathBuf,
+        endpoint_client: Arc<dyn ModelsEndpointClient>,
+        auth_manager: Option<Arc<AuthManager>>,
+        model_configs: Vec<ProviderModelConfig>,
+    ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         Self::new_with_optional_cache(
             Some(Arc::new(FileModelsCache::new(
@@ -245,6 +258,7 @@ impl OpenAiModelsManager {
             ))),
             endpoint_client,
             auth_manager,
+            model_configs,
         )
     }
 
@@ -253,7 +267,22 @@ impl OpenAiModelsManager {
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
-        Self::new_with_optional_cache(/*cache*/ None, endpoint_client, auth_manager)
+        Self::new_without_cache_with_model_configs(endpoint_client, auth_manager, Vec::new())
+    }
+
+    /// Construct a model manager without a disk cache and with explicit
+    /// per-model Provider capability configuration.
+    pub fn new_without_cache_with_model_configs(
+        endpoint_client: Arc<dyn ModelsEndpointClient>,
+        auth_manager: Option<Arc<AuthManager>>,
+        model_configs: Vec<ProviderModelConfig>,
+    ) -> Self {
+        Self::new_with_optional_cache(
+            /*cache*/ None,
+            endpoint_client,
+            auth_manager,
+            model_configs,
+        )
     }
 
     /// Constructs an OpenAI-compatible model manager with a caller-provided cache.
@@ -265,21 +294,36 @@ impl OpenAiModelsManager {
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
-        Self::new_with_optional_cache(Some(cache), endpoint_client, auth_manager)
+        Self::new_with_cache_and_model_configs(cache, endpoint_client, auth_manager, Vec::new())
+    }
+
+    /// Construct a model manager with a caller-provided cache and explicit
+    /// per-model Provider capability configuration.
+    pub fn new_with_cache_and_model_configs(
+        cache: Arc<dyn ModelsCache>,
+        endpoint_client: Arc<dyn ModelsEndpointClient>,
+        auth_manager: Option<Arc<AuthManager>>,
+        model_configs: Vec<ProviderModelConfig>,
+    ) -> Self {
+        Self::new_with_optional_cache(Some(cache), endpoint_client, auth_manager, model_configs)
     }
 
     fn new_with_optional_cache(
         cache: Option<Arc<dyn ModelsCache>>,
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
+        model_configs: Vec<ProviderModelConfig>,
     ) -> Self {
-        let remote_models = load_remote_models_from_file().unwrap_or_default();
+        let mut remote_models = load_remote_models_from_file().unwrap_or_default();
+        append_missing_provider_model_configs(&mut remote_models, &model_configs);
+        apply_provider_model_configs(&mut remote_models, &model_configs);
         Self {
             remote_models: RwLock::new(remote_models),
             etag: RwLock::new(None),
             cache,
             endpoint_client,
             auth_manager,
+            model_configs,
         }
     }
 }
@@ -287,6 +331,18 @@ impl OpenAiModelsManager {
 impl StaticModelsManager {
     /// Construct a static model manager from an authoritative catalog.
     pub fn new(auth_manager: Option<Arc<AuthManager>>, model_catalog: ModelsResponse) -> Self {
+        Self::new_with_model_configs(auth_manager, model_catalog, Vec::new())
+    }
+
+    /// Construct a static model manager with explicit per-model Provider
+    /// capability configuration.
+    pub fn new_with_model_configs(
+        auth_manager: Option<Arc<AuthManager>>,
+        mut model_catalog: ModelsResponse,
+        model_configs: Vec<ProviderModelConfig>,
+    ) -> Self {
+        append_missing_provider_model_configs(&mut model_catalog.models, &model_configs);
+        apply_provider_model_configs(&mut model_catalog.models, &model_configs);
         Self {
             remote_models: model_catalog.models,
             auth_manager,
@@ -414,10 +470,11 @@ impl OpenAiModelsManager {
         http_client_factory: &HttpClientFactory,
     ) -> CoreResult<()> {
         let client_version = crate::client_version_to_whole();
-        let (models, etag) = self
+        let (mut models, etag) = self
             .endpoint_client
             .list_models(&client_version, http_client_factory.clone())
             .await?;
+        apply_provider_model_configs(&mut models, &self.model_configs);
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
         if let Some(cache) = self.cache.as_ref() {
@@ -444,6 +501,9 @@ impl OpenAiModelsManager {
 
     /// Replace the cached remote models and rebuild the derived presets list.
     async fn apply_remote_models(&self, models: Vec<ModelInfo>) {
+        let mut models = models;
+        append_missing_provider_model_configs(&mut models, &self.model_configs);
+        apply_provider_model_configs(&mut models, &self.model_configs);
         // Use the remote models list as the source of truth if it contains at least one
         // non-hidden model and the user is using ChatGPT auth.
         let should_use_remote_models_only = !models.is_empty()
@@ -592,6 +652,43 @@ impl ModelsManager for StaticModelsManager {
 
 fn load_remote_models_from_file() -> Result<Vec<ModelInfo>, std::io::Error> {
     Ok(crate::bundled_models_response()?.models)
+}
+
+fn apply_provider_model_configs(models: &mut [ModelInfo], model_configs: &[ProviderModelConfig]) {
+    if model_configs.is_empty() {
+        return;
+    }
+    for model in models {
+        model.supports_search_tool = model_configs
+            .iter()
+            .find(|config| config.model_id == model.slug)
+            .is_some_and(|config| config.supports_search_tool);
+    }
+}
+
+fn append_missing_provider_model_configs(
+    models: &mut Vec<ModelInfo>,
+    model_configs: &[ProviderModelConfig],
+) {
+    for config in model_configs {
+        if models.iter().any(|model| model.slug == config.model_id) {
+            continue;
+        }
+        let mut model = model_info::model_info_from_slug_without_warning(&config.model_id);
+        model.used_fallback_model_metadata = false;
+        model.display_name = config
+            .model_name
+            .clone()
+            .unwrap_or_else(|| config.model_id.clone());
+        model.visibility = if config.show_in_picker {
+            ModelVisibility::List
+        } else {
+            ModelVisibility::None
+        };
+        model.context_window = config.context_window.or(model.context_window);
+        model.supports_search_tool = config.supports_search_tool;
+        models.push(model);
+    }
 }
 
 fn default_model_from_available(available: Vec<ModelPreset>) -> String {

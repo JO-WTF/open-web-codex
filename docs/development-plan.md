@@ -366,11 +366,13 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
 
 当前唯一关键路径固定为：
 
-1. **A — Codex Runtime 最小封口。** R2 真实 DeepSeek 工具门已执行但未通过：
-   encrypted Secret restart、显式 model Turn 和真实 Chat function-tool 请求均有证据；当前
-   `deepseek-v4-flash` 的 Runtime 模型目录没有声明原生 `ModelInfo.supports_search_tool`，因此
-   gate 以 typed `provider_tool_search_capability_unavailable` 停止，未伪造 `tool_search`、deferred
-   MCP 或最终业务结果。
+1. **A — Codex Runtime 最小封口。** R2 的 Chat transport 已完成 current-Turn
+   `tool_search → spawn_agent` 兼容门；D3 又把能力声明收敛为既有 Provider `models` 配置中的
+   typed exact `ProviderModelConfig.supports_search_tool`，由 `ModelsManager` 合并到原生
+   `ModelInfo`，未配置默认 false，不按模型名或普通 `/models` ID 推断。Platform DTO/API/UI、Profile
+   恢复和 refresh 保留同一 capability。真实 DeepSeek D3 最小 `tool_search → spawn_agent` 门已通过；
+   完整仓网门在 Data MCP 后以 typed `copilot_chain_incomplete/map_producer_item_not_projected` 停止，
+   不能伪造 deferred MCP 或最终业务结果。
 2. **B — Server 实际适配。** 只完成通用 Copilot 运行对当前 Web Server 必需的 typed bridge 与
    owning-layer 适配，包括把官方 child Thread/Turn/Item 生命周期投影为可追踪的 Agent activity；
    不建立第二 Runtime、第二上下文、第二执行日志或固定业务流程。
@@ -386,14 +388,18 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
    `CaseRepository`、`NetworkSnapshot`、`ArtifactRef`、旧 services/models/tests 与 Demo launcher
    surface，不保留兼容双路径；Data4 与 Network active `ResourceRef` surface 不回退为 aliases。
 
-R2 真实门当前状态：fresh local session 可添加并列出 DeepSeek Provider；配置只保存 env ref，Platform
-Secret 可注入同一密钥；显式 `deepseek-v4-flash` Turn 已证明 Chat function-tool `exec_command`
-调用可达，但没有原生 `tool_search`，所以不能进入 deferred MCP 或最终业务链。浏览器响应、日志、
-Workspace 与普通 Profile 文件均不得出现 Secret 明文；本轮 opt-in 探针已验证无明文泄漏。只有可信
-Runtime 模型目录补充 `supports_search_tool=true` 后，才能重新运行并退出 R2。后续真实空目录
-故障已用窄 follow-up 收口：Codex 只增加 exact Provider 的 fresh typed catalog，Platform 不切换
-current Provider，只在非空成功后持久化目标目录并在刷新/重启后恢复；Turn Provider override、
-Provider owner 全量重构和 Browser dead graph 仍不属于阶段一关键门。
+R2/D3 真实门当前状态：fresh local session 可添加并列出 DeepSeek Provider；配置只保存 env ref，Platform
+Secret 可注入同一密钥；D3 已提供 exact per-model capability 的 Runtime/Platform 配置路径和 refresh
+保留测试。真实最小门已证明同一临时 Provider 通过正式 API 配置
+`deepseek-v4-flash.supportsSearchTool=true` 后产生结构化 `tool_search → spawn_agent`；完整门实际
+执行了 Data MCP 的 source discovery/inspection/normalization/geography，但未完成 Network/map 交付；一轮
+以 typed `copilot_chain_incomplete/map_producer_item_not_projected` 停止，最新一轮以
+`provider_or_copilot_turn_incomplete/turn_completion_timeout` 停止。浏览器响应、日志、Workspace
+与普通 Profile 文件均不得出现 Secret 明文；不写 `model_catalog_json`、不按模型名推断、不重试提示词、
+不回退 single-agent。后续真实空目录故障已用窄 follow-up 收口：Codex 只增加 exact
+Provider 的 fresh typed catalog，Platform 不切换 current Provider，只在非空成功后持久化目标目录并在
+刷新/重启后恢复；Turn Provider override、Provider owner 全量重构和 Browser dead graph 仍不属于阶段一
+关键门。
 
 后续 backlog 继续遵守已确认边界：official Thread/Turn/Item/history 是唯一会话事实；Browser legacy、
 Terminal/Usage/prompts、Provider 重复 owner、Task creation selection、Run lease/history overlay 与

@@ -1973,6 +1973,13 @@
           "description": "Additional HTTP headers to include in requests to this provider where the (key, value) pairs are the header name and value.",
           "type": "object"
         },
+        "models": {
+          "description": "Explicit metadata and capabilities for exact Provider model IDs.",
+          "items": {
+            "$ref": "#/definitions/ProviderModelConfig"
+          },
+          "type": "array"
+        },
         "name": {
           "default": "",
           "description": "Friendly display name.",
@@ -2818,6 +2825,53 @@
           "$ref": "#/definitions/TrustLevel"
         }
       },
+      "type": "object"
+    },
+    "ProviderModelConfig": {
+      "additionalProperties": false,
+      "description": "Explicit per-model configuration owned by a model Provider.\n\nRemote model discovery may provide only an identifier. Runtime capabilities that are not part of that response, such as ToolSearch, must be declared here for the exact model identifier instead of inferred from a Provider or model name.",
+      "properties": {
+        "context_window": {
+          "default": null,
+          "description": "Optional context window override retained by the Provider catalog.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "max_output_tokens": {
+          "default": null,
+          "description": "Optional model output limit retained by the Provider catalog.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "max_token_len": {
+          "default": null,
+          "description": "Optional model context metadata retained by the Provider catalog.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "model_id": {
+          "description": "Exact model identifier returned by the Provider catalog.",
+          "type": "string"
+        },
+        "model_name": {
+          "default": null,
+          "description": "Optional display name retained by the Provider catalog.",
+          "type": "string"
+        },
+        "show_in_picker": {
+          "default": true,
+          "description": "Whether the model is shown in the model picker.",
+          "type": "boolean"
+        },
+        "supports_search_tool": {
+          "default": false,
+          "description": "Explicit native ToolSearch capability for this exact model.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "model_id"
+      ],
       "type": "object"
     },
     "RawMcpServerConfig": {

@@ -538,6 +538,7 @@ export type ProviderModel = {
   modelName?: string | null;
   showInPicker: boolean;
   contextWindow?: number | null;
+  supportsSearchTool: boolean;
 };
 
 export type Provider = {

@@ -151,14 +151,16 @@ npm run test:e2e:real-deepseek
 This gate requires the source Provider to already have a Platform-managed
 credential. It does not print or persist the credential value.
 
-To run the zero-Runtime-change D1 catalog probe, add `E2E_REAL_DEEPSEEK_D1=1`.
-The harness temporarily writes a complete native `ModelsResponse` through
-`model_catalog_json`, restarts the existing Profile process so the official
-`ModelsManager` loads it, verifies that the outgoing request exposes and calls
-`tool_search`, then attempts one `spawn_agent` call. It stops with a typed
-failure if the model does not call `spawn_agent`; it does not run the business
-workflow. The Profile config, Provider, temporary catalog, Run, Workspace and
-Project are restored or removed in terminal cleanup.
+The gate refreshes the temporary Provider's model catalog through the official
+Provider API, then persists `supportsSearchTool=true` for the exact
+`deepseek-v4-flash` model through the typed model metadata endpoint. It does
+not write `model_catalog_json`, infer capabilities from the model name, or
+retry with prompt variants. It first verifies the minimal
+`tool_search → spawn_agent` path, then runs the full
+`spawn_agent → Data/Network MCP → 12h/map` Task. A missing structured call or
+missing canonical business Tool is returned as a typed failure. The Provider
+capability, Run, Workspace and Project are restored or removed in terminal
+cleanup.
 
 ## Layout
 

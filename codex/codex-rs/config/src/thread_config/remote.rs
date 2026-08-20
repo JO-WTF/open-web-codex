@@ -4,6 +4,7 @@ use std::num::NonZeroU64;
 use std::time::Duration;
 
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ProviderModelConfig;
 use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -193,6 +194,11 @@ fn model_provider_from_proto(
         supports_websockets: provider.supports_websockets,
         supports_standalone_web_search: provider.supports_standalone_web_search,
         supports_function_tools: provider.supports_function_tools.unwrap_or_default(),
+        models: provider
+            .models
+            .into_iter()
+            .map(provider_model_config_from_proto)
+            .collect(),
     };
     Ok((id, info))
 }
@@ -222,6 +228,7 @@ fn model_provider_to_proto(
         supports_websockets,
         supports_standalone_web_search,
         supports_function_tools,
+        models,
     } = provider;
 
     proto::ModelProvider {
@@ -244,6 +251,10 @@ fn model_provider_to_proto(
         supports_websockets,
         supports_standalone_web_search,
         supports_function_tools: Some(supports_function_tools),
+        models: models
+            .into_iter()
+            .map(provider_model_config_to_proto)
+            .collect(),
     }
 }
 
@@ -266,6 +277,31 @@ fn model_provider_auth_from_proto(
         refresh_interval_ms: auth.refresh_interval_ms,
         cwd,
     })
+}
+
+fn provider_model_config_from_proto(config: proto::ProviderModelConfig) -> ProviderModelConfig {
+    ProviderModelConfig {
+        model_id: config.model_id,
+        model_name: config.model_name,
+        max_token_len: config.max_token_len,
+        max_output_tokens: config.max_output_tokens,
+        show_in_picker: config.show_in_picker,
+        context_window: config.context_window,
+        supports_search_tool: config.supports_search_tool,
+    }
+}
+
+#[cfg(test)]
+fn provider_model_config_to_proto(config: ProviderModelConfig) -> proto::ProviderModelConfig {
+    proto::ProviderModelConfig {
+        model_id: config.model_id,
+        model_name: config.model_name,
+        max_token_len: config.max_token_len,
+        max_output_tokens: config.max_output_tokens,
+        show_in_picker: config.show_in_picker,
+        context_window: config.context_window,
+        supports_search_tool: config.supports_search_tool,
+    }
 }
 
 #[cfg(test)]
@@ -512,6 +548,7 @@ mod tests {
                             supports_websockets: true,
                             supports_standalone_web_search: true,
                             supports_function_tools: Some(true),
+                            models: Vec::new(),
                         }],
                         features: HashMap::from([
                             ("plugins".to_string(), false),
@@ -577,6 +614,7 @@ mod tests {
             supports_websockets: true,
             supports_standalone_web_search: true,
             supports_function_tools: true,
+            models: Vec::new(),
             aws: None,
         }
     }

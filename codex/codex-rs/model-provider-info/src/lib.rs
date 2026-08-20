@@ -71,6 +71,41 @@ pub enum WireApi {
     Chat,
 }
 
+fn default_show_in_picker() -> bool {
+    true
+}
+
+/// Explicit per-model configuration owned by a model Provider.
+///
+/// Remote model discovery may provide only an identifier. Runtime capabilities
+/// that are not part of that response, such as ToolSearch, must be declared
+/// here for the exact model identifier instead of inferred from a Provider or
+/// model name.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ProviderModelConfig {
+    /// Exact model identifier returned by the Provider catalog.
+    pub model_id: String,
+    /// Optional display name retained by the Provider catalog.
+    #[serde(default)]
+    pub model_name: Option<String>,
+    /// Optional model context metadata retained by the Provider catalog.
+    #[serde(default)]
+    pub max_token_len: Option<i64>,
+    /// Optional model output limit retained by the Provider catalog.
+    #[serde(default)]
+    pub max_output_tokens: Option<i64>,
+    /// Whether the model is shown in the model picker.
+    #[serde(default = "default_show_in_picker")]
+    pub show_in_picker: bool,
+    /// Optional context window override retained by the Provider catalog.
+    #[serde(default)]
+    pub context_window: Option<i64>,
+    /// Explicit native ToolSearch capability for this exact model.
+    #[serde(default)]
+    pub supports_search_tool: bool,
+}
+
 impl fmt::Display for WireApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
@@ -130,6 +165,9 @@ pub struct ModelProviderInfo {
     /// capability reported by `ModelInfo.supports_search_tool`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub supports_function_tools: bool,
+    /// Explicit metadata and capabilities for exact Provider model IDs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ProviderModelConfig>,
     /// Optional query parameters to append to the base URL.
     pub query_params: Option<HashMap<String, String>>,
     /// Additional HTTP headers to include in requests to this provider where
@@ -205,6 +243,21 @@ fn default_aws_auth_refresh_timeout_ms() -> NonZeroU64 {
 
 impl ModelProviderInfo {
     pub fn validate(&self) -> std::result::Result<(), String> {
+        let mut model_ids = std::collections::HashSet::new();
+        for model in &self.models {
+            if model.model_id.trim().is_empty()
+                || model.model_id != model.model_id.trim()
+                || model.model_id.chars().any(char::is_control)
+            {
+                return Err("provider model_id must be a non-empty canonical string".to_string());
+            }
+            if !model_ids.insert(model.model_id.as_str()) {
+                return Err(format!(
+                    "provider model configuration contains duplicate model_id `{}`",
+                    model.model_id
+                ));
+            }
+        }
         if self.aws.is_some() {
             if self.supports_websockets {
                 // TODO(celia-oai): Support AWS SigV4 signing for WebSocket
@@ -400,6 +453,7 @@ impl ModelProviderInfo {
             aws: None,
             wire_api: WireApi::Responses,
             supports_function_tools: true,
+            models: Vec::new(),
             query_params: None,
             http_headers: Some(
                 [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
@@ -448,6 +502,7 @@ impl ModelProviderInfo {
             })),
             wire_api: WireApi::Responses,
             supports_function_tools: true,
+            models: Vec::new(),
             query_params: None,
             http_headers: Some(HashMap::from([(
                 AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string(),
@@ -619,6 +674,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         aws: None,
         wire_api,
         supports_function_tools: false,
+        models: Vec::new(),
         query_params: None,
         http_headers: None,
         env_http_headers: None,

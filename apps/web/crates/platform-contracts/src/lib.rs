@@ -1689,6 +1689,8 @@ pub struct ProviderModelSummary {
     pub max_output_tokens: Option<i64>,
     pub show_in_picker: bool,
     pub context_window: Option<i64>,
+    #[serde(default)]
+    pub supports_search_tool: bool,
 }
 
 /// Provider facts returned to browsers. Credential values are intentionally
@@ -1836,6 +1838,9 @@ pub struct UpsertProviderRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateProviderModelRequest {
     pub context_window: i64,
+    /// Explicit native ToolSearch capability for this exact model.
+    #[serde(default)]
+    pub supports_search_tool: Option<bool>,
 }
 
 // ── Events ────────────────────────────────────────────────────────

@@ -72,6 +72,8 @@ pub struct ModelProviderModelSummary {
     pub max_output_tokens: Option<i64>,
     pub show_in_picker: bool,
     pub context_window: Option<i64>,
+    #[serde(default)]
+    pub supports_search_tool: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

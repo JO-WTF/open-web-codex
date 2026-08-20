@@ -52,7 +52,12 @@ export type ModelProviderSummary = {
   canEdit?: boolean;
   canDelete?: boolean;
   canFetchModels?: boolean;
-  models?: { modelId: string; modelName?: string | null; contextWindow?: number | null }[];
+  models?: {
+    modelId: string;
+    modelName?: string | null;
+    contextWindow?: number | null;
+    supportsSearchTool?: boolean;
+  }[];
 };
 
 export type ModelSummary = {
@@ -671,6 +676,31 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
                           />
                           <small>tokens</small>
                         </span>
+                      </label>
+                    ) : null}
+                    {currentProvider?.canEdit ? (
+                      <label className="web-context-editor">
+                        <span>Tool search</span>
+                        <input
+                          type="checkbox"
+                          aria-label={`Tool search for ${model.model}`}
+                          checked={currentProvider.models?.find(
+                            (entry) => entry.modelId === model.model,
+                          )?.supportsSearchTool === true}
+                          disabled={catalogLoading || contextSaveState === "saving"}
+                          onChange={(event) => {
+                            const persistedContext = currentProvider.models?.find(
+                              (entry) => entry.modelId === model.model,
+                            )?.contextWindow ?? DEFAULT_MODEL_CONTEXT_WINDOW;
+                            writeProvider({
+                              action: "capability",
+                              id: currentProvider.id,
+                              modelId: model.model,
+                              contextWindow: persistedContext,
+                              supportsSearchTool: event.target.checked,
+                            });
+                          }}
+                        />
                       </label>
                     ) : null}
                   </div>

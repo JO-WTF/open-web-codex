@@ -235,6 +235,7 @@ function parseModelProviderCatalog(value: unknown): {
         modelId: model.modelId,
         modelName: typeof model.modelName === "string" ? model.modelName : null,
         contextWindow: typeof model.contextWindow === "number" ? model.contextWindow : null,
+        supportsSearchTool: model.supportsSearchTool === true,
       }];
     }) : [];
     return [{
