@@ -900,6 +900,50 @@ fn request_user_text(request: &Value) -> String {
         .join("\n")
 }
 
+fn request_tool_names(request: &Value) -> BTreeSet<String> {
+    fn collect(value: &Value, names: &mut BTreeSet<String>) {
+        if let Some(name) = value.get("name").and_then(Value::as_str) {
+            names.insert(name.to_string());
+        }
+        if let Some(name) = value
+            .get("function")
+            .and_then(|function| function.get("name"))
+            .and_then(Value::as_str)
+        {
+            names.insert(name.to_string());
+        }
+        if let Some(tools) = value.get("tools").and_then(Value::as_array) {
+            for tool in tools {
+                collect(tool, names);
+            }
+        }
+    }
+
+    let mut names = BTreeSet::new();
+    if let Some(tools) = request.get("tools").and_then(Value::as_array) {
+        for tool in tools {
+            collect(tool, &mut names);
+        }
+    }
+    names
+}
+
+fn assert_role_has_no_shell_tools(request: &Value, role: &str, require_tool_search: bool) {
+    let names = request_tool_names(request);
+    for forbidden in ["exec_command", "shell_command", "write_stdin"] {
+        assert!(
+            !names.contains(forbidden),
+            "{role} must not expose {forbidden}: {names:?}"
+        );
+    }
+    if require_tool_search {
+        assert!(
+            names.contains("tool_search"),
+            "{role} must retain native tool_search when deferred MCP tools are available: {names:?}"
+        );
+    }
+}
+
 fn request_function_output<'a>(request: &'a Value, call_id: &str) -> Option<&'a Value> {
     request["input"].as_array()?.iter().find(|item| {
         item["type"].as_str() == Some("function_call_output")
@@ -1272,9 +1316,10 @@ include_instructions = true
 name = "Built-in network Runtime gate provider"
 base_url = "{model_uri}/v1"
 wire_api = "responses"
+supports_function_tools = true
 request_max_retries = 0
 stream_max_retries = 0
-models = [{{ model_id = "mock-model", context_window = 25600 }}]
+models = [{{ model_id = "mock-model", context_window = 25600, supports_search_tool = true }}]
 "#
     );
     let config_path = profile_home.join("config.toml");
@@ -1446,6 +1491,13 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     );
     let root_developer_text = request_developer_text(&root_request);
     let root_user_text = request_user_text(&root_request);
+    assert_role_has_no_shell_tools(&root_request, "warehouse Root", false);
+    assert!(
+        request_tool_names(&root_request)
+            .iter()
+            .any(|name| name.contains("multi_agent_v1") || name == "spawn_agent"),
+        "warehouse Root must retain native collaboration tools",
+    );
     assert!(
         root_user_text.contains("<name>warehouse-supervisor</name>")
             && root_user_text.contains("Root 只负责理解目标、协调 child"),
@@ -1481,6 +1533,13 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         wait_for_direct_child_thread(&host, &root.thread_id, "data_agent", &[]).await;
     let data_request =
         wait_for_model_request(&model_control, DATA_CHILD_PROMPT, DATA_SPAWN_CALL).await;
+    assert_role_has_no_shell_tools(&data_request, "data_agent", true);
+    assert!(
+        request_tool_names(&data_request)
+            .iter()
+            .any(|name| name.contains("supply_chain_data") || name == "discover_workspace_sources"),
+        "data_agent must retain its Data MCP surface",
+    );
     assert_child_skill_policy(
         &data_request,
         &[(
@@ -1508,6 +1567,13 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
     .await;
     let network_request =
         wait_for_model_request(&model_control, NETWORK_CHILD_PROMPT, NETWORK_SPAWN_CALL).await;
+    assert_role_has_no_shell_tools(&network_request, "network_agent", true);
+    assert!(
+        request_tool_names(&network_request)
+            .iter()
+            .any(|name| name.contains("supply_chain") || name == "prepare_route_matrix"),
+        "network_agent must retain its Network MCP surface",
+    );
     let network_instructions = network_request["instructions"]
         .as_str()
         .expect("Network Role base instructions");

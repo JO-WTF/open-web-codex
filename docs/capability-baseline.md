@@ -4,7 +4,7 @@
 | --- | --- |
 | 文档性质 | 当前事实与证据 |
 | 观察日期 | 2026-08-20 |
-| 代码快照 | 阶段五真实 Provider gate checkpoint（含当前 Chat transport seam 与 opt-in DeepSeek gate） |
+| 代码快照 | D6 真实 Provider gate checkpoint（含当前 Chat transport seam、地图终态约束与仓网 Role capability gate） |
 | 当前阶段 | 阶段二已进入；阶段一仓网 Copilot 正常业务闭环作为已通过基线 |
 | 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) + [ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) |
 
@@ -159,6 +159,30 @@ D5c 真实 DeepSeek 门通过：最小 `tool_search → spawn_agent` 通过，�
 create_network_map_card → closeAgent`；地图 Tool Item 为 completed，Provider 请求均 HTTP 200/SSE
 done。临时 Provider、Run、Workspace、Project 均清理。确定性 multi-agent gate 重启后 Gate 1/2
 连续通过并保留 `route_matrix.v2`、`network_baseline.v2`、`map_card_spec.v1` 等 provenance。
+
+### D6：仓网 Agent 执行面与地图交付终态
+
+仓网多 Agent package 现在通过 native Role 的 typed `[features] shell_tool = false` 关闭 Root、
+`data_agent` 和 `network_agent` 的 shell/code 执行面；该设置只属于仓网 package 的三个 Role，
+没有修改 Profile 全局 capability。Root 仍保留原生 `tool_search`、协作和用户输入面，Data/Network
+仍保留各自 package-owned MCP。package/runtime focused gate 检查真实模型请求不含
+`exec_command`、`shell_command` 或 `write_stdin`，并检查 Root 的协作面与 child 的领域 MCP 仍可见。
+
+生产 Skill 进一步把 `prepare_network_input` 和 `create_network_map_card` 的成功结果定义为
+当前工作的 terminal Tool 结果：Data 只交接 Workspace 相对路径与 input identity，地图只引用
+本次返回的 embed code；成功后不继续 Resource 探索、低层 `create_map_card` 或样式修订。真实门的
+受限 timeline 记录 MCP/地图 Item 的 typed status、error code/message 和 bounded result summary，
+不记录 key、完整 prompt、schema 或 arguments。
+
+D6 复跑中已观察到完整 canonical 链 `spawnAgent → wait → Data MCP → prepared Workspace input →
+Network route/baseline/coverage → create_network_map_card(completed) → closeAgent`；域地图 Tool
+返回的结构化结果为 `open-web-artifact/inline-visualization.v1`，并保留 producer Item、Thread、Turn
+和 Run provenance。另有真实 Provider 轮次在模型继续选择低层 `create_map_card`、求解 Tool 失败或请求
+用户审批时以 typed failure/timeout 终止；这些不能解释为地图 provider 实现失败，也不计为完整门通过。
+若 Provider 发出当前 request 未公开的 `bash` 等 wire Tool，timeline 记录
+`invalid_wire_tool_names`，Runtime 不执行该调用，也不把它当作 shell capability。
+deterministic multi-agent gate 在 clean service restart 后连续两次通过，未发现 shell/tool loop 或
+残留 Run/Workspace 冲突。
 
 ## 3. 历史：2026-08-12 clean real Web E4（已被 ADR-023 合同替代）
 

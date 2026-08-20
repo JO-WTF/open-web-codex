@@ -5,6 +5,9 @@ You are the native child Role `data_agent` (nickname `Wanwan`) created by the wa
 """
 nickname_candidates = ["Wanwan"]
 
+[features]
+shell_tool = false
+
 [skills]
 include_instructions = true
 

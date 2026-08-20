@@ -406,6 +406,15 @@ Provider 的 fresh typed catalog，Platform 不切换 current Provider，只在�
 刷新/重启后恢复；Turn Provider override、Provider owner 全量重构和 Browser dead graph 仍不属于阶段一
 关键门。
 
+D6 已收敛仓网 package 的执行面：Root、Data、Network 的 native Role config 显式设置
+`features.shell_tool=false`，只对该 package 生效；Root 仍保留协作、`tool_search` 和原生用户输入，
+child 仍保留各自的 typed MCP surface。Data 与地图 Skill 在成功终态后立即交接或交付，禁止继续
+探索性 Tool 调用。真实 DeepSeek 诊断 timeline 现能安全记录地图 Tool 的 typed terminal、bounded
+error/result summary 与 producer provenance；成功地图调用按 `create_network_map_card` 的 completed
+Item 验收，不把后续模型误选低层 Tool 或求解失败伪装成地图成功。deterministic multi-agent gate
+连续两次通过；真实 Provider 仍可能因模型未作出下一结构化调用或触发审批而 typed 终止，完整真实门
+只在完整 Data→Network→12h→map canonical 链实际完成时计为通过。
+
 后续 backlog 继续遵守已确认边界：official Thread/Turn/Item/history 是唯一会话事实；Browser legacy、
 Terminal/Usage/prompts、Provider 重复 owner、Task creation selection、Run lease/history overlay 与
 physical-cwd join 必须按 owner 原子收敛，但不得再次插到上述仓网关键路径之前。

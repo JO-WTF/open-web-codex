@@ -174,6 +174,18 @@ locally and never serialized into Chat `messages`. The D5c real gate verified
 the complete native chain through Data preparation, Network route/12h
 calculation and `create_network_map_card` delivery.
 
+The D6 warehouse package gate disables `shell_tool` in the native Root, Data
+and Network Role configs only; it does not change the Profile-wide capability
+set. Root retains native collaboration, `tool_search` and user-input tools,
+while the child Roles retain their typed domain MCP surfaces. The Data and map
+Skills treat successful preparation and `create_network_map_card` results as
+terminal Tool outcomes, so the model must hand off or deliver the returned
+reference instead of continuing exploratory or low-level map calls. The real
+gate timeline records bounded typed map status/errors and producer provenance;
+it never records keys, full prompts, schemas or arguments. A model-side typed
+failure or an unexposed wire name such as `bash` remains a failure and is not
+presented as a successful map delivery or shell capability.
+
 ## Layout
 
 ```text

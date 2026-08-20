@@ -19,7 +19,11 @@ metadata:
 
 生成仓网点、线、面地图时优先调用 `create_network_map_card`，传入 Network Tool 返回的精确 GeoJSON `data_ref`。用户要求行政区边界时，先将 Data 已确认的 Workspace GeoJSON 通过 `publish_workspace_geojson(require_polygon=true)` 发布成精确 `boundary_data_ref`，再传入地图 Tool。该 Tool 按 profile 自动生成仓库、需求、末端覆盖、干线、候选与设施状态图层；不要自行拼 `sources`、`layers` 或猜字段。只有超出该固定领域表达的明确用户样式需求，才按 `data_ref.profile` 直接调用低层 `create_map_card`。
 
+标准覆盖地图必须遵循这一条不可替代的顺序：先用同一份精确 baseline、方案或 comparison 引用调用 `prepare_network_coverage_map` 生成 coverage GeoJSON，再把该 Tool 成功返回的完整 `data_ref` 原样传给 `create_network_map_card`。普通仓网点线面地图不得调用 `publish_workspace_geojson` 代替 coverage GeoJSON；该 Tool 只用于用户明确要求行政区边界且 Data 已提供精确 Workspace polygon 的场景。coverage Tool 缺失、失败或没有完整 `data_ref` 时返回原始 typed 终态并停止，不读取 Resource 猜字段、不改用 `create_map_card`、不伪造地图。
+
 一次地图交付中，`create_network_map_card` 成功后必须立即引用该次返回的 `structuredContent.embed.code`，并停止地图构建；不得在同一交付中再调用 `create_map_card` 或用另一张卡片替换其 Artifact 引用。超出领域表达的样式要求应作为新的、明确的地图样式请求处理；只有在该请求开始时才调用一次低层 `create_map_card`，并且只引用该调用成功返回的 embed 指令。
+
+`create_network_map_card` 返回成功是本次地图工作的 terminal Tool 结果：下一步只发送包含该 embed code 的最终 Agent Message。不要再调用 `tool_search`、`read_mcp_resource`、`list_mcp_resources`、`update_plan`、`revise_map_card`、`create_map_card` 或任何其他 Tool；地图样式修改必须等待用户发起新的请求并提供新的 `map_spec_ref`。
 
 低层样式调整时才按 `profile.discriminator_property`、`feature_types` 和实际非空字段构造筛选、标签与 hover；不要从业务名称或历史地图猜字段。单一结果可使用 `assigned_warehouse_id`、`distance_km`、`duration_hours`、`unit_cost`；comparison 才可使用 `baseline_*` 与 `facility_*`。缺失字段直接省略，不制作通用替代字段。
 

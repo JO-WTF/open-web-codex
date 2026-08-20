@@ -5,6 +5,7 @@ display_name = "Warehouse Network · Multi-Agent"
 [root]
 skill = "warehouse-supervisor"
 task_skills = "none"
+agent = "warehouse_supervisor_root"
 
 [[skills]]
 id = "warehouse-supervisor"
@@ -29,6 +30,10 @@ path = "skills/warehouse-network-optimization"
 [[skills]]
 id = "warehouse-map-delivery"
 path = "skills/warehouse-map-delivery"
+
+[[agents]]
+id = "warehouse_supervisor_root"
+role = "agents/warehouse_supervisor_root.toml"
 
 [[agents]]
 id = "data_agent"

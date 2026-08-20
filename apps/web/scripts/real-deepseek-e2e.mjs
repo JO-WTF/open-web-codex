@@ -393,6 +393,71 @@ function eventTool(event) {
   return data.tool ?? data.name ?? data.data?.tool ?? data.result?.tool ?? "";
 }
 
+const SAFE_RESULT_KEYS = [
+  "code",
+  "message",
+  "error",
+  "status",
+  "state",
+  "success",
+  "type",
+  "kind",
+  "schema",
+  "schema_version",
+  "resource_schema",
+  "resource_uri",
+  "uri",
+  "data_ref",
+  "map_spec_ref",
+  "delivery",
+];
+
+function safeStructuredSummary(value) {
+  const source = value?.structuredContent ?? value;
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return typeof source === "string" ? boundedAssistantSummary(source) : undefined;
+  }
+  const summary = {};
+  for (const key of SAFE_RESULT_KEYS) {
+    const entry = source[key];
+    if (entry === undefined || entry === null) continue;
+    if (typeof entry === "string") {
+      summary[key] = boundedAssistantSummary(entry);
+    } else if (typeof entry === "number" || typeof entry === "boolean") {
+      summary[key] = entry;
+    } else if (key === "data_ref" && typeof entry === "object") {
+      summary[key] = safeStructuredSummary(entry);
+    } else if (key === "delivery" && typeof entry === "object") {
+      summary[key] = safeStructuredSummary(entry);
+    }
+  }
+  return Object.keys(summary).length > 0 ? summary : undefined;
+}
+
+function safeEventItem(event) {
+  const data = eventData(event);
+  const error = data.error ?? data.result?.error;
+  const errorCode =
+    typeof error === "object"
+      ? error.code ?? error.type ?? error.codexErrorInfo
+      : typeof error === "string"
+        ? error
+        : undefined;
+  const errorMessage =
+    typeof error === "object" ? error.message ?? error.detail : undefined;
+  return {
+    thread_id: event.thread_id,
+    turn_id: event.turn_id,
+    event_type: event.event_type,
+    item_type: itemType(event),
+    tool: eventTool(event) || undefined,
+    status: typeof data.status === "string" ? data.status : undefined,
+    error_code: typeof errorCode === "string" ? errorCode : undefined,
+    error_message: boundedAssistantSummary(errorMessage),
+    result_summary: safeStructuredSummary(data.result),
+  };
+}
+
 function nativeToolNames(events) {
   const names = [];
   for (const event of events) {
@@ -493,14 +558,7 @@ function safeTimeline(events, rounds, agentProjections = []) {
       }
       threads.set(threadId, current);
     }
-    const item = {
-      thread_id: typeof threadId === "string" ? threadId : undefined,
-      turn_id: typeof turnId === "string" ? turnId : undefined,
-      event_type: event.event_type,
-      item_type: itemType(event),
-      tool: eventTool(event) || undefined,
-      status: typeof data.status === "string" ? data.status : undefined,
-    };
+    const item = safeEventItem(event);
     const itemName = String(item.tool ?? "");
     if (item.item_type === "collabAgentToolCall" || item.item_type === "collabToolCall") {
       collaboration.push(item);
@@ -1051,7 +1109,11 @@ async function diagnosticTimeline(record) {
 async function attachTimeline(error, record) {
   if (!(error instanceof NativeRuntimeBlocker)) return error;
   const timeline = await diagnosticTimeline(record);
-  error.details = { ...(error.details ?? {}), timeline };
+  error.details = {
+    ...(error.details ?? {}),
+    run_id: record?.run?.id,
+    timeline,
+  };
   return error;
 }
 
@@ -1279,6 +1341,7 @@ async function runToolSearchGate(provider) {
       status: "passed",
       provider_id: provider.id,
       model,
+      run_id: record.run?.id,
       round_count: state.proxy.rounds.length,
       native_tool_names: nativeNames,
     };
@@ -1397,7 +1460,12 @@ async function runGate(provider) {
         native_tool_names: nativeNames,
       });
     }
-    if (!allEvents.some((event) => /create_network_map_card/.test(String(eventTool(event))))) {
+    const mapProducerEvent = allEvents.find(
+      (event) =>
+        /create_network_map_card/.test(String(eventTool(event))) &&
+        event.event_type === "codex.item.completed",
+    );
+    if (!mapProducerEvent) {
       throw new NativeRuntimeBlocker("copilot_chain_incomplete", {
         reason: "map_producer_item_not_projected",
         provider_id: provider.id,
@@ -1409,6 +1477,11 @@ async function runGate(provider) {
       status: "passed",
       provider_id: provider.id,
       model,
+      run_id: record.run?.id,
+      map_producer_item_id: mapProducerEvent.item_id,
+      map_producer_thread_id: mapProducerEvent.thread_id,
+      map_producer_turn_id: mapProducerEvent.turn_id,
+      map_producer_status: mapProducerEvent.payload?.data?.status,
       round_count: rounds.length,
       native_tool_names: nativeNames,
     };

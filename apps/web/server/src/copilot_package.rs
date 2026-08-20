@@ -1534,6 +1534,9 @@ mod tests {
         include_str!("../../../../copilots/warehouse-network/agents/data_agent.toml");
     const NETWORK_ROLE: &str =
         include_str!("../../../../copilots/warehouse-network/agents/network_agent.toml");
+    const ROOT_ROLE: &str = include_str!(
+        "../../../../copilots/warehouse-network/agents/warehouse_supervisor_root.toml"
+    );
 
     #[test]
     fn root_agent_toml_becomes_flat_app_server_config_overrides() {
@@ -1580,6 +1583,13 @@ mod tests {
     }
 
     #[test]
+    fn warehouse_data_skill_stops_after_prepared_input_terminal_result() {
+        assert!(DATA_SKILL
+            .contains("`prepare_network_input` 成功是本次 Data 工作的 terminal Tool 结果"));
+        assert!(DATA_SKILL.contains("不要再调用 `read_mcp_resource`、`list_mcp_resources`"));
+    }
+
+    #[test]
     fn warehouse_map_delivery_skills_require_an_explicit_map_spec_selection() {
         for skill in [MAP_DELIVERY_SKILL, SINGLE_AGENT_MAP_DELIVERY_SKILL] {
             assert!(skill.contains("当前 Turn 由 Platform 注入的精确 `map_spec_ref`"));
@@ -1597,9 +1607,12 @@ mod tests {
     fn warehouse_map_delivery_skills_use_the_domain_map_builder() {
         for skill in [MAP_DELIVERY_SKILL, SINGLE_AGENT_MAP_DELIVERY_SKILL] {
             assert!(skill.contains("`create_network_map_card`"));
+            assert!(skill.contains("`prepare_network_coverage_map` 生成 coverage GeoJSON"));
+            assert!(skill.contains("不得调用 `publish_workspace_geojson` 代替 coverage GeoJSON"));
             assert!(skill.contains("`publish_workspace_geojson(require_polygon=true)`"));
             assert!(skill.contains("不要自行拼 `sources`、`layers` 或猜字段"));
             assert!(skill.contains("不得在同一交付中再调用 `create_map_card`"));
+            assert!(skill.contains("返回成功是本次地图工作的 terminal Tool 结果"));
         }
         assert!(SUPERVISOR_SKILL.contains("`existing_only` 只限制 baseline 的计算范围"));
     }
@@ -1636,6 +1649,7 @@ display_name = "Warehouse network"
 [root]
 skill = "warehouse-supervisor"
 task_skills = "none"
+agent = "warehouse_supervisor_root"
 
 [[skills]]
 id = "warehouse-supervisor"
@@ -1660,6 +1674,10 @@ path = "skills/warehouse-network-optimization"
 [[skills]]
 id = "warehouse-map-delivery"
 path = "skills/warehouse-map-delivery"
+
+[[agents]]
+id = "warehouse_supervisor_root"
+role = "agents/warehouse_supervisor_root.toml"
 
 [[agents]]
 id = "data_agent"
@@ -1712,6 +1730,11 @@ runtime = "tools/maps/runtime.toml"
             false,
         );
         write_file(&package.join("agents/data_agent.toml"), DATA_ROLE, false);
+        write_file(
+            &package.join("agents/warehouse_supervisor_root.toml"),
+            ROOT_ROLE,
+            false,
+        );
         write_file(
             &package.join("agents/network_agent.toml"),
             NETWORK_ROLE,
@@ -1925,6 +1948,22 @@ runtime = "tools/maps/runtime.toml"
             Value::Bool(true),
             "managed Role MCP projection must be carried by typed Runtime config",
         );
+        assert_eq!(
+            root_execution.runtime_config["features.shell_tool"],
+            Value::Bool(false),
+            "warehouse Root must disable shell tools through native config",
+        );
+        let root = assets
+            .render_role("warehouse_supervisor_root", &profile)
+            .expect("Root Role");
+        let root = root.parse::<DocumentMut>().expect("parse Root Role");
+        for role in [&data, &network, &root] {
+            assert_eq!(
+                role["features"]["shell_tool"].as_bool(),
+                Some(false),
+                "warehouse Root and child Roles must disable shell tools through native config",
+            );
+        }
         let supply_python = _temp
             .path()
             .join("prepared 运行态/dependencies/supply python/bin/python");
@@ -2218,10 +2257,13 @@ runtime = "tools/maps/runtime.toml"
         let (_temp, mut assets, profile, _descriptor) = fixture();
         assets.root_agent = Some("data_agent".to_string());
 
-        assert_eq!(assets.agent_role_ids(), vec!["network_agent"]);
+        assert_eq!(
+            assets.agent_role_ids(),
+            vec!["warehouse_supervisor_root", "network_agent"]
+        );
         assert_eq!(
             assets.startup_files(&profile).expect("startup files").len(),
-            7
+            8
         );
         assert!(assets
             .root_execution_config(&profile)

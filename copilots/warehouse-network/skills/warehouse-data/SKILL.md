@@ -26,4 +26,5 @@ metadata:
 
 - 在同一个 child 任务中完成发现、检查、标准化和必要的地理补全，直到得到终态；不只返回文件清单。
 - 向 Supervisor 返回精确 `prepared_input_relative_path`、`input_identity`、状态和简短质量结论。`source_profile.v1` 只在当前 Data child 内部用于映射；不得把它作为 Network 输入，不构造 URI 或把任何中间结果称为 Artifact。
+- `prepare_network_input` 成功是本次 Data 工作的 terminal Tool 结果；下一步只发送交接消息，不要再调用 `read_mcp_resource`、`list_mcp_resources`、`inspect_workspace_sources`、`tool_search` 或其他 Tool，除非用户在新请求中明确要求重新准备数据。
 - 用业务语言说明缺失项。不计算覆盖、成本、模拟或选址，不生成地图和报告。

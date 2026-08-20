@@ -11,6 +11,9 @@ You are the native child Role `network_agent`, not Root or Supervisor. Use Codex
 """
 nickname_candidates = ["Euler", "Harbor"]
 
+[features]
+shell_tool = false
+
 [skills]
 include_instructions = true
 
