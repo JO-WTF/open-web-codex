@@ -1017,9 +1017,26 @@ async function taskEvents(taskId) {
   return api("/tasks/" + taskId + "/events?limit=5000");
 }
 
+async function taskEventsAll(taskId) {
+  const events = [];
+  let afterSequence = 0;
+  for (let page = 0; page < 40; page += 1) {
+    const query =
+      "?after_sequence=" + encodeURIComponent(afterSequence) + "&limit=200";
+    const batch = await api("/tasks/" + taskId + "/events" + query);
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    events.push(...batch);
+    const nextSequence = batch.at(-1)?.sequence;
+    if (typeof nextSequence !== "number" || nextSequence <= afterSequence) break;
+    afterSequence = nextSequence;
+    if (batch.length < 200) break;
+  }
+  return events;
+}
+
 async function diagnosticTimeline(record) {
   const events = record?.task?.id
-    ? await taskEvents(record.task.id).catch(() => [])
+    ? await taskEventsAll(record.task.id).catch(() => [])
     : [];
   const agents = record?.run?.id
     ? await api("/runs/" + record.run.id + "/agents").catch(() => [])
@@ -1228,7 +1245,7 @@ async function runToolSearchGate(provider) {
       wire_tool_names: secondRound.wire_tool_names,
     };
     log("[D2 ROUND 2] " + JSON.stringify(secondEvidence));
-    const events = await taskEvents(record.task.id).catch(() => []);
+    const events = await taskEventsAll(record.task.id).catch(() => []);
     const nativeNames = nativeToolNames(events);
     log(
       "[D2 CANONICAL] " +
@@ -1302,7 +1319,7 @@ async function runGate(provider) {
       model_supports_native_tool_search:
         firstRound.visible_tool_names.includes("tool_search"),
     };
-    const canonicalBeforeStop = await taskEvents(record.task.id)
+    const canonicalBeforeStop = await taskEventsAll(record.task.id)
       .then((events) => eventSummary(events).filter((event) => event.turn_id === response.turn_id))
       .catch(() => []);
     log("[ROUND 1] " + JSON.stringify(minimalEvidence));
@@ -1324,30 +1341,33 @@ async function runGate(provider) {
     }
 
     const events = await waitForTurn(record.task.id, response.turn_id);
-    const nativeNames = nativeToolNames(events);
-    const rounds = state.proxy.rounds.filter((round) => round.round > roundStart).map((round) => ({
-      round: round.round,
-      tools_present: round.tools_present,
-      tool_count: round.tool_count,
-      tool_choice: round.tool_choice,
-      original_tool_choice: round.original_tool_choice,
-      effective_tool_choice: round.effective_tool_choice,
-      tool_choice_overridden: round.tool_choice_overridden,
-      current_turn_has_structured_tool_activity:
-        round.current_turn_has_structured_tool_activity,
-      visible_tool_names: round.visible_tool_names,
-      structured_tool_calls: round.structured_tool_calls,
-      wire_tool_names: round.wire_tool_names,
-      invalid_wire_tool_names: round.invalid_wire_tool_names,
-    }));
+    const allEvents = await taskEventsAll(record.task.id);
+    const nativeNames = nativeToolNames(allEvents);
+    const rounds = state.proxy.rounds
+      .filter((round) => round.round > roundStart)
+      .slice(-40)
+      .map((round) => ({
+        round: round.round,
+        tools_present: round.tools_present,
+        visible_tool_count: round.tool_count,
+        tool_choice: round.tool_choice,
+        original_tool_choice: round.original_tool_choice,
+        effective_tool_choice: round.effective_tool_choice,
+        tool_choice_overridden: round.tool_choice_overridden,
+        current_turn_has_structured_tool_activity:
+          round.current_turn_has_structured_tool_activity,
+        structured_tool_calls: round.structured_tool_calls,
+        wire_tool_names: round.wire_tool_names,
+        invalid_wire_tool_names: round.invalid_wire_tool_names,
+      }));
     log("[ROUNDS] " + JSON.stringify(rounds));
     log(
       "[CANONICAL] " +
         JSON.stringify({
           native_tool_names: nativeNames,
-          terminal_events: eventSummary(events).filter((event) =>
-            /completed|failed|cancelled|error/i.test(event.event_type ?? ""),
-          ),
+          terminal_events: eventSummary(events)
+            .filter((event) => /completed|failed|cancelled|error/i.test(event.event_type ?? ""))
+            .slice(-80),
         }),
     );
     logTimeline("ACTOR TIMELINE", await diagnosticTimeline(record));
@@ -1368,7 +1388,7 @@ async function runGate(provider) {
         },
       });
     }
-    const eventText = events.map((event) => sanitize(event.payload)).join("\n");
+    const eventText = allEvents.map((event) => sanitize(event.payload)).join("\n");
     if (!/12\s*h|12\s*小时|12-hour/i.test(eventText)) {
       throw new NativeRuntimeBlocker("copilot_chain_incomplete", {
         reason: "12h_result_not_reported",
@@ -1377,7 +1397,7 @@ async function runGate(provider) {
         native_tool_names: nativeNames,
       });
     }
-    if (!events.some((event) => /create_network_map_card/.test(String(eventTool(event))))) {
+    if (!allEvents.some((event) => /create_network_map_card/.test(String(eventTool(event))))) {
       throw new NativeRuntimeBlocker("copilot_chain_incomplete", {
         reason: "map_producer_item_not_projected",
         provider_id: provider.id,

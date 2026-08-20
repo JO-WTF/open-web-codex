@@ -219,7 +219,7 @@ fn translates_current_turn_tool_search_history_into_chat_tools_and_reverse_targe
                 text: "Use the network baseline tool.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: None,
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -227,7 +227,7 @@ fn translates_current_turn_tool_search_history_into_chat_tools_and_reverse_targe
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "network coverage"}),
-            internal_chat_message_metadata_passthrough: None,
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -240,7 +240,7 @@ fn translates_current_turn_tool_search_history_into_chat_tools_and_reverse_targe
                 "description": "Evaluate a network baseline.",
                 "parameters": {"type": "object", "properties": {}}
             })],
-            internal_chat_message_metadata_passthrough: None,
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
         },
     ];
 
@@ -296,6 +296,148 @@ fn translates_current_turn_tool_search_history_into_chat_tools_and_reverse_targe
             namespace: None,
         }
     );
+}
+
+#[test]
+fn keeps_current_turn_deferred_target_after_same_turn_agent_completion_message() {
+    let mut request = request(Some(vec![serde_json::json!({
+        "type": "tool_search",
+        "execution": "client",
+        "description": "Search available tools.",
+        "parameters": {"type": "object"}
+    })]));
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Plan the network.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+        },
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: None,
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "spawn agent"}),
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+        },
+        ResponseItem::ToolSearchOutput {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: vec![serde_json::json!({
+                "type": "namespace",
+                "name": "multi_agent_v1",
+                "description": "Native Agent collaboration.",
+                "tools": [{
+                    "type": "function",
+                    "name": "spawn_agent",
+                    "description": "Start a child Agent.",
+                    "parameters": {"type": "object", "properties": {}}
+                }]
+            })],
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+        },
+        // Inter-Agent completion is represented as a user-role Chat message,
+        // but its typed metadata keeps it inside the current Root Turn.
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Data Agent completed the prepared input handoff.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+        },
+    ];
+
+    let translated = responses_request_to_chat_completions_request(request).unwrap();
+    assert!(
+        translated
+            .tools
+            .iter()
+            .any(|tool| tool.function.name == "multi_agent_v1__spawn_agent")
+    );
+    assert_eq!(
+        translated
+            .history_tool_targets
+            .get("multi_agent_v1__spawn_agent"),
+        Some(&ChatToolTarget {
+            name: "spawn_agent".to_string(),
+            namespace: Some("multi_agent_v1".to_string()),
+        })
+    );
+}
+
+#[test]
+fn clears_deferred_targets_when_latest_user_message_lacks_turn_metadata() {
+    let mut request = request(Some(vec![serde_json::json!({
+        "type": "tool_search",
+        "execution": "client",
+        "description": "Search available tools.",
+        "parameters": {"type": "object"}
+    })]));
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Plan the network.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+        },
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: None,
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "spawn agent"}),
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+        },
+        ResponseItem::ToolSearchOutput {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: vec![serde_json::json!({
+                "type": "namespace",
+                "name": "multi_agent_v1",
+                "tools": [{
+                    "type": "function",
+                    "name": "spawn_agent",
+                    "parameters": {"type": "object"}
+                }]
+            })],
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Unidentified mailbox message.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+
+    let translated = responses_request_to_chat_completions_request(request).unwrap();
+    assert_eq!(
+        translated
+            .tools
+            .iter()
+            .map(|tool| tool.function.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["tool_search"]
+    );
+    assert!(translated.history_tool_targets.is_empty());
 }
 
 #[test]

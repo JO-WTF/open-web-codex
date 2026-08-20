@@ -336,32 +336,26 @@ fn current_turn_tool_targets(
     input: &[ResponseItem],
     prompt_tools: &[ChatTool],
 ) -> Result<(Vec<ChatTool>, HashMap<String, ChatToolTarget>), ApiError> {
-    let Some((turn_boundary_index, current_turn_id)) =
-        input
-            .iter()
-            .enumerate()
-            .rev()
-            .find_map(|(index, item)| match item {
-                ResponseItem::Message { role, .. } if role == "user" => {
-                    Some((index, item.turn_id().map(str::to_string)))
-                }
-                _ => None,
-            })
+    let latest_user_message = input
+        .iter()
+        .rev()
+        .find(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"));
+    let Some(current_turn_id) = latest_user_message
+        .and_then(ResponseItem::turn_id)
+        .map(str::to_string)
     else {
         return Ok((Vec::new(), HashMap::new()));
     };
 
     let mut tool_search_call_ids = HashSet::new();
     let mut history_candidates = Vec::new();
-    for item in input.iter().skip(turn_boundary_index) {
+    for item in input {
         match item {
             ResponseItem::ToolSearchCall {
                 call_id: Some(call_id),
                 execution,
                 ..
-            } if execution == "client"
-                && item_belongs_to_current_turn(item, current_turn_id.as_deref()) =>
-            {
+            } if execution == "client" && item_belongs_to_current_turn(item, &current_turn_id) => {
                 tool_search_call_ids.insert(call_id.as_str());
             }
             ResponseItem::ToolSearchOutput {
@@ -372,7 +366,7 @@ fn current_turn_tool_targets(
                 ..
             } if status == "completed"
                 && execution == "client"
-                && item_belongs_to_current_turn(item, current_turn_id.as_deref())
+                && item_belongs_to_current_turn(item, &current_turn_id)
                 && tool_search_call_ids.contains(call_id.as_str()) =>
             {
                 history_candidates.extend(loadable_tool_targets(tools)?);
@@ -422,11 +416,9 @@ fn current_turn_tool_targets(
     Ok((current_turn_tools, history_tool_targets))
 }
 
-fn item_belongs_to_current_turn(item: &ResponseItem, current_turn_id: Option<&str>) -> bool {
-    current_turn_id.is_none_or(|current_turn_id| {
-        item.turn_id()
-            .is_none_or(|item_turn_id| item_turn_id == current_turn_id)
-    })
+fn item_belongs_to_current_turn(item: &ResponseItem, current_turn_id: &str) -> bool {
+    item.turn_id()
+        .is_some_and(|item_turn_id| item_turn_id == current_turn_id)
 }
 
 fn loadable_tool_targets(tools: &[Value]) -> Result<Vec<ToolTargetCandidate>, ApiError> {

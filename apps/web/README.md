@@ -168,6 +168,12 @@ missing canonical business Tool is returned as a typed failure. The Provider
 capability, Run, Workspace and Project are restored or removed in terminal
 cleanup.
 
+The Chat bridge keeps the typed current-Turn metadata needed to retain deferred
+Tool targets across same-Turn Agent mailbox messages; this metadata is consumed
+locally and never serialized into Chat `messages`. The D5c real gate verified
+the complete native chain through Data preparation, Network route/12h
+calculation and `create_network_map_card` delivery.
+
 ## Layout
 
 ```text
