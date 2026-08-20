@@ -15,7 +15,10 @@ from open_web_codex_provider import ProviderContractError, ResourceRef, Resource
 from supply_chain_planner.network import server
 from supply_chain_planner.network.matrix_models import CostCalculationPolicy, DemandUnitCostRule
 from supply_chain_planner.network.models import RouteQuoteRecord
-from supply_chain_planner.network.optimization_models import KeepAllExistingWarehousePolicy, ScenarioSpec
+from supply_chain_planner.network.optimization_models import (
+    KeepAllExistingWarehousePolicy,
+    ScenarioSpec,
+)
 from supply_chain_planner.shared.models import (
     NetworkComparisonReportInput,
     PreparedNetworkResource,
@@ -95,12 +98,12 @@ def test_network_planning_tools_use_workspace_input_and_keep_compute_results_as_
         assert "normalized_input_ref" not in schema["properties"]
 
     assert "resource_ref" in tools["prepare_route_matrix"].outputSchema["properties"]
-    assert "prepared_input_relative_path" in tools["prepare_route_matrix"].inputSchema[
-        "properties"
-    ]
+    assert "prepared_input_relative_path" in tools["prepare_route_matrix"].inputSchema["properties"]
 
 
-def test_prepared_input_drives_baseline_optimization_map_and_report(tmp_path: Path, monkeypatch) -> None:
+def test_prepared_input_drives_baseline_optimization_map_and_report(
+    tmp_path: Path, monkeypatch
+) -> None:
     workspace, _store = _runtime(tmp_path, monkeypatch)
     (workspace / "outputs").mkdir()
     ctx = _context(workspace)
@@ -131,9 +134,9 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(tmp_path: Pa
             routes,
             "min_cost",
             [6, 12, 18],
-            "actual_current",
             ctx,
-            costs,
+            coverage_mode="actual_current",
+            cost_matrix_ref=costs,
         )
     )
     facility = _ref(
@@ -160,7 +163,10 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(tmp_path: Pa
 
     map_result = server.prepare_network_comparison_map(comparison, ctx)
     assert map_result.structuredContent is not None
-    assert map_result.structuredContent["data_ref"]["resource_schema"] == "network_comparison_geojson.v1"
+    assert (
+        map_result.structuredContent["data_ref"]["resource_schema"]
+        == "network_comparison_geojson.v1"
+    )
 
     coverage = server.prepare_network_coverage_map(prepared_path, facility, ctx)
     assert coverage.structuredContent is not None
@@ -173,7 +179,10 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(tmp_path: Pa
     )
     assert report.structuredContent is not None
     assert (workspace / "outputs/network-report.md").is_file()
-    assert "network_planning_report_markdown.v1" in (workspace / "outputs/network-report.md").read_text()
+    assert (
+        "network_planning_report_markdown.v1"
+        in (workspace / "outputs/network-report.md").read_text()
+    )
 
 
 def test_scenario_validation_stops_before_loading_missing_workspace_inputs() -> None:
@@ -182,7 +191,9 @@ def test_scenario_validation_stops_before_loading_missing_workspace_inputs() -> 
         uri="supply-chain://resources/not-loaded",
         resource_schema="route_matrix.v2",
     )
-    fake_context = SimpleNamespace(request_context=SimpleNamespace(meta=SimpleNamespace(model_extra={})))
+    fake_context = SimpleNamespace(
+        request_context=SimpleNamespace(meta=SimpleNamespace(model_extra={}))
+    )
     with pytest.raises(ProviderContractError, match="scenario_service_targets_invalid"):
         server._load_facility_scenario_inputs(
             "not-loaded.json",

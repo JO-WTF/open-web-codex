@@ -42,9 +42,11 @@ from supply_chain_planner.delivery.report_service import (
 from supply_chain_planner.network.matrix import build_cost_matrix as _build_composable_cost_matrix
 from supply_chain_planner.network.matrix import (
     build_navigation_matrix_request,
+    build_route_matrix_with_reuse,
+)
+from supply_chain_planner.network.matrix import (
     build_provided_route_matrix as _build_provided_route_matrix,
 )
-from supply_chain_planner.network.matrix import build_route_matrix_with_reuse
 from supply_chain_planner.network.matrix import (
     register_navigation_route_matrix as _register_composable_navigation_matrix,
 )
@@ -92,10 +94,10 @@ from supply_chain_planner.shared.models import (
     ComparableNetworkResultRef,
     FacilityChangeAssessmentToolResult,
     FacilityChangeCostComparison,
+    NavigationMatrixRequestToolResult,
     NetworkBaselineResourceToolResult,
     NetworkFinalArtifactDescriptor,
     NetworkFinalArtifactToolResult,
-    NavigationMatrixRequestToolResult,
     NetworkPlanComparisonResource,
     NetworkPlanComparisonResourceRef,
     NetworkReportInput,
@@ -108,7 +110,6 @@ from supply_chain_planner.shared.planning_input import (
     load_prepared_network_input,
     require_matching_input,
 )
-from supply_chain_planner.shared.resource_identity import NETWORK_MCP_SERVER_NAME
 from supply_chain_planner.shared.resources import SupplyChainResources
 
 McpResourceContractError = ProviderContractError
@@ -384,9 +385,7 @@ def _load_assignment_coverage_result(
 ]:
     """Adapt one solved domain result without choosing or recomputing it."""
     if resource_ref.resource_schema == "network_baseline.v2":
-        baseline = _runtime().load_model(
-            resource_ref, "network_baseline.v2", BaselineResult
-        )
+        baseline = _runtime().load_model(resource_ref, "network_baseline.v2", BaselineResult)
         return (
             baseline.assignment,
             baseline.active_warehouse_ids,
@@ -395,9 +394,7 @@ def _load_assignment_coverage_result(
             baseline.input_identity,
         )
     if resource_ref.resource_schema == "network_scenario.v2":
-        scenario = _runtime().load_model(
-            resource_ref, "network_scenario.v2", ScenarioResult
-        )
+        scenario = _runtime().load_model(resource_ref, "network_scenario.v2", ScenarioResult)
         return (
             scenario.assignment,
             scenario.active_warehouse_ids,
@@ -405,9 +402,7 @@ def _load_assignment_coverage_result(
             "scenario",
             scenario.input_identity,
         )
-    facility = _runtime().load_model(
-        resource_ref, "facility_location_solution.v3", PMedianSolution
-    )
+    facility = _runtime().load_model(resource_ref, "facility_location_solution.v3", PMedianSolution)
     if facility.assignment is None:
         raise McpResourceContractError("coverage_assignment_required")
     if facility.status not in {"optimal", "feasible"}:
@@ -432,9 +427,7 @@ def _publish_geojson(
     # Mapbox fallback.  The immutable GeoJSON and its derived profile must use
     # the same compact, non-null payload.
     payload = value.model_dump(mode="json", by_alias=True, exclude_none=True)
-    if payload.get("type") != "FeatureCollection" or not isinstance(
-        payload.get("features"), list
-    ):
+    if payload.get("type") != "FeatureCollection" or not isinstance(payload.get("features"), list):
         raise McpResourceContractError("geojson_feature_collection_required")
     result = _runtime().publish(
         schema,
@@ -558,9 +551,7 @@ def create_navigation_matrix_request(
         if prior.warehouse_scope != warehouse_scope:
             raise McpResourceContractError("navigation_route_matrix_scope_mismatch")
         reused_rows = [
-            row
-            for row in prior.rows
-            if row.method == "navigation" and row.status == "ready"
+            row for row in prior.rows if row.method == "navigation" and row.status == "ready"
         ]
         reusable_keys = {(row.origin_id, row.destination_id, row.layer) for row in reused_rows}
         request = request.model_copy(
@@ -626,19 +617,11 @@ def prepare_route_matrix(
     warehouse_scope: Literal["existing_only", "all_warehouses"] = "all_warehouses",
     detour_coefficient: Annotated[
         float | None,
-        Field(
-            description=(
-                "Required when route_method is haversine; omit for provided routes."
-            )
-        ),
+        Field(description=("Required when route_method is haversine; omit for provided routes.")),
     ] = None,
     average_speed_kph: Annotated[
         float | None,
-        Field(
-            description=(
-                "Required when route_method is haversine; omit for provided routes."
-            )
-        ),
+        Field(description=("Required when route_method is haversine; omit for provided routes.")),
     ] = None,
     prior_route_matrix_ref: ResourceRef | None = None,
 ) -> Annotated[CallToolResult, RouteMatrixPreparationToolResult]:
@@ -826,11 +809,16 @@ def evaluate_network_baseline(
     route_matrix_ref: ResourceRef,
     objective: Literal["min_time", "min_cost"],
     service_targets: Annotated[list[float], Field(min_length=1, max_length=32)],
-    coverage_mode: Literal["actual_current", "optimized_existing_footprint"],
     ctx: Context,
+    coverage_mode: Literal["auto", "actual_current", "optimized_existing_footprint"] = "auto",
     cost_matrix_ref: ResourceRef | None = None,
 ) -> Annotated[CallToolResult, NetworkBaselineResourceToolResult]:
-    """Evaluate one explicitly selected actual or optimized-existing baseline."""
+    """Evaluate an actual or optimized-existing baseline.
+
+    The default auto mode selects actual_current only when the prepared input
+    contains current assignments; otherwise it selects the optimized existing
+    footprint without making the model inspect or guess input contents.
+    """
     if any(target <= 0 for target in service_targets):
         raise McpResourceContractError("baseline_service_targets_invalid")
     prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
@@ -855,7 +843,14 @@ def evaluate_network_baseline(
     active_ids = {
         warehouse.warehouse_id for warehouse in prepared.warehouses if warehouse.is_existing
     }
-    if coverage_mode == "actual_current":
+    resolved_coverage_mode = (
+        "actual_current"
+        if coverage_mode == "auto" and prepared.current_assignments
+        else "optimized_existing_footprint"
+        if coverage_mode == "auto"
+        else coverage_mode
+    )
+    if resolved_coverage_mode == "actual_current":
         if not prepared.current_assignments:
             raise McpResourceContractError("current_assignments_required")
         assignment = solve_current_assignment(
@@ -1051,12 +1046,14 @@ def assess_facility_change(
     cost matrix are already available. It returns both the changed scenario and
     its comparison without requiring a second model-selected Tool call.
     """
-    prepared, input_identity, routes, costs, targets, add_ids, remove_ids = _load_facility_scenario_inputs(
-        prepared_input_relative_path,
-        route_matrix_ref,
-        cost_matrix_ref,
-        scenario,
-        ctx,
+    prepared, input_identity, routes, costs, targets, add_ids, remove_ids = (
+        _load_facility_scenario_inputs(
+            prepared_input_relative_path,
+            route_matrix_ref,
+            cost_matrix_ref,
+            scenario,
+            ctx,
+        )
     )
     before_assignment, before_active_ids, before_identity = _load_comparable_resource(before_ref)
     try:
@@ -1138,9 +1135,7 @@ def assess_facility_change(
     )
     if comparison_published.structuredContent is None:
         raise McpResourceContractError("facility_change_result_missing")
-    affected_city_changes = [
-        change for change in comparison.city_changes if change.affected
-    ]
+    affected_city_changes = [change for change in comparison.city_changes if change.affected]
     result = FacilityChangeAssessmentToolResult(
         summary=summary,
         scenario_ref=scenario_ref,
@@ -1477,8 +1472,8 @@ def prepare_network_coverage_map(
 ) -> CallToolResult:
     """Publish all straight-line coverage facts for one exact solved result."""
     prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
-    assignment, active_ids, result_label, scenario, result_identity = _load_assignment_coverage_result(
-        assignment_result_ref
+    assignment, active_ids, result_label, scenario, result_identity = (
+        _load_assignment_coverage_result(assignment_result_ref)
     )
     try:
         require_matching_input(input_identity, result_identity)

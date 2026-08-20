@@ -27,7 +27,6 @@ from supply_chain_planner.data.geography import (
 )
 from supply_chain_planner.data.mapping import (
     FieldObservation,
-    SourceRole,
     TransformSpec,
     suggest_role_mappings,
 )
@@ -45,6 +44,7 @@ from supply_chain_planner.data.workspace_intake import (
 )
 from supply_chain_planner.network.models import NormalizedInputBatch
 from supply_chain_planner.shared.models import (
+    ConfirmedFieldDecision,
     ConfirmedSourceDecision,
     DataInspectionToolResult,
     DataPreparationToolResult,
@@ -86,6 +86,7 @@ class _SourceProfileResource(BaseModel):
         alias="schemaVersion",
     )
     sources: list[dict[str, Any]] = Field(min_length=1, max_length=500)
+
 
 mcp = FastMCP(
     "Supply Chain Data",
@@ -294,11 +295,15 @@ def _load_source_profile(resource_ref: ResourceRef) -> dict[str, Any]:
     contracts.  This function accepts only the latter and never attempts to
     resolve a Workspace path from a model-provided value.
     """
-    profile = _runtime().load_model(
-        resource_ref,
-        "source_profile.v1",
-        _SourceProfileResource,
-    ).model_dump(mode="json", by_alias=True)
+    profile = (
+        _runtime()
+        .load_model(
+            resource_ref,
+            "source_profile.v1",
+            _SourceProfileResource,
+        )
+        .model_dump(mode="json", by_alias=True)
+    )
     sources = profile.get("sources")
     if not isinstance(sources, list) or not sources:
         raise ValueError("source_profile_sources_missing")
@@ -314,12 +319,38 @@ def _load_source_profile(resource_ref: ResourceRef) -> dict[str, Any]:
 @mcp.tool(structured_output=True, annotations=WORKSPACE_PREPARATION_TOOL)
 def prepare_network_input(
     source_profile_ref: ResourceRef,
-    confirmed_sources: list[ConfirmedSourceDecision],
+    confirmed_sources: Annotated[
+        list[ConfirmedSourceDecision],
+        Field(
+            description=(
+                "Confirmed demand, warehouse, assignment, or route sources only. "
+                "For an unambiguous source_profile suggestion, provide only relative_path and "
+                "role and omit mappings; the Tool resolves the exact suggested mappings. "
+                "Provide mappings only after explicit confirmation of an ambiguous suggestion. "
+                "Never include an administrative catalog here."
+            )
+        ),
+    ],
     country_code: Annotated[str, Field(pattern=r"^[A-Za-z]{2}$")],
     output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     ctx: Context,
+    administrative_catalog_relative_path: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Optional exact Workspace-relative administrative JSON path used atomically "
+                "for geography enrichment. The same file must not appear in confirmed_sources."
+            )
+        ),
+    ] = None,
+    overrides: list[GeographyOverride] | None = None,
 ) -> DataPreparationToolResult:
-    """Prepare one complete, validated Workspace input from confirmed raw sources."""
+    """Prepare one complete, validated Workspace input from confirmed raw sources.
+
+    When an administrative catalog is supplied, geography enrichment is part
+    of this same create-new operation and the returned path is the terminal
+    Data-to-Network handoff.
+    """
     profile = _load_source_profile(source_profile_ref)
     country = country_code.strip().upper()
     if not re.fullmatch(r"[A-Z]{2}", country):
@@ -332,8 +363,12 @@ def prepare_network_input(
         raise ValueError("confirmed_source_relative_paths_must_be_unique")
     if not set(selected_paths) <= set(available):
         raise ValueError("confirmed_source_not_in_profile")
+    resolved_sources = [
+        _resolve_confirmed_source_decision(decision, available[decision.relative_path])
+        for decision in confirmed_sources
+    ]
     normalized_sources = []
-    for decision in confirmed_sources:
+    for decision in resolved_sources:
         mappings = [
             ConfirmedFieldMapping(
                 target_field=mapping.target_field,
@@ -356,14 +391,29 @@ def prepare_network_input(
     payload = PreparedNetworkResource(
         country_code=country,
         state=state,
-        confirmed_sources=confirmed_sources,
+        confirmed_sources=resolved_sources,
         **batch.model_dump(mode="json"),
     )
+    if administrative_catalog_relative_path is not None:
+        payload, geography_summary = _enrich_prepared_geography(
+            payload,
+            administrative_catalog_relative_path,
+            ctx,
+            overrides,
+            parent_input_identity=None,
+        )
+        return _write_prepared_input(
+            payload,
+            output_relative_path,
+            ctx,
+            f"Normalized {len(resolved_sources)} confirmed Workspace sources and "
+            f"{geography_summary}",
+        )
     return _write_prepared_input(
         payload,
         output_relative_path,
         ctx,
-        f"Normalized {len(confirmed_sources)} confirmed Workspace sources; "
+        f"Normalized {len(resolved_sources)} confirmed Workspace sources; "
         f"{len(batch.demand_cities)} demand cities, {len(batch.warehouses)} warehouses, "
         f"{len(batch.current_assignments)} current assignments, "
         f"{len(batch.route_quotes)} route quotes, and "
@@ -371,18 +421,55 @@ def prepare_network_input(
     )
 
 
-@mcp.tool(structured_output=True, annotations=WORKSPACE_PREPARATION_TOOL)
-def prepare_network_geography(
-    prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
-    administrative_catalog_relative_path: str,
-    output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
-    ctx: Context,
-    overrides: list[GeographyOverride] | None = None,
-) -> DataPreparationToolResult:
-    """Create a new prepared Workspace input enriched by one exact boundary catalog."""
-    payload, parent_identity = load_prepared_network_input(
-        _workspace(ctx), prepared_input_relative_path
+def _resolve_confirmed_source_decision(
+    decision: ConfirmedSourceDecision,
+    source: dict[str, Any],
+) -> ConfirmedSourceDecision:
+    if decision.mappings:
+        return decision
+    suggestions = [
+        suggestion
+        for suggestion in source.get("mapping_suggestions", [])
+        if suggestion.get("role") == decision.role.value
+    ]
+    if len(suggestions) != 1 or suggestions[0].get("ambiguous") is not False:
+        raise ValueError(
+            f"confirmed_mappings_required:{decision.relative_path}:{decision.role.value}"
+        )
+    mappings = []
+    for mapping in suggestions[0].get("field_mappings", []):
+        source_fields = mapping.get("source_fields")
+        transform = mapping.get("transform")
+        if not isinstance(source_fields, list) or len(source_fields) != 1:
+            raise ValueError(
+                f"confirmed_mapping_source_invalid:{decision.relative_path}:{decision.role.value}"
+            )
+        if not isinstance(transform, dict) or not isinstance(transform.get("kind"), str):
+            raise ValueError(
+                f"confirmed_mapping_transform_invalid:{decision.relative_path}:{decision.role.value}"
+            )
+        mappings.append(
+            ConfirmedFieldDecision(
+                source_field=str(source_fields[0]),
+                target_field=str(mapping["target_field"]),
+                transform=transform["kind"],
+                factor=transform.get("factor"),
+            )
+        )
+    return ConfirmedSourceDecision(
+        relative_path=decision.relative_path,
+        role=decision.role,
+        mappings=mappings,
     )
+
+
+def _enrich_prepared_geography(
+    payload: PreparedNetworkResource,
+    administrative_catalog_relative_path: str,
+    ctx: Context,
+    overrides: list[GeographyOverride] | None,
+    parent_input_identity: Any,
+) -> tuple[PreparedNetworkResource, str]:
     country_code = payload.country_code
     batch = NormalizedInputBatch.model_validate(
         payload.model_dump(
@@ -396,9 +483,7 @@ def prepare_network_geography(
             }
         )
     )
-    catalog_document = read_json_document(
-        _workspace(ctx), administrative_catalog_relative_path
-    )
+    catalog_document = read_json_document(_workspace(ctx), administrative_catalog_relative_path)
     admin_level = catalog_document.get("admin_level")
     if not isinstance(admin_level, str) or not admin_level.strip():
         raise ValueError("administrative_catalog_level_missing")
@@ -426,7 +511,7 @@ def prepare_network_geography(
             "issues": [*batch.issues, *issues],
         }
     )
-    has_missing_coordinates = any(
+    missing_coordinates = sum(
         item.longitude is None or item.latitude is None
         for item in [*prepared.demand_cities, *prepared.warehouses]
     )
@@ -434,24 +519,48 @@ def prepare_network_geography(
         "needs_input"
         if any(issue.severity == "error" for issue in prepared.issues)
         else "needs_geography"
-        if has_missing_coordinates
+        if missing_coordinates
         else "ready"
     )
-    return _write_prepared_input(
+    return (
         PreparedNetworkResource(
             country_code=country_code,
             state=state,
             confirmed_sources=payload.confirmed_sources,
-            parent_input_identity=parent_identity,
+            parent_input_identity=parent_input_identity,
             **prepared.model_dump(mode="json"),
         ),
-        output_relative_path,
-        ctx,
-        f"Prepared network geography from the catalog's {admin_level.strip()} level; "
+        f"enriched geography from the catalog's {admin_level.strip()} level; "
         f"{len(prepared.demand_cities)} demand cities and "
         f"{len(prepared.warehouses)} warehouses; missing-coordinate records "
-        f"{sum(item.longitude is None or item.latitude is None for item in [*prepared.demand_cities, *prepared.warehouses])}; "
-        f"state is {state}.",
+        f"{missing_coordinates}; state is {state}",
+    )
+
+
+@mcp.tool(structured_output=True, annotations=WORKSPACE_PREPARATION_TOOL)
+def prepare_network_geography(
+    prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    administrative_catalog_relative_path: str,
+    output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    ctx: Context,
+    overrides: list[GeographyOverride] | None = None,
+) -> DataPreparationToolResult:
+    """Create a new prepared Workspace input enriched by one exact boundary catalog."""
+    payload, parent_identity = load_prepared_network_input(
+        _workspace(ctx), prepared_input_relative_path
+    )
+    prepared, summary = _enrich_prepared_geography(
+        payload,
+        administrative_catalog_relative_path,
+        ctx,
+        overrides,
+        parent_input_identity=parent_identity,
+    )
+    return _write_prepared_input(
+        prepared,
+        output_relative_path,
+        ctx,
+        f"Prepared network geography and {summary}.",
     )
 
 

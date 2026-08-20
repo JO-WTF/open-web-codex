@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from open_web_codex_provider import ProviderContractError, ResourceRef, ResourceStore
 from supply_chain_planner.data import server as data_server
+from supply_chain_planner.data.mapping import SourceRole
 from supply_chain_planner.shared.models import (
     ConfirmedSourceDecision,
     DataPreparationToolResult,
@@ -114,7 +115,9 @@ def test_data_server_exposes_workspace_preparation_not_cross_agent_data_resource
     }
 
 
-def test_prepare_input_writes_a_complete_auditable_workspace_document(tmp_path, monkeypatch) -> None:
+def test_prepare_input_writes_a_complete_auditable_workspace_document(
+    tmp_path, monkeypatch
+) -> None:
     (tmp_path / "demand.csv").write_text(
         "city_id,city_name,demand_quantity\nCITY-1,Jakarta,50\n",
         encoding="utf-8",
@@ -189,6 +192,36 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(tmp_path, 
     assert enriched["parent_input_identity"] == result.input_identity.model_dump(mode="json")
     assert geography.input_identity != result.input_identity
 
+    atomic = data_server.prepare_network_input(
+        profile_ref,
+        _decisions(),
+        "ID",
+        "prepared-input-atomic.json",
+        ctx,
+        administrative_catalog_relative_path="admin.json",
+    )
+    assert atomic.state == "ready"
+    atomic_payload = json.loads((tmp_path / atomic.prepared_input_relative_path).read_text())
+    assert atomic_payload["demand_cities"][0]["longitude"] == 106.8
+    assert atomic_payload["parent_input_identity"] is None
+
+    automatic = data_server.prepare_network_input(
+        profile_ref,
+        [
+            decision.model_copy(update={"mappings": []})
+            if decision.role == SourceRole.DEMAND
+            else decision
+            for decision in _decisions()
+        ],
+        "ID",
+        "prepared-input-automatic.json",
+        ctx,
+        administrative_catalog_relative_path="admin.json",
+    )
+    assert automatic.state == "ready"
+    automatic_payload = json.loads((tmp_path / automatic.prepared_input_relative_path).read_text())
+    assert all(source["mappings"] for source in automatic_payload["confirmed_sources"])
+
     with pytest.raises(ProviderContractError, match="workspace_file_invalid"):
         data_server.prepare_network_input(
             profile_ref,
@@ -199,7 +232,9 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(tmp_path, 
         )
 
 
-def test_candidate_changes_require_a_complete_new_workspace_preparation(tmp_path, monkeypatch) -> None:
+def test_candidate_changes_require_a_complete_new_workspace_preparation(
+    tmp_path, monkeypatch
+) -> None:
     (tmp_path / "candidate.csv").write_text(
         "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,longitude,latitude\n"
         "CAND-1,Jakarta Candidate,center,CITY-1,Jakarta,106.9,-6.3\n",
@@ -215,13 +250,37 @@ def test_candidate_changes_require_a_complete_new_workspace_preparation(tmp_path
             "relative_path": "candidate.csv",
             "role": "candidate_warehouse",
             "mappings": [
-                {"source_field": "warehouse_id", "target_field": "warehouse_id", "transform": "normalize_identifier"},
-                {"source_field": "warehouse_name", "target_field": "warehouse_name", "transform": "trim"},
-                {"source_field": "warehouse_type", "target_field": "warehouse_type", "transform": "normalize_warehouse_type"},
-                {"source_field": "city_id", "target_field": "city_id", "transform": "normalize_identifier"},
+                {
+                    "source_field": "warehouse_id",
+                    "target_field": "warehouse_id",
+                    "transform": "normalize_identifier",
+                },
+                {
+                    "source_field": "warehouse_name",
+                    "target_field": "warehouse_name",
+                    "transform": "trim",
+                },
+                {
+                    "source_field": "warehouse_type",
+                    "target_field": "warehouse_type",
+                    "transform": "normalize_warehouse_type",
+                },
+                {
+                    "source_field": "city_id",
+                    "target_field": "city_id",
+                    "transform": "normalize_identifier",
+                },
                 {"source_field": "city_name", "target_field": "city_name", "transform": "trim"},
-                {"source_field": "longitude", "target_field": "longitude", "transform": "parse_decimal"},
-                {"source_field": "latitude", "target_field": "latitude", "transform": "parse_decimal"},
+                {
+                    "source_field": "longitude",
+                    "target_field": "longitude",
+                    "transform": "parse_decimal",
+                },
+                {
+                    "source_field": "latitude",
+                    "target_field": "latitude",
+                    "transform": "parse_decimal",
+                },
             ],
         }
     )

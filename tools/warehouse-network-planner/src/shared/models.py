@@ -17,10 +17,10 @@ from supply_chain_planner.network.models import (
     CurrentAssignmentRecord,
     DataQualityIssue,
     DemandCityRecord,
+    PlanningInputIdentity,
     ProvidedRouteFactRecord,
     RouteQuoteRecord,
     WarehouseRecord,
-    PlanningInputIdentity,
 )
 from supply_chain_planner.network.optimization_models import (
     AssignmentComparison,
@@ -49,7 +49,7 @@ class PreparedNetworkResource(StrictModel):
     route_quotes: list[RouteQuoteRecord]
     provided_route_facts: list[ProvidedRouteFactRecord] = Field(default_factory=list)
     issues: list[DataQualityIssue] = Field(default_factory=list)
-    confirmed_sources: list["ConfirmedSourceDecision"] = Field(default_factory=list)
+    confirmed_sources: list[ConfirmedSourceDecision] = Field(default_factory=list)
     parent_input_identity: PlanningInputIdentity | None = None
 
 
@@ -63,12 +63,14 @@ class ConfirmedFieldDecision(StrictModel):
 class ConfirmedSourceDecision(StrictModel):
     relative_path: str = Field(min_length=1, max_length=1024)
     role: SourceRole
-    mappings: list[ConfirmedFieldDecision] = Field(min_length=1, max_length=64)
+    mappings: list[ConfirmedFieldDecision] = Field(default_factory=list, max_length=64)
 
     @model_validator(mode="after")
     def validate_role_mapping(self) -> ConfirmedSourceDecision:
         if self.role == SourceRole.ADMINISTRATIVE_CATALOG:
             raise ValueError("administrative catalog is prepared by the geography tool")
+        if not self.mappings:
+            return self
         allowed = set(TARGET_ALIASES[self.role])
         targets = [mapping.target_field for mapping in self.mappings]
         sources = [mapping.source_field for mapping in self.mappings]
@@ -201,6 +203,7 @@ class NetworkPlanComparisonResource(StrictModel):
     before_ref: ComparableNetworkResultRef
     after_ref: ComparableNetworkResultRef
     comparison: AssignmentComparison
+
 
 class FacilityChangeAssessmentToolResult(StrictModel):
     """Bounded result of one deterministic facility-change assessment."""
