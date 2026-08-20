@@ -7,20 +7,21 @@ import asyncio
 import os
 import re
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.stdio import stdio_server
 from mcp.types import (
     CallToolResult,
+    TextContent,
     ToolAnnotations,
 )
 from open_web_codex_provider import (
     MAX_WORKSPACE_FILE_BYTES,
     McpResourceRuntime,
-    ResourceRef,
+    ProviderContractError,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 from supply_chain_planner.data.geography import enrich_network_geography
 from supply_chain_planner.data.geography import (
     load_administrative_catalog as _load_administrative_catalog,
@@ -40,6 +41,7 @@ from supply_chain_planner.data.workspace_intake import (
     inspect,
     read_json_document,
     read_rows,
+    source_inspection_identity,
     workspace_source_metadata,
 )
 from supply_chain_planner.network.models import NormalizedInputBatch
@@ -51,24 +53,20 @@ from supply_chain_planner.shared.models import (
     DataPreparationToolResult,
     GeographyOverride,
     PreparedNetworkResource,
+    SourceInspectionIdentity,
 )
 from supply_chain_planner.shared.planning_input import load_prepared_network_input
 from supply_chain_planner.shared.resources import SupplyChainResources
-from supply_chain_planner.shared.workspace_outputs import WorkspaceOutputKind
-from supply_chain_planner.shared.workspace_outputs import prepare_workspace_output_path
+from supply_chain_planner.shared.workspace_outputs import (
+    WorkspaceOutputKind,
+    prepare_workspace_output_path,
+)
 
-RESOURCE_URI_PREFIX = "supply-chain://resources/"
 MAX_SOURCE_CATALOG_ENTRIES = 500
 SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
 
 READ_ONLY_LOCAL_TOOL = ToolAnnotations(
     readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
-)
-CONTENT_ADDRESSED_RESOURCE_TOOL = ToolAnnotations(
-    readOnlyHint=False,
     destructiveHint=False,
     idempotentHint=True,
     openWorldHint=False,
@@ -81,16 +79,6 @@ WORKSPACE_PREPARATION_TOOL = ToolAnnotations(
 )
 
 
-class _SourceProfileResource(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
-
-    schema_version: Literal["source_profile.v1"] = Field(
-        default="source_profile.v1",
-        alias="schemaVersion",
-    )
-    sources: list[dict[str, Any]] = Field(min_length=1, max_length=500)
-
-
 mcp = FastMCP(
     "Supply Chain Data",
     instructions=(
@@ -100,7 +88,9 @@ mcp = FastMCP(
         "Inputs are validated Workspace-relative paths resolved under the trusted Turn Workspace; "
         "never request or accept organization IDs, Profile IDs, credentials, arbitrary SQL, "
         "filesystem paths, or write statements. Discover and inspect the complete authorized "
-        "Workspace before confirming mappings. Inspection returns a head preview with separate "
+        "Workspace before confirming mappings. Inspection returns one bounded inline profile and "
+        "workspace_source_inspection.v1 identity; Data does not publish a source Resource. The "
+        "head preview has separate "
         "preview_sample_count, total_count, and total_count_exact fields; preview rows are examples "
         "only and never the full source. Never use the preview sample count as the source row count. "
         "The initial normalization tool rereads "
@@ -126,27 +116,8 @@ def _runtime() -> McpResourceRuntime:
     return _supply_chain_resources.data
 
 
-@mcp.resource(
-    "supply-chain://resources/{resource_id}",
-    name="supply_chain_resource",
-    title="Supply-chain data Resource",
-    mime_type="application/json",
-)
-def read_data_resource(resource_id: str) -> str:
-    """Read one immutable data Resource by its opaque Resource name."""
-    return _runtime().read(resource_id)
-
-
 def _workspace(ctx: Context) -> Path:
     return _runtime().require_workspace(ctx)
-
-
-def _publish_json(
-    schema: str,
-    payload: BaseModel | dict[str, Any],
-    summary: str,
-) -> CallToolResult:
-    return _runtime().publish(schema, payload, summary)
 
 
 def _write_prepared_input(
@@ -207,19 +178,33 @@ def discover_workspace_sources(ctx: Context) -> dict[str, Any]:
     }
 
 
-@mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
+@mcp.tool(structured_output=True, annotations=READ_ONLY_LOCAL_TOOL)
 def inspect_workspace_sources(
     relative_paths: list[str],
     ctx: Context,
 ) -> Annotated[CallToolResult, DataInspectionToolResult]:
-    """Inspect selected Workspace files and publish one typed source profile.
+    """Inspect selected Workspace files and return one bounded inline profile.
 
     Preview rows are examples for schema inspection only. They are never a
     complete source snapshot and must not be used as the source row count.
     """
     profile = _inspect_workspace_sources(relative_paths, ctx)
-    summary = f"Inspected {len(profile['sources'])} authorized Workspace sources."
-    return _publish_json("source_profile.v1", profile, summary)
+    content_sha256, source_count = source_inspection_identity(_workspace(ctx), relative_paths)
+    identity = SourceInspectionIdentity(
+        content_sha256=content_sha256,
+        source_count=source_count,
+    )
+    summary = f"Inspected {source_count} authorized Workspace sources."
+    result = DataInspectionToolResult(
+        summary=summary,
+        source_profile=profile,
+        inspection_identity=identity,
+        inspected_relative_paths=sorted(relative_paths),
+    )
+    return CallToolResult(
+        content=[TextContent(type="text", text=summary)],
+        structuredContent=result.model_dump(mode="json", by_alias=True),
+    )
 
 
 def _inspect_workspace_sources(
@@ -263,6 +248,9 @@ def _mapping_suggestions(structure: dict[str, Any]) -> list[dict[str, Any]]:
         for sheet in structure.get("sheets", []):
             add(sheet.get("columns", []), sheet.get("preview", {}).get("rows", []))
     elif kind == "json":
+        for fields in structure.get("object_keys", {}).values():
+            for name in fields:
+                observations.append(FieldObservation(name=str(name)))
         for array in structure.get("arrays", []):
             values: dict[str, list[str]] = {}
             for item in array.get("preview", {}).get("rows", []):
@@ -313,44 +301,17 @@ def _bound_agent_previews(profile: dict[str, Any]) -> dict[str, Any]:
     return trim(profile)
 
 
-def _load_source_profile(resource_ref: ResourceRef) -> dict[str, Any]:
-    """Load and validate the canonical source_profile.v1 Resource.
-
-    Workspace source references and MCP Resource references are different
-    contracts.  This function accepts only the latter and never attempts to
-    resolve a Workspace path from a model-provided value.
-    """
-    profile = (
-        _runtime()
-        .load_model(
-            resource_ref,
-            "source_profile.v1",
-            _SourceProfileResource,
-        )
-        .model_dump(mode="json", by_alias=True)
-    )
-    sources = profile.get("sources")
-    if not isinstance(sources, list) or not sources:
-        raise ValueError("source_profile_sources_missing")
-    for index, source in enumerate(sources):
-        if not isinstance(source, dict):
-            raise ValueError(f"source_profile_source_invalid:{index}")
-        structure = source.get("structure")
-        if not isinstance(structure, dict) or not structure.get("kind"):
-            raise ValueError(f"source_profile_structure_missing:{index}")
-    return profile
-
-
 @mcp.tool(structured_output=True, annotations=WORKSPACE_PREPARATION_TOOL)
 def prepare_network_input(
-    source_profile_ref: ResourceRef,
+    inspection_identity: SourceInspectionIdentity,
+    inspected_relative_paths: list[str],
     confirmed_sources: Annotated[
         list[ConfirmedSourceDecision],
         Field(
             description=(
                 "Confirmed demand, warehouse, assignment, or route sources only. "
-                "For an unambiguous source_profile suggestion, provide only relative_path and "
-                "role and omit mappings; the Tool resolves the exact suggested mappings. "
+                "For an unambiguous inline source_profile suggestion, provide only relative_path "
+                "and role and omit mappings; the Tool resolves the exact suggested mappings. "
                 "Provide mappings only after explicit confirmation of an ambiguous suggestion. "
                 "Never include an administrative catalog here."
             )
@@ -385,18 +346,35 @@ def prepare_network_input(
     of this same create-new operation and the returned path is the terminal
     Data-to-Network handoff.
     """
-    profile = _load_source_profile(source_profile_ref)
+    inspection_identity = SourceInspectionIdentity.model_validate(inspection_identity)
+    confirmed_sources = [
+        ConfirmedSourceDecision.model_validate(decision) for decision in confirmed_sources
+    ]
+    profile = _inspect_workspace_sources(inspected_relative_paths, ctx)
+    content_sha256, source_count = source_inspection_identity(
+        _workspace(ctx), inspected_relative_paths
+    )
+    if (
+        inspection_identity.schema_version != "workspace_source_inspection.v1"
+        or inspection_identity.content_sha256 != content_sha256
+        or inspection_identity.source_count != source_count
+    ):
+        raise ProviderContractError("source_inspection_changed")
     country = country_code.strip().upper()
     if not re.fullmatch(r"[A-Z]{2}", country):
         raise ValueError("country_code_required_iso_alpha2")
     available = {str(source["relative_path"]): source for source in profile.get("sources", [])}
+    inspected_set = set(inspected_relative_paths)
+    if administrative_catalog_relative_path is not None:
+        if administrative_catalog_relative_path not in inspected_set:
+            raise ValueError("administrative_catalog_not_in_inspected_paths")
     if not confirmed_sources or len(confirmed_sources) > len(available):
         raise ValueError("confirmed_sources_must_select_profile_sources")
     selected_paths = [decision.relative_path for decision in confirmed_sources]
     if len(set(selected_paths)) != len(selected_paths):
         raise ValueError("confirmed_source_relative_paths_must_be_unique")
-    if not set(selected_paths) <= set(available):
-        raise ValueError("confirmed_source_not_in_profile")
+    if not set(selected_paths) <= inspected_set or not set(selected_paths) <= set(available):
+        raise ValueError("confirmed_source_not_in_inspected_paths")
     resolved_sources = [
         _resolve_confirmed_source_decision(decision, available[decision.relative_path])
         for decision in confirmed_sources

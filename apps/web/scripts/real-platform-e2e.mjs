@@ -791,12 +791,14 @@ class DeterministicModelServer {
         });
       }
       if (!has("data:prepare")) {
-        const profileRef = findResourceRef(body, "source_profile.v1");
-        if (!profileRef) {
-          throw new Error("deterministic model could not find source_profile.v1");
+        const inspectionIdentity = findFirstKey(body, ["inspection_identity"]);
+        const inspectedRelativePaths = findFirstKey(body, ["inspected_relative_paths"]);
+        if (!inspectionIdentity || !Array.isArray(inspectedRelativePaths)) {
+          throw new Error("deterministic model could not find inline source inspection identity");
         }
         return mcp("data:prepare", "prepare_network_input", {
-          source_profile_ref: profileRef,
+          inspection_identity: inspectionIdentity,
+          inspected_relative_paths: inspectedRelativePaths,
           confirmed_sources: confirmedSources(),
           country_code: "ID",
           output_relative_path: preparedOutputPath,
@@ -1445,7 +1447,6 @@ async function runCase(index) {
     const refs = await api("/tasks/" + record.task.id + "/resource-refs");
     const schemas = new Set(refs.map((ref) => ref.resourceSchema ?? ref.resource_schema));
     for (const schema of [
-      "source_profile.v1",
       "route_matrix.v2",
       "network_baseline.v2",
       "network_coverage_geojson.v1",
@@ -1454,7 +1455,6 @@ async function runCase(index) {
     }
     assert(
       eventText.includes("prepared_input_relative_path=" + preparedOutputPath) &&
-        eventText.includes('"schema_version":"prepared_network_input.v1"') &&
         eventText.includes('"content_sha256":"') &&
         eventText.includes('"candidate_warehouse_count":12') &&
         eventText.includes("WH-CANDIDATE-BALIKPAPAN"),

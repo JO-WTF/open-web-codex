@@ -5,12 +5,13 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from open_web_codex_provider import ProviderContractError, ResourceRef, ResourceStore
+from open_web_codex_provider import ProviderContractError, ResourceStore
 from supply_chain_planner.data import server as data_server
 from supply_chain_planner.data.mapping import SourceRole
 from supply_chain_planner.shared.models import (
     ConfirmedSourceDecision,
     DataPreparationToolResult,
+    SourceInspectionIdentity,
 )
 from supply_chain_planner.shared.resources import SupplyChainResources
 
@@ -52,10 +53,13 @@ def test_data_server_exposes_workspace_preparation_not_cross_agent_data_resource
     }
     assert "normalize_candidate_delta" not in tools
     assert "derive_normalized_network_input" not in tools
+    assert asyncio.run(data_server.mcp.list_resources()) == []
+    assert asyncio.run(data_server.mcp.list_resource_templates()) == []
 
     prepare = tools["prepare_network_input"]
     assert set(prepare.inputSchema["required"]) == {
-        "source_profile_ref",
+        "inspection_identity",
+        "inspected_relative_paths",
         "confirmed_sources",
         "country_code",
         "output_relative_path",
@@ -71,6 +75,15 @@ def test_data_server_exposes_workspace_preparation_not_cross_agent_data_resource
         "candidate_warehouses_truncated",
     }
     assert "resource_ref" not in prepare.outputSchema["properties"]
+
+    inspect_tool = tools["inspect_workspace_sources"]
+    assert set(inspect_tool.outputSchema["required"]) == {
+        "summary",
+        "source_profile",
+        "inspection_identity",
+        "inspected_relative_paths",
+    }
+    assert "resource_ref" not in inspect_tool.outputSchema["properties"]
 
     geography = tools["prepare_network_geography"]
     assert set(geography.inputSchema["required"]) == {
@@ -104,13 +117,17 @@ def test_source_profile_distinguishes_preview_samples_from_exact_total(
         "IDN-CITY-021,Balikpapan,116.996737,-1.202072,false"
     )
     (tmp_path / "candidate.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
-    store = _use_store(tmp_path, monkeypatch)
+    _use_store(tmp_path, monkeypatch)
 
     result = data_server.inspect_workspace_sources(["candidate.csv"], object())
     assert result.structuredContent is not None
-    profile_ref = ResourceRef.model_validate(result.structuredContent["resource_ref"])
-    source = store.load(profile_ref)["sources"][0]
+    inspection = result.structuredContent
+    source = inspection["source_profile"]["sources"][0]
     preview = source["structure"]["preview"]
+    inspection_identity = SourceInspectionIdentity.model_validate(
+        inspection["inspection_identity"]
+    )
+    inspected_paths = inspection["inspected_relative_paths"]
 
     assert source["structure"]["record_count"] == 12
     assert preview["preview_sample_count"] == 3
@@ -121,7 +138,8 @@ def test_source_profile_distinguishes_preview_samples_from_exact_total(
 
     with pytest.raises(ProviderContractError, match="generated_output_path_invalid"):
         data_server.prepare_network_input(
-            profile_ref,
+            inspection_identity,
+            inspected_paths,
             [
                 ConfirmedSourceDecision(
                     relative_path="candidate.csv",
@@ -134,7 +152,8 @@ def test_source_profile_distinguishes_preview_samples_from_exact_total(
         )
 
     prepared = data_server.prepare_network_input(
-        profile_ref,
+        inspection_identity,
+        inspected_paths,
         [
             ConfirmedSourceDecision(
                 relative_path="candidate.csv",
@@ -185,18 +204,22 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
         ),
         encoding="utf-8",
     )
-    store = _use_store(tmp_path, monkeypatch)
+    _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
     profile = data_server.inspect_workspace_sources(
         ["demand.csv", "warehouses.csv", "admin.json"], object()
     )
     assert profile.structuredContent is not None
-    profile_ref = ResourceRef.model_validate(profile.structuredContent["resource_ref"])
-    assert store.load(profile_ref)["schemaVersion"] == "source_profile.v1"
+    inspection = profile.structuredContent
+    inspection_identity = SourceInspectionIdentity.model_validate(
+        inspection["inspection_identity"]
+    )
+    inspected_paths = inspection["inspected_relative_paths"]
 
     with pytest.raises(ValueError, match="country_code_required_iso_alpha2"):
         data_server.prepare_network_input(
-            profile_ref,
+            inspection_identity,
+            inspected_paths,
             _decisions(),
             "IDN",
             f"{PREPARED_OUTPUT_DIR}/prepared-input.json",
@@ -204,7 +227,8 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
         )
 
     result = data_server.prepare_network_input(
-        profile_ref,
+        inspection_identity,
+        inspected_paths,
         _decisions(),
         "ID",
         f"{PREPARED_OUTPUT_DIR}/prepared-input.json",
@@ -232,7 +256,8 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
     assert geography.input_identity != result.input_identity
 
     atomic = data_server.prepare_network_input(
-        profile_ref,
+        inspection_identity,
+        inspected_paths,
         _decisions(),
         "ID",
         f"{PREPARED_OUTPUT_DIR}/prepared-input-atomic.json",
@@ -267,7 +292,8 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
         match="confirmed_mappings_not_allowed_for_unambiguous_source",
     ):
         data_server.prepare_network_input(
-            profile_ref,
+            inspection_identity,
+            inspected_paths,
             [manual_demand, _decisions()[1]],
             "ID",
             f"{PREPARED_OUTPUT_DIR}/prepared-input-manual.json",
@@ -277,7 +303,8 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
 
     with pytest.raises(ProviderContractError, match="workspace_file_invalid"):
         data_server.prepare_network_input(
-            profile_ref,
+            inspection_identity,
+            inspected_paths,
             _decisions(),
             "ID",
             f"{PREPARED_OUTPUT_DIR}/prepared-input.json",
@@ -298,14 +325,19 @@ def test_candidate_changes_require_a_complete_new_workspace_preparation(
     ctx = _context(tmp_path)
     profile = data_server.inspect_workspace_sources(["candidate.csv"], object())
     assert profile.structuredContent is not None
-    profile_ref = ResourceRef.model_validate(profile.structuredContent["resource_ref"])
+    inspection = profile.structuredContent
+    inspection_identity = SourceInspectionIdentity.model_validate(
+        inspection["inspection_identity"]
+    )
+    inspected_paths = inspection["inspected_relative_paths"]
     candidate = ConfirmedSourceDecision(
         relative_path="candidate.csv",
         role=SourceRole.CANDIDATE_WAREHOUSE,
     )
 
     result = data_server.prepare_network_input(
-        profile_ref,
+        inspection_identity,
+        inspected_paths,
         [candidate],
         "ID",
         f"{PREPARED_OUTPUT_DIR}/candidate-only-preparation.json",
@@ -317,3 +349,61 @@ def test_candidate_changes_require_a_complete_new_workspace_preparation(
     assert result.state == "needs_input"
     assert not hasattr(data_server, "normalize_candidate_delta")
     assert not hasattr(data_server, "derive_normalized_network_input")
+
+
+def test_inspection_identity_is_order_independent_and_rejects_changed_inputs(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "a.csv").write_text("city_id,city_name\nCITY-1,Jakarta\n", encoding="utf-8")
+    (tmp_path / "b.csv").write_text("city_id,city_name\nCITY-2,Balikpapan\n", encoding="utf-8")
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+
+    first = data_server.inspect_workspace_sources(["b.csv", "a.csv"], ctx)
+    second = data_server.inspect_workspace_sources(["a.csv", "b.csv"], ctx)
+    first_identity = first.structuredContent["inspection_identity"]
+    assert first_identity == second.structuredContent["inspection_identity"]
+    assert first.structuredContent["inspected_relative_paths"] == ["a.csv", "b.csv"]
+
+    (tmp_path / "b.csv").write_text(
+        "city_id,city_name\nCITY-2,Balikpapan changed\n", encoding="utf-8"
+    )
+    with pytest.raises(ProviderContractError, match="source_inspection_changed") as byte_error:
+        data_server.prepare_network_input(
+            SourceInspectionIdentity.model_validate(first_identity),
+            ["a.csv", "b.csv"],
+            [],
+            "ID",
+            f"{PREPARED_OUTPUT_DIR}/must-not-write.json",
+            ctx,
+        )
+    assert byte_error.value.code == "source_inspection_changed"
+    assert not (tmp_path / f"{PREPARED_OUTPUT_DIR}/must-not-write.json").exists()
+
+    (tmp_path / "c.csv").write_text(
+        "city_id,city_name\nCITY-3,Surabaya\n", encoding="utf-8"
+    )
+    with pytest.raises(ProviderContractError, match="source_inspection_changed") as path_set_error:
+        data_server.prepare_network_input(
+            SourceInspectionIdentity.model_validate(first_identity),
+            ["a.csv", "b.csv", "c.csv"],
+            [],
+            "ID",
+            f"{PREPARED_OUTPUT_DIR}/must-not-write-path-set.json",
+            ctx,
+        )
+    assert path_set_error.value.code == "source_inspection_changed"
+    assert not (tmp_path / f"{PREPARED_OUTPUT_DIR}/must-not-write-path-set.json").exists()
+
+
+def test_inspection_rejects_symlink_and_data_resource_surface_is_empty(tmp_path, monkeypatch) -> None:
+    (tmp_path / "source.csv").write_text("city_id,city_name\nCITY-1,Jakarta\n", encoding="utf-8")
+    (tmp_path / "outside.csv").write_text("city_id,city_name\nCITY-2,Outside\n", encoding="utf-8")
+    (tmp_path / "linked.csv").symlink_to(tmp_path / "outside.csv")
+    _use_store(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="workspace_source_symlink_rejected"):
+        data_server.inspect_workspace_sources(["linked.csv"], _context(tmp_path))
+    with pytest.raises(ValueError, match="invalid_workspace_relative_path"):
+        data_server.inspect_workspace_sources(["../outside.csv"], _context(tmp_path))
+    assert asyncio.run(data_server.mcp.list_resources()) == []
+    assert asyncio.run(data_server.mcp.list_resource_templates()) == []

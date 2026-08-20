@@ -114,87 +114,20 @@ def _write_sources(workspace: Path) -> list[str]:
     return list(sources)
 
 
-def _mappings(*values: tuple[str, str]) -> list[dict[str, str]]:
-    return [
-        {
-            "source_field": field,
-            "target_field": field,
-            "transform": transform,
-        }
-        for field, transform in values
-    ]
-
-
 def _confirmed_sources() -> list[dict[str, object]]:
-    warehouse_mappings = _mappings(
-        ("warehouse_id", "normalize_identifier"),
-        ("warehouse_name", "trim"),
-        ("warehouse_type", "normalize_warehouse_type"),
-        ("city_id", "normalize_identifier"),
-        ("city_name", "trim"),
-        ("province_id", "normalize_identifier"),
-        ("province_name", "trim"),
-        ("longitude", "parse_decimal"),
-        ("latitude", "parse_decimal"),
-        ("upstream_center_id", "normalize_identifier"),
-        ("is_fixed", "parse_boolean"),
-    )
     return [
-        {
-            "relative_path": "demand.json",
-            "role": "demand",
-            "mappings": _mappings(
-                ("city_id", "normalize_identifier"),
-                ("city_name", "trim"),
-                ("province_id", "normalize_identifier"),
-                ("province_name", "trim"),
-                ("demand_quantity", "parse_integer"),
-                ("longitude", "parse_decimal"),
-                ("latitude", "parse_decimal"),
-            ),
-        },
-        {
-            "relative_path": "existing.json",
-            "role": "existing_warehouse",
-            "mappings": warehouse_mappings,
-        },
-        {
-            "relative_path": "candidates.json",
-            "role": "candidate_warehouse",
-            "mappings": warehouse_mappings,
-        },
-        {
-            "relative_path": "assignments.json",
-            "role": "current_assignment",
-            "mappings": _mappings(
-                ("demand_city_id", "normalize_identifier"),
-                ("serving_warehouse_id", "normalize_identifier"),
-                ("upstream_center_id", "normalize_identifier"),
-            ),
-        },
-        {
-            "relative_path": "quotes.json",
-            "role": "route_quote",
-            "mappings": _mappings(
-                ("origin_id", "normalize_identifier"),
-                ("destination_id", "normalize_identifier"),
-                ("destination_name", "trim"),
-                ("layer", "trim"),
-                ("distance_km", "parse_decimal"),
-                ("duration_hours", "parse_decimal"),
-                ("price_per_vehicle", "parse_decimal"),
-                ("currency", "trim"),
-                ("vehicle_capacity", "parse_decimal"),
-                ("method", "trim"),
-            ),
-        },
+        {"relative_path": "demand.json", "role": "demand"},
+        {"relative_path": "existing.json", "role": "existing_warehouse"},
+        {"relative_path": "candidates.json", "role": "candidate_warehouse"},
+        {"relative_path": "assignments.json", "role": "current_assignment"},
+        {"relative_path": "quotes.json", "role": "route_quote"},
     ]
 
 
 async def _prepare_normalized_resource(
     workspace: Path,
     environment: dict[str, str],
-) -> tuple[dict[str, object], list[str]]:
+) -> tuple[str, list[str]]:
     relative_paths = _write_sources(workspace)
     trace: list[str] = []
     parameters = StdioServerParameters(
@@ -210,9 +143,13 @@ async def _prepare_normalized_resource(
             assert inventory == {
                 "discover_workspace_sources",
                 "inspect_workspace_sources",
-                "normalize_network_input",
+                "prepare_network_input",
                 "prepare_network_geography",
             }
+            assert (await asyncio.wait_for(session.list_resources(), timeout=30)).resources == []
+            assert (
+                await asyncio.wait_for(session.list_resource_templates(), timeout=30)
+            ).resourceTemplates == []
             trace.append("inspect_workspace_sources")
             profile = await _call(
                 session,
@@ -220,27 +157,31 @@ async def _prepare_normalized_resource(
                 {"relative_paths": relative_paths},
                 workspace,
             )
-            trace.append("normalize_network_input")
+            trace.append("prepare_network_input")
             normalized = await _call(
                 session,
-                "normalize_network_input",
+                "prepare_network_input",
                 {
-                    "source_profile_ref": profile.structuredContent["resource_ref"],
+                    "inspection_identity": profile.structuredContent["inspection_identity"],
+                    "inspected_relative_paths": profile.structuredContent[
+                        "inspected_relative_paths"
+                    ],
                     "confirmed_sources": _confirmed_sources(),
                     "country_code": "ID",
+                    "output_relative_path": "outputs/warehouse-network/prepared/domain.json",
                 },
                 workspace,
             )
-            ref = normalized.structuredContent["resource_ref"]
-            assert ref["server"] == "supply_chain_data"
-            payload = await _read_resource(session, ref)
+            prepared_path = normalized.structuredContent["prepared_input_relative_path"]
+            payload = json.loads((workspace / prepared_path).read_text(encoding="utf-8"))
             assert payload["state"] == "ready"
             assert len(payload["demand_cities"]) == 50
             assert len(payload["warehouses"]) == 23
             assert len(payload["current_assignments"]) == 50
             assert len(payload["route_quotes"]) == 580
             assert len(payload["provided_route_facts"]) == 580
-            return ref, trace
+            assert normalized.structuredContent["input_identity"]["content_sha256"]
+            return prepared_path, trace
 
 
 def _cost_policy() -> dict[str, object]:
@@ -260,7 +201,7 @@ def _cost_policy() -> dict[str, object]:
 async def _run_network_s3_then_s2(
     workspace: Path,
     environment: dict[str, str],
-    normalized_ref: dict[str, object],
+    prepared_path: str,
 ) -> tuple[list[str], list[str]]:
     parameters = StdioServerParameters(
         command=sys.executable,
@@ -287,7 +228,7 @@ async def _run_network_s3_then_s2(
                 "render_network_comparison_map",
                 "publish_network_planning_report",
             }
-            prepared = await _read_resource(session, normalized_ref)
+            prepared = json.loads((workspace / prepared_path).read_text(encoding="utf-8"))
             existing_ids = sorted(
                 item["warehouse_id"] for item in prepared["warehouses"] if item["is_existing"]
             )
@@ -297,7 +238,7 @@ async def _run_network_s3_then_s2(
                 session,
                 "prepare_route_matrix",
                 {
-                    "normalized_input_ref": normalized_ref,
+                    "prepared_input_relative_path": prepared_path,
                     "route_method": "provided",
                     "warehouse_scope": "existing_only",
                 },
@@ -313,7 +254,7 @@ async def _run_network_s3_then_s2(
                 session,
                 "prepare_route_matrix",
                 {
-                    "normalized_input_ref": normalized_ref,
+                    "prepared_input_relative_path": prepared_path,
                     "route_method": "haversine",
                     "detour_coefficient": 1.2,
                     "average_speed_kph": 42,
@@ -331,7 +272,7 @@ async def _run_network_s3_then_s2(
                 session,
                 "plan_cost_matrix",
                 {
-                    "normalized_input_ref": normalized_ref,
+                    "prepared_input_relative_path": prepared_path,
                     "warehouse_scope": "all_warehouses",
                     "cost_policy": {
                         "kind": "explicit",
@@ -351,7 +292,7 @@ async def _run_network_s3_then_s2(
                 session,
                 "evaluate_network_baseline",
                 {
-                    "normalized_input_ref": normalized_ref,
+                    "prepared_input_relative_path": prepared_path,
                     "route_matrix_ref": provided_ref,
                     "cost_matrix_ref": costs_ref,
                     "objective": "min_cost",
@@ -381,7 +322,7 @@ async def _run_network_s3_then_s2(
                 session,
                 "assess_facility_change",
                 {
-                    "normalized_input_ref": normalized_ref,
+                    "prepared_input_relative_path": prepared_path,
                     "route_matrix_ref": provided_ref,
                     "cost_matrix_ref": costs_ref,
                     "before_ref": baseline_ref,
@@ -428,7 +369,7 @@ async def _run_network_s3_then_s2(
                 session,
                 "solve_p_median",
                 {
-                    "normalized_input_ref": normalized_ref,
+                    "prepared_input_relative_path": prepared_path,
                     "route_matrix_ref": routes_ref,
                     "cost_matrix_ref": costs_ref,
                     "opening_policy": {"kind": "exact", "number_to_open": 2},
@@ -452,7 +393,7 @@ async def _run_network_s3_then_s2(
                 session,
                 "compare_network_scenarios",
                 {
-                    "normalized_input_ref": normalized_ref,
+                    "prepared_input_relative_path": prepared_path,
                     "before_ref": baseline_ref,
                     "after_ref": facility_ref,
                     "service_targets": [6, 12, 18],
@@ -552,15 +493,15 @@ async def smoke() -> None:
         workspace = state_root / "workspace"
         workspace.mkdir()
         environment = _environment(state_root)
-        normalized_ref, data_trace = await _prepare_normalized_resource(
+        prepared_path, data_trace = await _prepare_normalized_resource(
             workspace,
             environment,
         )
-        assert data_trace == ["inspect_workspace_sources", "normalize_network_input"]
+        assert data_trace == ["inspect_workspace_sources", "prepare_network_input"]
         s3_trace, s2_trace = await _run_network_s3_then_s2(
             workspace,
             environment,
-            normalized_ref,
+            prepared_path,
         )
         assert s3_trace[-1:] == ["assess_facility_change"]
         assert s2_trace[-4:] == [

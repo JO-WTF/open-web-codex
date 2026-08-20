@@ -210,6 +210,22 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def source_inspection_identity(root: Path, relative_paths: list[str]) -> tuple[str, int]:
+    """Hash sorted exact Workspace paths and each complete regular-file digest."""
+    if not relative_paths or len(relative_paths) > MAX_FILES:
+        raise ValueError("relative_paths must contain 1-500 Workspace-relative paths")
+    if len(set(relative_paths)) != len(relative_paths):
+        raise ValueError("relative_paths must not contain duplicates")
+    digest = hashlib.sha256()
+    for relative_path in sorted(relative_paths):
+        path = _validated_source_path(root, relative_path)
+        digest.update(relative_path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(_sha256_file(path).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest(), len(relative_paths)
+
+
 def inspect(root: Path, relative_path: str) -> dict[str, Any]:
     path = _validated_source_path(root, relative_path)
     record = source_descriptor(root, relative_path)

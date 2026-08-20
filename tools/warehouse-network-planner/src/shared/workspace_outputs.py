@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from pathlib import Path
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
-from open_web_codex_provider import ProviderContractError
-from open_web_codex_provider import ensure_workspace_directory
+from open_web_codex_provider import ProviderContractError, ensure_workspace_directory
 
 
 class WorkspaceOutputKind(StrEnum):

@@ -7,7 +7,7 @@ metadata:
 
 # 单 Agent 仓网规划
 
-按用户目标选择基线、单仓变动或多仓选址；复用同一份 Tool 结果，不重复计算同一矩阵。Data preparation Skill 交接的完整 prepared input 是本 Skill 的唯一业务输入。
+按用户目标选择基线、单仓变动或多仓选址；复用同一份 Tool 结果，不重复计算同一矩阵。数据准备遵循 `discover_workspace_sources → inspect_workspace_sources`（inline profile + inspection identity）→ `prepare_network_input`；Data preparation Skill 交接的完整 prepared input 是本 Skill 的唯一业务输入，不接收 source profile Resource。
 
 路线与成本：
 

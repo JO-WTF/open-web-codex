@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from open_web_codex_provider import ResourceRef as _ResourceRef
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -104,11 +104,24 @@ class GeographyOverride(StrictModel):
     catalog_city_id: str = Field(min_length=1, max_length=128)
 
 
+class SourceInspectionIdentity(StrictModel):
+    """Identity of the exact regular Workspace files inspected by Data."""
+
+    schema_version: Literal["workspace_source_inspection.v1"] = Field(
+        default="workspace_source_inspection.v1",
+        alias="schemaVersion",
+    )
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_count: int = Field(ge=1, le=500)
+
+
 class DataInspectionToolResult(StrictModel):
-    """A Data-Agent-local source-profile Resource used only during preparation."""
+    """Bounded inline inspection result; it is not a Resource."""
 
     summary: str
-    resource_ref: _ResourceRef
+    source_profile: dict[str, Any]
+    inspection_identity: SourceInspectionIdentity
+    inspected_relative_paths: list[str] = Field(min_length=1, max_length=500)
 
 
 class CandidateWarehouseSummary(StrictModel):

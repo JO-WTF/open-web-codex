@@ -10,7 +10,6 @@ from _network_fixtures import (
     network_case,
     route_matrix,
 )
-
 from supply_chain_planner.network.matrix import build_cost_matrix, build_haversine_route_matrix
 from supply_chain_planner.network.matrix_models import (
     CostCalculationPolicy,

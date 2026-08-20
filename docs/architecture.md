@@ -214,11 +214,13 @@ WorkResourceReference 已随 Slice 4B.2-A 完全删除。供应链旧 `CaseRepos
 models/services 及其测试已在 Stage E 删除；当前 provider 不再维护第二套 source、mapping、
 revision、operation、dependency、readiness 或 deliverable 状态。
 
-当前 `ResourceStore` 以内容寻址 URI 为同一 logical `supply_chain` provider 的 Data/Network
+当前 `ResourceStore` 以内容寻址 URI 为同一 logical `supply_chain` provider 的 Network
 能力提供不可变 Resource 内容，并以 Profile 私有、canonical Workspace 隔离的物理目录保存
-字节；这一 provider content owner 与 Codex 官方 MCP Resource 合同一致。Data4 与 Network 的
-active surface 以 Workspace 路径和 typed Resource 各司其职：Data Server 的 inspect 只在 Data child
-内发布 `source_profile.v1`，并分别返回预览样本数与完整总数；`prepare_network_input` 以显式确认 source mapping 和全部候选仓原子写入
+字节；Data inspection 不发布 Resource。Data4 与 Network 的 active surface 以 inline inspection
+identity、Workspace 路径和 typed Network Resource 各司其职：Data Server 的 inspect 返回有界
+`source_profile`、预览样本数与完整总数、`workspace_source_inspection.v1` identity 及精确
+inspected paths；`prepare_network_input` 重新检查同一完整 regular files，若路径集合或任一字节变化
+则返回 `source_inspection_changed` 且不写文件，否则以显式确认 mapping 和全部候选仓原子写入
 `outputs/warehouse-network/prepared/` 下的完整 `prepared_network_input.v1`，同时返回候选仓总数和有界目录；`prepare_network_geography` 再从该文件生成新的完整输入。Network
 Tool 只接受这个确切路径，并为矩阵与方案 Resource 绑定输入内容身份；不存在 candidate delta 或
 Data-to-Network ResourceRef 交接。

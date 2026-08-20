@@ -52,7 +52,7 @@ from open_web_codex_provider import ResourceStore
 published = ResourceStore(
     Path(sys.argv[1]),
     uri_prefix="supply-chain://resources/",
-).publish("source_profile.v1", {"ready": True})
+).publish("test_resource.v1", {"ready": True})
 print(published.uri)
 """
     completed = subprocess.run(
@@ -72,7 +72,7 @@ print(published.uri)
         ResourceRef(
             server=SERVER_NAME,
             uri=uri,
-            resource_schema="source_profile.v1",
+            resource_schema="test_resource.v1",
         )
     ) == {
         "ready": True
@@ -112,7 +112,7 @@ def test_workspace_store_denies_same_uri_from_another_workspace(tmp_path: Path) 
         workspace_resource_root(profile, first_workspace, SERVER_NAME),
         uri_prefix=URI_PREFIX,
     )
-    published = first.publish("source_profile.v1", {"ready": True})
+    published = first.publish("test_resource.v1", {"ready": True})
     ref = resource_ref(published, SERVER_NAME)
 
     second = ResourceStore(
@@ -125,7 +125,7 @@ def test_workspace_store_denies_same_uri_from_another_workspace(tmp_path: Path) 
 
 def test_resource_store_rejects_forged_schema(tmp_path: Path) -> None:
     store = ResourceStore(tmp_path, uri_prefix=URI_PREFIX)
-    published = store.publish("source_profile.v1", {"ready": True})
+    published = store.publish("test_resource.v1", {"ready": True})
     forged = ResourceRef(
         server=SERVER_NAME,
         uri=published.uri,

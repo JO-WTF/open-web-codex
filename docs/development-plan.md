@@ -582,13 +582,13 @@ producer-time verifier snapshot，恢复不依赖届时 active package registry�
   Workspace，绝不能在真实输入失败后静默回退。
 
 Data4 的 Stage C active surface 已不再依赖 `source_ref` 及 wire aliases、模型可见
-revision/operation/CAS、ArtifactRef 双重 ref 或隐藏 Task 数据目录；它保留并简化 ResourceStore
-为 MCP provider 的最小内容 owner，重用纯解析、验证与标准化代码。Network decorated active
-surface 已使用 strict `ResourceRef`；未装饰的 `CaseRepository`、`NetworkSnapshot`、ArtifactRef
-compatibility tail 已由 Stage E 原子尾删。
+revision/operation/CAS、ArtifactRef 双重 ref 或隐藏 Task 数据目录；inspect 使用 inline
+`workspace_source_inspection.v1` identity，prepare 重新校验完整 Workspace 文件并写入 prepared
+普通文件，不注册 Data Resource。Network decorated active surface 继续使用 strict `ResourceRef`；
+未装饰的 `CaseRepository`、`NetworkSnapshot`、ArtifactRef compatibility tail 已由 Stage E 原子尾删。
 
-退出：所有仓网 Tool 只使用 Workspace 相对路径、typed MCP Resource ref 或普通业务参数；
-Data4 strict ResourceRef、完整仓网清单和 pair-level 部分复用都有确定性测试；两个 Task 可显式
+退出：所有仓网 Tool 只使用 Workspace 相对路径、inline Data inspection identity、Network typed
+MCP Resource ref 或普通业务参数；Data4 identity、完整仓网清单和 pair-level 部分复用都有确定性测试；两个 Task 可显式
 复用文件或 Resource 但没有直连 context/result API；Platform 不出现仓网状态机。
 
 ### Slice 6：最小 Artifact 与安全投影

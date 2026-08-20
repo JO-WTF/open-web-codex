@@ -14,11 +14,10 @@ from supply_chain_planner.network.matrix_models import (
 from supply_chain_planner.network.models import (
     CurrentAssignmentRecord,
     DemandCityRecord,
-    ProvidedRouteFactRecord,
     PlanningInputIdentity,
+    ProvidedRouteFactRecord,
     WarehouseRecord,
 )
-
 
 TEST_INPUT_IDENTITY = PlanningInputIdentity(content_sha256="0" * 64)
 
