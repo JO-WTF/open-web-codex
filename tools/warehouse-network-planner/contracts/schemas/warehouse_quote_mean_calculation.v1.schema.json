@@ -1,0 +1,133 @@
+{
+  "$defs": {
+    "PlanningInputIdentity": {
+      "additionalProperties": false,
+      "description": "Immutable identity of one prepared Workspace planning input.\n\nThis is a domain integrity guard, not a Platform dataset registry or a\nwhole-dataset cache key.  Domain tools use it only to reject accidentally\nmixed matrices and solved results.",
+      "properties": {
+        "content_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Content Sha256",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "prepared_network_input.v1",
+          "default": "prepared_network_input.v1",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "content_sha256"
+      ],
+      "title": "PlanningInputIdentity",
+      "type": "object"
+    },
+    "QuoteMeanCostRuleEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "pattern": "^[A-Z]{3}$",
+          "title": "Currency",
+          "type": "string"
+        },
+        "layer": {
+          "enum": [
+            "linehaul",
+            "last_mile"
+          ],
+          "title": "Layer",
+          "type": "string"
+        },
+        "mean_cost_per_demand_unit": {
+          "minimum": 0,
+          "title": "Mean Cost Per Demand Unit",
+          "type": "number"
+        },
+        "quote_count": {
+          "exclusiveMinimum": 0,
+          "title": "Quote Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "layer",
+        "currency",
+        "quote_count",
+        "mean_cost_per_demand_unit"
+      ],
+      "title": "QuoteMeanCostRuleEvidence",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Stable evidence produced by a full prepared-input quote aggregation.\n\nThe evidence file is intentionally small enough to pass through the Agent\ncontext, while the Planner re-derives and validates it from the complete\nprepared input before accepting it.  This keeps a user-authored script\nauditable without allowing its numeric output to become a second source of\nbusiness truth.",
+  "properties": {
+    "considered_quote_count": {
+      "exclusiveMinimum": 0,
+      "title": "Considered Quote Count",
+      "type": "integer"
+    },
+    "formula": {
+      "const": "arithmetic_mean(price_per_vehicle / vehicle_capacity)",
+      "title": "Formula",
+      "type": "string"
+    },
+    "ignored_quote_count": {
+      "minimum": 0,
+      "title": "Ignored Quote Count",
+      "type": "integer"
+    },
+    "input_identity": {
+      "$ref": "#/$defs/PlanningInputIdentity"
+    },
+    "method": {
+      "const": "observed_quote_mean",
+      "title": "Method",
+      "type": "string"
+    },
+    "prepared_input_relative_path": {
+      "maxLength": 1024,
+      "minLength": 1,
+      "title": "Prepared Input Relative Path",
+      "type": "string"
+    },
+    "rules": {
+      "items": {
+        "$ref": "#/$defs/QuoteMeanCostRuleEvidence"
+      },
+      "minItems": 1,
+      "title": "Rules",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "warehouse_quote_mean_calculation.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tool_version": {
+      "const": "observed-quote-mean.v1",
+      "title": "Tool Version",
+      "type": "string"
+    },
+    "total_quote_count": {
+      "exclusiveMinimum": 0,
+      "title": "Total Quote Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "prepared_input_relative_path",
+    "input_identity",
+    "total_quote_count",
+    "method",
+    "tool_version",
+    "formula",
+    "considered_quote_count",
+    "ignored_quote_count",
+    "rules"
+  ],
+  "title": "warehouse_quote_mean_calculation.v1",
+  "type": "object"
+}

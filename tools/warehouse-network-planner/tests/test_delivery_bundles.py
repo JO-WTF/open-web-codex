@@ -30,6 +30,7 @@ from supply_chain_planner.network.models import NormalizedInputBatch
 from supply_chain_planner.network.optimization_models import (
     AssignmentComparison,
     BaselineResult,
+    ExactOpeningPolicy,
     PMedianSolution,
 )
 from supply_chain_planner.network.solver import (
@@ -134,6 +135,7 @@ def sample2_delivery() -> Sample2Delivery:
         input_identity=TEST_INPUT_IDENTITY,
         service=service_metrics(best.assignment, targets),
         optimality="proven",
+        opening_policy=ExactOpeningPolicy(number_to_open=2),
     )
     comparison = compare_assignments(
         baseline.assignment,

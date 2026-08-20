@@ -19,6 +19,19 @@ const MARK_FAILURE_SQL: &str = "UPDATE profile_copilot_installations SET \
      WHERE profile_id = (SELECT id FROM profiles WHERE runtime_key = $1) \
        AND package_id = $2";
 
+const CURRENT_ROLE_THREAD_IDS_SQL: &str = "SELECT current.thread_id
+     FROM (
+         SELECT DISTINCT ON (projection.agent_role)
+             projection.agent_role, projection.thread_id, projection.last_observed_at
+         FROM runtime_agent_projections projection
+         JOIN profiles profile ON profile.id = projection.profile_id
+         WHERE profile.runtime_key = $1
+           AND projection.agent_role = ANY($2)
+         ORDER BY projection.agent_role, projection.last_observed_at DESC,
+                  projection.thread_id DESC
+     ) current
+     ORDER BY current.last_observed_at DESC, current.thread_id";
+
 #[derive(Debug, Clone)]
 pub(crate) struct CopilotPackageSource {
     pub id: String,
@@ -358,18 +371,11 @@ impl CopilotInstallationStore {
         if role_ids.is_empty() {
             return Ok(Vec::new());
         }
-        sqlx::query_scalar(
-            "SELECT projection.thread_id
-             FROM runtime_agent_projections projection
-             JOIN profiles profile ON profile.id = projection.profile_id
-             WHERE profile.runtime_key = $1
-               AND projection.agent_role = ANY($2)
-             ORDER BY projection.last_observed_at DESC, projection.thread_id",
-        )
-        .bind(&self.runtime_key)
-        .bind(role_ids)
-        .fetch_all(&self.db)
-        .await
+        sqlx::query_scalar(CURRENT_ROLE_THREAD_IDS_SQL)
+            .bind(&self.runtime_key)
+            .bind(role_ids)
+            .fetch_all(&self.db)
+            .await
     }
 }
 
@@ -692,7 +698,7 @@ impl CopilotInstallationService {
                                 Ok(role_threads) if role_threads.is_empty() => {}
                                 Ok(role_threads) => {
                                     let mut mcp_servers = BTreeSet::new();
-                                    let mut inventory_unavailable = false;
+                                    let mut inventory_complete = true;
                                     for thread_id in role_threads {
                                         match runtime
                                             .request(
@@ -709,18 +715,16 @@ impl CopilotInstallationService {
                                                 mcp_servers
                                                     .extend(discovered_mcp_server_ids(&response));
                                             }
-                                            Err(_) => inventory_unavailable = true,
+                                            Err(_) => inventory_complete = false,
                                         }
                                     }
                                     discovered_mcp_servers = mcp_servers.iter().cloned().collect();
-                                    if inventory_unavailable {
-                                        state = CopilotInstallationState::Unavailable;
-                                    } else if mcp_inventory_ready(
+                                    state = promote_mcp_inventory_state(
+                                        state,
                                         &assets.mcp_server_ids(),
                                         &mcp_servers,
-                                    ) {
-                                        state = CopilotInstallationState::Ready;
-                                    }
+                                        inventory_complete,
+                                    );
                                 }
                                 Err(_) => state = CopilotInstallationState::Unavailable,
                             }
@@ -784,6 +788,19 @@ fn discovered_mcp_server_ids(response: &Value) -> Vec<String> {
 
 fn mcp_inventory_ready(expected: &[String], discovered: &BTreeSet<String>) -> bool {
     !expected.is_empty() && expected.iter().all(|id| discovered.contains(id))
+}
+
+fn promote_mcp_inventory_state(
+    current: CopilotInstallationState,
+    expected: &[String],
+    discovered: &BTreeSet<String>,
+    inventory_complete: bool,
+) -> CopilotInstallationState {
+    if inventory_complete && mcp_inventory_ready(expected, discovered) {
+        CopilotInstallationState::Ready
+    } else {
+        current
+    }
 }
 
 fn source_revision_requires_refresh(persisted: &str, registered: &str) -> bool {
@@ -873,6 +890,24 @@ mod tests {
             ],
             &discovered
         ));
+        assert_eq!(
+            promote_mcp_inventory_state(
+                CopilotInstallationState::Configured,
+                &["meeting_action_review".to_string()],
+                &discovered,
+                false,
+            ),
+            CopilotInstallationState::Configured
+        );
+        assert_eq!(
+            promote_mcp_inventory_state(
+                CopilotInstallationState::Configured,
+                &["meeting_action_review".to_string()],
+                &discovered,
+                true,
+            ),
+            CopilotInstallationState::Ready
+        );
     }
 
     #[test]
@@ -915,6 +950,12 @@ mod tests {
         assert!(!MARK_FAILURE_SQL.contains("configured_revision"));
         assert!(!MARK_FAILURE_SQL.contains("managed_skill_ids"));
         assert!(!MARK_FAILURE_SQL.contains("managed_agent_role_ids"));
+    }
+
+    #[test]
+    fn readiness_inventory_selects_one_current_thread_per_role() {
+        assert!(CURRENT_ROLE_THREAD_IDS_SQL.contains("DISTINCT ON (projection.agent_role)"));
+        assert!(CURRENT_ROLE_THREAD_IDS_SQL.contains("projection.last_observed_at DESC"));
     }
 
     #[test]

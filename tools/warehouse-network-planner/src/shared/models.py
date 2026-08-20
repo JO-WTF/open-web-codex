@@ -29,6 +29,8 @@ from supply_chain_planner.network.optimization_models import (
     CostSummary,
     CoverageComparison,
     CoverageMetricSummary,
+    OpeningPolicySelection,
+    PMedianSearchAttempt,
 )
 
 
@@ -148,6 +150,7 @@ class CostMatrixPlanningToolResult(StrictModel):
     input_identity: PlanningInputIdentity
     calculation_rule_source: Literal["explicit", "observed_quote_mean"] | None = None
     calculation_rule_evidence: ObservedQuoteMeanCostEvidence | None = None
+    calculation_rule_evidence_path: str | None = Field(default=None, max_length=1024)
     expected_pair_count: int = Field(ge=0)
     reused_pair_count: int = Field(ge=0)
     computed_pair_count: int = Field(ge=0)
@@ -162,6 +165,9 @@ class PMedianSolutionToolResult(StrictModel):
     input_identity: PlanningInputIdentity
     status: Literal["optimal", "feasible", "timeout", "infeasible", "unavailable"]
     optimality: Literal["proven", "feasible_only", "not_available"]
+    opening_policy: OpeningPolicySelection
+    first_feasible_number_to_open: int | None = Field(default=None, ge=0)
+    search_attempts: list[PMedianSearchAttempt] = Field(max_length=65)
     active_warehouse_count: int = Field(ge=0)
     opened_candidate_ids: list[str] = Field(max_length=64)
     closed_existing_ids: list[str] = Field(max_length=64)

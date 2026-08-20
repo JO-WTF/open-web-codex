@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 from _network_fixtures import (
     TEST_INPUT_IDENTITY,
@@ -18,6 +21,7 @@ from supply_chain_planner.network.matrix_models import (
     CostCalculationPolicy,
     CostMatrix,
     DemandUnitCostRule,
+    ObservedQuoteMeanCostEvidence,
     RouteCostQuote,
 )
 
@@ -267,12 +271,19 @@ def test_observed_quote_mean_uses_complete_normalized_quote_population() -> None
         fixture.demand,
         fixture.warehouses,
         indonesia_route_quotes(),
+        prepared_input_relative_path="outputs/warehouse-network/prepared/prepared-network.json",
+        input_identity=TEST_INPUT_IDENTITY,
     )
 
     evidence_by_layer = {rule.layer: rule for rule in evidence.rules}
     policy_by_layer = {rule.layer: rule for rule in policy.rules}
     assert evidence.tool_version == "observed-quote-mean.v1"
     assert evidence.formula == "arithmetic_mean(price_per_vehicle / vehicle_capacity)"
+    assert evidence.schema_version == "warehouse_quote_mean_calculation.v1"
+    assert evidence.prepared_input_relative_path.endswith("prepared-network.json")
+    assert evidence.input_identity == TEST_INPUT_IDENTITY
+    assert evidence.total_quote_count == 580
+    assert evidence.considered_quote_count + evidence.ignored_quote_count == evidence.total_quote_count
     assert evidence.considered_quote_count == 580
     assert evidence.ignored_quote_count == 0
     assert evidence_by_layer["last_mile"].quote_count == 550
@@ -306,4 +317,24 @@ def test_observed_quote_mean_requires_evidence_for_every_required_layer() -> Non
     ]
 
     with pytest.raises(ValueError, match="observed_quote_mean_missing_layers:linehaul"):
-        derive_observed_quote_mean_cost_policy(case.demand, case.warehouses, quotes)
+        derive_observed_quote_mean_cost_policy(
+            case.demand,
+            case.warehouses,
+            quotes,
+            prepared_input_relative_path="prepared-network.json",
+            input_identity=TEST_INPUT_IDENTITY,
+        )
+
+
+def test_quote_mean_evidence_fixture_uses_stable_schema() -> None:
+    fixture_path = (
+        Path(__file__).parents[1]
+        / "contracts"
+        / "fixtures"
+        / "warehouse_quote_mean_calculation.v1.json"
+    )
+    evidence = ObservedQuoteMeanCostEvidence.model_validate(
+        json.loads(fixture_path.read_text(encoding="utf-8"))
+    )
+    assert evidence.schema_version == "warehouse_quote_mean_calculation.v1"
+    assert evidence.total_quote_count == 580

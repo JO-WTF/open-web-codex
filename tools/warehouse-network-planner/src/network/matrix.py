@@ -513,6 +513,7 @@ def build_cost_matrix(
     input_identity: PlanningInputIdentity,
     calculation_rule_source: Literal["explicit", "observed_quote_mean"] | None = None,
     calculation_rule_evidence: ObservedQuoteMeanCostEvidence | None = None,
+    calculation_rule_evidence_path: str | None = None,
 ) -> CostMatrix:
     expected = _expected_route_pairs(demand_cities, warehouses)
     expected_set = set(expected)
@@ -642,6 +643,7 @@ def build_cost_matrix(
             else ("explicit" if policy is not None else None)
         ),
         calculation_rule_evidence=calculation_rule_evidence,
+        calculation_rule_evidence_path=calculation_rule_evidence_path,
         stats=CostMatrixStats(
             expected_pair_count=len(expected),
             reused_pair_count=reused,
@@ -660,6 +662,9 @@ def derive_observed_quote_mean_cost_policy(
     demand_cities: list[DemandCityRecord],
     warehouses: list[WarehouseRecord],
     route_quotes: list[RouteCostQuote | RouteQuoteRecord],
+    *,
+    prepared_input_relative_path: str,
+    input_identity: PlanningInputIdentity,
 ) -> tuple[CostCalculationPolicy, ObservedQuoteMeanCostEvidence]:
     """Derive deterministic per-layer fallback costs from complete normalized quotes."""
 
@@ -717,7 +722,13 @@ def derive_observed_quote_mean_cost_policy(
             )
         )
     evidence = ObservedQuoteMeanCostEvidence(
+        schema_version="warehouse_quote_mean_calculation.v1",
+        prepared_input_relative_path=prepared_input_relative_path,
+        input_identity=input_identity,
+        total_quote_count=len(route_quotes),
+        method="observed_quote_mean",
         tool_version=OBSERVED_QUOTE_MEAN_TOOL_VERSION,
+        formula="arithmetic_mean(price_per_vehicle / vehicle_capacity)",
         considered_quote_count=sum(len(values) for values in quote_values.values()),
         ignored_quote_count=ignored,
         rules=evidence_rules,

@@ -8,11 +8,11 @@ from _network_fixtures import (
     network_case,
     route_matrix,
 )
-
 from pydantic import ValidationError
 from supply_chain_planner.network.matrix import build_cost_matrix, build_haversine_route_matrix
 from supply_chain_planner.network.matrix_models import CostCalculationPolicy, DemandUnitCostRule
 from supply_chain_planner.network.optimization_models import (
+    ExactOpeningPolicy,
     PMedianRequest,
     PMedianSolution,
     ScenarioSpec,
@@ -125,6 +125,7 @@ def test_sample2_opens_exactly_two_candidates_with_existing_sites_explicitly_fix
         input_identity=TEST_INPUT_IDENTITY,
         service=service_metrics(result.assignment, [6, 12, 18]),
         optimality="proven",
+        opening_policy=ExactOpeningPolicy(number_to_open=2),
     )
     assert solution.cost is not None
     assert solution.cost.complete is True
@@ -139,9 +140,9 @@ def test_planning_objective_and_existing_policy_have_no_hidden_defaults() -> Non
     with pytest.raises(ValidationError):
         ScenarioSpec()
     with pytest.raises(ValidationError):
-        PMedianRequest(number_to_open=1)
+        PMedianRequest(opening_policy={"kind": "exact"})
     with pytest.raises(ValidationError):
         PMedianRequest(
-            number_to_open=1,
+            opening_policy=ExactOpeningPolicy(number_to_open=1),
             existing_warehouse_policy={"mode": "allow_closure"},
         )

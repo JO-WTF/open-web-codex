@@ -1348,11 +1348,9 @@ models = [{{ model_id = "mock-model", context_window = 25600, supports_search_to
         host.clone(),
         "package-network-runtime-runner",
         runner_root.clone(),
-        vec![
-            assets
-                .root_execution_config(&profile_home)
-                .expect("resolve managed Root execution config"),
-        ],
+        vec![assets
+            .root_execution_config(&profile_home)
+            .expect("resolve managed Root execution config")],
         Some(assets.id().to_string()),
     )
     .expect("construct real Codex adapter");

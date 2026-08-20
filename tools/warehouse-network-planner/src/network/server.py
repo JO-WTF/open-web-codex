@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import os
+import time
 import urllib.parse
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -60,6 +62,7 @@ from supply_chain_planner.network.matrix_models import (
     CostPolicySelection,
     ExplicitCostPolicy,
     NavigationMatrixResult,
+    ObservedQuoteMeanCostEvidence,
     ObservedQuoteMeanCostPolicy,
 )
 from supply_chain_planner.network.matrix_models import RouteMatrix as ComposableRouteMatrix
@@ -75,7 +78,10 @@ from supply_chain_planner.network.optimization_models import (
     BaselineResult,
     CostSummary,
     CoverageMetricSummary,
+    ExactOpeningPolicy,
     ExistingWarehousePolicy,
+    OpeningPolicySelection,
+    PMedianSearchAttempt,
     PMedianSolution,
     ScenarioResult,
     ScenarioSpec,
@@ -258,6 +264,66 @@ def _runtime() -> McpResourceRuntime:
     if _supply_chain_resources is None:
         _supply_chain_resources = SupplyChainResources(_workspace_root, _profile_state_root)
     return _supply_chain_resources.network
+
+
+def _validate_quote_mean_evidence_path(
+    relative_path: str,
+    prepared_input_relative_path: str,
+) -> str:
+    """Accept only a create-new typed evidence file in the package output dir."""
+
+    candidate = PurePosixPath(relative_path)
+    expected_parent = PurePosixPath("outputs/warehouse-network/calculations")
+    if (
+        candidate.is_absolute()
+        or candidate.as_posix() != relative_path
+        or candidate.parent != expected_parent
+        or candidate.suffix.lower() != ".json"
+        or candidate.name in {"", ".", ".."}
+        or relative_path == prepared_input_relative_path
+    ):
+        raise McpResourceContractError("cost_evidence_path_invalid")
+    return candidate.as_posix()
+
+
+def _quote_mean_evidence_matches(
+    expected: ObservedQuoteMeanCostEvidence,
+    supplied: ObservedQuoteMeanCostEvidence,
+) -> bool:
+    """Compare script evidence to canonical Tool output without float noise."""
+
+    if (
+        expected.schema_version != supplied.schema_version
+        or expected.prepared_input_relative_path != supplied.prepared_input_relative_path
+        or expected.input_identity != supplied.input_identity
+        or expected.total_quote_count != supplied.total_quote_count
+        or expected.method != supplied.method
+        or expected.tool_version != supplied.tool_version
+        or expected.formula != supplied.formula
+        or expected.considered_quote_count != supplied.considered_quote_count
+        or expected.ignored_quote_count != supplied.ignored_quote_count
+    ):
+        return False
+    expected_rules = {rule.layer: rule for rule in expected.rules}
+    supplied_rules = {rule.layer: rule for rule in supplied.rules}
+    if (
+        len(expected.rules) != len(supplied.rules)
+        or len(expected_rules) != len(expected.rules)
+        or len(supplied_rules) != len(supplied.rules)
+        or set(expected_rules) != set(supplied_rules)
+    ):
+        return False
+    return all(
+        expected_rules[layer].currency == supplied_rules[layer].currency
+        and expected_rules[layer].quote_count == supplied_rules[layer].quote_count
+        and math.isclose(
+            expected_rules[layer].mean_cost_per_demand_unit,
+            supplied_rules[layer].mean_cost_per_demand_unit,
+            rel_tol=0,
+            abs_tol=1e-6,
+        )
+        for layer in expected_rules
+    )
 
 
 @mcp.resource(
@@ -777,6 +843,7 @@ def plan_cost_matrix(
     cost_policy: CostPolicySelection | None = None,
     route_matrix_ref: ResourceRef | None = None,
     prior_cost_matrix_ref: ResourceRef | None = None,
+    quote_mean_evidence_relative_path: Annotated[str | None, Field(max_length=1024)] = None,
 ) -> Annotated[CallToolResult, CostMatrixPlanningToolResult]:
     """Build quote-first costs with explicit or full-quote-mean fallback policy."""
     prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
@@ -787,6 +854,8 @@ def plan_cost_matrix(
     calculation_rule_source = None
     calculation_rule_evidence = None
     if isinstance(cost_policy, ExplicitCostPolicy):
+        if quote_mean_evidence_relative_path is not None:
+            raise McpResourceContractError("cost_evidence_requires_observed_quote_mean")
         calculation_policy = CostCalculationPolicy(rules=cost_policy.rules)
         calculation_rule_source = "explicit"
     elif isinstance(cost_policy, ObservedQuoteMeanCostPolicy):
@@ -794,8 +863,32 @@ def plan_cost_matrix(
             prepared.demand_cities,
             warehouses,
             prepared.route_quotes,
+            prepared_input_relative_path=prepared_input_relative_path,
+            input_identity=input_identity,
         )
         calculation_rule_source = "observed_quote_mean"
+        if quote_mean_evidence_relative_path is not None:
+            evidence_path = _validate_quote_mean_evidence_path(
+                quote_mean_evidence_relative_path,
+                prepared_input_relative_path,
+            )
+            try:
+                evidence_payload = read_json_document(
+                    _runtime().require_workspace(ctx),
+                    evidence_path,
+                )
+                supplied_evidence = ObservedQuoteMeanCostEvidence.model_validate(
+                    evidence_payload
+                )
+            except (ValueError, ValidationError) as error:
+                raise McpResourceContractError("cost_evidence_invalid") from error
+            if not _quote_mean_evidence_matches(calculation_rule_evidence, supplied_evidence):
+                raise McpResourceContractError("cost_evidence_mismatch")
+            quote_mean_evidence_relative_path = evidence_path
+        else:
+            quote_mean_evidence_relative_path = None
+    elif quote_mean_evidence_relative_path is not None:
+        raise McpResourceContractError("cost_evidence_requires_observed_quote_mean")
     route_matrix = (
         _runtime().load_model(
             route_matrix_ref,
@@ -830,6 +923,7 @@ def plan_cost_matrix(
         input_identity=input_identity,
         calculation_rule_source=calculation_rule_source,
         calculation_rule_evidence=calculation_rule_evidence,
+        calculation_rule_evidence_path=quote_mean_evidence_relative_path,
     )
     stats = matrix.stats
     policy_summary = ""
@@ -859,6 +953,7 @@ def plan_cost_matrix(
         input_identity=input_identity,
         calculation_rule_source=matrix.calculation_rule_source,
         calculation_rule_evidence=matrix.calculation_rule_evidence,
+        calculation_rule_evidence_path=matrix.calculation_rule_evidence_path,
         expected_pair_count=stats.expected_pair_count,
         reused_pair_count=stats.reused_pair_count,
         computed_pair_count=stats.computed_pair_count,
@@ -1242,13 +1337,14 @@ def solve_p_median(
     prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     route_matrix_ref: ResourceRef,
     cost_matrix_ref: ResourceRef,
-    number_to_open: Annotated[
-        int,
+    opening_policy: Annotated[
+        OpeningPolicySelection,
         Field(
-            ge=0,
             description=(
-                "Count of candidate new warehouses selected; excludes existing warehouses."
-            ),
+                "Use exact with number_to_open for one candidate count, or "
+                "minimum_feasible to search candidate counts from zero through the "
+                "bounded maximum and stop at the first feasible count."
+            )
         ),
     ],
     existing_warehouse_policy: Annotated[
@@ -1267,7 +1363,7 @@ def solve_p_median(
     ctx: Context,
     service_constraints: list[ServiceCoverageConstraint] | None = None,
 ) -> Annotated[CallToolResult, PMedianSolutionToolResult]:
-    """Solve finite-candidate min-cost p-median under explicit existing-site policy."""
+    """Solve finite-candidate p-median with one bounded exact/search execution."""
     if any(target <= 0 for target in service_targets):
         raise McpResourceContractError("p_median_service_targets_invalid")
     prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
@@ -1312,25 +1408,96 @@ def solve_p_median(
             raise McpResourceContractError("existing_policy_closable_ids_duplicate")
         optional_existing_ids = set(existing_warehouse_policy.closable_existing_ids)
         fixed_existing_ids = existing_ids - optional_existing_ids
-    try:
-        solved, _branches, timed_out = enumerate_p_median(
-            prepared.demand_cities,
-            prepared.warehouses,
-            routes,
-            costs,
-            number_to_open,
-            fixed_existing_ids,
-            optional_existing_ids,
-            time_limit_seconds,
-            constraints,
-        )
-    except SolverUnavailable as error:
-        solved = None
-        timed_out = False
-        unavailable_message = str(error)
+    candidate_count = sum(1 for warehouse in prepared.warehouses if not warehouse.is_existing)
+    if isinstance(opening_policy, ExactOpeningPolicy):
+        opening_counts = [opening_policy.number_to_open]
     else:
-        unavailable_message = None
+        if not constraints:
+            raise McpResourceContractError(
+                "p_median_minimum_feasible_requires_service_constraints"
+            )
+        maximum = (
+            candidate_count
+            if opening_policy.maximum_number_to_open is None
+            else opening_policy.maximum_number_to_open
+        )
+        if maximum > candidate_count or maximum > 64:
+            raise McpResourceContractError("p_median_opening_policy_bound_invalid")
+        opening_counts = list(range(maximum + 1))
+
+    started_at = time.monotonic()
+    attempts: list[PMedianSearchAttempt] = []
+    solved = None
+    timed_out = False
+    unavailable_message: str | None = None
+    solved_number_to_open: int | None = None
     solution_coverage: list[CoverageMetricSummary] = []
+    for number_to_open in opening_counts:
+        remaining_seconds = time_limit_seconds - (time.monotonic() - started_at)
+        if remaining_seconds <= 0:
+            timed_out = True
+            attempts.append(
+                PMedianSearchAttempt(
+                    number_to_open=number_to_open,
+                    status="timeout",
+                    optimality="not_available",
+                )
+            )
+            break
+        try:
+            candidate_solution, _branches, attempt_timed_out = enumerate_p_median(
+                prepared.demand_cities,
+                prepared.warehouses,
+                routes,
+                costs,
+                number_to_open,
+                fixed_existing_ids,
+                optional_existing_ids,
+                remaining_seconds,
+                constraints,
+            )
+        except SolverUnavailable as error:
+            unavailable_message = str(error)
+            attempts.append(
+                PMedianSearchAttempt(
+                    number_to_open=number_to_open,
+                    status="unavailable",
+                    optimality="not_available",
+                )
+            )
+            break
+        if candidate_solution is None:
+            timed_out = attempt_timed_out
+            attempts.append(
+                PMedianSearchAttempt(
+                    number_to_open=number_to_open,
+                    status="timeout" if attempt_timed_out else "infeasible",
+                    optimality="not_available" if attempt_timed_out else "proven",
+                )
+            )
+            if attempt_timed_out:
+                break
+            continue
+        attempt_status = "timeout" if attempt_timed_out else "optimal"
+        attempt_optimality = "feasible_only" if attempt_timed_out else "proven"
+        attempt_coverage = coverage_metrics(
+            candidate_solution.assignment,
+            sorted(set(service_targets)),
+        )
+        attempts.append(
+            PMedianSearchAttempt(
+                number_to_open=number_to_open,
+                status=attempt_status,
+                optimality=attempt_optimality,
+                objective_value=candidate_solution.objective_value,
+                coverage=attempt_coverage,
+            )
+        )
+        solved = candidate_solution
+        solved_number_to_open = number_to_open
+        timed_out = attempt_timed_out
+        solution_coverage = attempt_coverage
+        break
     if solved is None:
         status = (
             "timeout" if timed_out else ("unavailable" if unavailable_message else "infeasible")
@@ -1341,6 +1508,9 @@ def solve_p_median(
             opened_candidate_ids=[],
             closed_existing_ids=[],
             optimality="not_available",
+            opening_policy=opening_policy,
+            first_feasible_number_to_open=None,
+            search_attempts=attempts,
             message=unavailable_message or "No feasible p-median solution was found.",
             input_identity=input_identity,
         )
@@ -1362,6 +1532,9 @@ def solve_p_median(
                 sorted(set(service_targets)),
             ),
             optimality="feasible_only" if timed_out else "proven",
+            opening_policy=opening_policy,
+            first_feasible_number_to_open=solved_number_to_open,
+            search_attempts=attempts,
             message="The solver returned a feasible solution before the time limit."
             if timed_out
             else None,
@@ -1389,6 +1562,9 @@ def solve_p_median(
         input_identity=input_identity,
         status=solution.status,
         optimality=solution.optimality,
+        opening_policy=solution.opening_policy,
+        first_feasible_number_to_open=solution.first_feasible_number_to_open,
+        search_attempts=solution.search_attempts,
         active_warehouse_count=len(solution.active_warehouse_ids),
         opened_candidate_ids=solution.opened_candidate_ids,
         closed_existing_ids=solution.closed_existing_ids,

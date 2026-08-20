@@ -7,7 +7,7 @@ metadata:
 
 # 仓网地图与交付
 
-只从精确分析、比较或分配结果生成 distribution、coverage 或 comparison GeoJSON。展示已有基线时携带精确 `baseline_ref`；已有前后方案比较时只使用 `compare_network_scenarios` 或 `assess_facility_change` 返回的单一 `plan_comparison_ref`，不分别拼装多个引用，也不为地图重算业务结果。
+只从精确分析、比较或分配结果生成 distribution、coverage 或 comparison GeoJSON。展示已有基线时携带精确 `baseline_ref`。`assess_facility_change` 的单仓增减或搬迁结果必须把其 `scenario_ref` 作为 `assignment_result_ref` 传给 `prepare_network_coverage_map`；该 Tool 返回的 `plan_comparison_ref` 只用于比较指标或报告，不能传给只支持 baseline-versus-facility-location 的 `prepare_network_comparison_map`。只有已有基线与 `facility_location_solution.v3` 选址方案的完整比较时，才把对应单一 `plan_comparison_ref` 传给 `prepare_network_comparison_map`；不分别拼装多个引用，也不为地图重算业务结果。
 
 将 Planner 返回的完整 `data_ref`（包括 profile）原样交给 `map_utils`；图层、颜色、图例和 hover 只使用 profile 已声明的字段和类型。地图 Tool 返回的 embed 指令必须原样作为独立段落返回。
 

@@ -429,7 +429,7 @@ async def _run_network_s3_then_s2(
                     "normalized_input_ref": normalized_ref,
                     "route_matrix_ref": routes_ref,
                     "cost_matrix_ref": costs_ref,
-                    "number_to_open": 2,
+                    "opening_policy": {"kind": "exact", "number_to_open": 2},
                     "existing_warehouse_policy": {"mode": "keep_all_existing"},
                     "service_targets": [6, 12, 18],
                     "time_limit_seconds": 30,

@@ -1,0 +1,28 @@
+{
+  "schema_version": "warehouse_quote_mean_calculation.v1",
+  "prepared_input_relative_path": "outputs/warehouse-network/prepared/prepared-network.json",
+  "input_identity": {
+    "schema_version": "prepared_network_input.v1",
+    "content_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "total_quote_count": 580,
+  "method": "observed_quote_mean",
+  "tool_version": "observed-quote-mean.v1",
+  "formula": "arithmetic_mean(price_per_vehicle / vehicle_capacity)",
+  "considered_quote_count": 580,
+  "ignored_quote_count": 0,
+  "rules": [
+    {
+      "layer": "last_mile",
+      "currency": "IDR",
+      "quote_count": 550,
+      "mean_cost_per_demand_unit": 1968472.727273
+    },
+    {
+      "layer": "linehaul",
+      "currency": "IDR",
+      "quote_count": 30,
+      "mean_cost_per_demand_unit": 1252333.333333
+    }
+  ]
+}

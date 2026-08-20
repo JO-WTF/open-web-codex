@@ -12,3 +12,8 @@ Platform validates and serves the exact Markdown bytes for reading and download.
 
 The Platform consumes these files only as validation fixtures. It does not
 interpret warehouse fields or define a second domain contract.
+
+`warehouse_quote_mean_calculation.v1.json` is the bounded script-evidence fixture.
+Its input identity is synthetic; production evidence is accepted only when the
+Planner re-derives the same total count, per-layer counts, currency, formula and
+means from the exact prepared Workspace input.

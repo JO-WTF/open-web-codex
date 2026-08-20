@@ -11,13 +11,14 @@ metadata:
 
 Root 没有仓网 MCP 数据面；上传文件已由 Workspace 授权并交给 Data child，不能通过 `list_mcp_resources`、`list_mcp_resource_templates` 或 `read_mcp_resource` 预检文件，也不能为此请求额外审批。需要协作时只发现原生协作 Tool，完成 child terminal 后立即交接或向用户交付，不继续探索性调用。
 
-数据发现、映射、标准化和地理补全由 `data_agent`（昵称 `Wanwan`）处理；路线、分析、选址、地图和报告由 `network_agent` 处理。Data→Network 的唯一业务数据交接是 Data Tool 返回的精确 `prepared_input_relative_path` 与 `input_identity`；路线、成本和方案仍以 Network Tool 的精确 ResourceRef 交接。Root 不读取或搬运业务内容；child 的 Tool 终态失败、拒绝、取消、超时或输入缺失必须如实报告并停止当前请求。
+数据发现、映射、标准化和地理补全由 `data_agent`（昵称 `Wanwan`）处理；路线、分析、选址、地图和报告由 `network_agent` 处理。Data→Network 的唯一业务数据交接是 Data Tool 返回的精确 `prepared_input_relative_path` 与 `input_identity`；路线、成本和方案仍以 Network Tool 的精确 ResourceRef 交接。Root 不读取或搬运业务内容。只有缺少前置引用、参数/schema 不完整且尚未产生副作用时，才允许在同一 child 上做一次有界纠正后继续；权限拒绝、身份不一致、取消、超时、外部失败、能力不可用或 Tool 已执行的终态失败必须如实报告并停止当前请求。
 
 ## Child Skill 选择
 
 - Data child 的 `items` 必须包含精确 `$warehouse-data` Skill item 和一个任务 Text item。
 - 12h 基线与地图的 Network child `items` 必须依次包含 `$warehouse-route-planning`、`$warehouse-network-analysis`、`$warehouse-map-delivery` Skill item，再包含一个任务 Text item；不加载 optimization Skill。
 - 只有设施变化或选址求解才额外包含 `$warehouse-network-optimization` Skill item。
+- 创建 Data child 必须显式传 `agent_type="data_agent"`，创建 Network child 必须显式传 `agent_type="network_agent"`；不得省略 `agent_type` 而产生 default child，也不得让一个 child 再创建另一个业务 child。Data 与 Network 都必须是当前 Root 的直接 child。
 - Skill item 的 `path` 必须按当前 Root catalog 的 `### Skill roots` 展开对应短 locator，得到同一 entry 的绝对 `SKILL.md` 路径；不得改名、跨 root 查找或构造不存在的路径。新 child Turn 没有精确结构化 Skill item 时返回 `needs_context` 并停止；不得让 child 用 `read_mcp_resource`、shell、历史 Skill 内容或路径猜测补读正文。
 
 ## Child 延续与上下文

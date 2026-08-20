@@ -1583,7 +1583,7 @@ mod tests {
     #[test]
     fn warehouse_supervisor_skill_does_not_retry_terminal_child_failures() {
         assert!(SUPERVISOR_SKILL.contains(
-            "child 的 Tool 终态失败、拒绝、取消、超时或输入缺失必须如实报告并停止当前请求"
+            "权限拒绝、身份不一致、取消、超时、外部失败、能力不可用或 Tool 已执行的终态失败必须如实报告并停止当前请求"
         ));
         assert!(ANALYSIS_SKILL.contains("缺少输入或 Tool 终态失败时返回 typed 结果并停止"));
     }

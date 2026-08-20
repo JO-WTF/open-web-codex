@@ -53,8 +53,11 @@ Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码�
    app-server 前预检/stage/publish或精确清理 managed destinations。运行中变更返回
    `restartRequired`，不伪造热切换。
 8. `ready` 不进入数据库；GET 状态只在当前 Runtime instance 对 trusted authorized Workspace
-   调用官方 `skills/list(forceReload)` 后给出。Role 没有官方静态 list，保持 configured 单列，
-   真实执行仍由 native spawn/MCP acceptance 证明。
+   调用官方 `skills/list(forceReload)` 后给出。单 Agent 只有 Root Role 时保持 `Configured`，
+   明确表示配置已收敛但尚未观察 child/MCP 执行；不伪造 Runtime `Ready`，真实执行仍由 native
+   spawn/MCP acceptance 证明。多 Agent readiness 只检查每个声明 Role 最新观测到的 child Thread；
+   历史、已卸载 Thread 不进入当前 inventory。冷启动后最新 child 尚未加载而无法查询 inventory 时
+   保持 `Configured`，只有完整观察全部声明 server 才提升为 `Ready`。
 9. 当前仍不建立真实生产模型质量验收、Web Builder、Catalog、Release 或 Marketplace，也不把
    Settings Agents 误写成 Copilot 创作入口。
 10. 存在可用包时，新建 Thread 列出全部 configured package 并要求用户显式选择；Task 固定
@@ -534,15 +537,16 @@ producer-time verifier snapshot，恢复不依赖届时 active package registry�
    Network Tool 按当前分析范围直接物化并验证，不重复询问估算参数或让模型重读 raw 文件。导航则先
    生成精确缺失 lane request，在费用确认后由地理 Tool 自动执行并导入验证结果。
 2. 优先使用用户路线报价；用户明确要求用现有报价均值外推时，由 Cost Tool 对 exact prepared input
-   的完整报价按层计算 `mean(price_per_vehicle / vehicle_capacity)`，返回报价数、币种、公式和均值 provenance，
-   不让模型从 preview 推导。用户明确要求脚本证据时，单 Agent 可对同一 prepared input 执行受限脚本并把
-   bounded 结果写入 calculations 目录；缺失路线且没有任何已确认计价口径时才询问，禁止以零成本填补。
+   的完整报价按层计算 `mean(price_per_vehicle / vehicle_capacity)`，返回 `warehouse_quote_mean_calculation.v1`
+   所需的 prepared identity、完整报价总数、分层报价数、币种、公式和均值 provenance，不让模型从 preview 推导。
+   用户明确要求脚本证据时，单 Agent 可对同一 prepared input 执行受限脚本并把同一 typed evidence 写入
+   calculations 目录；Planner 重新读取完整报价并逐字段校验后绑定证据。缺失路线且没有任何已确认计价口径时才询问，禁止以零成本填补。
 3. 按成本优先或时效优先计算覆盖；计算一个或多个 SLA 目标的满足率，同时明确返回按城市
    数量与按需求量加权的两种口径及确定性的未覆盖城市，模型不得自行汇总。
 4. 计算全网和分仓运输成本，完成增仓、减仓、搬迁三类模拟。
-5. 执行 p-median：已有仓默认固定；用户给出 `p` 时按该值求解。用户只要求达到指定需求加权 SLA 的
-   最优分布时，从 `p=0` 递增做有界可行性搜索，以最少新增仓优先、同一 `p` 下运输成本最低，首个 proven
-   feasible solution 即停止；只有用户明确许可时才允许指定已有仓关闭。
+5. 执行 p-median：已有仓默认固定；用户给出 `p` 时传 `opening_policy.kind=exact`。用户只要求达到指定需求加权 SLA 的
+   最优分布时，传一次 `opening_policy.kind=minimum_feasible`，Planner 在一个总时间预算内从 `p=0` 递增做有界可行性搜索，
+   以最少新增仓优先、同一 `p` 下运输成本最低，并返回每个 `p` 的可行性、首个可行仓数和最终 coverage；只有用户明确许可时才允许指定已有仓关闭。
 6. 执行给定 SLA 下的成本最优规划，输出覆盖、时效、距离、成本和仓库变动。
 7. 当空间关系有助理解时生成对话内交互地图卡片；Network 从 exact 分配结果产生城市、设施、实际
    分配和城市→仓库 LineString 的通用覆盖 GeoJSON，Maps 只消费该精确几何 ref。结构化计算明细与

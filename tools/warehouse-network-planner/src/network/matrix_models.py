@@ -205,11 +205,22 @@ class QuoteMeanCostRuleEvidence(MatrixModel):
 
 
 class ObservedQuoteMeanCostEvidence(MatrixModel):
-    method: Literal["observed_quote_mean"] = "observed_quote_mean"
-    tool_version: Literal["observed-quote-mean.v1"] = "observed-quote-mean.v1"
-    formula: Literal["arithmetic_mean(price_per_vehicle / vehicle_capacity)"] = (
-        "arithmetic_mean(price_per_vehicle / vehicle_capacity)"
-    )
+    """Stable evidence produced by a full prepared-input quote aggregation.
+
+    The evidence file is intentionally small enough to pass through the Agent
+    context, while the Planner re-derives and validates it from the complete
+    prepared input before accepting it.  This keeps a user-authored script
+    auditable without allowing its numeric output to become a second source of
+    business truth.
+    """
+
+    schema_version: Literal["warehouse_quote_mean_calculation.v1"]
+    prepared_input_relative_path: str = Field(min_length=1, max_length=1024)
+    input_identity: PlanningInputIdentity
+    total_quote_count: int = Field(gt=0)
+    method: Literal["observed_quote_mean"]
+    tool_version: Literal["observed-quote-mean.v1"]
+    formula: Literal["arithmetic_mean(price_per_vehicle / vehicle_capacity)"]
     considered_quote_count: int = Field(gt=0)
     ignored_quote_count: int = Field(ge=0)
     rules: list[QuoteMeanCostRuleEvidence] = Field(min_length=1)
@@ -235,6 +246,7 @@ class CostMatrix(MatrixModel):
     calculation_rule: CostCalculationPolicy | None = None
     calculation_rule_source: Literal["explicit", "observed_quote_mean"] | None = None
     calculation_rule_evidence: ObservedQuoteMeanCostEvidence | None = None
+    calculation_rule_evidence_path: str | None = Field(default=None, max_length=1024)
     stats: CostMatrixStats
     input_identity: PlanningInputIdentity
 

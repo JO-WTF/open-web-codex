@@ -7,7 +7,7 @@ metadata:
 
 # 仓网地图与交付
 
-只从精确分析、比较或分配结果生成 distribution、coverage 或 comparison GeoJSON。将 Planner 返回的完整 `data_ref`（包括 profile）原样交给 `map_utils`；图层、颜色、图例和 hover 只使用 profile 已声明的字段和类型。地图 Tool 返回的 embed 指令必须原样作为独立段落返回。
+只从精确分析、比较或分配结果生成 distribution、coverage 或 comparison GeoJSON。`assess_facility_change` 的单仓增减或搬迁结果必须把其 `scenario_ref` 作为 `assignment_result_ref` 传给 `prepare_network_coverage_map`；该 Tool 返回的 `plan_comparison_ref` 只用于比较指标或报告，不能传给只支持 baseline-versus-facility-location 的 `prepare_network_comparison_map`。只有已有基线与 `facility_location_solution.v3` 选址方案的完整比较时，才把对应单一 `plan_comparison_ref` 传给 `prepare_network_comparison_map`。将 Planner 返回的完整 `data_ref`（包括 profile）原样交给 `map_utils`；图层、颜色、图例和 hover 只使用 profile 已声明的字段和类型。地图 Tool 返回的 embed 指令必须原样作为独立段落返回。
 
 仓网点、线、面地图优先调用 `create_network_map_card`，传入 Network Tool 返回的精确 GeoJSON `data_ref`。用户要求行政区边界时，先将 Data 已确认的 Workspace GeoJSON 通过 `publish_workspace_geojson(require_polygon=true)` 发布成精确 `boundary_data_ref`，再传入地图 Tool。该 Tool 使用 `kind="warehouse"`、`warehouse_type`、`is_existing` 三个正交字段生成现有中心仓、现有 XD、候选中心仓/XD、启用候选仓和关闭现有仓图层；不要自行拼 `sources`、`layers` 或猜字段。只有明确需要超出固定领域表达的样式时，才按 profile 直接调用低层 `create_map_card`。
 

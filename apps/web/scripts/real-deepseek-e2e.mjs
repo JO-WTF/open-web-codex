@@ -54,14 +54,14 @@ const balikpapanCandidateWarehouseId = "WH-CANDIDATE-BALIKPAPAN";
 const fullNetworkTaskPrompt = [
   "根据已上传的 mock_data 文件，先计算当前仓网的 12 小时时效达标率。",
   "在得出上述基线后，评估只新增候选仓 Balikpapan（WH-CANDIDATE-BALIKPAPAN）带来的 12 小时时效达标率变化；必须分别给出城市数量口径和需求量加权口径的变化率。",
-  "请使用当前 warehouse-network-copilot 的 native multi-agent 协同：清理 raw data，",
-  "将处理后的输入写入 outputs/warehouse-network/prepared/，由 network agent 使用同一基线和路线矩阵完成单仓变更评估及地图交付。不要把生成文件写入 Workspace 根目录或 mock_data，不要模拟业务结果，不要使用 shell 代替 MCP。",
+  "请使用当前 warehouse-network-copilot 的 native multi-agent 协同：Root 以 agent_type=data_agent 和 agent_type=network_agent 直接创建两个声明角色，禁止 default child 或 child 再派生业务 child；清理 raw data，",
+  "将处理后的输入写入 outputs/warehouse-network/prepared/，由 network agent 使用同一基线和路线矩阵完成单仓变更评估及地图交付。只交付对话地图，不生成报告或其他交付文件；地图成功后立即结束 child，不再调用任何 Tool。network agent 不枚举 MCP Resources。不要把生成文件写入 Workspace 根目录或 mock_data，不要模拟业务结果，不要使用 shell 代替 MCP。",
 ].join("\n");
 const singleAgentTaskPrompt = [
   "根据已上传的 mock_data 文件，由当前单 Agent 独立计算仓库分布方案：在保留全部已有仓的前提下，使 12 小时需求加权时效达标率至少达到 90%。",
-  "路线统一使用 haversine，绕路系数 1.2、平均速度 42 kph；从新增候选仓数 0 开始递增，选择满足约束的最少新增仓方案，同一仓数下运输成本最低。",
+  "路线统一使用 haversine，绕路系数 1.2、平均速度 42 kph；使用一次 opening_policy.kind=minimum_feasible 的有界求解，选择满足约束的最少新增仓方案，同一仓数下运输成本最低，不要循环调用多个 solve_p_median。",
   "成本必须用完整 prepared input 中全部现有报价按 layer 计算 arithmetic_mean(price_per_vehicle / vehicle_capacity)，不得从 preview 行推算。",
-  "本次明确要求脚本证据：先用 apply_patch 在 outputs/warehouse-network/calculations/ create-new Python 脚本，再执行脚本并把输入 SHA-256、完整报价数、分层报价数、币种、公式和均值写入同目录 JSON；随后将这些均值作为 explicit cost_policy 传给 plan_cost_matrix。",
+  "本次明确要求脚本证据：先在 outputs/warehouse-network/calculations/ create-new Python 脚本，再执行脚本并把 warehouse_quote_mean_calculation.v1 typed evidence（prepared path、输入 SHA-256、完整报价总数、分层报价数、币种、公式和均值）写入同目录 JSON；随后以 observed_quote_mean cost_policy 和 quote_mean_evidence_relative_path 传给 plan_cost_matrix，由 Planner 校验证据。",
   "数据准备文件写入 outputs/warehouse-network/prepared/。不要创建或调用 child Agent，不要把文件写到 Workspace 根目录或 mock_data，不生成地图或报告，不模拟业务结果。",
 ].join("\n");
 const results = [];
@@ -95,6 +95,18 @@ function sanitize(value) {
     text = text.split(secret).join("[redacted]");
   }
   return text;
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalJson(entry)]),
+    );
+  }
+  return value;
 }
 
 function log(value) {
@@ -466,12 +478,16 @@ function facilityChangeEvidence(event) {
   const addedWarehouseIds = Array.isArray(structured.added_warehouse_ids)
     ? structured.added_warehouse_ids.filter((id) => typeof id === "string").slice(0, 8)
     : [];
+  const removedWarehouseIds = Array.isArray(structured.removed_warehouse_ids)
+    ? structured.removed_warehouse_ids.filter((id) => typeof id === "string").slice(0, 8)
+    : [];
   const coverageAtTarget = Array.isArray(structured.coverage)
     ? structured.coverage.find((metric) => metric?.target_hours === serviceTargetHours)
     : undefined;
   const delta = coverageAtTarget?.delta;
   return {
     added_warehouse_ids: addedWarehouseIds,
+    removed_warehouse_ids: removedWarehouseIds,
     target_hours: coverageAtTarget?.target_hours,
     city_coverage_rate_delta:
       typeof delta?.city_coverage_rate === "number" ? delta.city_coverage_rate : undefined,
@@ -737,6 +753,8 @@ function runSelfTests() {
     "stale_tool",
   );
   assert.match(fullNetworkTaskPrompt, /Balikpapan（WH-CANDIDATE-BALIKPAPAN）/);
+  assert.match(singleAgentTaskPrompt, /opening_policy\.kind=minimum_feasible/);
+  assert.match(singleAgentTaskPrompt, /warehouse_quote_mean_calculation\.v1/);
   assertBalikpapanFacilityChange(
     {
       payload: {
@@ -746,8 +764,6 @@ function runSelfTests() {
             before_ref: { resource_schema: "network_baseline.v2" },
             scenario: {
               add_warehouse_ids: [balikpapanCandidateWarehouseId],
-              remove_warehouse_ids: [],
-              relocations: [],
               objective: "min_time",
               service_targets: [serviceTargetHours],
             },
@@ -755,6 +771,7 @@ function runSelfTests() {
           result: {
             structuredContent: {
               added_warehouse_ids: [balikpapanCandidateWarehouseId],
+              removed_warehouse_ids: [],
               coverage: [{
                 target_hours: serviceTargetHours,
                 delta: {
@@ -810,10 +827,11 @@ function assertBalikpapanFacilityChange(event, providerIdValue) {
     scenario.add_warehouse_ids.length === 1 &&
     scenario.add_warehouse_ids[0] === balikpapanCandidateWarehouseId;
   const noRemovalOrRelocation =
-    Array.isArray(scenario?.remove_warehouse_ids) &&
-    scenario.remove_warehouse_ids.length === 0 &&
-    Array.isArray(scenario?.relocations) &&
-    scenario.relocations.length === 0;
+    (scenario?.remove_warehouse_ids === undefined ||
+      (Array.isArray(scenario.remove_warehouse_ids) &&
+        scenario.remove_warehouse_ids.length === 0)) &&
+    (scenario?.relocations === undefined ||
+      (Array.isArray(scenario.relocations) && scenario.relocations.length === 0));
   const hasExactServiceTarget =
     Array.isArray(scenario?.service_targets) &&
     scenario.service_targets.length === 1 &&
@@ -822,6 +840,7 @@ function assertBalikpapanFacilityChange(event, providerIdValue) {
   const resultMatchesRequest =
     evidence?.added_warehouse_ids.length === 1 &&
     evidence.added_warehouse_ids[0] === balikpapanCandidateWarehouseId &&
+    evidence.removed_warehouse_ids.length === 0 &&
     evidence.target_hours === serviceTargetHours &&
     Number.isFinite(evidence.city_coverage_rate_delta) &&
     Number.isFinite(evidence.demand_weighted_coverage_rate_delta);
@@ -894,6 +913,40 @@ function assertGoldenTimeline(timeline, rounds, providerIdValue) {
   const roleByThread = new Map(
     (timeline?.threads ?? []).map((thread) => [thread.thread_id, thread.role]),
   );
+  const rootThreads = (timeline?.threads ?? []).filter((thread) => !thread.parent_thread_id);
+  const dataThreads = (timeline?.threads ?? []).filter((thread) => thread.role === "data_agent");
+  const networkThreads = (timeline?.threads ?? []).filter(
+    (thread) => thread.role === "network_agent",
+  );
+  const unexpectedChildren = (timeline?.threads ?? []).filter(
+    (thread) =>
+      thread.parent_thread_id && !["data_agent", "network_agent"].includes(thread.role),
+  );
+  if (
+    rootThreads.length !== 1 ||
+    dataThreads.length !== 1 ||
+    networkThreads.length !== 1 ||
+    unexpectedChildren.length > 0 ||
+    dataThreads[0]?.parent_thread_id !== rootThreads[0]?.thread_id ||
+    networkThreads[0]?.parent_thread_id !== rootThreads[0]?.thread_id
+  ) {
+    throw new NativeRuntimeBlocker("golden_chain_agent_topology_invalid", {
+      provider_id: providerIdValue,
+      threads: timeline?.threads ?? [],
+    });
+  }
+  const forbiddenNetworkResourceInventory = (timeline?.mcp ?? []).filter(
+    (item) =>
+      ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"].includes(
+        item.tool,
+      ) && roleByThread.get(item.thread_id) === "network_agent",
+  );
+  if (forbiddenNetworkResourceInventory.length > 0) {
+    throw new NativeRuntimeBlocker("golden_chain_network_resource_inventory_invalid", {
+      provider_id: providerIdValue,
+      resource_inventory: forbiddenNetworkResourceInventory,
+    });
+  }
   const resourceReads = (timeline?.mcp ?? []).filter(
     (item) => item.tool === "read_mcp_resource" && item.event_type === "codex.item.completed",
   );
@@ -976,18 +1029,23 @@ async function ensureCopilotActive() {
   const target = installationId(status, copilotPackageId);
   assert(target?.active === true);
   if (target.restartRequired ?? target.restart_required) {
+    const activated = await api("/profile/copilots/activate", {
+      method: "POST",
+      body: { packageId: copilotPackageId },
+    });
     throw new NativeRuntimeBlocker("copilot_restart_required", {
       package_id: copilotPackageId,
       state: target.state,
-      restart_required: true,
+      restart_required:
+        activated.restartRequired ?? activated.restart_required ?? true,
+      reason: "package_revision_refreshed",
     });
   }
   const stateValue = String(target.state).toLowerCase();
-  const rootOnlyConfigured =
-    isSingleAgentScenario &&
+  const executionConfigured =
     stateValue === "configured" &&
     (target.agentRolesConfigured ?? target.agent_roles_configured) === true;
-  if (stateValue !== "ready" && !rootOnlyConfigured) {
+  if (stateValue !== "ready" && !executionConfigured) {
     throw new NativeRuntimeBlocker("copilot_runtime_unavailable", {
       package_id: copilotPackageId,
       state: target.state,
@@ -1887,8 +1945,13 @@ async function runSingleAgentGate(provider) {
         eventData(event)?.status === "completed",
     );
     const costResult = costEvent ? eventData(costEvent)?.result?.structuredContent : undefined;
-    if (!costEvent || costResult?.calculation_rule_source !== "explicit") {
-      throw new NativeRuntimeBlocker("single_agent_explicit_mean_cost_not_completed", {
+    if (
+      !costEvent ||
+      costResult?.calculation_rule_source !== "observed_quote_mean" ||
+      costResult?.calculation_rule_evidence_path === undefined ||
+      eventData(costEvent)?.arguments?.cost_policy?.kind !== "observed_quote_mean"
+    ) {
+      throw new NativeRuntimeBlocker("single_agent_typed_mean_cost_not_completed", {
         provider_id: provider.id,
         cost_result: safeStructuredSummary(costResult),
         native_tool_names: nativeNames,
@@ -1901,18 +1964,29 @@ async function runSingleAgentGate(provider) {
         event.event_type === "codex.item.completed" &&
         eventData(event)?.status === "completed",
     );
-    const successfulSolve = solveEvents.findLast((event) => {
-      const result = eventData(event)?.result?.structuredContent;
-      const metric = Array.isArray(result?.coverage)
-        ? result.coverage.find((entry) => entry?.target_hours === serviceTargetHours)
-        : undefined;
-      return (
-        ["optimal", "feasible"].includes(result?.status) &&
-        typeof metric?.demand_weighted_coverage_rate === "number" &&
-        metric.demand_weighted_coverage_rate >= 0.9
-      );
-    });
-    if (!successfulSolve) {
+    if (solveEvents.length !== 1) {
+      throw new NativeRuntimeBlocker("single_agent_multiple_solve_calls", {
+        provider_id: provider.id,
+        solve_count: solveEvents.length,
+        native_tool_names: nativeNames,
+      });
+    }
+    const successfulSolve = solveEvents[0];
+    const solveResult = eventData(successfulSolve)?.result?.structuredContent;
+    const metric = Array.isArray(solveResult?.coverage)
+      ? solveResult.coverage.find((entry) => entry?.target_hours === serviceTargetHours)
+      : undefined;
+    const attemptCounts = Array.isArray(solveResult?.search_attempts)
+      ? solveResult.search_attempts.map((attempt) => attempt?.number_to_open)
+      : [];
+    if (
+      !["optimal", "feasible"].includes(solveResult?.status) ||
+      solveResult?.opening_policy?.kind !== "minimum_feasible" ||
+      solveResult?.first_feasible_number_to_open !== 2 ||
+      JSON.stringify(attemptCounts) !== JSON.stringify([0, 1, 2]) ||
+      typeof metric?.demand_weighted_coverage_rate !== "number" ||
+      metric.demand_weighted_coverage_rate < 0.9
+    ) {
       throw new NativeRuntimeBlocker("single_agent_90pct_solution_not_completed", {
         provider_id: provider.id,
         solve_results: solveEvents.map((event) => {
@@ -1926,7 +2000,7 @@ async function runSingleAgentGate(provider) {
         native_tool_names: nativeNames,
       });
     }
-    const solution = eventData(successfulSolve)?.result?.structuredContent;
+    const solution = solveResult;
     const targetCoverage = solution.coverage.find(
       (metric) => metric.target_hours === serviceTargetHours,
     );
@@ -1956,9 +2030,18 @@ async function runSingleAgentGate(provider) {
         generated_workspace_files_truncated: generatedWorkspaceFiles.length > 60,
       });
     }
-    const calculationJsonPath = calculationFiles.find((relativePath) =>
-      relativePath.endsWith(".json"),
-    );
+    const calculationJsonPath = costResult.calculation_rule_evidence_path;
+    if (
+      typeof calculationJsonPath !== "string" ||
+      !calculationFiles.includes(calculationJsonPath) ||
+      !calculationJsonPath.endsWith(".json")
+    ) {
+      throw new NativeRuntimeBlocker("single_agent_typed_evidence_path_invalid", {
+        provider_id: provider.id,
+        evidence_path: calculationJsonPath,
+        calculation_files: calculationFiles,
+      });
+    }
     const calculationResponse = await api(
       "/workspaces/" +
         encodeURIComponent(record.workspace.id) +
@@ -1980,57 +2063,56 @@ async function runSingleAgentGate(provider) {
         path: calculationJsonPath,
       });
     }
-    const costRules = eventData(costEvent)?.arguments?.cost_policy?.rules;
-    const evidenceText = JSON.stringify(calculation);
-    const scalarValues = [];
-    const collectScalars = (value) => {
-      if (value === null || value === undefined) return;
-      if (typeof value === "string" || typeof value === "number") {
-        scalarValues.push(value);
-        return;
-      }
-      if (Array.isArray(value)) {
-        for (const entry of value) collectScalars(entry);
-        return;
-      }
-      if (typeof value === "object") {
-        for (const entry of Object.values(value)) collectScalars(entry);
-      }
-    };
-    collectScalars(calculation);
-    const numericValues = scalarValues
-      .map((value) => (typeof value === "number" ? value : Number(value)))
-      .filter(Number.isFinite);
     const expectedMeans = {
       last_mile: 1_968_472.727273,
       linehaul: 1_252_333.333333,
     };
+    const expectedEvidenceKeys = [
+      "considered_quote_count",
+      "formula",
+      "ignored_quote_count",
+      "input_identity",
+      "method",
+      "prepared_input_relative_path",
+      "rules",
+      "schema_version",
+      "tool_version",
+      "total_quote_count",
+    ];
+    const evidenceKeys = Object.keys(calculation).sort();
     const calculationValid =
-      scalarValues.some(
-        (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
-      ) &&
-      evidenceText.includes("price_per_vehicle") &&
-      evidenceText.includes("vehicle_capacity") &&
-      evidenceText.includes("IDR") &&
-      [580, 550, 30].every((expected) => numericValues.includes(expected)) &&
-      Object.values(expectedMeans).every((expected) =>
-        numericValues.some((actual) => Math.abs(actual - expected) < 1e-3),
-      ) &&
-      Array.isArray(costRules) &&
+      JSON.stringify(evidenceKeys) === JSON.stringify(expectedEvidenceKeys) &&
+      calculation.schema_version === "warehouse_quote_mean_calculation.v1" &&
+      calculation.method === "observed_quote_mean" &&
+      calculation.tool_version === "observed-quote-mean.v1" &&
+      calculation.formula === "arithmetic_mean(price_per_vehicle / vehicle_capacity)" &&
+      typeof calculation.prepared_input_relative_path === "string" &&
+      calculation.prepared_input_relative_path.startsWith("outputs/warehouse-network/prepared/") &&
+      /^[a-f0-9]{64}$/.test(calculation.input_identity?.content_sha256 ?? "") &&
+      calculation.total_quote_count === 580 &&
+      calculation.considered_quote_count === 580 &&
+      calculation.ignored_quote_count === 0 &&
+      Array.isArray(calculation.rules) &&
+      calculation.rules.length === 2 &&
       Object.entries(expectedMeans).every(([layer, expectedMean]) => {
-        const rule = costRules.find((entry) => entry?.layer === layer);
+        const rule = calculation.rules.find((entry) => entry?.layer === layer);
         return (
           rule?.currency === "IDR" &&
-          rule?.cost_per_km_per_demand_unit === 0 &&
-          Number.isFinite(rule?.fixed_cost_per_demand_unit) &&
-          Math.abs(rule.fixed_cost_per_demand_unit - expectedMean) < 1e-3
+          Number.isInteger(rule?.quote_count) &&
+          rule.quote_count === (layer === "last_mile" ? 550 : 30) &&
+          Number.isFinite(rule?.mean_cost_per_demand_unit) &&
+          Math.abs(rule.mean_cost_per_demand_unit - expectedMean) < 1e-3
         );
-      });
+      }) &&
+      costResult.calculation_rule_evidence_path === calculationJsonPath &&
+      JSON.stringify(canonicalJson(costResult.calculation_rule_evidence)) ===
+        JSON.stringify(canonicalJson(calculation));
     if (!calculationValid) {
       throw new NativeRuntimeBlocker("single_agent_calculation_policy_mismatch", {
         provider_id: provider.id,
         evidence_keys: Object.keys(calculation),
-        cost_rules: costRules,
+        evidence_rules: calculation.rules,
+        cost_result: safeStructuredSummary(costResult),
       });
     }
     return {

@@ -6,7 +6,6 @@ from decimal import Decimal
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
 from supply_chain_planner.network.models import PlanningInputIdentity
 
 
@@ -172,8 +171,24 @@ ExistingWarehousePolicy = Annotated[
 ]
 
 
-class PMedianRequest(OptimizationModel):
+class ExactOpeningPolicy(OptimizationModel):
+    kind: Literal["exact"] = "exact"
     number_to_open: int = Field(ge=0)
+
+
+class MinimumFeasibleOpeningPolicy(OptimizationModel):
+    kind: Literal["minimum_feasible"] = "minimum_feasible"
+    maximum_number_to_open: int | None = Field(default=None, ge=0)
+
+
+OpeningPolicySelection = Annotated[
+    ExactOpeningPolicy | MinimumFeasibleOpeningPolicy,
+    Field(discriminator="kind"),
+]
+
+
+class PMedianRequest(OptimizationModel):
+    opening_policy: OpeningPolicySelection
     existing_warehouse_policy: ExistingWarehousePolicy
     time_limit_seconds: float = Field(default=30, gt=0, le=300)
 
@@ -181,6 +196,14 @@ class PMedianRequest(OptimizationModel):
 class ServiceCoverageConstraint(OptimizationModel):
     target_hours: float = Field(gt=0)
     minimum_coverage: float = Field(gt=0, le=1)
+
+
+class PMedianSearchAttempt(OptimizationModel):
+    number_to_open: int = Field(ge=0)
+    status: Literal["optimal", "feasible", "timeout", "infeasible", "unavailable"]
+    optimality: Literal["proven", "feasible_only", "not_available"]
+    objective_value: float | None = Field(default=None, ge=0)
+    coverage: list[CoverageMetricSummary] = Field(default_factory=list)
 
 
 class PMedianSolution(OptimizationModel):
@@ -195,6 +218,9 @@ class PMedianSolution(OptimizationModel):
     best_bound: float | None = None
     service: list[ServiceMetric] = Field(default_factory=list)
     optimality: Literal["proven", "feasible_only", "not_available"]
+    opening_policy: OpeningPolicySelection
+    first_feasible_number_to_open: int | None = Field(default=None, ge=0)
+    search_attempts: list[PMedianSearchAttempt] = Field(default_factory=list)
     message: str | None = None
     input_identity: PlanningInputIdentity
 
