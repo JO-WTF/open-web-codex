@@ -13,4 +13,4 @@ metadata:
 
 首次准备必须保留全部已确认候选仓；用户要求地图展示候选仓时，候选 source 必须纳入该输入，即使 baseline 使用 `existing_only`。`existing_only` 只限制 Network 的计算范围，不能删除已确认候选仓。任何候选、需求、现网仓、当前分配、路线事实或报价变化都完整准备一个新的 Workspace 输入，并 create-new 写入 `outputs/warehouse-network/prepared/*.json`，不得写入 Workspace 根目录或源数据目录。需要地理补全时使用已确认国家的行政区目录，直到得到 `ready` `prepared_network_input.v1`；原样保留 Tool 返回的 `prepared_input_relative_path`、`input_identity`、候选仓总数和有界候选仓目录，不构造 URI；目录被截断时不得断言候选仓不存在。
 
-文件角色、字段映射、国家、候选仓、成本规则或数据缺口不明确时，只询问真正缺失的业务选择。完成后只返回精确 Workspace 输入路径、输入身份与有界数据质量结论，不计算覆盖、成本、方案或地图。
+文件角色、字段映射、国家、候选仓、成本规则或数据缺口不明确时，只询问真正缺失的业务选择。`prepare_network_input` 成功是本次数据准备的 terminal Tool 结果；随后只返回精确 Workspace 输入路径、输入身份与有界数据质量结论，不再调用 `read_mcp_resource`、`list_mcp_resources`、`inspect_workspace_sources`、`tool_search` 或其他 Tool，也不计算覆盖、成本、方案或地图。
