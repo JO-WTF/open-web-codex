@@ -321,6 +321,110 @@ function eventSummary(events) {
   }));
 }
 
+function boundedAssistantSummary(value) {
+  if (typeof value !== "string") return undefined;
+  const normalized = sanitize(value).replace(/\s+/g, " ").trim();
+  if (!normalized) return undefined;
+  return normalized.length > 240 ? normalized.slice(0, 237) + "..." : normalized;
+}
+
+function eventAgentRole(data) {
+  for (const key of ["agentRole", "agent_role", "subagentRole", "subagent_role"]) {
+    if (typeof data?.[key] === "string" && data[key].trim()) return data[key].trim();
+  }
+  return undefined;
+}
+
+function safeTimeline(events, rounds, agentProjections = []) {
+  const threads = new Map();
+  const collaboration = [];
+  const mcp = [];
+  const mapProducers = [];
+  const mailbox = [];
+  let lastAssistantText;
+  for (const event of events) {
+    const data = eventData(event);
+    const threadId = event.thread_id ?? data.threadId ?? data.thread_id;
+    const turnId = event.turn_id ?? data.turnId ?? data.turn_id;
+    const role = eventAgentRole(data);
+    if (typeof threadId === "string") {
+      const current = threads.get(threadId) ?? {
+        thread_id: threadId,
+        role,
+        turns: [],
+        terminal: [],
+      };
+      if (!current.role && role) current.role = role;
+      if (typeof turnId === "string" && !current.turns.some((turn) => turn.turn_id === turnId)) {
+        current.turns.push({ turn_id: turnId, statuses: [] });
+      }
+      const turn = current.turns.find((candidate) => candidate.turn_id === turnId);
+      if (turn && !turn.statuses.includes(event.event_type)) turn.statuses.push(event.event_type);
+      if (/thread\.(completed|failed|cancelled|interrupted)/i.test(event.event_type)) {
+        if (!current.terminal.includes(event.event_type)) current.terminal.push(event.event_type);
+      }
+      threads.set(threadId, current);
+    }
+    const item = {
+      thread_id: typeof threadId === "string" ? threadId : undefined,
+      turn_id: typeof turnId === "string" ? turnId : undefined,
+      event_type: event.event_type,
+      item_type: itemType(event),
+      tool: eventTool(event) || undefined,
+      status: typeof data.status === "string" ? data.status : undefined,
+    };
+    const itemName = String(item.tool ?? "");
+    if (item.item_type === "collabAgentToolCall" || item.item_type === "collabToolCall") {
+      collaboration.push(item);
+    }
+    if (/mailbox|mail|message|wait_agent|followup|resume_agent/i.test(event.event_type + " " + itemName)) {
+      mailbox.push(item);
+    }
+    if (item.item_type === "mcpToolCall" || /^mcp__/.test(itemName)) {
+      mcp.push(item);
+    }
+    if (/map|create_network_map_card/i.test(itemName) || /map/i.test(String(item.item_type))) {
+      mapProducers.push(item);
+    }
+    if (item.item_type === "agentMessage") {
+      const summary = boundedAssistantSummary(data.text ?? data.message ?? data.content);
+      if (summary) lastAssistantText = summary;
+    }
+  }
+  for (const agent of agentProjections) {
+    const threadId = agent.thread_id ?? agent.threadId;
+    if (typeof threadId !== "string") continue;
+    const current = threads.get(threadId) ?? {
+      thread_id: threadId,
+      turns: [],
+      terminal: [],
+    };
+    const role = agent.agent_role ?? agent.agentRole;
+    if (typeof role === "string" && role.trim()) current.role = role.trim();
+    const parentThreadId = agent.parent_thread_id ?? agent.parentThreadId;
+    if (typeof parentThreadId === "string") current.parent_thread_id = parentThreadId;
+    const status = agent.status_type ?? agent.statusType;
+    if (typeof status === "string" && status.trim()) current.status = status.trim();
+    threads.set(threadId, current);
+  }
+  return {
+    rounds: rounds.slice(-40).map((round) => ({
+      round: round.round,
+      wire_api: round.wire_api,
+      tool_count: round.tool_count,
+      visible_tool_names: round.visible_tool_names.slice(0, 40),
+      structured_tool_calls: round.structured_tool_calls,
+      wire_tool_names: round.wire_tool_names,
+    })),
+    threads: [...threads.values()].slice(-20),
+    collaboration: collaboration.slice(-40),
+    mailbox: mailbox.slice(-40),
+    mcp: mcp.slice(-60),
+    map_producers: mapProducers.slice(-20),
+    last_assistant_text: lastAssistantText,
+  };
+}
+
 function runSelfTests() {
   const model = {
     modelId: "deepseek-v4-flash",
@@ -709,6 +813,27 @@ async function taskEvents(taskId) {
   return api("/tasks/" + taskId + "/events?limit=5000");
 }
 
+async function diagnosticTimeline(record) {
+  const events = record?.task?.id
+    ? await taskEvents(record.task.id).catch(() => [])
+    : [];
+  const agents = record?.run?.id
+    ? await api("/runs/" + record.run.id + "/agents").catch(() => [])
+    : [];
+  return safeTimeline(
+    Array.isArray(events) ? events : [],
+    state.proxy?.rounds ?? [],
+    Array.isArray(agents) ? agents : [],
+  );
+}
+
+async function attachTimeline(error, record) {
+  if (!(error instanceof NativeRuntimeBlocker)) return error;
+  const timeline = await diagnosticTimeline(record);
+  error.details = { ...(error.details ?? {}), timeline };
+  return error;
+}
+
 async function waitForTurn(taskId, turnId, timeoutMs = 300_000) {
   try {
     return await eventually(
@@ -925,6 +1050,8 @@ async function runToolSearchGate(provider) {
       round_count: state.proxy.rounds.length,
       native_tool_names: nativeNames,
     };
+  } catch (error) {
+    throw await attachTimeline(error, record);
   } finally {
     await cleanupCase(record);
   }
@@ -1021,6 +1148,8 @@ async function runGate(provider) {
       round_count: rounds.length,
       native_tool_names: nativeNames,
     };
+  } catch (error) {
+    throw await attachTimeline(error, record);
   } finally {
     await cleanupCase(record);
   }
@@ -1096,7 +1225,10 @@ async function main() {
 
 main().catch((error) => {
   if (error instanceof NativeRuntimeBlocker) {
-    log("[TYPED_FAILURE] " + error.message);
+    log(
+      "[TYPED_FAILURE] " +
+        JSON.stringify({ code: error.code, details: error.details }),
+    );
     process.exitCode = 2;
   } else {
     log("[FAIL] " + error.stack);

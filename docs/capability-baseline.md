@@ -17,8 +17,9 @@
 完成多 Agent 仓网 Copilot 的阶段一正常业务闭环。这个结论不自动覆盖新加入的单 Agent 仓网
 Copilot，也不代表 Web Studio、Marketplace、多用户产品或完整 hardening 矩阵已经完成。单 Agent
 包当前已有静态组合、共享 Tool、package-keyed Root config 和 Web 显式选择的 E1/E2 证据；真实
-DeepSeek 工具能力门已运行，但因当前模型目录没有声明原生 `ModelInfo.supports_search_tool`
-而以 typed failure 停止，不能声称真实 DeepSeek 的仓网 E4。
+DeepSeek 工具能力门已通过临时 Provider 的 exact per-model capability 配置进入最小
+`tool_search → spawn_agent`，但完整仓网门仍以 typed Provider/Runtime 终态停止，不能声称真实
+DeepSeek 的仓网 E4。
 
 阶段二 Copilot SDK 已提供 `copilot init` 源码脚手架和 `copilot validate` 静态组合
 验证；`copilot dev` 提供隔离 discovery probe：通过官方 app-server 握手、
@@ -116,14 +117,19 @@ Provider model 配置已收敛到 Runtime `ModelProviderInfo.models` 的 typed
 
 真实 DeepSeek opt-in 门不再写 `model_catalog_json`。它通过正式 Provider refresh/typed model
 metadata API 对 exact `deepseek-v4-flash` 持久化 `supportsSearchTool=true`。本轮最小门真实通过：
-Round 1 暴露 12 个工具并结构化调用 `tool_search`，Round 2 暴露 20 个工具并结构化调用
+Round 1 暴露 12 个工具并结构化调用 `tool_search`，Round 2 暴露 17 个工具并结构化调用
 `multi_agent_v1__spawn_agent`，canonical item 为 `collabAgentToolCall/spawnAgent`。随后完整仓网
-Task 暴露 Data MCP 并执行了 `discover_workspace_sources`、`inspect_workspace_sources`、
-`prepare_network_input` 和 `prepare_network_geography`，但 DeepSeek 没有完成 Network/map 交付；此前
-一轮终态为 typed `copilot_chain_incomplete`（`map_producer_item_not_projected`），最新一轮为
-`provider_or_copilot_turn_incomplete/turn_completion_timeout`。探针只记录工具数量/名称、结构化调用
-存在性和 canonical item 摘要，不记录 key、完整 prompt/schema/arguments；临时 Provider、Run、
-Workspace、Project 和原始选择均已清理，未伪造业务结果。完整 Provider E4 仍未通过。
+门的首个 Chat 请求没有返回结构化 Tool call，终态为 typed
+`provider_tool_call_not_produced`；受限 timeline 显示只有 Root thread 的 started Turn，尚未
+创建 Data/Network child，也没有 wait/mailbox、MCP 或地图 producer Item。因此这次没有证据表明
+Runtime 协同或地图投影失败，不能把模型未作出结构化调用解释成业务链成功。此前一次完整门曾执行
+`discover_workspace_sources`、`inspect_workspace_sources`、`prepare_network_input` 和
+`prepare_network_geography`，但以 `copilot_chain_incomplete/map_producer_item_not_projected`
+停止；这些都是未完成的 typed 证据，完整 Provider E4 仍未通过。
+
+真实门失败时脚本输出有界 timeline：Root/Data/Network thread 与 Turn 状态、协作调用/等待/消息、
+MCP 工具名及终态、地图 producer Item 和最后 assistant 文本摘要。它不记录 key、完整 prompt、
+schema 或 arguments；临时 Provider、Run、Workspace、Project 和原始选择均已清理，未伪造业务结果。
 
 ## 3. 历史：2026-08-12 clean real Web E4（已被 ADR-023 合同替代）
 

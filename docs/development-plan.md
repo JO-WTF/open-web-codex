@@ -388,15 +388,16 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
    `CaseRepository`、`NetworkSnapshot`、`ArtifactRef`、旧 services/models/tests 与 Demo launcher
    surface，不保留兼容双路径；Data4 与 Network active `ResourceRef` surface 不回退为 aliases。
 
-R2/D3 真实门当前状态：fresh local session 可添加并列出 DeepSeek Provider；配置只保存 env ref，Platform
+R2/D3/D4 真实门当前状态：fresh local session 可添加并列出 DeepSeek Provider；配置只保存 env ref，Platform
 Secret 可注入同一密钥；D3 已提供 exact per-model capability 的 Runtime/Platform 配置路径和 refresh
 保留测试。真实最小门已证明同一临时 Provider 通过正式 API 配置
-`deepseek-v4-flash.supportsSearchTool=true` 后产生结构化 `tool_search → spawn_agent`；完整门实际
-执行了 Data MCP 的 source discovery/inspection/normalization/geography，但未完成 Network/map 交付；一轮
-以 typed `copilot_chain_incomplete/map_producer_item_not_projected` 停止，最新一轮以
-`provider_or_copilot_turn_incomplete/turn_completion_timeout` 停止。浏览器响应、日志、Workspace
-与普通 Profile 文件均不得出现 Secret 明文；不写 `model_catalog_json`、不按模型名推断、不重试提示词、
-不回退 single-agent。后续真实空目录故障已用窄 follow-up 收口：Codex 只增加 exact
+`deepseek-v4-flash.supportsSearchTool=true` 后产生结构化 `tool_search → spawn_agent`；D4 完整门的
+最新一轮首个 Chat 请求没有结构化 Tool call，已以 typed `provider_tool_call_not_produced` 停止，
+有界 timeline 确认尚未创建 Data/Network child。此前一轮完整门执行过 Data MCP 的 source
+discovery/inspection/normalization/geography，但未完成 Network/map 交付；其 typed 终态为
+`copilot_chain_incomplete/map_producer_item_not_projected`。这些都不是完整 Provider E4 证据。
+浏览器响应、日志、Workspace 与普通 Profile 文件均不得出现 Secret 明文；不写 `model_catalog_json`、
+不按模型名推断、不重试提示词、不回退 single-agent。后续真实空目录故障已用窄 follow-up 收口：Codex 只增加 exact
 Provider 的 fresh typed catalog，Platform 不切换 current Provider，只在非空成功后持久化目标目录并在
 刷新/重启后恢复；Turn Provider override、Provider owner 全量重构和 Browser dead graph 仍不属于阶段一
 关键门。
