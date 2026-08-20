@@ -434,7 +434,7 @@ function itemType(event) {
 }
 
 function eventData(event) {
-  return event.payload?.data ?? {};
+  return event?.payload?.data ?? {};
 }
 
 function eventTool(event) {
