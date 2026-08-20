@@ -679,8 +679,9 @@
       "title": "DemandCityRecord",
       "type": "object"
     },
-    "NetworkBaselineReport": {
+    "NetworkComparableReport": {
       "additionalProperties": false,
+      "description": "Stable report projection shared by any comparable result kind.",
       "properties": {
         "active_warehouse_ids": {
           "items": {
@@ -689,73 +690,11 @@
           "title": "Active Warehouse Ids",
           "type": "array"
         },
-        "assignment": {
-          "$ref": "#/$defs/AssignmentResult"
-        },
-        "cost": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/CostSummary"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "coverage": {
-          "items": {
-            "$ref": "#/$defs/CoverageMetricSummary"
-          },
-          "title": "Coverage",
-          "type": "array"
-        },
-        "label": {
-          "enum": [
-            "actual_current",
-            "optimized_existing_footprint"
-          ],
-          "title": "Label",
-          "type": "string"
-        },
-        "notice_code": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Notice Code"
-        },
-        "service": {
-          "items": {
-            "$ref": "#/$defs/ServiceMetric"
-          },
-          "title": "Service",
-          "type": "array"
-        }
-      },
-      "required": [
-        "label",
-        "active_warehouse_ids",
-        "assignment",
-        "service",
-        "coverage",
-        "cost",
-        "notice_code"
-      ],
-      "title": "NetworkBaselineReport",
-      "type": "object"
-    },
-    "NetworkFacilityReport": {
-      "additionalProperties": false,
-      "properties": {
-        "active_warehouse_ids": {
+        "added_warehouse_ids": {
           "items": {
             "type": "string"
           },
-          "title": "Active Warehouse Ids",
+          "title": "Added Warehouse Ids",
           "type": "array"
         },
         "assignment": {
@@ -772,13 +711,6 @@
           ],
           "title": "Best Bound"
         },
-        "closed_existing_ids": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Closed Existing Ids",
-          "type": "array"
-        },
         "cost": {
           "anyOf": [
             {
@@ -789,7 +721,11 @@
             }
           ]
         },
-        "message": {
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "notice": {
           "anyOf": [
             {
               "type": "string"
@@ -798,7 +734,7 @@
               "type": "null"
             }
           ],
-          "title": "Message"
+          "title": "Notice"
         },
         "objective_value": {
           "anyOf": [
@@ -811,21 +747,28 @@
           ],
           "title": "Objective Value"
         },
-        "opened_candidate_ids": {
+        "optimality": {
+          "anyOf": [
+            {
+              "enum": [
+                "proven",
+                "feasible_only",
+                "not_available"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Optimality"
+        },
+        "removed_warehouse_ids": {
           "items": {
             "type": "string"
           },
-          "title": "Opened Candidate Ids",
+          "title": "Removed Warehouse Ids",
           "type": "array"
-        },
-        "optimality": {
-          "enum": [
-            "proven",
-            "feasible_only",
-            "not_available"
-          ],
-          "title": "Optimality",
-          "type": "string"
         },
         "service": {
           "items": {
@@ -835,28 +778,39 @@
           "type": "array"
         },
         "status": {
-          "enum": [
-            "optimal",
-            "feasible"
+          "anyOf": [
+            {
+              "enum": [
+                "optimal",
+                "feasible",
+                "timeout",
+                "infeasible",
+                "unavailable"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "Status",
-          "type": "string"
+          "title": "Status"
         }
       },
       "required": [
-        "status",
+        "label",
         "active_warehouse_ids",
-        "opened_candidate_ids",
-        "closed_existing_ids",
+        "added_warehouse_ids",
+        "removed_warehouse_ids",
         "assignment",
         "objective_value",
-        "cost",
         "best_bound",
+        "cost",
         "service",
+        "status",
         "optimality",
-        "message"
+        "notice"
       ],
-      "title": "NetworkFacilityReport",
+      "title": "NetworkComparableReport",
       "type": "object"
     },
     "NetworkReportEntities": {
@@ -1112,12 +1066,15 @@
       "type": "object"
     }
   },
-  "$id": "urn:open-web-codex:supply-chain:network_planning_report_bundle.v1",
+  "$id": "urn:open-web-codex:supply-chain:network_planning_report_bundle.v2",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "baseline": {
-      "$ref": "#/$defs/NetworkBaselineReport"
+    "after": {
+      "$ref": "#/$defs/NetworkComparableReport"
+    },
+    "before": {
+      "$ref": "#/$defs/NetworkComparableReport"
     },
     "comparison": {
       "$ref": "#/$defs/AssignmentComparison"
@@ -1129,9 +1086,6 @@
     },
     "entities": {
       "$ref": "#/$defs/NetworkReportEntities"
-    },
-    "facility": {
-      "$ref": "#/$defs/NetworkFacilityReport"
     },
     "kind": {
       "const": "network_planning_report",
@@ -1147,8 +1101,8 @@
       "type": "array"
     },
     "schema_version": {
-      "const": "network_planning_report_bundle.v1",
-      "default": "network_planning_report_bundle.v1",
+      "const": "network_planning_report_bundle.v2",
+      "default": "network_planning_report_bundle.v2",
       "title": "Schema Version",
       "type": "string"
     },
@@ -1165,8 +1119,8 @@
     "country_code",
     "scope",
     "entities",
-    "baseline",
-    "facility",
+    "before",
+    "after",
     "comparison",
     "notices"
   ],

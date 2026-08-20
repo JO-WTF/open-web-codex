@@ -176,7 +176,7 @@ impl ContentVerifier {
 #[cfg(test)]
 pub(crate) fn warehouse_test_registry() -> DeliveryRegistry {
     let schema = serde_json::from_str(include_str!(
-        "../../../../tools/warehouse-network-planner/contracts/schemas/network_comparison_map_bundle.v1.schema.json"
+        "../../../../tools/warehouse-network-planner/contracts/schemas/network_comparison_map_bundle.v2.schema.json"
     ))
     .expect("warehouse map delivery schema");
     DeliveryRegistry::new(vec![
@@ -187,9 +187,9 @@ pub(crate) fn warehouse_test_registry() -> DeliveryRegistry {
             kind: DeliveryKind::WorkspaceArtifact {
                 verifier: ContentVerifier::JsonSchema { document: schema },
             },
-            schema: "network_comparison_map_bundle.v1".into(),
+            schema: "network_comparison_map_bundle.v2".into(),
             mime_type: "application/json".into(),
-            display_name: "Warehouse network: baseline vs selected facilities".into(),
+            display_name: "Warehouse network: before vs after comparison".into(),
         },
         DeliveryContract {
             id: "network-planning-report".into(),
@@ -197,10 +197,10 @@ pub(crate) fn warehouse_test_registry() -> DeliveryRegistry {
             tool: "publish_network_planning_report".into(),
             kind: DeliveryKind::WorkspaceArtifact {
                 verifier: ContentVerifier::MarkdownMarker {
-                    marker: "<!-- network_planning_report_markdown.v1 -->".into(),
+                    marker: "<!-- network_planning_report_markdown.v2 -->".into(),
                 },
             },
-            schema: "network_planning_report_markdown.v1".into(),
+            schema: "network_planning_report_markdown.v2".into(),
             mime_type: "text/markdown".into(),
             display_name: "Warehouse network planning report".into(),
         },

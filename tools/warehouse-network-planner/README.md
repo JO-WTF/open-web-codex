@@ -58,11 +58,12 @@ Data Tool 会把用户输入中完整的起点、终点、距离、时长与来�
 把 Planner 返回的完整 `data_ref` 交给通用 `map_utils/create_map_card`，并用标准 Mapbox Style
 表达本次展示意图；改变样式不会改变或重新发布仓网业务数据。
 
-`assess_facility_change` 接受精确的标准化输入、路线、可选成本以及 baseline/scenario/facility
-结果引用，以引用中的活动仓集合为起点，一次完成增仓、关仓或迁仓后的分配求解和前后比较。
+`assess_facility_change` 接受精确的标准化输入、路线、可选成本以及任意合法的
+baseline/scenario/facility-location `before_ref`，以引用中的活动仓集合为起点，一次完成增仓、关仓或迁仓后的分配求解和前后比较。
 它发布完整的 `network_scenario.v2` 与绑定输入、前后方案和比较结果的
-`network_plan_comparison.v1` Resource，同时只把
-有界的仓库变化、成本、两种覆盖率和最多 10 个重点受影响/重分配城市返回给 Agent。
+`network_plan_comparison.v2` Resource，同时只把
+有界的仓库变化、成本、两种覆盖率和最多 10 个重点受影响/重分配城市返回给 Agent；
+`compare_network_scenarios` 与 `assess_facility_change` 均发布同一 before/after 合同。
 单仓增加、关闭或搬迁统一由 `assess_facility_change` 完成计算与比较；不再向 Agent 暴露重复的独立场景入口。
 
 ## Tool 审批

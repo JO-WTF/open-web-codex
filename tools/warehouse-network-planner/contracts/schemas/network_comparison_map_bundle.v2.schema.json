@@ -46,9 +46,9 @@
         },
         "scenario": {
           "enum": [
-            "baseline",
-            "scenario",
-            "facility"
+            "before",
+            "after",
+            "scenario"
           ],
           "title": "Scenario",
           "type": "string"
@@ -241,6 +241,57 @@
     "DemandMapProperties": {
       "additionalProperties": false,
       "properties": {
+        "after_distance_km": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After Distance Km"
+        },
+        "after_duration_hours": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After Duration Hours"
+        },
+        "after_unit_cost": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After Unit Cost"
+        },
+        "after_warehouse_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After Warehouse Id"
+        },
         "assigned_warehouse_id": {
           "anyOf": [
             {
@@ -253,7 +304,7 @@
           "default": null,
           "title": "Assigned Warehouse Id"
         },
-        "baseline_distance_km": {
+        "before_distance_km": {
           "anyOf": [
             {
               "minimum": 0,
@@ -264,9 +315,9 @@
             }
           ],
           "default": null,
-          "title": "Baseline Distance Km"
+          "title": "Before Distance Km"
         },
-        "baseline_duration_hours": {
+        "before_duration_hours": {
           "anyOf": [
             {
               "minimum": 0,
@@ -277,9 +328,9 @@
             }
           ],
           "default": null,
-          "title": "Baseline Duration Hours"
+          "title": "Before Duration Hours"
         },
-        "baseline_unit_cost": {
+        "before_unit_cost": {
           "anyOf": [
             {
               "minimum": 0,
@@ -290,9 +341,9 @@
             }
           ],
           "default": null,
-          "title": "Baseline Unit Cost"
+          "title": "Before Unit Cost"
         },
-        "baseline_warehouse_id": {
+        "before_warehouse_id": {
           "anyOf": [
             {
               "type": "string"
@@ -302,7 +353,7 @@
             }
           ],
           "default": null,
-          "title": "Baseline Warehouse Id"
+          "title": "Before Warehouse Id"
         },
         "city_id": {
           "title": "City Id",
@@ -342,57 +393,6 @@
           ],
           "default": null,
           "title": "Duration Hours"
-        },
-        "facility_distance_km": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Facility Distance Km"
-        },
-        "facility_duration_hours": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Facility Duration Hours"
-        },
-        "facility_unit_cost": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Facility Unit Cost"
-        },
-        "facility_warehouse_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Facility Warehouse Id"
         },
         "kind": {
           "const": "demand",
@@ -516,9 +516,9 @@
         },
         "scenario": {
           "enum": [
-            "baseline",
-            "scenario",
-            "facility"
+            "before",
+            "after",
+            "scenario"
           ],
           "title": "Scenario",
           "type": "string"
@@ -613,6 +613,20 @@
     "NetworkMapSummary": {
       "additionalProperties": false,
       "properties": {
+        "added_warehouse_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Added Warehouse Ids",
+          "type": "array"
+        },
+        "after_active_warehouse_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "After Active Warehouse Ids",
+          "type": "array"
+        },
         "after_cost": {
           "anyOf": [
             {
@@ -624,16 +638,16 @@
           ],
           "title": "After Cost"
         },
-        "baseline_active_warehouse_ids": {
+        "after_label": {
+          "title": "After Label",
+          "type": "string"
+        },
+        "before_active_warehouse_ids": {
           "items": {
             "type": "string"
           },
-          "title": "Baseline Active Warehouse Ids",
+          "title": "Before Active Warehouse Ids",
           "type": "array"
-        },
-        "baseline_label": {
-          "title": "Baseline Label",
-          "type": "string"
         },
         "before_cost": {
           "anyOf": [
@@ -646,12 +660,9 @@
           ],
           "title": "Before Cost"
         },
-        "closed_existing_ids": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Closed Existing Ids",
-          "type": "array"
+        "before_label": {
+          "title": "Before Label",
+          "type": "string"
         },
         "cost_delta": {
           "anyOf": [
@@ -676,39 +687,28 @@
           "title": "Coverage",
           "type": "array"
         },
-        "facility_active_warehouse_ids": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Facility Active Warehouse Ids",
-          "type": "array"
-        },
-        "facility_status": {
-          "title": "Facility Status",
-          "type": "string"
-        },
         "feature_count": {
           "minimum": 0,
           "title": "Feature Count",
           "type": "integer"
         },
-        "opened_candidate_ids": {
+        "removed_warehouse_ids": {
           "items": {
             "type": "string"
           },
-          "title": "Opened Candidate Ids",
+          "title": "Removed Warehouse Ids",
           "type": "array"
         }
       },
       "required": [
         "country_code",
-        "baseline_label",
-        "facility_status",
+        "before_label",
+        "after_label",
         "feature_count",
-        "baseline_active_warehouse_ids",
-        "facility_active_warehouse_ids",
-        "opened_candidate_ids",
-        "closed_existing_ids",
+        "before_active_warehouse_ids",
+        "after_active_warehouse_ids",
+        "added_warehouse_ids",
+        "removed_warehouse_ids",
         "before_cost",
         "after_cost",
         "cost_delta",
@@ -750,8 +750,16 @@
     "WarehouseMapProperties": {
       "additionalProperties": false,
       "properties": {
-        "baseline_active": {
-          "title": "Baseline Active",
+        "added_facility": {
+          "title": "Added Facility",
+          "type": "boolean"
+        },
+        "after_active": {
+          "title": "After Active",
+          "type": "boolean"
+        },
+        "before_active": {
+          "title": "Before Active",
           "type": "boolean"
         },
         "city_id": {
@@ -762,14 +770,6 @@
           "title": "City Name",
           "type": "string"
         },
-        "closed_existing": {
-          "title": "Closed Existing",
-          "type": "boolean"
-        },
-        "facility_active": {
-          "title": "Facility Active",
-          "type": "boolean"
-        },
         "is_existing": {
           "title": "Is Existing",
           "type": "boolean"
@@ -779,10 +779,6 @@
           "default": "warehouse",
           "title": "Kind",
           "type": "string"
-        },
-        "opened_candidate": {
-          "title": "Opened Candidate",
-          "type": "boolean"
         },
         "province_id": {
           "anyOf": [
@@ -805,6 +801,10 @@
             }
           ],
           "title": "Province Name"
+        },
+        "removed_facility": {
+          "title": "Removed Facility",
+          "type": "boolean"
         },
         "warehouse_id": {
           "title": "Warehouse Id",
@@ -832,16 +832,16 @@
         "province_id",
         "province_name",
         "is_existing",
-        "baseline_active",
-        "facility_active",
-        "opened_candidate",
-        "closed_existing"
+        "before_active",
+        "after_active",
+        "added_facility",
+        "removed_facility"
       ],
       "title": "WarehouseMapProperties",
       "type": "object"
     }
   },
-  "$id": "urn:open-web-codex:supply-chain:network_comparison_map_bundle.v1",
+  "$id": "urn:open-web-codex:supply-chain:network_comparison_map_bundle.v2",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
@@ -855,8 +855,8 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "network_comparison_map_bundle.v1",
-      "default": "network_comparison_map_bundle.v1",
+      "const": "network_comparison_map_bundle.v2",
+      "default": "network_comparison_map_bundle.v2",
       "title": "Schema Version",
       "type": "string"
     },

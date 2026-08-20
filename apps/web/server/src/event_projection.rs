@@ -3687,7 +3687,7 @@ mod tests {
                     "result": {"content": [], "structuredContent": {
                         "summary": "Created report.",
                         "artifact": {
-                            "schema": "network_planning_report_markdown.v1",
+                            "schema": "network_planning_report_markdown.v2",
                             "displayName": "Warehouse network planning report",
                             "mimeType": "text/markdown",
                             "workspaceRelativePath": "outputs/network-report.md",

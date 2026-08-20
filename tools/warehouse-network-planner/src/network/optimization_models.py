@@ -225,6 +225,22 @@ class PMedianSolution(OptimizationModel):
     input_identity: PlanningInputIdentity
 
 
+class ComparableNetworkView(OptimizationModel):
+    """Internal common view for any assignment-bearing before/after result."""
+
+    label: str
+    active_warehouse_ids: list[str]
+    assignment: AssignmentResult
+    cost: CostSummary | None = None
+    service: list[ServiceMetric] = Field(default_factory=list)
+    notice_code: str | None = None
+    status: Literal["optimal", "feasible", "timeout", "infeasible", "unavailable"] | None = None
+    optimality: Literal["proven", "feasible_only", "not_available"] | None = None
+    objective_value: float | None = None
+    best_bound: float | None = None
+    input_identity: PlanningInputIdentity
+
+
 class ServiceConstrainedRequest(OptimizationModel):
     service_targets: list[ServiceMetric] = Field(min_length=1)
     minimum_coverage: float = Field(gt=0, le=1)

@@ -60,7 +60,7 @@ describe("Conversation auto-scroll", () => {
         finalArtifacts={[{
           id: "artifact-1",
           task_id: "task-1",
-          artifact_schema: "network_planning_report_markdown.v1",
+          artifact_schema: "network_planning_report_markdown.v2",
           display_name: "Warehouse network planning report",
           mime_type: "text/markdown",
           expected_size: 1024,
@@ -101,7 +101,7 @@ describe("Conversation auto-scroll", () => {
         finalArtifacts={[{
           id: "artifact-child",
           task_id: "task-1",
-          artifact_schema: "network_planning_report_markdown.v1",
+          artifact_schema: "network_planning_report_markdown.v2",
           display_name: "Child report",
           mime_type: "text/markdown",
           expected_size: 512,

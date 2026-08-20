@@ -640,8 +640,8 @@ def _network_layers(
                 )
                 legend_items.append({"label": label, "color": color, "type": "circle"})
             for field, layer_id, color, label in (
-                ("opened_candidate", "opened-candidates", "#C026D3", "新增启用仓"),
-                ("closed_existing", "closed-existing", "#64748B", "关闭现有仓"),
+                ("added_facility", "added-facilities", "#C026D3", "新增启用仓"),
+                ("removed_facility", "removed-facilities", "#64748B", "移除现有仓"),
             ):
                 counts = boolean_counts.get(field)
                 if properties.get(field) != "boolean" or counts is None or counts.true_count == 0:
@@ -678,12 +678,101 @@ def _network_layers(
             legend_items.append({"label": "仓库", "color": "#1D4ED8", "type": "circle"})
     if not layers:
         raise ValueError("network_map_features_unavailable")
-    extensions = (
-        MapExtensions.model_validate({"legend": {"title": "仓网图例", "items": legend_items}})
-        if legend_items
-        else None
-    )
+    extension_values: dict[str, object] = {}
+    if legend_items:
+        extension_values["legend"] = {"title": "仓网图例", "items": legend_items}
+    hover_layers = _network_hover_layers(network_data_ref, layers)
+    if hover_layers:
+        extension_values["hover"] = {"layers": hover_layers}
+    extensions = MapExtensions.model_validate(extension_values) if extension_values else None
     return sources, layers, extensions
+
+
+def _network_hover_layers(
+    network_data_ref: GeoJsonResourceRef,
+    layers: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Create bounded hover fields from the exact v2 GeoJSON profile."""
+    layer_ids = {str(layer["id"]) for layer in layers if "id" in layer}
+    profile_by_kind = {
+        item.value: set(item.properties)
+        for item in network_data_ref.profile.feature_types
+    }
+    result: list[dict[str, object]] = []
+
+    def add(
+        layer_id: str,
+        title_property: str,
+        fields: tuple[str, ...],
+        kind: str,
+    ) -> None:
+        if layer_id not in layer_ids:
+            return
+        properties = profile_by_kind.get(kind, set())
+        available = [field for field in fields if field in properties]
+        title = title_property if title_property in properties else None
+        if title is None and not available:
+            return
+        result.append(
+            {
+                "layer": layer_id,
+                "title_property": title,
+                "fields": available,
+            }
+        )
+
+    add(
+        "demand-cities",
+        "city_name",
+        (
+            "city_id",
+            "demand_quantity",
+            "assigned_warehouse_id",
+            "before_warehouse_id",
+            "after_warehouse_id",
+            "duration_hours",
+            "before_duration_hours",
+            "after_duration_hours",
+            "unit_cost",
+            "before_unit_cost",
+            "after_unit_cost",
+        ),
+        "demand",
+    )
+    add(
+        "last-mile-coverage",
+        "demand_city_id",
+        ("scenario", "warehouse_id", "demand_quantity", "duration_hours", "unit_cost"),
+        "last_mile_assignment",
+    )
+    add(
+        "linehaul-coverage",
+        "crossdock_warehouse_id",
+        ("scenario", "upstream_center_id", "assigned_demand"),
+        "linehaul_connection",
+    )
+    for layer_id in (
+        "existing-center",
+        "existing-cross-docking",
+        "candidate-center",
+        "candidate-cross-docking",
+        "added-facilities",
+        "removed-facilities",
+    ):
+        add(
+            layer_id,
+            "warehouse_name",
+            (
+                "warehouse_id",
+                "warehouse_type",
+                "before_active",
+                "after_active",
+                "added_facility",
+                "removed_facility",
+            ),
+            "warehouse",
+        )
+    return result
 
 
 @mcp.tool(structured_output=True, annotations=LOCAL_PRESENTATION_TOOL)

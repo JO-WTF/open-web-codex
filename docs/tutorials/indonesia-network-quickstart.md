@@ -60,10 +60,10 @@ source_profile.v1
 normalized_network_input.v1
 route_matrix.v2
 network_baseline.v2
-network_planning_report_markdown.v1
+network_planning_report_markdown.v2（单独 baseline 评估）
 ```
 
-`network_planning_report_markdown.v1` 是 built-in final Tool 创建的 Workspace Markdown 交付物。没有 current coverage 时，报告必须使用 `optimized_existing_footprint` 标签。需要实际当前方案时，继续阅读第三篇并上传 `current-coverage.csv`。
+`network_planning_report_markdown.v2` 是 built-in final Tool 创建的 Workspace Markdown 交付物；baseline 评估使用独立 baseline report bundle，前后比较使用 generic before/after bundle。没有 current coverage 时，报告必须使用 `optimized_existing_footprint` 标签。需要实际当前方案时，继续阅读第三篇并上传 `current-coverage.csv`。
 
 ## 6. 出错时怎么判断
 

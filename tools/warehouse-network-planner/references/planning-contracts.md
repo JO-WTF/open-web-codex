@@ -11,11 +11,11 @@ Every calculation starts from immutable MCP Resources:
   the same lane.
 - `network_baseline.v2` and `network_scenario.v2`: allocations, issues and metrics for
   one explicit current or candidate facility set.
-- `network_assignment_comparison.v1`: deltas between compatible baseline, scenario and
+- `network_assignment_comparison.v2`: deltas between compatible baseline, scenario and
   facility-location results.
 - `facility_location_solution.v3`: target, selected candidates, exact-solver scope,
   assumptions and its assignment reference.
-- `network_comparison_map_bundle.v1` and `network_planning_report_markdown.v1`: the
+- `network_comparison_map_bundle.v2` and `network_planning_report_markdown.v2`: the
   bounded map-card projection and final Markdown delivery contracts.
 
 Copy each returned `data_ref` unchanged. It uses server `supply_chain` and an

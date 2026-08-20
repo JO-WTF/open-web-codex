@@ -109,19 +109,19 @@ def compare_network_scenarios(
         raise McpResourceContractError("comparison_subject_schema_invalid") from error
     if any(target <= 0 for target in service_targets):
         raise McpResourceContractError("comparison_service_targets_invalid")
-    before_assignment, before_active_ids, before_identity = _load_comparable_resource(before_ref)
-    after_assignment, after_active_ids, after_identity = _load_comparable_resource(after_ref)
+    before_view = _load_comparable_resource(before_ref)
+    after_view = _load_comparable_resource(after_ref)
     try:
-        require_matching_input(input_identity, before_identity)
-        require_matching_input(input_identity, after_identity)
+        require_matching_input(input_identity, before_view.input_identity)
+        require_matching_input(input_identity, after_view.input_identity)
     except ValueError as error:
         raise McpResourceContractError("comparison_input_identity_mismatch") from error
     comparison: AssignmentComparison = compare_assignments(
-        before_assignment,
-        after_assignment,
+        before_view.assignment,
+        after_view.assignment,
         service_targets,
-        before_active_ids,
-        after_active_ids,
+        set(before_view.active_warehouse_ids),
+        set(after_view.active_warehouse_ids),
     )
     coverage_summary = (
         ", ".join(

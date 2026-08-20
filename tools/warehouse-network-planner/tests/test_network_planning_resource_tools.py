@@ -38,6 +38,7 @@ from supply_chain_planner.network.optimization_models import (
     ServiceCoverageConstraint,
 )
 from supply_chain_planner.shared.models import (
+    ComparableNetworkResultRef,
     NetworkComparisonReportInput,
     PreparedNetworkResource,
 )
@@ -125,6 +126,28 @@ def test_network_planning_tools_use_workspace_input_and_keep_compute_results_as_
     assert "opening_policy" in tools["solve_p_median"].inputSchema["properties"]
     assert "number_to_open" not in tools["solve_p_median"].inputSchema["properties"]
     assert "search_attempts" in tools["solve_p_median"].outputSchema["properties"]
+
+
+def test_comparable_loader_rejects_facility_without_assignment(monkeypatch) -> None:
+    class RuntimeWithUnavailableFacility:
+        def load_model(self, *_args, **_kwargs):
+            return SimpleNamespace(assignment=None)
+
+    monkeypatch.setattr(
+        tool_runtime,
+        "_runtime",
+        lambda: RuntimeWithUnavailableFacility(),
+    )
+    ref = ComparableNetworkResultRef.model_validate(
+        {
+            "type": "mcp_resource",
+            "server": "supply_chain",
+            "uri": "supply-chain://resources/facility",
+            "resource_schema": "facility_location_solution.v3",
+        }
+    )
+    with pytest.raises(ProviderContractError, match="comparable_assignment_unavailable"):
+        tool_runtime._load_comparable_resource(ref)
 
 
 def test_plan_cost_matrix_derives_bounded_full_quote_means(
@@ -343,12 +366,13 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
             ctx,
         )
     )
+    assert comparison.resource_schema == "network_plan_comparison.v2"
 
     map_result = delivery_tools.prepare_network_comparison_map(comparison, ctx)
     assert map_result.structuredContent is not None
     assert (
         map_result.structuredContent["data_ref"]["resource_schema"]
-        == "network_comparison_geojson.v1"
+        == "network_comparison_geojson.v2"
     )
 
     coverage = delivery_tools.prepare_network_coverage_map(prepared_path, facility, ctx)
@@ -363,7 +387,7 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
     assert report.structuredContent is not None
     assert (workspace / "outputs/warehouse-network/deliverables/network-report.md").is_file()
     assert (
-        "network_planning_report_markdown.v1"
+        "network_planning_report_markdown.v2"
         in (workspace / "outputs/warehouse-network/deliverables/network-report.md").read_text()
     )
 

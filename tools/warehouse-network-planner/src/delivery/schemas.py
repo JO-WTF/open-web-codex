@@ -8,11 +8,11 @@ from supply_chain_planner.delivery.map_service import NetworkComparisonMapBundle
 from supply_chain_planner.delivery.report_service import NetworkPlanningReportBundle
 
 DELIVERY_SCHEMA_SOURCES = {
-    "network_comparison_map_bundle.v1": (
+    "network_comparison_map_bundle.v2": (
         NetworkComparisonMapBundle,
         "Network comparison map bundle",
     ),
-    "network_planning_report_bundle.v1": (
+    "network_planning_report_bundle.v2": (
         NetworkPlanningReportBundle,
         "Network planning report bundle",
     ),

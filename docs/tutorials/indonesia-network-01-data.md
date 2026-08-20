@@ -82,7 +82,7 @@ Network Agent 再请求缺失参数。第一次看到输入卡片时选择：
 - `normalized_network_input.v1` 为 `ready`，且摘要显示 50 个需求城市和 11 个已有仓。
 - `route_matrix.v2` 为 `ready`，方法是 `haversine`，路线数等于 11 × 50 = 550。
 - 路线组件保存绕路系数和平均速度；没有 `navigation` 结果。
-- `network_baseline.v2` 为 `ready`，并由 final Tool 创建 `network_planning_report_markdown.v1` Workspace 交付物。
+- `network_baseline.v2` 为 `ready`，并由 final Tool 创建 `network_planning_report_markdown.v2` Workspace 交付物；baseline 评估仍使用独立 baseline report bundle 口径，比较报告使用 generic before/after 口径。
 - 报告写明这是 `optimized_existing_footprint`，因为本篇没有上传当前覆盖关系；不能称为实际当前方案。
 - 刷新页面后，输入卡片、Agent 状态和报告交付物仍可恢复。
 

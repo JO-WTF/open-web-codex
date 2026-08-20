@@ -19,8 +19,8 @@ from supply_chain_planner.network.optimization_models import (
     AssignmentResult,
     AssignmentRow,
     BaselineResult,
+    ComparableNetworkView,
     CostSummary,
-    PMedianSolution,
     ServiceMetric,
 )
 
@@ -35,10 +35,10 @@ class DeliveryModel(BaseModel):
 class ValidatedDeliveryInputs:
     demand_by_id: Mapping[str, DemandCityRecord]
     warehouse_by_id: Mapping[str, WarehouseRecord]
-    baseline_rows_by_city: Mapping[str, AssignmentRow]
-    facility_rows_by_city: Mapping[str, AssignmentRow]
-    baseline_active_ids: frozenset[str]
-    facility_active_ids: frozenset[str]
+    before_rows_by_city: Mapping[str, AssignmentRow]
+    after_rows_by_city: Mapping[str, AssignmentRow]
+    before_active_ids: frozenset[str]
+    after_active_ids: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -89,11 +89,11 @@ def validate_baseline_delivery_inputs(
 
 def validate_delivery_inputs(
     normalized: NormalizedInputBatch,
-    baseline: BaselineResult,
-    facility: PMedianSolution,
+    before: ComparableNetworkView,
+    after: ComparableNetworkView,
     comparison: AssignmentComparison,
 ) -> ValidatedDeliveryInputs:
-    """Cross-check exact typed results without filling gaps or recomputing them."""
+    """Cross-check any two assignment-bearing results without recomputing them."""
 
     if any(issue.severity == "error" for issue in normalized.issues):
         raise ValueError("delivery_normalized_input_has_errors")
@@ -109,31 +109,15 @@ def validate_delivery_inputs(
     )
     if not demand or not warehouses:
         raise ValueError("delivery_demand_and_warehouse_required")
-    before_active = _active_ids("baseline", baseline.active_warehouse_ids, warehouses)
-    after_active = _active_ids("facility", facility.active_warehouse_ids, warehouses)
-    existing = {key for key, item in warehouses.items() if item.is_existing}
-    if before_active != existing:
-        raise ValueError("delivery_baseline_active_must_equal_existing")
-    if facility.assignment is None:
-        raise ValueError("delivery_facility_assignment_required")
-    if facility.status not in {"optimal", "feasible"}:
-        raise ValueError(f"delivery_facility_status_not_deliverable:{facility.status}")
+    if before.input_identity != after.input_identity:
+        raise ValueError("delivery_result_input_identity_mismatch")
+    before_active = _active_ids("before", before.active_warehouse_ids, warehouses)
+    after_active = _active_ids("after", after.active_warehouse_ids, warehouses)
 
     before_rows = _assignment_rows(
-        "baseline", baseline.assignment, demand, warehouses, before_active
+        "before", before.assignment, demand, warehouses, before_active
     )
-    after_rows = _assignment_rows("facility", facility.assignment, demand, warehouses, after_active)
-    candidates = set(warehouses) - existing
-    _exact_ids(
-        "facility_opened_candidate",
-        facility.opened_candidate_ids,
-        after_active & candidates,
-    )
-    _exact_ids(
-        "facility_closed_existing",
-        facility.closed_existing_ids,
-        existing - after_active,
-    )
+    after_rows = _assignment_rows("after", after.assignment, demand, warehouses, after_active)
     _exact_ids(
         "comparison_selected_warehouse",
         comparison.selected_warehouse_ids,
@@ -145,15 +129,15 @@ def validate_delivery_inputs(
         before_active - after_active,
     )
     _comparison(comparison, demand, before_rows, after_rows)
-    _service(baseline, facility, comparison)
-    _cost(baseline, facility, comparison)
+    _service(before, after, comparison)
+    _cost(before, after, comparison)
     return ValidatedDeliveryInputs(
         demand_by_id=demand,
         warehouse_by_id=warehouses,
-        baseline_rows_by_city=before_rows,
-        facility_rows_by_city=after_rows,
-        baseline_active_ids=frozenset(before_active),
-        facility_active_ids=frozenset(after_active),
+        before_rows_by_city=before_rows,
+        after_rows_by_city=after_rows,
+        before_active_ids=frozenset(before_active),
+        after_active_ids=frozenset(after_active),
     )
 
 
@@ -318,39 +302,43 @@ def _comparison(
 
 
 def _service(
-    baseline: BaselineResult,
-    facility: PMedianSolution,
+    before: ComparableNetworkView,
+    after: ComparableNetworkView,
     comparison: AssignmentComparison,
 ) -> None:
-    if not baseline.service:
-        raise ValueError("delivery_baseline_service_required")
-    if not facility.service:
-        raise ValueError("delivery_facility_service_required")
+    if not before.service:
+        raise ValueError("delivery_before_service_required")
+    if not after.service:
+        raise ValueError("delivery_after_service_required")
     requested = set(comparison.requested_service_targets)
     compared = {item.target_hours: item for item in comparison.coverage}
-    before = {item.target_hours: item for item in baseline.service}
-    after = {item.target_hours: item for item in facility.service}
-    if not requested or set(compared) != requested or set(before) != requested:
-        raise ValueError("delivery_baseline_service_targets_mismatch")
-    if set(after) != requested:
-        raise ValueError("delivery_facility_service_targets_mismatch")
-    baseline_coverage = {item.target_hours: item for item in baseline.coverage}
-    if set(baseline_coverage) != requested:
-        raise ValueError("delivery_baseline_coverage_targets_mismatch")
+    before_metrics = {item.target_hours: item for item in before.service}
+    after_metrics = {item.target_hours: item for item in after.service}
+    if not requested or set(compared) != requested or set(before_metrics) != requested:
+        raise ValueError("delivery_before_service_targets_mismatch")
+    if set(after_metrics) != requested:
+        raise ValueError("delivery_after_service_targets_mismatch")
     for target in requested:
         item = compared[target]
-        expected_before = baseline_coverage[target]
-        if item.before != expected_before:
-            raise ValueError("delivery_baseline_comparison_coverage_mismatch")
+        expected_before = item.before
         if (
-            after[target].covered_demand != item.after.covered_demand
-            or after[target].total_demand != item.after.total_demand
+            before_metrics[target].covered_demand != expected_before.covered_demand
+            or before_metrics[target].total_demand != expected_before.total_demand
             or not _close(
-                after[target].coverage_rate,
+                before_metrics[target].coverage_rate,
+                expected_before.demand_weighted_coverage_rate,
+            )
+        ):
+            raise ValueError("delivery_before_comparison_service_mismatch")
+        if (
+            after_metrics[target].covered_demand != item.after.covered_demand
+            or after_metrics[target].total_demand != item.after.total_demand
+            or not _close(
+                after_metrics[target].coverage_rate,
                 item.after.demand_weighted_coverage_rate,
             )
         ):
-            raise ValueError("delivery_facility_comparison_service_mismatch")
+            raise ValueError("delivery_after_comparison_service_mismatch")
         if item.delta.covered_city_count != (
             item.after.covered_city_count - expected_before.covered_city_count
         ) or item.delta.total_city_count != (
@@ -375,40 +363,48 @@ def _service(
 
 
 def _cost(
-    baseline: BaselineResult,
-    facility: PMedianSolution,
+    before: ComparableNetworkView,
+    after: ComparableNetworkView,
     comparison: AssignmentComparison,
 ) -> None:
-    if baseline.assignment.objective != facility.assignment.objective:
-        raise ValueError("delivery_assignment_objective_mismatch")
-    if baseline.assignment.objective == "min_cost" and baseline.cost is None:
-        raise ValueError("delivery_baseline_cost_required")
-    if facility.assignment.objective == "min_cost" and facility.cost is None:
-        raise ValueError("delivery_facility_cost_required")
-    if baseline.cost is None or facility.cost is None:
-        if comparison.before_cost is not None or comparison.after_cost is not None:
-            raise ValueError("delivery_comparison_cost_without_summaries")
-        return
-    if baseline.cost.currency != facility.cost.currency:
-        raise ValueError("delivery_cost_currency_mismatch")
-    for source, cost in (("baseline", baseline.cost), ("facility", facility.cost)):
+    if before.assignment.objective == "min_cost" and before.cost is None:
+        raise ValueError("delivery_before_cost_required")
+    if after.assignment.objective == "min_cost" and after.cost is None:
+        raise ValueError("delivery_after_cost_required")
+    for source, cost in (("before", before.cost), ("after", after.cost)):
+        if cost is None:
+            continue
         if not cost.complete or cost.missing_routes:
             raise ValueError(f"delivery_{source}_cost_incomplete")
         if not _close(cost.total, cost.linehaul + cost.last_mile):
             raise ValueError(f"delivery_{source}_cost_components_mismatch")
-    if comparison.before_cost is None or comparison.after_cost is None:
-        raise ValueError("delivery_comparison_cost_required")
-    if not _close(comparison.before_cost, baseline.cost.total):
-        raise ValueError("delivery_comparison_before_cost_mismatch")
-    if not _close(comparison.after_cost, facility.cost.total):
-        raise ValueError("delivery_comparison_after_cost_mismatch")
-    expected_delta = facility.cost.total - baseline.cost.total
-    if comparison.cost_delta is None or not _close(comparison.cost_delta, expected_delta):
-        raise ValueError("delivery_comparison_cost_delta_mismatch")
-    if facility.objective_value is None or not _close(
-        facility.objective_value, facility.cost.total
-    ):
-        raise ValueError("delivery_facility_objective_value_mismatch")
+
+    if before.cost is not None:
+        if comparison.before_cost is None or not _close(comparison.before_cost, before.cost.total):
+            raise ValueError("delivery_comparison_before_cost_mismatch")
+    elif comparison.before_cost is not None and before.assignment.unassigned_demand:
+        raise ValueError("delivery_comparison_before_cost_without_summary")
+    if after.cost is not None:
+        if comparison.after_cost is None or not _close(comparison.after_cost, after.cost.total):
+            raise ValueError("delivery_comparison_after_cost_mismatch")
+    elif comparison.after_cost is not None and after.assignment.unassigned_demand:
+        raise ValueError("delivery_comparison_after_cost_without_summary")
+
+    if before.cost is not None and after.cost is not None:
+        if before.cost.currency != after.cost.currency:
+            raise ValueError("delivery_cost_currency_mismatch")
+        expected_delta = after.cost.total - before.cost.total
+        if comparison.cost_delta is None or not _close(comparison.cost_delta, expected_delta):
+            raise ValueError("delivery_comparison_cost_delta_mismatch")
+    elif comparison.cost_delta is not None:
+        raise ValueError("delivery_comparison_cost_delta_without_summaries")
+    for source, value in (("before", before), ("after", after)):
+        if value.objective_value is None:
+            continue
+        if value.cost is None:
+            raise ValueError(f"delivery_{source}_objective_cost_required")
+        if not _close(value.objective_value, value.cost.total):
+            raise ValueError(f"delivery_{source}_objective_value_mismatch")
 
 
 def _close(left: float, right: float) -> bool:

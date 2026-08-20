@@ -24,14 +24,14 @@ from supply_chain_planner.network.optimization_models import (
     AssignmentComparison,
     AssignmentResult,
     BaselineResult,
+    ComparableNetworkView,
     CostSummary,
     CoverageMetricSummary,
-    PMedianSolution,
     ServiceMetric,
 )
 
-NETWORK_PLANNING_MARKDOWN_SCHEMA = "network_planning_report_markdown.v1"
-NETWORK_PLANNING_MARKDOWN_MARKER = "<!-- network_planning_report_markdown.v1 -->"
+NETWORK_PLANNING_MARKDOWN_SCHEMA = "network_planning_report_markdown.v2"
+NETWORK_PLANNING_MARKDOWN_MARKER = "<!-- network_planning_report_markdown.v2 -->"
 MAX_BRIEF_CITY_CHANGES = 20
 
 
@@ -58,31 +58,32 @@ class NetworkBaselineReport(DeliveryModel):
     notice_code: str | None
 
 
-class NetworkFacilityReport(DeliveryModel):
-    status: Literal["optimal", "feasible"]
+class NetworkComparableReport(DeliveryModel):
+    """Stable report projection shared by any comparable result kind."""
+
+    label: str
     active_warehouse_ids: list[str]
-    opened_candidate_ids: list[str]
-    closed_existing_ids: list[str]
+    added_warehouse_ids: list[str]
+    removed_warehouse_ids: list[str]
     assignment: AssignmentResult
     objective_value: float | None
-    cost: CostSummary | None
     best_bound: float | None
+    cost: CostSummary | None
     service: list[ServiceMetric]
-    optimality: Literal["proven", "feasible_only", "not_available"]
-    message: str | None
+    status: Literal["optimal", "feasible", "timeout", "infeasible", "unavailable"] | None
+    optimality: Literal["proven", "feasible_only", "not_available"] | None
+    notice: str | None
 
 
 class NetworkPlanningReportBundle(DeliveryModel):
-    schema_version: Literal["network_planning_report_bundle.v1"] = (
-        "network_planning_report_bundle.v1"
-    )
+    schema_version: Literal["network_planning_report_bundle.v2"] = "network_planning_report_bundle.v2"
     kind: Literal["network_planning_report"] = "network_planning_report"
     title: str = "仓网规划结果简报"
     country_code: str = Field(pattern=r"^[A-Z]{2}$")
     scope: NetworkReportScope
     entities: NetworkReportEntities
-    baseline: NetworkBaselineReport
-    facility: NetworkFacilityReport
+    before: NetworkComparableReport
+    after: NetworkComparableReport
     comparison: AssignmentComparison
     notices: list[str]
 
@@ -149,19 +150,17 @@ def build_network_baseline_assessment_report_bundle(
 
 def build_network_planning_report_bundle(
     normalized: NormalizedInputBatch,
-    baseline: BaselineResult,
-    facility: PMedianSolution,
+    before: ComparableNetworkView,
+    after: ComparableNetworkView,
     comparison: AssignmentComparison,
     *,
     country_code: str,
 ) -> NetworkPlanningReportBundle:
     """Build the typed report source without persistence or solver work."""
 
-    validated = validate_delivery_inputs(normalized, baseline, facility, comparison)
-    if facility.assignment is None:  # narrowed by validation; retained for typing.
-        raise ValueError("delivery_facility_assignment_required")
+    validated = validate_delivery_inputs(normalized, before, after, comparison)
     notices = sorted(
-        {notice for notice in (baseline.notice_code, facility.message) if notice is not None}
+        {notice for notice in (before.notice_code, after.notice_code) if notice is not None}
     )
     existing_count = sum(
         1 for warehouse in validated.warehouse_by_id.values() if warehouse.is_existing
@@ -173,7 +172,7 @@ def build_network_planning_report_bundle(
             warehouse_count=len(validated.warehouse_by_id),
             existing_warehouse_count=existing_count,
             candidate_warehouse_count=len(validated.warehouse_by_id) - existing_count,
-            total_demand=baseline.assignment.total_demand,
+            total_demand=before.assignment.total_demand,
         ),
         entities=NetworkReportEntities(
             demand_cities=[
@@ -184,30 +183,38 @@ def build_network_planning_report_bundle(
                 for warehouse_id in sorted(validated.warehouse_by_id)
             ],
         ),
-        baseline=NetworkBaselineReport(
-            label=baseline.label,
-            active_warehouse_ids=sorted(validated.baseline_active_ids),
-            assignment=ordered_assignment(baseline.assignment),
-            service=ordered_metrics(baseline.service),
-            coverage=sorted(baseline.coverage, key=lambda item: item.target_hours),
-            cost=ordered_cost(baseline.cost),
-            notice_code=baseline.notice_code,
-        ),
-        facility=NetworkFacilityReport(
-            status=facility.status,
-            active_warehouse_ids=sorted(validated.facility_active_ids),
-            opened_candidate_ids=sorted(facility.opened_candidate_ids),
-            closed_existing_ids=sorted(facility.closed_existing_ids),
-            assignment=ordered_assignment(facility.assignment),
-            objective_value=facility.objective_value,
-            cost=ordered_cost(facility.cost),
-            best_bound=facility.best_bound,
-            service=ordered_metrics(facility.service),
-            optimality=facility.optimality,
-            message=facility.message,
+        before=_comparable_report(before, validated.before_active_ids),
+        after=_comparable_report(
+            after,
+            validated.after_active_ids,
+            added_ids=comparison.selected_warehouse_ids,
+            removed_ids=comparison.removed_warehouse_ids,
         ),
         comparison=ordered_comparison(comparison),
         notices=notices,
+    )
+
+
+def _comparable_report(
+    value: ComparableNetworkView,
+    active_ids: frozenset[str],
+    *,
+    added_ids: list[str] | None = None,
+    removed_ids: list[str] | None = None,
+) -> NetworkComparableReport:
+    return NetworkComparableReport(
+        label=value.label,
+        active_warehouse_ids=sorted(active_ids),
+        added_warehouse_ids=sorted(added_ids or []),
+        removed_warehouse_ids=sorted(removed_ids or []),
+        assignment=ordered_assignment(value.assignment),
+        objective_value=value.objective_value,
+        best_bound=value.best_bound,
+        cost=ordered_cost(value.cost),
+        service=ordered_metrics(value.service),
+        status=value.status,
+        optimality=value.optimality,
+        notice=value.notice_code,
     )
 
 
@@ -217,10 +224,10 @@ def render_network_planning_report_markdown(
     """Render a deterministic business brief from one validated report bundle."""
 
     targets = sorted(bundle.comparison.requested_service_targets)
-    baseline_coverage = {
+    before_coverage = {
         metric.target_hours: metric.before for metric in bundle.comparison.coverage
     }
-    facility_coverage = {
+    after_coverage = {
         metric.target_hours: metric.after for metric in bundle.comparison.coverage
     }
     city_by_id = {city.city_id: city for city in bundle.entities.demand_cities}
@@ -249,38 +256,38 @@ def render_network_planning_report_markdown(
             f"需求总量 {_format_decimal(bundle.scope.total_demand)}。"
         ),
         (
-            "- 选址结果："
-            f"{_facility_status_label(bundle.facility.status)}"
-            f"（{_optimality_label(bundle.facility.optimality)}），"
-            f"共 {len(bundle.facility.active_warehouse_ids):,} 个启用仓。"
+            "- 变更后结果："
+            f"{_result_status_label(bundle.after.status or bundle.after.label)}"
+            f"（{_optimality_label(bundle.after.optimality or 'not_available')}），"
+            f"共 {len(bundle.after.active_warehouse_ids):,} 个启用仓。"
         ),
         (
             "- 仓网变动："
-            f"新开 {len(bundle.facility.opened_candidate_ids):,} 个仓，"
-            f"关闭 {len(bundle.facility.closed_existing_ids):,} 个仓，"
+            f"新增 {len(bundle.after.added_warehouse_ids):,} 个仓，"
+            f"移除 {len(bundle.after.removed_warehouse_ids):,} 个仓，"
             f"重新分配 {len(bundle.comparison.reassigned_city_ids):,} 个需求城市。"
         ),
         _cost_summary_line(bundle),
         "",
         "## 仓库变动",
         "",
-        f"- 新开仓库：{_id_list(bundle.facility.opened_candidate_ids)}",
-        f"- 关闭仓库：{_id_list(bundle.facility.closed_existing_ids)}",
+        f"- 新增仓库：{_id_list(bundle.after.added_warehouse_ids)}",
+        f"- 移除仓库：{_id_list(bundle.after.removed_warehouse_ids)}",
         (
             "- 启用仓库数："
-            f"变更前 {len(bundle.baseline.active_warehouse_ids):,} 个，"
-            f"变更后 {len(bundle.facility.active_warehouse_ids):,} 个。"
+            f"变更前 {len(bundle.before.active_warehouse_ids):,} 个，"
+            f"变更后 {len(bundle.after.active_warehouse_ids):,} 个。"
         ),
         "",
         "## 时效覆盖",
         "",
-        "| 时效目标 | 基线城市覆盖率 | 方案城市覆盖率 | "
-        "基线需求量加权覆盖率 | 方案需求量加权覆盖率 | 变化 |",
+        "| 时效目标 | 变更前城市覆盖率 | 变更后城市覆盖率 | "
+        "变更前需求量加权覆盖率 | 变更后需求量加权覆盖率 | 变化 |",
         "| ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for target in targets:
-        before = baseline_coverage[target]
-        after = facility_coverage[target]
+        before = before_coverage[target]
+        after = after_coverage[target]
         lines.append(
             "| "
             f"{target:g} 小时 | "
@@ -343,8 +350,8 @@ def render_network_planning_report_markdown(
             "",
             "| 情景 | 总成本 | 干线成本 | 末端成本 | 数据是否完整 |",
             "| --- | ---: | ---: | ---: | :---: |",
-            _cost_table_row("基线", bundle.baseline.cost),
-            _cost_table_row("规划方案", bundle.facility.cost),
+            _cost_table_row("变更前", bundle.before.cost),
+            _cost_table_row("变更后", bundle.after.cost),
             "",
             "## 说明",
             "",
@@ -476,10 +483,10 @@ def _cost_summary_line(bundle: NetworkPlanningReportBundle) -> str:
     after = bundle.comparison.after_cost
     delta = bundle.comparison.cost_delta
     currency = (
-        bundle.facility.cost.currency
-        if bundle.facility.cost is not None
-        else bundle.baseline.cost.currency
-        if bundle.baseline.cost is not None
+        bundle.after.cost.currency
+        if bundle.after.cost is not None
+        else bundle.before.cost.currency
+        if bundle.before.cost is not None
         else None
     )
     if before is None or after is None or delta is None or currency is None:
@@ -516,7 +523,7 @@ def _objective_label(value: str) -> str:
     }.get(value, _markdown_inline(value))
 
 
-def _facility_status_label(value: str) -> str:
+def _result_status_label(value: str) -> str:
     return {"optimal": "最优方案", "feasible": "可行方案"}.get(
         value, _markdown_inline(value)
     )

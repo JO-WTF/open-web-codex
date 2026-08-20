@@ -216,9 +216,10 @@ def assess_facility_change(
             ctx,
         )
     )
-    before_assignment, before_active_ids, before_identity = _load_comparable_resource(before_ref)
+    before_view = _load_comparable_resource(before_ref)
+    before_active_ids = set(before_view.active_warehouse_ids)
     try:
-        require_matching_input(input_identity, before_identity)
+        require_matching_input(input_identity, before_view.input_identity)
     except ValueError as error:
         raise McpResourceContractError("scenario_before_input_identity_mismatch") from error
     known_warehouse_ids = {warehouse.warehouse_id for warehouse in prepared.warehouses}
@@ -240,7 +241,7 @@ def assess_facility_change(
         targets,
     )
     comparison = compare_assignments(
-        before_assignment,
+        before_view.assignment,
         after.assignment,
         targets,
         before_active_ids,

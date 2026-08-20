@@ -46,6 +46,7 @@ from supply_chain_planner.network.optimization_models import (
     AssignmentComparison,
     AssignmentResult,
     BaselineResult,
+    ComparableNetworkView,
     PMedianSolution,
     ScenarioResult,
 )
@@ -70,6 +71,7 @@ from .tool_runtime import (
     CONTENT_ADDRESSED_RESOURCE_TOOL,
     FINAL_WORKSPACE_DELIVERY_TOOL,
     McpResourceContractError,
+    _load_comparable_resource,
     _load_ready_network,
     _runtime,
 )
@@ -81,7 +83,7 @@ def _load_assignment_coverage_result(
     AssignmentResult,
     list[str],
     str,
-    Literal["baseline", "scenario", "facility"],
+    Literal["before", "scenario", "after"],
     PlanningInputIdentity,
 ]:
     """Adapt one solved domain result without choosing or recomputing it."""
@@ -91,7 +93,7 @@ def _load_assignment_coverage_result(
             baseline.assignment,
             baseline.active_warehouse_ids,
             baseline.label,
-            "baseline",
+            "before",
             baseline.input_identity,
         )
     if resource_ref.resource_schema == "network_scenario.v2":
@@ -112,7 +114,7 @@ def _load_assignment_coverage_result(
         facility.assignment,
         facility.active_warehouse_ids,
         facility.status,
-        "facility",
+        "after",
         facility.input_identity,
     )
 
@@ -157,37 +159,25 @@ def _load_final_delivery_inputs(
 ) -> tuple[
     PreparedNetworkResource,
     NormalizedInputBatch,
-    BaselineResult,
-    PMedianSolution,
+    ComparableNetworkView,
+    ComparableNetworkView,
     AssignmentComparison,
 ]:
     plan_comparison = _runtime().load_model(
         plan_comparison_ref,
-        "network_plan_comparison.v1",
+        "network_plan_comparison.v2",
         NetworkPlanComparisonResource,
     )
-    if plan_comparison.before_ref.resource_schema != "network_baseline.v2":
-        raise McpResourceContractError("delivery_before_baseline_required")
-    if plan_comparison.after_ref.resource_schema != "facility_location_solution.v3":
-        raise McpResourceContractError("delivery_after_facility_solution_required")
     prepared, input_identity = _load_ready_network(
         plan_comparison.prepared_input_relative_path,
         ctx,
     )
-    baseline = _runtime().load_model(
-        plan_comparison.before_ref,
-        "network_baseline.v2",
-        BaselineResult,
-    )
-    facility = _runtime().load_model(
-        plan_comparison.after_ref,
-        "facility_location_solution.v3",
-        PMedianSolution,
-    )
+    before_view = _load_comparable_resource(plan_comparison.before_ref)
+    after_view = _load_comparable_resource(plan_comparison.after_ref)
     try:
         require_matching_input(plan_comparison.input_identity, input_identity)
-        require_matching_input(input_identity, baseline.input_identity)
-        require_matching_input(input_identity, facility.input_identity)
+        require_matching_input(input_identity, before_view.input_identity)
+        require_matching_input(input_identity, after_view.input_identity)
     except ValueError as error:
         raise McpResourceContractError("delivery_input_identity_mismatch") from error
     normalized = NormalizedInputBatch(
@@ -198,7 +188,7 @@ def _load_final_delivery_inputs(
         provided_route_facts=prepared.provided_route_facts,
         issues=prepared.issues,
     )
-    return prepared, normalized, baseline, facility, plan_comparison.comparison
+    return prepared, normalized, before_view, after_view, plan_comparison.comparison
 
 
 def _write_final_delivery_json_bundle(
@@ -346,22 +336,22 @@ def prepare_network_comparison_map(
     plan_comparison_ref: NetworkPlanComparisonResourceRef,
     ctx: Context,
 ) -> CallToolResult:
-    """Publish raw baseline-versus-plan GeoJSON for a separately authored map."""
-    prepared, normalized, baseline, facility, comparison = _load_final_delivery_inputs(
+    """Publish raw before-versus-after GeoJSON for a separately authored map."""
+    prepared, normalized, before, after, comparison = _load_final_delivery_inputs(
         plan_comparison_ref,
         ctx,
     )
     bundle = build_network_comparison_map_bundle(
         normalized,
-        baseline,
-        facility,
+        before,
+        after,
         comparison,
         country_code=prepared.country_code,
     )
     geojson = NetworkComparisonGeoJson(features=bundle.geojson.features)
     summary = (
         f"Prepared an interactive comparison map with {len(geojson.features)} "
-        "features from the validated baseline and facility result."
+        "features from the validated before and after results."
     )
     result = _publish_geojson(geojson.schema_version, geojson, summary)
     structured = result.structuredContent
@@ -430,15 +420,15 @@ def render_network_comparison_map(
     ],
     ctx: Context,
 ) -> CallToolResult:
-    """Create a self-contained baseline-versus-facility map JSON file."""
-    prepared, normalized, baseline, facility, comparison = _load_final_delivery_inputs(
+    """Create a self-contained generic before-versus-after map JSON file."""
+    prepared, normalized, before, after, comparison = _load_final_delivery_inputs(
         plan_comparison_ref,
         ctx,
     )
     bundle = build_network_comparison_map_bundle(
         normalized,
-        baseline,
-        facility,
+        before,
+        after,
         comparison,
         country_code=prepared.country_code,
     )
@@ -495,14 +485,14 @@ def publish_network_planning_report(
         )
         markdown = render_network_baseline_assessment_markdown(bundle)
     else:
-        prepared, normalized, baseline, facility, comparison = _load_final_delivery_inputs(
+        prepared, normalized, before, after, comparison = _load_final_delivery_inputs(
             report_input.plan_comparison_ref,
             ctx,
         )
         bundle = build_network_planning_report_bundle(
             normalized,
-            baseline,
-            facility,
+            before,
+            after,
             comparison,
             country_code=prepared.country_code,
         )

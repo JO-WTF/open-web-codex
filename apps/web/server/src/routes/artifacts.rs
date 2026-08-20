@@ -676,7 +676,7 @@ fn validate_downloaded_artifact(
     bytes: &[u8],
 ) -> Result<(), &'static str> {
     let registry = crate::delivery_contracts::warehouse_test_registry();
-    let mime_type = if declared_schema == "network_planning_report_markdown.v1" {
+    let mime_type = if declared_schema == "network_planning_report_markdown.v2" {
         "text/markdown"
     } else {
         "application/json"
@@ -767,11 +767,11 @@ mod tests {
     fn rejects_downloaded_artifact_size_and_contract_drift() {
         let valid = include_bytes!(
             "../../../../../tools/warehouse-network-planner/contracts/fixtures/\
-network_planning_report_markdown.v1.md"
+network_planning_report_markdown.v2.md"
         );
         assert_eq!(
             validate_downloaded_artifact(
-                "network_planning_report_markdown.v1",
+                "network_planning_report_markdown.v2",
                 valid.len() as i64,
                 valid,
             ),
@@ -779,7 +779,7 @@ network_planning_report_markdown.v1.md"
         );
         assert_eq!(
             validate_downloaded_artifact(
-                "network_planning_report_markdown.v1",
+                "network_planning_report_markdown.v2",
                 valid.len() as i64 + 1,
                 valid,
             ),
@@ -788,7 +788,7 @@ network_planning_report_markdown.v1.md"
         let wrong_schema = b"# Warehouse network planning report\n\nMissing marker\n";
         assert_eq!(
             validate_downloaded_artifact(
-                "network_planning_report_markdown.v1",
+                "network_planning_report_markdown.v2",
                 wrong_schema.len() as i64,
                 wrong_schema,
             ),
@@ -837,7 +837,7 @@ network_planning_report_markdown.v1.md"
                             "result": {"content": [], "structuredContent": {
                                 "summary": "Created report.",
                                 "artifact": {
-                                    "schema": "network_planning_report_markdown.v1",
+                                    "schema": "network_planning_report_markdown.v2",
                                     "displayName": "Warehouse network planning report",
                                     "mimeType": "text/markdown",
                                     "workspaceRelativePath": relative_path,
@@ -942,7 +942,7 @@ network_planning_report_markdown.v1.md"
         std::fs::create_dir(checkout.root.join("deliverables")).unwrap();
         let valid = include_bytes!(
             "../../../../../tools/warehouse-network-planner/contracts/fixtures/\
-network_planning_report_markdown.v1.md"
+network_planning_report_markdown.v2.md"
         );
         std::fs::write(checkout.root.join("deliverables/report.md"), valid).unwrap();
         std::fs::write(checkout.root.join("deliverables/restart.md"), valid).unwrap();

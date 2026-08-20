@@ -20,8 +20,8 @@ from supply_chain_planner.network.models import (
     PlanningInputIdentity,
 )
 from supply_chain_planner.network.optimization_models import (
-    AssignmentResult,
     BaselineResult,
+    ComparableNetworkView,
     CostSummary,
     CoverageMetricSummary,
     PMedianSolution,
@@ -154,7 +154,7 @@ def _cost_metric_summary(cost: CostSummary | None) -> str:
 
 def _load_comparable_resource(
     resource_ref: ComparableNetworkResultRef,
-) -> tuple[AssignmentResult, set[str], PlanningInputIdentity]:
+) -> ComparableNetworkView:
     """Load one supported comparison subject through the provider runtime."""
     if resource_ref.resource_schema == "network_baseline.v2":
         result = _runtime().load_model(
@@ -178,7 +178,38 @@ def _load_comparable_resource(
             raise McpResourceContractError("comparable_assignment_unavailable")
     else:
         raise McpResourceContractError("comparison_subject_schema_invalid")
-    return result.assignment, set(result.active_warehouse_ids), result.input_identity
+    if resource_ref.resource_schema == "network_baseline.v2":
+        return ComparableNetworkView(
+            label=result.label,
+            active_warehouse_ids=result.active_warehouse_ids,
+            assignment=result.assignment,
+            cost=result.cost,
+            service=result.service,
+            notice_code=result.notice_code,
+            input_identity=result.input_identity,
+        )
+    if resource_ref.resource_schema == "network_scenario.v2":
+        return ComparableNetworkView(
+            label="scenario",
+            active_warehouse_ids=result.active_warehouse_ids,
+            assignment=result.assignment,
+            cost=result.cost,
+            service=result.service,
+            input_identity=result.input_identity,
+        )
+    return ComparableNetworkView(
+        label=result.status,
+        active_warehouse_ids=result.active_warehouse_ids,
+        assignment=result.assignment,
+        cost=result.cost,
+        service=result.service,
+        notice_code=result.message,
+        status=result.status,
+        optimality=result.optimality,
+        objective_value=result.objective_value,
+        best_bound=result.best_bound,
+        input_identity=result.input_identity,
+    )
 
 
 def _load_ready_network(

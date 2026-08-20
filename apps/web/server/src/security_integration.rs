@@ -750,7 +750,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .unwrap();
     let artifact_id = Uuid::now_v7();
     let artifact_bytes =
-        b"# Warehouse network planning report\n\n<!-- network_planning_report_markdown.v1 -->\n";
+        b"# Warehouse network planning report\n\n<!-- network_planning_report_markdown.v2 -->\n";
     let artifact_digest = hex::encode(Sha256::digest(artifact_bytes));
     sqlx::query(
         "INSERT INTO artifacts (
@@ -758,11 +758,11 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
             source_relative_path, mime_type, expected_size, byte_size,
             content, content_sha256, state, delivery_verifier
          ) VALUES (
-            $1, $2, $3, $4, 'network_planning_report_markdown.v1',
+            $1, $2, $3, $4, 'network_planning_report_markdown.v2',
             'Warehouse network planning report', 'deliverables/security-report.md',
             'text/markdown', $5, $5, $6, $7, 'ready', jsonb_build_object(
                 'kind', 'markdown_marker',
-                'marker', '<!-- network_planning_report_markdown.v1 -->'
+                'marker', '<!-- network_planning_report_markdown.v2 -->'
             )
          )",
     )

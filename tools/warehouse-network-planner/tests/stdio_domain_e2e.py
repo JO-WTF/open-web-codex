@@ -426,11 +426,11 @@ async def _run_network_s3_then_s2(
             ]
             assert demand_features
             assert all(
-                feature["properties"]["baseline_duration_hours"] is not None
+                feature["properties"]["before_duration_hours"] is not None
                 for feature in demand_features
             )
             assert all(
-                feature["properties"]["facility_duration_hours"] is not None
+                feature["properties"]["after_duration_hours"] is not None
                 for feature in demand_features
             )
             assert "layers" not in inline_map
@@ -463,10 +463,10 @@ async def _run_network_s3_then_s2(
                 workspace,
             )
             assert map_result.structuredContent["artifact"]["schema"] == (
-                "network_comparison_map_bundle.v1"
+                "network_comparison_map_bundle.v2"
             )
             assert report_result.structuredContent["artifact"]["schema"] == (
-                "network_planning_report_markdown.v1"
+                "network_planning_report_markdown.v2"
             )
             map_payload = json.loads(
                 (

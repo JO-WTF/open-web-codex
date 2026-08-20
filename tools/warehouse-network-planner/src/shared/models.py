@@ -250,13 +250,13 @@ class ComparableNetworkResultRef(_ResourceRef):
 
 
 class NetworkPlanComparisonResourceRef(_ResourceRef):
-    resource_schema: Literal["network_plan_comparison.v1"] = "network_plan_comparison.v1"
+    resource_schema: Literal["network_plan_comparison.v2"] = "network_plan_comparison.v2"
 
 
 class NetworkPlanComparisonResource(StrictModel):
     """One complete, provenance-bound before-versus-after planning result."""
 
-    schema_version: Literal["network_plan_comparison.v1"] = "network_plan_comparison.v1"
+    schema_version: Literal["network_plan_comparison.v2"] = "network_plan_comparison.v2"
     prepared_input_relative_path: str = Field(min_length=1, max_length=1024)
     input_identity: PlanningInputIdentity
     before_ref: ComparableNetworkResultRef
@@ -289,8 +289,8 @@ class NetworkFinalArtifactDescriptor(StrictModel):
     """Platform-readable descriptor for one explicit final domain deliverable."""
 
     artifact_schema: Literal[
-        "network_comparison_map_bundle.v1",
-        "network_planning_report_markdown.v1",
+        "network_comparison_map_bundle.v2",
+        "network_planning_report_markdown.v2",
     ] = Field(alias="schema")
     display_name: str = Field(min_length=1, max_length=256, alias="displayName")
     mime_type: Literal["application/json", "text/markdown"] = Field(alias="mimeType")
@@ -316,7 +316,7 @@ class NetworkBaselineReportInput(StrictModel):
 
 
 class NetworkComparisonReportInput(StrictModel):
-    """Exact typed inputs for a baseline-versus-plan comparison brief."""
+    """Exact typed inputs for a generic before-versus-after comparison brief."""
 
     mode: Literal["comparison"] = "comparison"
     plan_comparison_ref: Annotated[

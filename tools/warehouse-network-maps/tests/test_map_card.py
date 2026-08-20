@@ -136,14 +136,20 @@ def coverage_data_ref() -> dict[str, object]:
                         "city_name": "string",
                         "is_existing": "boolean",
                         "kind": "string",
-                        "opened_candidate": "boolean",
+                        "added_facility": "boolean",
+                        "after_active": "boolean",
+                        "before_active": "boolean",
+                        "removed_facility": "boolean",
                         "warehouse_id": "string",
                         "warehouse_name": "string",
                         "warehouse_type": "string",
                     },
                     "boolean_property_counts": {
                         "is_existing": {"true_count": 11, "false_count": 12},
-                        "opened_candidate": {"true_count": 2, "false_count": 21},
+                        "added_facility": {"true_count": 2, "false_count": 21},
+                        "after_active": {"true_count": 13, "false_count": 10},
+                        "before_active": {"true_count": 11, "false_count": 12},
+                        "removed_facility": {"true_count": 0, "false_count": 23},
                     },
                 },
             ],
@@ -168,9 +174,56 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
                 layer_ids = [layer["id"] for layer in spec["layers"]]
                 self.assertIn("existing-center", layer_ids)
                 self.assertIn("candidate-cross-docking", layer_ids)
-                self.assertIn("opened-candidates", layer_ids)
+                self.assertIn("added-facilities", layer_ids)
                 self.assertIn("last-mile-coverage", layer_ids)
                 self.assertIn("linehaul-coverage", layer_ids)
+                hover_layers = {
+                    item["layer"]: item
+                    for item in spec["extensions"]["hover"]["layers"]
+                }
+                self.assertIn("demand-cities", hover_layers)
+                self.assertIn("last-mile-coverage", hover_layers)
+                self.assertIn("before_active", hover_layers["existing-center"]["fields"])
+                self.assertIn("duration_hours", hover_layers["demand-cities"]["fields"])
+            finally:
+                server._map_card_spec_store = original
+
+    async def test_comparison_profile_exposes_before_after_hover_fields(self) -> None:
+        comparison = deepcopy(coverage_data_ref())
+        demand = comparison["profile"]["feature_types"][0]
+        assert isinstance(demand, dict)
+        properties = demand["properties"]
+        assert isinstance(properties, dict)
+        properties.update(
+            {
+                "after_duration_hours": "number",
+                "after_warehouse_id": "string",
+                "before_duration_hours": "number",
+                "before_warehouse_id": "string",
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            original = server._map_card_spec_store
+            server._map_card_spec_store = MapCardSpecStore(Path(directory))
+            try:
+                result = await server.create_network_map_card(
+                    "Comparison",
+                    GeoJsonResourceRef.model_validate(comparison),
+                )
+                spec_ref = result.structuredContent["map_spec_ref"]
+                resource_id = spec_ref["uri"].rsplit("/", 1)[-1]
+                spec = json.loads(server._map_card_spec_store.read(resource_id))
+                hover_layers = {
+                    item["layer"]: item for item in spec["extensions"]["hover"]["layers"]
+                }
+                self.assertIn(
+                    "after_warehouse_id",
+                    hover_layers["demand-cities"]["fields"],
+                )
+                self.assertIn(
+                    "before_duration_hours",
+                    hover_layers["demand-cities"]["fields"],
+                )
             finally:
                 server._map_card_spec_store = original
 
@@ -529,7 +582,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
         assert isinstance(demand, dict)
         properties = demand["properties"]
         assert isinstance(properties, dict)
-        properties["baseline_duration_hours"] = "null"
+        properties["before_duration_hours"] = "null"
         with self.assertRaisesRegex(ToolError, "no non-null GeoJSON values"):
             await server.mcp.call_tool(
                 "create_map_card",
@@ -545,7 +598,7 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
                             "paint": {
                                 "circle-color": [
                                     "case",
-                                    ["<=", ["get", "baseline_duration_hours"], 12],
+                                    ["<=", ["get", "before_duration_hours"], 12],
                                     "#16A34A",
                                     "#DC2626",
                                 ]

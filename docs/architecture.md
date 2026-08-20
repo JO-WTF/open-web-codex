@@ -47,7 +47,7 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | Capability Draft/Release/Installation | 无当前生产 owner | Catalog/Studio/Python publish crate、route、DTO、client、UI 与无 owner 数据表均已删除，不参与启动或 readiness |
 | Work State 与 Platform coordination | 无当前 production owner | work-state-service、route、MCP、gate、schema 与第二控制面已由 Slice 4B.2-A 删除；不建设替代状态机 |
 | Data Intake | 无当前 owner | 生产 route、validation crate、SourceAsset/Dataset/Task binding 表与产品入口已删除；阶段一不建设替代状态机 |
-| 仓网规划能力 | 供应链 Python 包的 domain owners | 当前阶段统一拥有 demand/facility/candidate/location/lane/route/cost records，Data mapping/normalization/geography、route/cost fact 与 matrix build/validate/partial reuse，actual/optimized baseline、open/close/relocation scenario、assignment/service/cost evaluation、p-median、before/after comparison、分配覆盖 GeoJSON、地图卡片数据和确定性 Markdown 简报。来源预览显式区分样本数与完整总数；完整准备结果返回精确候选仓总数和有界目录。成本 Tool 可在 exact prepared input 内对完整报价按层派生 `warehouse_quote_mean_calculation.v1`，并逐字段校验用户脚本证据后绑定 bounded provenance；单 Agent 只有在任务 Skill 授权或用户明确要求时才可用脚本对同一 prepared input 做确定性聚合，脚本不拥有标准化或求解。需求、候选、现网仓、实际分配、路线或报价事实变动必须完整归一化；生成输入、导航请求、计算证据和最终文件分别只能进入 `outputs/warehouse-network/{prepared,requests,calculations,deliverables}/`。Network 覆盖线从精确分配和坐标派生，不含城市/仓库名称分支；它不引入 Platform workflow、缓存或第二份业务状态。`solve_p_median` 的 `minimum_feasible` 在一个总时间预算内返回每个仓数的可行性、首个可行仓数和最终 coverage，避免 Agent 循环调用多个求解 Tool。报告输入以 discriminated typed contract 区分单一 baseline 评估和完整 baseline-versus-plan comparison，不为交付伪造方案结果。结构化计算结果与业务简报分离，不拥有通用 Resource/Workspace infrastructure。Stage E 已删除 Case/NetworkSnapshot/source_ref/ArtifactRef 与多层 hashes 旧偏离。未来若第二个供应链 Copilot 证明存在稳定公共领域合同，再评估内部提取 |
+| 仓网规划能力 | 供应链 Python 包的 domain owners | 当前阶段统一拥有 demand/facility/candidate/location/lane/route/cost records，Data mapping/normalization/geography、route/cost fact 与 matrix build/validate/partial reuse，actual/optimized baseline、open/close/relocation scenario、assignment/service/cost evaluation、p-median、before/after comparison、分配覆盖 GeoJSON、地图卡片数据和确定性 Markdown 简报。来源预览显式区分样本数与完整总数；完整准备结果返回精确候选仓总数和有界目录。成本 Tool 可在 exact prepared input 内对完整报价按层派生 `warehouse_quote_mean_calculation.v1`，并逐字段校验用户脚本证据后绑定 bounded provenance；单 Agent 只有在任务 Skill 授权或用户明确要求时才可用脚本对同一 prepared input 做确定性聚合，脚本不拥有标准化或求解。需求、候选、现网仓、实际分配、路线或报价事实变动必须完整归一化；生成输入、导航请求、计算证据和最终文件分别只能进入 `outputs/warehouse-network/{prepared,requests,calculations,deliverables}/`。Network 覆盖线从精确分配和坐标派生，不含城市/仓库名称分支；它不引入 Platform workflow、缓存或第二份业务状态。`solve_p_median` 的 `minimum_feasible` 在一个总时间预算内返回每个仓数的可行性、首个可行仓数和最终 coverage，避免 Agent 循环调用多个求解 Tool。报告输入以 discriminated typed contract 区分单一 baseline 评估和 generic before/after comparison；comparison v2 接受同一 prepared identity 下任意 baseline、scenario 或 facility-location 结果，不为交付伪造方案结果。结构化计算结果与业务简报分离，不拥有通用 Resource/Workspace infrastructure。Stage E 已删除 Case/NetworkSnapshot/source_ref/ArtifactRef 与多层 hashes 旧偏离。未来若第二个供应链 Copilot 证明存在稳定公共领域合同，再评估内部提取 |
 
 Codex Runtime 仍是模型可见对话状态的唯一权威。Platform events、execution、activity
 和协作状态都是投影，不应成为第二个 Thread、Memory 或 Supervisor。
@@ -252,8 +252,8 @@ DTO、数据库工作流或 Skill 中的案例规则。
 
 当前 `artifacts`、`artifact_task_grants`、exact Item provenance 和物化字节是 Platform
 最终交付 owner。generic ResourceLink 注册、跨 child Resource 搜索、Artifact 输入回流和旧
-`report.v1` JSON inline renderer 已删除；正式结果简报只作为 built-in final Tool 产生的中文
-Markdown 文件登记并下载。对话内 `map.v3` 只保存 bounded renderer 与 exact producing Resource
+`report.v1` JSON inline renderer 已删除；正式 comparison 简报使用
+`network_planning_report_markdown.v2`，单独 baseline 评估保留独立的 baseline report bundle 口径，最终均作为 built-in final Tool 产生的中文 Markdown 文件登记并下载。对话内 `map.v3` 只保存 bounded renderer 与 exact producing Resource
 引用，原生 Codex inline visualization 则从授权 Profile/Thread 目录即时读取，二者都不会把
 中间 MCP Resource 提升为 Artifact。`content_sha256` 只记录复制后字节完整性，不参与业务复用
 或准入。`map.v3` 的 provider-owned、内容寻址 `map_card_spec.v1` 只保存精确 GeoJSON refs、图层、视角和可选父 spec ref；

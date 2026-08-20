@@ -30,6 +30,7 @@ from supply_chain_planner.network.models import NormalizedInputBatch
 from supply_chain_planner.network.optimization_models import (
     AssignmentComparison,
     BaselineResult,
+    ComparableNetworkView,
     ExactOpeningPolicy,
     PMedianSolution,
 )
@@ -61,6 +62,32 @@ class Sample2Delivery:
     baseline: BaselineResult
     facility: PMedianSolution
     comparison: AssignmentComparison
+
+    @property
+    def before(self) -> ComparableNetworkView:
+        return ComparableNetworkView(
+            label=self.baseline.label,
+            active_warehouse_ids=self.baseline.active_warehouse_ids,
+            assignment=self.baseline.assignment,
+            service=self.baseline.service,
+            cost=self.baseline.cost,
+            notice_code=self.baseline.notice_code,
+            input_identity=self.baseline.input_identity,
+        )
+
+    @property
+    def after(self) -> ComparableNetworkView:
+        return ComparableNetworkView(
+            label=self.facility.status,
+            active_warehouse_ids=self.facility.active_warehouse_ids,
+            assignment=self.facility.assignment,
+            service=self.facility.service,
+            cost=self.facility.cost,
+            status=self.facility.status,
+            optimality=self.facility.optimality,
+            objective_value=self.facility.objective_value,
+            input_identity=self.facility.input_identity,
+        )
 
 
 @pytest.fixture(scope="module")
@@ -163,15 +190,15 @@ def test_sample2_builds_complete_self_contained_map_and_report(
     inputs = sample2_delivery
     map_bundle = build_network_comparison_map_bundle(
         inputs.normalized,
-        inputs.baseline,
-        inputs.facility,
+        inputs.before,
+        inputs.after,
         inputs.comparison,
         country_code="ID",
     )
     report_bundle = build_network_planning_report_bundle(
         inputs.normalized,
-        inputs.baseline,
-        inputs.facility,
+        inputs.before,
+        inputs.after,
         inputs.comparison,
         country_code="ID",
     )
@@ -181,12 +208,12 @@ def test_sample2_builds_complete_self_contained_map_and_report(
         1
         for warehouse in inputs.normalized.warehouses
         if warehouse.warehouse_type == "cross_docking"
-        and warehouse.warehouse_id in set(inputs.baseline.active_warehouse_ids)
+        and warehouse.warehouse_id in set(inputs.before.active_warehouse_ids)
     ) + sum(
         1
         for warehouse in inputs.normalized.warehouses
         if warehouse.warehouse_type == "cross_docking"
-        and warehouse.warehouse_id in set(inputs.facility.active_warehouse_ids)
+        and warehouse.warehouse_id in set(inputs.after.active_warehouse_ids)
     )
     assert feature_kinds == {
         "warehouse": 23,
@@ -198,8 +225,8 @@ def test_sample2_builds_complete_self_contained_map_and_report(
     assert len({feature.id for feature in map_bundle.geojson.features}) == len(
         map_bundle.geojson.features
     )
-    assert len(map_bundle.summary.opened_candidate_ids) == 2
-    assert map_bundle.summary.closed_existing_ids == []
+    assert len(map_bundle.summary.added_warehouse_ids) == 2
+    assert map_bundle.summary.removed_warehouse_ids == []
     assert inputs.baseline.label == "actual_current"
     assert len(inputs.normalized.current_assignments) == 50
     assert set(inputs.baseline.active_warehouse_ids) == {
@@ -219,15 +246,15 @@ def test_sample2_builds_complete_self_contained_map_and_report(
         if feature.properties.kind == "warehouse"
     }
     assert all(
-        warehouse_properties[warehouse_id].baseline_active for warehouse_id in zero_demand_active
+        warehouse_properties[warehouse_id].before_active for warehouse_id in zero_demand_active
     )
     demand_properties = [
         feature.properties
         for feature in map_bundle.geojson.features
         if feature.properties.kind == "demand"
     ]
-    assert all(item.baseline_duration_hours is not None for item in demand_properties)
-    assert all(item.facility_duration_hours is not None for item in demand_properties)
+    assert all(item.before_duration_hours is not None for item in demand_properties)
+    assert all(item.after_duration_hours is not None for item in demand_properties)
     assert "title" not in type(map_bundle).model_fields
     assert "layers" not in type(map_bundle).model_fields
     assert "extensions" not in type(map_bundle).model_fields
@@ -240,24 +267,23 @@ def test_sample2_builds_complete_self_contained_map_and_report(
     }
     assert len(report_bundle.entities.demand_cities) == 50
     assert len(report_bundle.entities.warehouses) == 23
-    assert len(report_bundle.baseline.assignment.rows) == 50
-    assert len(report_bundle.facility.assignment.rows) == 50
-    assert len(report_bundle.facility.opened_candidate_ids) == 2
-    assert report_bundle.facility.closed_existing_ids == []
-    assert [metric.target_hours for metric in report_bundle.facility.service] == [
+    assert len(report_bundle.before.assignment.rows) == 50
+    assert len(report_bundle.after.assignment.rows) == 50
+    assert len(report_bundle.after.added_warehouse_ids) == 2
+    assert report_bundle.after.removed_warehouse_ids == []
+    assert [metric.target_hours for metric in report_bundle.after.service] == [
         6,
         12,
         18,
     ]
-    assert report_bundle.baseline.cost is not None
-    assert report_bundle.baseline.cost.complete is True
-    assert report_bundle.facility.cost is not None
-    assert report_bundle.facility.cost.complete is True
-    assert report_bundle.facility.cost.total == (
-        report_bundle.facility.cost.linehaul + report_bundle.facility.cost.last_mile
+    assert report_bundle.before.cost is not None
+    assert report_bundle.before.cost.complete is True
+    assert report_bundle.after.cost is not None
+    assert report_bundle.after.cost.complete is True
+    assert report_bundle.after.cost.total == (
+        report_bundle.after.cost.linehaul + report_bundle.after.cost.last_mile
     )
-    assert report_bundle.facility.cost.by_warehouse
-
+    assert report_bundle.after.cost.by_warehouse
     map_payload = map_bundle.model_dump(mode="json")
     report_payload = report_bundle.model_dump(mode="json")
     serialized_map = json.dumps(map_payload, ensure_ascii=False, sort_keys=True)
@@ -279,22 +305,138 @@ def test_sample2_builds_complete_self_contained_map_and_report(
     _assert_no_external_delivery_identity(report_payload)
 
 
+@pytest.mark.parametrize(
+    ("before_kind", "after_kind"),
+    [
+        ("baseline", "baseline"),
+        ("baseline", "scenario"),
+        ("baseline", "facility"),
+        ("scenario", "baseline"),
+        ("scenario", "scenario"),
+        ("scenario", "facility"),
+        ("facility", "baseline"),
+        ("facility", "scenario"),
+        ("facility", "facility"),
+    ],
+)
+def test_comparison_delivery_accepts_any_comparable_result_pair(
+    sample2_delivery: Sample2Delivery,
+    before_kind: str,
+    after_kind: str,
+) -> None:
+    inputs = sample2_delivery
+    scenario_view = inputs.before.model_copy(update={"label": "scenario"})
+    views = {
+        "baseline": inputs.before,
+        "facility": inputs.after,
+        "scenario": scenario_view,
+    }
+    before = views[before_kind]
+    after = views[after_kind]
+    comparison = compare_assignments(
+        before.assignment,
+        after.assignment,
+        inputs.comparison.requested_service_targets,
+        set(before.active_warehouse_ids),
+        set(after.active_warehouse_ids),
+    )
+    map_bundle = build_network_comparison_map_bundle(
+        inputs.normalized,
+        before,
+        after,
+        comparison,
+        country_code="ID",
+    )
+    report_bundle = build_network_planning_report_bundle(
+        inputs.normalized,
+        before,
+        after,
+        comparison,
+        country_code="ID",
+    )
+    map_payload = map_bundle.model_dump(mode="json")
+    report_payload = report_bundle.model_dump(mode="json")
+    assert map_bundle.schema_version == "network_comparison_map_bundle.v2"
+    assert report_bundle.schema_version == "network_planning_report_bundle.v2"
+    assert map_payload["summary"]["before_label"] == before.label
+    assert map_payload["summary"]["after_label"] == after.label
+    assert "baseline_active" not in str(map_payload)
+    assert "facility_active" not in str(map_payload)
+    assert report_payload["before"]["label"] == before.label
+    assert report_payload["after"]["label"] == after.label
+
+
+def test_comparison_delivery_rejects_result_identity_mismatch(
+    sample2_delivery: Sample2Delivery,
+) -> None:
+    inputs = sample2_delivery
+    mismatched = inputs.after.model_copy(
+        update={
+            "input_identity": inputs.before.input_identity.model_copy(
+                update={"content_sha256": "f" * 64}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="delivery_result_input_identity_mismatch"):
+        build_network_comparison_map_bundle(
+            inputs.normalized,
+            inputs.before,
+            mismatched,
+            inputs.comparison,
+            country_code="ID",
+        )
+
+
+def test_comparison_delivery_checks_objective_value_for_before_facility(
+    sample2_delivery: Sample2Delivery,
+) -> None:
+    inputs = sample2_delivery
+    assert inputs.after.cost is not None
+    before = inputs.after.model_copy(
+        update={"objective_value": inputs.after.cost.total + 1_000}
+    )
+    after = inputs.before
+    comparison = compare_assignments(
+        before.assignment,
+        after.assignment,
+        inputs.comparison.requested_service_targets,
+        set(before.active_warehouse_ids),
+        set(after.active_warehouse_ids),
+    )
+    with pytest.raises(ValueError, match="delivery_before_objective_value_mismatch"):
+        build_network_planning_report_bundle(
+            inputs.normalized,
+            before,
+            after,
+            comparison,
+            country_code="ID",
+        )
+    without_cost = before.model_copy(update={"cost": None})
+    with pytest.raises(ValueError, match="delivery_before_cost_required"):
+        build_network_planning_report_bundle(
+            inputs.normalized,
+            without_cost,
+            after,
+            comparison,
+            country_code="ID",
+        )
+
 def test_delivery_schema_fixtures_match_models_and_validate_complete_indonesia_bundle(
     sample2_delivery: Sample2Delivery,
 ) -> None:
     inputs = sample2_delivery
     bundles = {
-        "network_comparison_map_bundle.v1": build_network_comparison_map_bundle(
+        "network_comparison_map_bundle.v2": build_network_comparison_map_bundle(
             inputs.normalized,
-            inputs.baseline,
-            inputs.facility,
+            inputs.before,
+            inputs.after,
             inputs.comparison,
             country_code="ID",
         ),
-        "network_planning_report_bundle.v1": build_network_planning_report_bundle(
+        "network_planning_report_bundle.v2": build_network_planning_report_bundle(
             inputs.normalized,
-            inputs.baseline,
-            inputs.facility,
+            inputs.before,
+            inputs.after,
             inputs.comparison,
             country_code="ID",
         ),
@@ -320,15 +462,15 @@ def test_delivery_models_reject_unknown_nested_fields(
     bundles = [
         build_network_comparison_map_bundle(
             inputs.normalized,
-            inputs.baseline,
-            inputs.facility,
+            inputs.before,
+            inputs.after,
             inputs.comparison,
             country_code="ID",
         ).model_dump(mode="json"),
         build_network_planning_report_bundle(
             inputs.normalized,
-            inputs.baseline,
-            inputs.facility,
+            inputs.before,
+            inputs.after,
             inputs.comparison,
             country_code="ID",
         ).model_dump(mode="json"),
@@ -385,29 +527,53 @@ def test_delivery_bundles_are_deterministic_for_equivalent_input_order(
 
     expected_map = build_network_comparison_map_bundle(
         inputs.normalized,
-        inputs.baseline,
-        inputs.facility,
+        inputs.before,
+        inputs.after,
         inputs.comparison,
         country_code="ID",
     )
     reordered_map = build_network_comparison_map_bundle(
         reversed_normalized,
-        reversed_baseline,
-        reversed_facility,
+        inputs.before.model_copy(
+            update={
+                "active_warehouse_ids": reversed_baseline.active_warehouse_ids,
+                "assignment": reversed_baseline.assignment,
+                "service": reversed_baseline.service,
+            }
+        ),
+        inputs.after.model_copy(
+            update={
+                "active_warehouse_ids": reversed_facility.active_warehouse_ids,
+                "assignment": reversed_facility.assignment,
+                "service": reversed_facility.service,
+            }
+        ),
         reversed_comparison,
         country_code="ID",
     )
     expected_report = build_network_planning_report_bundle(
         inputs.normalized,
-        inputs.baseline,
-        inputs.facility,
+        inputs.before,
+        inputs.after,
         inputs.comparison,
         country_code="ID",
     )
     reordered_report = build_network_planning_report_bundle(
         reversed_normalized,
-        reversed_baseline,
-        reversed_facility,
+        inputs.before.model_copy(
+            update={
+                "active_warehouse_ids": reversed_baseline.active_warehouse_ids,
+                "assignment": reversed_baseline.assignment,
+                "service": reversed_baseline.service,
+            }
+        ),
+        inputs.after.model_copy(
+            update={
+                "active_warehouse_ids": reversed_facility.active_warehouse_ids,
+                "assignment": reversed_facility.assignment,
+                "service": reversed_facility.service,
+            }
+        ),
         reversed_comparison,
         country_code="ID",
     )
@@ -425,8 +591,8 @@ def test_report_markdown_is_a_bounded_brief_not_a_json_assignment_dump(
     inputs = sample2_delivery
     bundle = build_network_planning_report_bundle(
         inputs.normalized,
-        inputs.baseline,
-        inputs.facility,
+        inputs.before,
+        inputs.after,
         inputs.comparison,
         country_code="ID",
     )
@@ -438,14 +604,34 @@ def test_report_markdown_is_a_bounded_brief_not_a_json_assignment_dump(
     assert "## 执行摘要" in markdown
     assert "## 仓库变动" in markdown
     assert "## 时效覆盖" in markdown
-    assert "基线城市覆盖率" in markdown
-    assert "方案城市覆盖率" in markdown
+    assert "变更前城市覆盖率" in markdown
+    assert "变更后城市覆盖率" in markdown
     assert "## 受影响的需求城市" in markdown
     assert "## 成本汇总" in markdown
     assert "结构化计算结果" in markdown
     assert '"schema_version"' not in markdown
     assert '"rows"' not in markdown
     assert len(markdown.encode("utf-8")) < 32 * 1024
+
+
+def test_report_markdown_v2_fixture_matches_generic_bundle(
+    sample2_delivery: Sample2Delivery,
+) -> None:
+    inputs = sample2_delivery
+    bundle = build_network_planning_report_bundle(
+        inputs.normalized,
+        inputs.before,
+        inputs.after,
+        inputs.comparison,
+        country_code="ID",
+    )
+    fixture = (
+        Path(__file__).parents[1]
+        / "contracts"
+        / "fixtures"
+        / "network_planning_report_markdown.v2.md"
+    ).read_text(encoding="utf-8")
+    assert render_network_planning_report_markdown(bundle) == fixture
 
 
 def test_map_rejects_missing_coordinates_without_blocking_json_report(
@@ -468,16 +654,16 @@ def test_map_rejects_missing_coordinates_without_blocking_json_report(
     ):
         build_network_comparison_map_bundle(
             normalized,
-            inputs.baseline,
-            inputs.facility,
+            inputs.before,
+            inputs.after,
             inputs.comparison,
             country_code="ID",
         )
 
     report = build_network_planning_report_bundle(
         normalized,
-        inputs.baseline,
-        inputs.facility,
+        inputs.before,
+        inputs.after,
         inputs.comparison,
         country_code="ID",
     )
@@ -487,11 +673,11 @@ def test_map_rejects_missing_coordinates_without_blocking_json_report(
 @pytest.mark.parametrize(
     ("field", "error_code"),
     [
-        ("unknown_assignment", "delivery_facility_assignment_warehouse_unknown"),
+        ("unknown_assignment", "delivery_after_assignment_warehouse_unknown"),
         ("inconsistent_active_delta", "delivery_comparison_selected_warehouse_ids_mismatch"),
-        ("incomplete_baseline_active", "delivery_baseline_active_must_equal_existing"),
-        ("missing_cost", "delivery_facility_cost_required"),
-        ("missing_service", "delivery_facility_service_required"),
+        ("incomplete_baseline_active", "delivery_before_assignment_warehouse_inactive"),
+        ("missing_cost", "delivery_after_cost_required"),
+        ("missing_service", "delivery_after_service_required"),
     ],
 )
 def test_delivery_rejects_inconsistent_typed_results(
@@ -516,8 +702,19 @@ def test_delivery_rejects_inconsistent_typed_results(
     elif field == "inconsistent_active_delta":
         comparison = comparison.model_copy(update={"selected_warehouse_ids": []})
     elif field == "incomplete_baseline_active":
+        removed_id = next(
+            row.warehouse_id
+            for row in baseline.assignment.rows
+            if row.warehouse_id is not None
+        )
         baseline = baseline.model_copy(
-            update={"active_warehouse_ids": baseline.active_warehouse_ids[1:]}
+            update={
+                "active_warehouse_ids": [
+                    warehouse_id
+                    for warehouse_id in baseline.active_warehouse_ids
+                    if warehouse_id != removed_id
+                ]
+            }
         )
     elif field == "missing_cost":
         facility = facility.model_copy(update={"cost": None})
@@ -540,8 +737,8 @@ def test_country_is_explicit_and_not_indonesia_specific(
     inputs = sample2_delivery
     report = build_network_planning_report_bundle(
         inputs.normalized,
-        inputs.baseline,
-        inputs.facility,
+        inputs.before,
+        inputs.after,
         inputs.comparison,
         country_code="MY",
     )

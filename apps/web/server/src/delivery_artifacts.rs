@@ -344,8 +344,8 @@ mod tests {
             "result": {"structuredContent": {
                 "summary": "Created map.",
                 "artifact": {
-                    "schema": "network_comparison_map_bundle.v1",
-                    "displayName": "Warehouse network: baseline vs selected facilities",
+                    "schema": "network_comparison_map_bundle.v2",
+                    "displayName": "Warehouse network: before vs after comparison",
                     "mimeType": "application/json",
                     "workspaceRelativePath": "outputs/network-map.json",
                     "byteSize": 128
@@ -378,7 +378,7 @@ mod tests {
             "result": {"structuredContent": {
                 "summary": "Created report.",
                 "artifact": {
-                    "schema": "network_planning_report_markdown.v1",
+                    "schema": "network_planning_report_markdown.v2",
                     "displayName": "Warehouse network planning report",
                     "mimeType": "text/markdown",
                     "workspaceRelativePath": "deliverables/report.md",
@@ -440,7 +440,7 @@ mod tests {
             "result": {"structuredContent": {
                 "summary": "Created report.",
                 "artifact": {
-                    "schema": "network_planning_report_markdown.v1",
+                    "schema": "network_planning_report_markdown.v2",
                     "displayName": "Warehouse network planning report",
                     "mimeType": "text/markdown",
                     "workspaceRelativePath": "deliverables/report.md",
@@ -513,30 +513,30 @@ mod tests {
     fn validates_materialized_bundle_schema_and_kind() {
         let report_fixture = include_bytes!(
             "../../../../tools/warehouse-network-planner/contracts/fixtures/\
-network_planning_report_markdown.v1.md"
+network_planning_report_markdown.v2.md"
         );
         let map_fixture = include_bytes!(
             "../../../../tools/warehouse-network-planner/contracts/fixtures/\
-network_comparison_map_bundle.v1.json"
+network_comparison_map_bundle.v2.json"
         );
-        validate_materialized_bundle("network_planning_report_markdown.v1", report_fixture)
+        validate_materialized_bundle("network_planning_report_markdown.v2", report_fixture)
             .expect("complete provider report fixture must validate");
         validate_materialized_bundle(
-            "network_planning_report_markdown.v1",
-            "# 当前仓网评估简报\n\n<!-- network_planning_report_markdown.v1 -->\n\n## 时效覆盖\n\n- 覆盖城市数：45/50。\n".as_bytes(),
+            "network_planning_report_markdown.v2",
+            "# 当前仓网评估简报\n\n<!-- network_planning_report_markdown.v2 -->\n\n## 时效覆盖\n\n- 覆盖城市数：45/50。\n".as_bytes(),
         )
         .expect("provider-owned Chinese assessment with natural ratio must validate");
-        validate_materialized_bundle("network_comparison_map_bundle.v1", map_fixture)
+        validate_materialized_bundle("network_comparison_map_bundle.v2", map_fixture)
             .expect("complete provider map fixture must validate");
 
         for bytes in [
-            b"# \n\n<!-- network_planning_report_markdown.v1 -->\n".as_slice(),
+            b"# \n\n<!-- network_planning_report_markdown.v2 -->\n".as_slice(),
             b"# Warehouse network planning report\n\nMissing marker\n".as_slice(),
             b"# Warehouse network planning report\n\n<!-- wrong.v1 -->\n".as_slice(),
-            b"# Warehouse network planning report\n\n<!-- network_planning_report_markdown.v1 -->\n\nSee /Users/private/report.md\n".as_slice(),
+            b"# Warehouse network planning report\n\n<!-- network_planning_report_markdown.v2 -->\n\nSee /Users/private/report.md\n".as_slice(),
         ] {
             assert_eq!(
-                validate_materialized_bundle("network_planning_report_markdown.v1", bytes),
+                validate_materialized_bundle("network_planning_report_markdown.v2", bytes),
                 if bytes.ends_with(b"report.md\n") {
                     Err("artifact_content_unsafe")
                 } else {
@@ -551,7 +551,7 @@ network_comparison_map_bundle.v1.json"
         let artifact_id = Uuid::nil();
         let pending = artifact_delivery_projection(
             artifact_id,
-            "network_planning_report_markdown.v1",
+            "network_planning_report_markdown.v2",
             "Warehouse network planning report",
             "text/markdown",
             128,
@@ -566,7 +566,7 @@ network_comparison_map_bundle.v1.json"
 
         let materializing = artifact_delivery_projection(
             artifact_id,
-            "network_planning_report_markdown.v1",
+            "network_planning_report_markdown.v2",
             "Warehouse network planning report",
             "text/markdown",
             128,
@@ -580,7 +580,7 @@ network_comparison_map_bundle.v1.json"
 
         let ready = artifact_delivery_projection(
             artifact_id,
-            "network_planning_report_markdown.v1",
+            "network_planning_report_markdown.v2",
             "Warehouse network planning report",
             "text/markdown",
             128,
@@ -598,7 +598,7 @@ network_comparison_map_bundle.v1.json"
 
         let failed = artifact_delivery_projection(
             artifact_id,
-            "network_planning_report_markdown.v1",
+            "network_planning_report_markdown.v2",
             "Warehouse network planning report",
             "text/markdown",
             128,
@@ -621,7 +621,7 @@ network_comparison_map_bundle.v1.json"
     fn rejects_unknown_artifact_state_instead_of_downgrading_it() {
         assert!(artifact_delivery_projection(
             Uuid::nil(),
-            "network_planning_report_markdown.v1",
+            "network_planning_report_markdown.v2",
             "Warehouse network planning report",
             "text/markdown",
             128,
