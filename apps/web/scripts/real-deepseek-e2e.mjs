@@ -1042,10 +1042,7 @@ async function ensureCopilotActive() {
     });
   }
   const stateValue = String(target.state).toLowerCase();
-  const executionConfigured =
-    stateValue === "configured" &&
-    (target.agentRolesConfigured ?? target.agent_roles_configured) === true;
-  if (stateValue !== "ready" && !executionConfigured) {
+  if (stateValue !== "configured") {
     throw new NativeRuntimeBlocker("copilot_runtime_unavailable", {
       package_id: copilotPackageId,
       state: target.state,

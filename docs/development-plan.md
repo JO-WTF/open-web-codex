@@ -38,7 +38,7 @@ Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码�
    返回 typed `EnvironmentUnavailable`。SDK 不扫描文件猜语言或 server，不调用 Tool setup，也不
    在 Runtime launch 内安装。准备完成后，SDK 生成一次性 Plugin 投影，Tool 通过官方
    `thread/start.selectedCapabilityRoots` 从 exact projection root 选择。它用 app-server 官方握手、
-   `skills/list` 和线程范围 `mcpServerStatus/list` 验证声明能力的 discovery。
+   `skills/list` 一次性验证声明 Skill；Role/MCP 执行能力留给真实 Task/child MCP Item 验证。
 5. `dev` 的 app-server HOME/cwd 使用 Profile 外的独立临时目录并始终清理；默认临时 Profile
    清理，`--keep-profile` 或显式 `--profile` 才保留。成功只报告 `discovery_ready`，Role spawn
    和 model acceptance 固定为 `not_run`。
@@ -55,9 +55,8 @@ Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码�
 8. `ready` 不进入数据库；GET 状态只在当前 Runtime instance 对 trusted authorized Workspace
    调用官方 `skills/list(forceReload)` 后给出。单 Agent 只有 Root Role 时保持 `Configured`，
    明确表示配置已收敛但尚未观察 child/MCP 执行；不伪造 Runtime `Ready`，真实执行仍由 native
-   spawn/MCP acceptance 证明。多 Agent readiness 只检查每个声明 Role 最新观测到的 child Thread；
-   历史、已卸载 Thread 不进入当前 inventory。冷启动后最新 child 尚未加载而无法查询 inventory 时
-   保持 `Configured`，只有完整观察全部声明 server 才提升为 `Ready`。
+   spawn/MCP acceptance 证明。所有 package 共用一次 Skill discovery 投影；Role/MCP 不参与
+   installation status，也不产生 Copilot `Ready`。
 9. 当前仍不建立真实生产模型质量验收、Web Builder、Catalog、Release 或 Marketplace，也不把
    Settings Agents 误写成 Copilot 创作入口。
 10. 存在可用包时，新建 Thread 列出全部 configured package 并要求用户显式选择；Task 固定
@@ -300,10 +299,10 @@ Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。
 4. Skill watcher/`forceReload` 对下一 Turn 生效；Role 文件修改对下一次 spawn 生效；MCP
    reload 在安全 step 边界切换。Role 集合、allowlist、增删改名只对新 Root Thread 保证，
    不修改 Codex 弥补这一边界。
-5. Runtime 观察只使用 `skills/list(forceReload=true)`、`config/read`/config warning 和线程范围
-   `mcpServerStatus/list`。`thread/start` 后不等待 MCP startup notification；selected capability
-   roots 在 status/list 的 step 配置中解析，inventory RPC 自身使用剩余 Runtime deadline。Role 状态只称 `configured/unavailable`，真实
-   执行能力由 Root 对 Data/Network 的 native spawn gate 证明；不保存 DB readiness。
+5. Runtime 观察只使用一次 `skills/list(forceReload=true)`、`config/read`/config warning。Copilot
+   installation 状态只称 `installed/configured/unavailable/failed`，按 package 声明 Skill 交集投影；
+   不保存或伪造 Copilot ready。真实 Role/MCP 执行能力由 Root 对 Data/Network 的 native spawn 与
+   child MCP completion gate 证明。
 6. built-in/product Standard/fork 路径已经删除 capability path scan 与 selected-root 主动
    注入。3B.3-B2 进一步删除 `RunStartPreflight`、Governed Agent/Supervisor mode、旧
    `platform-agents/<definition>/<version>` writer/verifier 与 request-scoped SHA Role/inventory

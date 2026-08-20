@@ -1723,15 +1723,12 @@ pub struct ProviderCatalog {
 
 // ── Copilot Profile installation ──────────────────────────────────────────
 
-/// Current lifecycle projection for one Profile installation. `Ready` is only
-/// returned after discovery by the current Runtime instance; it is not a
-/// durable database state.
+/// Current lifecycle projection for one Profile installation.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CopilotInstallationState {
     Installed,
     Configured,
-    Ready,
     Unavailable,
     Failed,
 }
@@ -1747,10 +1744,6 @@ pub struct CopilotInstallationSummary {
     pub managed_skill_ids: Vec<String>,
     pub managed_agent_role_ids: Vec<String>,
     pub runtime_discovered_skill_ids: Vec<String>,
-    pub runtime_discovered_mcp_server_ids: Vec<String>,
-    /// Agent Roles have no official static list endpoint. This only reports
-    /// that their native files were configured before Runtime startup.
-    pub agent_roles_configured: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_code: Option<String>,
 }
@@ -1797,6 +1790,28 @@ mod copilot_installation_contract_tests {
                 "packageRoot": "/private/server/package"
             }))
             .is_err()
+        );
+    }
+
+    #[test]
+    fn copilot_installation_has_configured_state_without_ready_or_mcp_fields() {
+        let summary = CopilotInstallationSummary {
+            package_id: "sample".to_string(),
+            source_revision: "a".repeat(64),
+            active: true,
+            state: CopilotInstallationState::Configured,
+            restart_required: false,
+            managed_skill_ids: vec!["root".to_string()],
+            managed_agent_role_ids: vec!["worker".to_string()],
+            runtime_discovered_skill_ids: vec!["root".to_string()],
+            failure_code: None,
+        };
+        let value = serde_json::to_value(&summary).expect("serialize installation summary");
+        assert_eq!(value["state"], "configured");
+        assert!(value.get("agentRolesConfigured").is_none());
+        assert!(value.get("runtimeDiscoveredMcpServerIds").is_none());
+        assert!(
+            serde_json::from_value::<CopilotInstallationState>(serde_json::json!("ready")).is_err()
         );
     }
 }

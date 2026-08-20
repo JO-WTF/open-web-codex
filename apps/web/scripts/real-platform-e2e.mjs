@@ -1517,27 +1517,29 @@ async function runCase(index) {
       async () => {
         const status = await api("/profile/copilots");
         const target = installationId(status, copilotPackageId);
-        return target?.agentRolesConfigured &&
-          (target.runtimeDiscoveredSkillIds ?? []).includes("warehouse-supervisor") &&
-          (target.runtimeDiscoveredMcpServerIds ?? []).includes("supply_chain_data")
+        return target?.state === "configured" &&
+          (target.runtimeDiscoveredSkillIds ?? []).includes("warehouse-supervisor")
           ? target
           : undefined;
       },
-      "warehouse-network-copilot Runtime discovery",
+      "warehouse-network-copilot Skill discovery",
       120_000,
       1_000,
     );
-    assert.equal(runtimeStatus.agentRolesConfigured, true);
+    assert.equal(runtimeStatus.state, "configured");
     assert(
       (runtimeStatus.runtimeDiscoveredSkillIds ?? []).includes(
         "warehouse-supervisor",
       ),
     );
-    assert(
-      (runtimeStatus.runtimeDiscoveredMcpServerIds ?? []).includes(
-        "supply_chain_data",
-      ),
+    const childMcpCompleted = events.some(
+      (event) =>
+        itemType(event) === "mcpToolCall" &&
+        event.event_type === "codex.item.completed" &&
+        event.thread_id !== response.thread_id &&
+        event.payload?.data?.status === "completed",
     );
+    assert(childMcpCompleted, "child MCP completion must be proven by a native MCP item");
     const calls = state.modelServer.calls.filter((call) => call.runId === runId);
     assert(calls.some((call) => call.name === "tool_search"), "fixture did not issue native tool_search");
     assert(

@@ -225,15 +225,6 @@ impl CopilotPackageAssets {
             .collect()
     }
 
-    pub(crate) fn mcp_server_ids(&self) -> Vec<String> {
-        self.capability_roots
-            .values()
-            .flat_map(|root| root.servers.keys().cloned())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
-    }
-
     pub(crate) fn deliveries(&self) -> DeliveryRegistry {
         self.deliveries.clone()
     }

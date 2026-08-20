@@ -31,8 +31,8 @@ fixture 驱动真实 app-server，已从 fresh init 通过 Supervisor Skill、�
 它没有生产模型质量验收、Web 创作链、Catalog 或 Marketplace。Platform 现在从显式可信
 Copilot 根发现所有一级 package，并以 `(profile, package)` 持久 desired/configured/failure；
 Browser 创建 Thread 时列出可用 package 并只提交所选 ID。Profile Host 在 Runtime 启动前收敛
-全部 active 包的 Skill/child Role，每个包生成一个 package-keyed Root execution config；`ready`
-不持久。当前 Tool 环境合同已收敛到根级共享 registry：`[[tools]]` 可按 package 引用严格
+全部 active 包的 Skill/child Role，每个包生成一个 package-keyed Root execution config；Copilot
+installation 不产生或持久 `Ready`。当前 Tool 环境合同已收敛到根级共享 registry：`[[tools]]` 可按 package 引用严格
 `tool.toml`，Tool 的 `runtime.toml`
 source 只保留 Python/Node 项目 manifest、hash lock、server entry/env binding 声明与领域代码。
 SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，生成内部
@@ -236,7 +236,7 @@ Provider、Run、Workspace 与 Project 均完成清理。该次门在第一次�
 纠正，不把它描述为零失败 golden path。成本均值外推是敏感性方案，缺少仓租、建设、容量和吞吐成本时不称为经济全局最优。首次启用或 source revision 变化仍需要正式冷启动，
 测试在 `restartRequired=true` 时报告 typed `copilot_restart_required`，不会继续到 Task 503。单 Agent
 没有可预先 spawn 的 child Role，因此安装投影在 Task 前保持 `Configured`；当前 revision 且
-`agentRolesConfigured=true` 时允许创建 Task，Root MCP 的真实 readiness 由随后完整业务 Turn 证明，
+状态保持 `Configured` 时允许创建 Task，Root/child 的真实 MCP 执行能力由随后完整业务 Turn 证明，
 不把缺少 child inventory 误报为安装失败。
 
 ## 3. 历史：2026-08-12 clean real Web E4（已被 ADR-023 合同替代）
@@ -474,7 +474,7 @@ malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除�
 | Capability Catalog | 无生产 crate、API、Browser DTO/client、UI 或当前 schema 对象 | 不再是阶段一能力 |
 | Package Compiler | 无当前生产 owner；阶段二目标文档保留设计输入 | 不再是阶段一能力 |
 | Profile Installation | Platform 从显式可信应用根发现一级 Copilot 目录，按 `(Profile, package)` 持久 desired state、configured revision、managed Skill/child Role IDs 与安全 failure；Browser 只传 package ID；冷启动在 app-server 前合并收敛或清理精确 native destinations | E2 focused + 既有真实 PostgreSQL lifecycle；新的多 package schema/compile gate 已通过，完整双包 PostgreSQL/Runtime restart gate 待补。没有 Catalog/Release/Marketplace、多用户产品流或动态热切换 |
-| Runtime discovery/readiness | 当前 instance 用官方 `skills/list` + trusted authorized Workspace 即时验证声明 Skill；DB 不存 ready。Role 无官方静态 list，只报告 configured；可执行性由 native Role spawn/MCP acceptance gate 证明 | built-in native gate E2；ready 不跨 instance/revision复用 |
+| Runtime discovery/readiness | 当前 instance 每次 status 最多调用一次官方 `skills/list(forceReload)`，按 package 声明 Skill 交集投影 `Installed/Configured/Unavailable/Failed`；不再有 Copilot `Ready` 或 MCP inventory 字段，Role/MCP 可执行性由真实 Task/child MCP completion gate 证明 | built-in native gate E2；无 DB ready |
 | Copilot / Tool SDK | Copilot `init` 生成最小组合源码；一个 package 只声明一个 `[root]`。`validate` 支持 package-local Tool 或根级 `tool.toml` 引用，shared Tool 必须经显式 registry；`prepare` 在 Tool/Profile/Workspace 外准备依赖并生成 typed descriptor，`dev`/`test` 保留 official Runtime normal-case gate。checked-in meeting 与单/多 Agent 仓网包复用同一合同 | E2 既有本地 discovery/normal-case gate；92 项 SDK 单测和三个 checked-in package 的共享 registry validate 已通过。没有生产模型质量验收、Web Studio 或 Marketplace |
 | Skill 创作 | 阶段一仅支持直接编辑 Profile Skill；公开 SDK/Web 创作后移 | 无阶段一产品流 |
 | Agent/Supervisor Studio | 旧 Settings/Sidebar Studio 已删除；原生 Profile Agent 配置保留 | 无阶段一 authoring 产品流 |

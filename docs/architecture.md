@@ -110,12 +110,10 @@ destination；不同包目标冲突时整个 composition 明确失败。Profile 
 本批已发布变更。停用只删除持久安装事实记录的精确 managed destinations，用户使用其他 ID
 创建的 Skill、Role 和 `config.toml` 不受影响。运行中 activate/deactivate 只保存 desired state
 并返回 `restartRequired`，下一次冷启动完成文件与 Runtime 收敛。当前 Runtime instance 的 GET
-状态以官方 `skills/list` 对授权 Workspace 的即时结果区分 configured/ready；Role 没有官方静态
-list endpoint。单 Agent 只有 Root Role 时保持 `Configured`，表示配置已收敛但尚未观察 child/MCP 执行，
-不伪造 `Ready`；Task selection 仍可在当前 revision 下进入真实 Root Turn，由执行结果建立运行证据。
-多 Agent 包只用每个声明 child Role 最新观测到的 Thread 查询官方 MCP inventory；历史、已卸载
-Thread 不参与当前 readiness。冷启动后最新 child 尚未重新加载、因而暂时无法查询 inventory 时，
-状态同样保持 `Configured`，而不是误报 `Unavailable`；只有完整发现全部声明 server 才提升为 `Ready`。
+状态只保留 persisted/source-revision 的 `Installed`/`Configured`/`Unavailable`/`Failed`；当前 Runtime
+若存在 trusted Workspace，每次 status 最多做一次官方 `skills/list(forceReload)`，把该结果按 package
+声明 Skill 交集投影。Role/MCP 执行能力不伪造为 Copilot readiness，由真实 Task/child MCP Item 证明；Task
+selection 不依赖 status discovery。
 运行中的 Skill watcher 与下一次 Role spawn 仍由 Codex 原生语义拥有。仓网验收 composition 在
 `app-server` 启动前使用 Codex 官方、进程级 `--disable` feature override 关闭
 `plugins`、`remote_plugin`、`apps` 与 `tool_suggest`；不改写持久 Profile 配置，也不在

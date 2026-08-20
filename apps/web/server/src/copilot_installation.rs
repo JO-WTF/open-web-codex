@@ -19,19 +19,6 @@ const MARK_FAILURE_SQL: &str = "UPDATE profile_copilot_installations SET \
      WHERE profile_id = (SELECT id FROM profiles WHERE runtime_key = $1) \
        AND package_id = $2";
 
-const CURRENT_ROLE_THREAD_IDS_SQL: &str = "SELECT current.thread_id
-     FROM (
-         SELECT DISTINCT ON (projection.agent_role)
-             projection.agent_role, projection.thread_id, projection.last_observed_at
-         FROM runtime_agent_projections projection
-         JOIN profiles profile ON profile.id = projection.profile_id
-         WHERE profile.runtime_key = $1
-           AND projection.agent_role = ANY($2)
-         ORDER BY projection.agent_role, projection.last_observed_at DESC,
-                  projection.thread_id DESC
-     ) current
-     ORDER BY current.last_observed_at DESC, current.thread_id";
-
 #[derive(Debug, Clone)]
 pub(crate) struct CopilotPackageSource {
     pub id: String,
@@ -372,20 +359,6 @@ impl CopilotInstallationStore {
             .await?;
         Ok(())
     }
-
-    async fn current_role_thread_ids(
-        &self,
-        role_ids: &[String],
-    ) -> Result<Vec<String>, sqlx::Error> {
-        if role_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        sqlx::query_scalar(CURRENT_ROLE_THREAD_IDS_SQL)
-            .bind(&self.runtime_key)
-            .bind(role_ids)
-            .fetch_all(&self.db)
-            .await
-    }
 }
 
 pub(crate) struct ColdStartComposition {
@@ -590,9 +563,10 @@ impl CopilotInstallationService {
     }
 
     pub(crate) async fn status(&self) -> Result<CopilotProfileStatus, CopilotInstallationError> {
+        let discovery = self.discover_skills().await;
         let mut installations = Vec::new();
         for record in self.store.load_all().await? {
-            installations.push(self.summary(record).await);
+            installations.push(self.summary(record, discovery.as_ref()));
         }
         Ok(CopilotProfileStatus {
             packages: self.sources.summaries(),
@@ -660,12 +634,34 @@ impl CopilotInstallationService {
         self.status().await
     }
 
-    async fn summary(&self, record: InstallationRecord) -> CopilotInstallationSummary {
+    async fn discover_skills(&self) -> Option<SkillDiscovery> {
+        let (Some(runtime), Some(workspace)) = (&self.runtime, &self.runtime_workspace) else {
+            return None;
+        };
+        match runtime
+            .request(
+                "skills/list",
+                json!({"cwds": [workspace], "forceReload": true}),
+            )
+            .await
+        {
+            Ok(response) => Some(SkillDiscovery::Observed {
+                ids: discovered_skill_ids(&response).into_iter().collect(),
+                errors_empty: discovery_errors_empty(&response),
+            }),
+            Err(_) => Some(SkillDiscovery::Unavailable),
+        }
+    }
+
+    fn summary(
+        &self,
+        record: InstallationRecord,
+        discovery: Option<&SkillDiscovery>,
+    ) -> CopilotInstallationSummary {
         let configured = record.desired_active
             && record.configured_revision.as_deref() == Some(record.source_revision.as_str())
             && self.sources.available(&record.package_id).is_some();
         let mut discovered = Vec::new();
-        let mut discovered_mcp_servers = Vec::new();
         let mut state = if let Some(kind) = record.last_failure_kind.as_deref() {
             if kind == "unavailable" {
                 CopilotInstallationState::Unavailable
@@ -678,70 +674,24 @@ impl CopilotInstallationService {
             CopilotInstallationState::Installed
         };
         if configured {
-            if let (Some(runtime), Some(workspace), Some(assets)) = (
-                &self.runtime,
-                &self.runtime_workspace,
-                self.sources.available(&record.package_id),
-            ) {
-                match runtime
-                    .request(
-                        "skills/list",
-                        json!({"cwds": [workspace], "forceReload": true}),
-                    )
-                    .await
-                {
-                    Ok(response) => {
-                        discovered = discovered_skill_ids(&response);
-                        let discovered_set = discovered.iter().cloned().collect::<BTreeSet<_>>();
-                        if assets
-                            .skill_ids()
+            if let (Some(assets), Some(discovery)) =
+                (self.sources.available(&record.package_id), discovery)
+            {
+                match discovery {
+                    SkillDiscovery::Unavailable => state = CopilotInstallationState::Unavailable,
+                    SkillDiscovery::Observed { ids, errors_empty } => {
+                        let package_skills = assets.skill_ids();
+                        discovered = package_skills
                             .iter()
-                            .all(|id| discovered_set.contains(id))
-                            && discovery_errors_empty(&response)
-                        {
-                            match self
-                                .store
-                                .current_role_thread_ids(&assets.agent_role_ids())
-                                .await
-                            {
-                                Ok(role_threads) if role_threads.is_empty() => {}
-                                Ok(role_threads) => {
-                                    let mut mcp_servers = BTreeSet::new();
-                                    let mut inventory_complete = true;
-                                    for thread_id in role_threads {
-                                        match runtime
-                                            .request(
-                                                "mcpServerStatus/list",
-                                                json!({
-                                                    "threadId": thread_id,
-                                                    "detail": "toolsAndAuthOnly",
-                                                    "limit": 100,
-                                                }),
-                                            )
-                                            .await
-                                        {
-                                            Ok(response) => {
-                                                mcp_servers
-                                                    .extend(discovered_mcp_server_ids(&response));
-                                            }
-                                            Err(_) => inventory_complete = false,
-                                        }
-                                    }
-                                    discovered_mcp_servers = mcp_servers.iter().cloned().collect();
-                                    state = promote_mcp_inventory_state(
-                                        state,
-                                        &assets.mcp_server_ids(),
-                                        &mcp_servers,
-                                        inventory_complete,
-                                    );
-                                }
-                                Err(_) => state = CopilotInstallationState::Unavailable,
-                            }
-                        } else {
+                            .filter(|id| ids.contains(*id))
+                            .cloned()
+                            .collect();
+                        if !errors_empty {
+                            state = CopilotInstallationState::Failed;
+                        } else if discovered.len() != package_skills.len() {
                             state = CopilotInstallationState::Failed;
                         }
                     }
-                    Err(_) => state = CopilotInstallationState::Unavailable,
                 }
             }
         }
@@ -755,13 +705,19 @@ impl CopilotInstallationService {
             state,
             restart_required,
             managed_skill_ids: record.managed_skill_ids,
-            agent_roles_configured: configured,
             managed_agent_role_ids: record.managed_agent_role_ids,
             runtime_discovered_skill_ids: discovered,
-            runtime_discovered_mcp_server_ids: discovered_mcp_servers,
             failure_code: record.last_failure_code,
         }
     }
+}
+
+enum SkillDiscovery {
+    Observed {
+        ids: BTreeSet<String>,
+        errors_empty: bool,
+    },
+    Unavailable,
 }
 
 fn discovered_skill_ids(response: &Value) -> Vec<String> {
@@ -777,39 +733,6 @@ fn discovered_skill_ids(response: &Value) -> Vec<String> {
         .collect::<Vec<_>>();
     ids.sort();
     ids
-}
-
-fn discovered_mcp_server_ids(response: &Value) -> Vec<String> {
-    response["data"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|entry| {
-            entry["tools"]
-                .as_object()
-                .is_some_and(|tools| !tools.is_empty())
-        })
-        .filter_map(|entry| entry["name"].as_str().map(str::to_string))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn mcp_inventory_ready(expected: &[String], discovered: &BTreeSet<String>) -> bool {
-    !expected.is_empty() && expected.iter().all(|id| discovered.contains(id))
-}
-
-fn promote_mcp_inventory_state(
-    current: CopilotInstallationState,
-    expected: &[String],
-    discovered: &BTreeSet<String>,
-    inventory_complete: bool,
-) -> CopilotInstallationState {
-    if inventory_complete && mcp_inventory_ready(expected, discovered) {
-        CopilotInstallationState::Ready
-    } else {
-        current
-    }
 }
 
 fn source_revision_requires_refresh(persisted: &str, registered: &str) -> bool {
@@ -880,43 +803,26 @@ mod tests {
     }
 
     #[test]
-    fn official_role_thread_mcp_inventory_requires_every_declared_server() {
-        let response = json!({"data": [
-            {"name": "meeting_action_review", "tools": {"review_action_items": {}}},
-            {"name": "empty", "tools": {}},
-        ]});
-        let discovered = discovered_mcp_server_ids(&response)
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        assert!(mcp_inventory_ready(
-            &["meeting_action_review".to_string()],
-            &discovered
-        ));
-        assert!(!mcp_inventory_ready(
-            &[
-                "meeting_action_review".to_string(),
-                "another_server".to_string(),
-            ],
-            &discovered
-        ));
-        assert_eq!(
-            promote_mcp_inventory_state(
-                CopilotInstallationState::Configured,
-                &["meeting_action_review".to_string()],
-                &discovered,
-                false,
-            ),
-            CopilotInstallationState::Configured
-        );
-        assert_eq!(
-            promote_mcp_inventory_state(
-                CopilotInstallationState::Configured,
-                &["meeting_action_review".to_string()],
-                &discovered,
-                true,
-            ),
-            CopilotInstallationState::Ready
-        );
+    fn skill_discovery_intersects_each_package_declared_skill_ids() {
+        let response = json!({"data": [{"skills": [
+            {"name": "alpha", "scope": "user"},
+            {"name": "unrelated-package-skill", "scope": "user"}
+        ], "errors": []}]});
+        let discovery = SkillDiscovery::Observed {
+            ids: discovered_skill_ids(&response).into_iter().collect(),
+            errors_empty: discovery_errors_empty(&response),
+        };
+        let SkillDiscovery::Observed { ids, errors_empty } = discovery else {
+            panic!("expected observed discovery");
+        };
+        assert!(errors_empty);
+        let package_skills = ["alpha", "package-only"];
+        let projected = package_skills
+            .iter()
+            .filter(|id| ids.contains(**id))
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(projected, vec!["alpha"]);
     }
 
     #[test]
@@ -963,12 +869,6 @@ mod tests {
         assert!(!MARK_FAILURE_SQL.contains("configured_revision"));
         assert!(!MARK_FAILURE_SQL.contains("managed_skill_ids"));
         assert!(!MARK_FAILURE_SQL.contains("managed_agent_role_ids"));
-    }
-
-    #[test]
-    fn readiness_inventory_selects_one_current_thread_per_role() {
-        assert!(CURRENT_ROLE_THREAD_IDS_SQL.contains("DISTINCT ON (projection.agent_role)"));
-        assert!(CURRENT_ROLE_THREAD_IDS_SQL.contains("projection.last_observed_at DESC"));
     }
 
     #[test]
