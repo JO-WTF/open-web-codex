@@ -398,10 +398,14 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
 失败均为 typed terminal failure。`observe` 模式不改写 `tool_choice`；所有门共享 bounded timeline 和
 终态清理，deterministic multi-agent gate 的严格 topology、Tool 顺序与 Resource inventory 仍只属于
 `real-platform-e2e.mjs`。
-当前复跑中，多 Agent 业务门为 26 个有效 Chat 轮次、98.407 秒；单 Agent 业务门为 23 个有效
-Chat 轮次、97.383 秒，并完成 580 条报价 evidence 绑定与 90.0521% 需求加权覆盖。旧门对应基线为
-Multi 26 轮/91.768 秒、Single 24 轮/84.851 秒：自然语言入口减少了 Single 一轮，但墙钟时间没有
-下降，后续加速必须来自 Data Tool 往返、精确路线 scope 和求解器，而不是重新向 prompt 填回内部步骤。
+2026-08-21 ADR-024 最终复跑中，多 Agent 业务门为 40 个有效 Chat 轮次、133.552 秒；单 Agent
+业务门为 26 个有效 Chat 轮次、109.585 秒，并完成 580 条报价 evidence 绑定与 90.0521% 需求加权
+覆盖。旧门对应基线为 Multi 26 轮/91.768 秒、Single 24 轮/84.851 秒，第一批拆门基线为 Multi
+26 轮/98.407 秒、Single 23 轮/97.383 秒。Data 标准链已缩为 discover→inspect→prepare，单设施
+路线已精确到候选 ID，最小仓数已收敛为最多两个 CP-SAT stage，共享 Tool build store 也从约
+10.2GB 降到约 405MB；但 DeepSeek 的额外计划、搜索和参数纠正使模型轮次与墙钟时间没有下降。
+后续模型层加速必须用新的真实测量驱动，不能重新向 prompt 填回固定 Tool 顺序，也不能把内部计算
+加速误报为端到端加速。
 浏览器响应、日志、Workspace 与普通 Profile 文件均不得出现 Secret 明文；不写 `model_catalog_json`、
 不按模型名推断、不重试提示词、不回退 single-agent。后续真实空目录故障已用窄 follow-up 收口：Codex 只增加 exact
 Provider 的 fresh typed catalog，Platform 不切换 current Provider，只在非空成功后持久化目标目录并在

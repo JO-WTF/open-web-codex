@@ -3,10 +3,10 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前事实与证据 |
-| 观察日期 | 2026-08-20 |
-| 代码快照 | D6 真实 Provider gate checkpoint（含当前 Chat transport seam、地图终态约束与仓网 Role capability gate） |
+| 观察日期 | 2026-08-21 |
+| 代码快照 | ADR-024 仓网双 Copilot 合同简化与真实 Provider 复验 checkpoint |
 | 当前阶段 | 阶段二已进入；阶段一仓网 Copilot 正常业务闭环作为已通过基线 |
-| 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) + [ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) |
+| 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) + [ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) + [ADR-024](adr/024-warehouse-copilot-contract-simplification.md) |
 
 本文回答“当前构建能证明什么”。源码存在、局部测试通过、真实 Runtime 运行和从阶段一
 业务 Task/Web 开始的产品 E2E 是不同证据，不能互相替代。
@@ -102,11 +102,30 @@ failure。严格的 Tool 次数、顺序、Network Resource inventory 和 topolo
 `real-platform-e2e.mjs` 的 fake/deterministic 合同门。临时 Provider、Run、Workspace、Project 与原
 Provider 选择在终态清理。
 
-当前自然语言复跑结果：多 Agent 门 26 个有效 Chat 轮次、98.407 秒，完成 Data/Network child、
-12h baseline、只新增 Balikpapan 的两种有限变化率与地图；单 Agent 门 23 个有效 Chat 轮次、
-97.383 秒，以 580 条完整报价生成并绑定脚本 evidence，选择 Balikpapan 与 Jambi，12h 需求加权
-覆盖率为 `0.9005214995572174`。deterministic multi-agent Gate 1/2 均通过。模型在个别真实轮次中
-出现可见的参数纠正或无害探索，但没有不可见 wire Tool、已接受 Tool 后断流、权限/身份失败或清理失败。
+2026-08-21 ADR-024 最终自然语言复跑结果：多 Agent 门 40 个有效 Chat 轮次、133.552 秒，完成
+Data/Network child、12h baseline、只新增 Balikpapan 的城市数量与需求加权变化率（本 fixture 均为
+`0`）和地图；单 Agent 门 26 个有效 Chat 轮次、109.585 秒，以 580 条完整报价生成并绑定脚本
+evidence，选择 Balikpapan 与 Jambi，`minimum_feasible` 两阶段均证明最优，12h 需求加权覆盖率为
+`0.9005214995572174`。deterministic multi-agent Gate 1/2 均连续通过并保存 `route_matrix.v3`、
+`network_baseline.v2`、`network_coverage_geojson.v1` 与 `map_card_spec.v1` provenance。接受运行没有
+不可见 wire Tool、已接受 Tool 后断流、权限/身份失败或清理失败；真实门现在也会拒绝带
+`codex.turn.completed.error` 的 Turn，不能再把 Tool 已完成但 Provider 后续协议失败的 Run 记为 PASS。
+
+该复跑没有证明模型层加速。旧自然语言基线为 Multi 26 轮/91.768 秒、Single 24 轮/84.851 秒；
+第一批拆门后的基线为 Multi 26 轮/98.407 秒、Single 23 轮/97.383 秒。当前 Tool 合同减少了标准
+Data 往返、把单设施路线缩到精确候选集、把最小仓数求解限制为最多两个 CP-SAT stage，但自然模型
+仍可能做额外计划、搜索和一次 typed 参数纠正，因此最终 Provider 轮次与墙钟时间反而增加。性能
+结论必须分开陈述为“Tool 内部工作与磁盘显著收敛，真实模型编排未加速”。
+
+本地共享 Tool build store 当前占用约 405MB，其中两个被三份 prepared descriptor 引用的 build
+分别约 55MB 和 298MB；仓网单/多 Agent descriptor 各约 40KB。它替代了第一批前约 10.2GB 的
+package-keyed 重复环境。首次新 fingerprint 的 Copilot 环境准备观测为 31 秒，随后同 fingerprint
+冷启动准备为 1 秒；GC 只移除未被 descriptor 引用的 build。
+
+最终回归证据：Copilot SDK 114、Provider SDK 11、Planner 153、Maps 38、Web Vitest 184 files/
+1341 tests、两个 4-Skill Copilot manifest、八个 Skill validator、Web Rust 全 workspace gate 与两次
+deterministic multi-agent gate 全部通过；Rust 中要求外部 PostgreSQL/真实 Runtime 的 ignored 门仍按
+各自前置条件保留，不冒充已运行。
 
 Chat 与 Responses 共用同一个 Thread/Turn/ToolRouter/Agent/Skill/MCP 主干。Chat 仅在 wire 边界把
 canonical Responses request 转为 Chat Completions，并把 SSE 恢复为 `ResponseEvent`；当前 Turn 的
