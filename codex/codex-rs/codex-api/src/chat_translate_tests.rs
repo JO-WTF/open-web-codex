@@ -7,7 +7,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 fn request(tools: Option<Vec<Value>>) -> ResponsesApiRequest {
@@ -78,7 +77,6 @@ fn translates_text_only_request_with_exact_controls() {
             },
             reasoning_effort: None,
             service_tier: None,
-            history_tool_targets: HashMap::new(),
         }
     );
 }
@@ -281,15 +279,6 @@ fn translates_current_turn_tool_search_history_into_chat_tools_and_reverse_targe
         ]
     );
     assert_eq!(
-        translated
-            .history_tool_targets
-            .get("evaluate_network_baseline"),
-        Some(&ChatToolTarget {
-            name: "evaluate_network_baseline".to_string(),
-            namespace: None,
-        })
-    );
-    assert_eq!(
         translated.tools[1].target,
         ChatToolTarget {
             name: "evaluate_network_baseline".to_string(),
@@ -365,8 +354,10 @@ fn keeps_current_turn_deferred_target_after_same_turn_agent_completion_message()
     );
     assert_eq!(
         translated
-            .history_tool_targets
-            .get("multi_agent_v1__spawn_agent"),
+            .tools
+            .iter()
+            .find(|tool| tool.function.name == "multi_agent_v1__spawn_agent")
+            .map(|tool| &tool.target),
         Some(&ChatToolTarget {
             name: "spawn_agent".to_string(),
             namespace: Some("multi_agent_v1".to_string()),
@@ -437,7 +428,6 @@ fn clears_deferred_targets_when_latest_user_message_lacks_turn_metadata() {
             .collect::<Vec<_>>(),
         vec!["tool_search"]
     );
-    assert!(translated.history_tool_targets.is_empty());
 }
 
 #[test]
@@ -492,7 +482,6 @@ fn does_not_replay_a_previous_turns_loaded_tool_schema() {
         vec!["tool_search"],
         "a new Turn must search before a deferred Tool schema is callable"
     );
-    assert!(translated.history_tool_targets.is_empty());
 }
 
 #[test]
@@ -621,7 +610,6 @@ fn encodes_a_loaded_namespace_from_prompt_once() {
             namespace: Some("mcp__supply_chain".to_string()),
         }
     );
-    assert!(translated.history_tool_targets.is_empty());
 }
 
 #[test]

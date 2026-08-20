@@ -50,23 +50,11 @@ impl<T: HttpTransport> ChatCompletionsClient<T> {
         &self,
         request: ChatCompletionsApiRequest,
     ) -> Result<ResponseStream, ApiError> {
-        let mut tool_targets = request
+        let tool_targets = request
             .tools
             .iter()
             .map(|tool| (tool.function.name.clone(), tool.target.clone()))
             .collect::<HashMap<String, ChatToolTarget>>();
-        for (wire_name, target) in &request.history_tool_targets {
-            if let Some(existing) = tool_targets.get(wire_name)
-                && existing != target
-            {
-                return Err(ApiError::InvalidRequest {
-                    message: format!(
-                        "wire_api = \"chat\" cannot encode colliding tool target `{wire_name}`"
-                    ),
-                });
-            }
-            tool_targets.insert(wire_name.clone(), target.clone());
-        }
         let body = EncodedJsonBody::encode(&request).map_err(|error| {
             ApiError::Stream(format!(
                 "failed to encode chat completions request: {error}"

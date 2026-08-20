@@ -100,12 +100,6 @@ pub struct ChatCompletionsApiRequest {
     pub reasoning_effort: Option<ChatReasoningEffort>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
-    /// Reverse targets for deferred tools discovered in the current Turn.
-    /// Current-turn exact specs are also projected into Chat `tools`; this map
-    /// keeps the same target available to the SSE decoder without changing
-    /// canonical Core Prompt.tools.
-    #[serde(skip)]
-    pub history_tool_targets: HashMap<String, ChatToolTarget>,
 }
 
 #[derive(Debug, Default, Serialize, Clone, PartialEq)]
@@ -197,7 +191,7 @@ pub fn responses_request_to_chat_completions_request(
         .map(|tools| responses_tools_to_chat_tools(&tools))
         .transpose()?
         .unwrap_or_default();
-    let (current_turn_tools, history_tool_targets) = current_turn_tool_targets(&input, &tools)?;
+    let current_turn_tools = current_turn_discovered_chat_tools(&input, &tools)?;
     // This is a request-scoped Chat compatibility projection of the current
     // Turn's completed client ToolSearchOutput. It never mutates canonical
     // Prompt.tools or the Core ToolRouter registry.
@@ -228,7 +222,6 @@ pub fn responses_request_to_chat_completions_request(
         },
         reasoning_effort,
         service_tier,
-        history_tool_targets,
     })
 }
 
@@ -332,10 +325,10 @@ enum ToolSearchNamespaceTool {
     },
 }
 
-fn current_turn_tool_targets(
+fn current_turn_discovered_chat_tools(
     input: &[ResponseItem],
     prompt_tools: &[ChatTool],
-) -> Result<(Vec<ChatTool>, HashMap<String, ChatToolTarget>), ApiError> {
+) -> Result<Vec<ChatTool>, ApiError> {
     let latest_user_message = input
         .iter()
         .rev()
@@ -344,11 +337,11 @@ fn current_turn_tool_targets(
         .and_then(ResponseItem::turn_id)
         .map(str::to_string)
     else {
-        return Ok((Vec::new(), HashMap::new()));
+        return Ok(Vec::new());
     };
 
     let mut tool_search_call_ids = HashSet::new();
-    let mut history_candidates = Vec::new();
+    let mut discovered_candidates = Vec::new();
     for item in input {
         match item {
             ResponseItem::ToolSearchCall {
@@ -369,16 +362,14 @@ fn current_turn_tool_targets(
                 && item_belongs_to_current_turn(item, &current_turn_id)
                 && tool_search_call_ids.contains(call_id.as_str()) =>
             {
-                history_candidates.extend(loadable_tool_targets(tools)?);
+                discovered_candidates.extend(loadable_tool_targets(tools)?);
             }
             _ => {}
         }
     }
 
     let mut targets = HashMap::new();
-    let mut direct_wire_names = HashSet::new();
     for tool in prompt_tools {
-        direct_wire_names.insert(tool.function.name.clone());
         register_tool_target(
             &mut targets,
             ToolTargetCandidate {
@@ -390,30 +381,17 @@ fn current_turn_tool_targets(
         )?;
     }
 
-    let mut history_wire_names = HashSet::new();
     let mut current_turn_tools = Vec::new();
-    for candidate in history_candidates {
-        let wire_name = candidate.wire_name.clone();
+    for candidate in discovered_candidates {
         let chat_tool = candidate.chat_tool.clone();
-        history_wire_names.insert(wire_name.clone());
-        let is_new_target = !targets.contains_key(&wire_name);
+        let is_new_target = !targets.contains_key(&candidate.wire_name);
         register_tool_target(&mut targets, candidate)?;
         if is_new_target && let Some(chat_tool) = chat_tool {
             current_turn_tools.push(chat_tool);
         }
     }
 
-    let history_tool_targets = history_wire_names
-        .into_iter()
-        .filter(|wire_name| !direct_wire_names.contains(wire_name))
-        .filter_map(|wire_name| {
-            targets
-                .remove(&wire_name)
-                .map(|entry| (wire_name, entry.target))
-        })
-        .collect();
-
-    Ok((current_turn_tools, history_tool_targets))
+    Ok(current_turn_tools)
 }
 
 fn item_belongs_to_current_turn(item: &ResponseItem, current_turn_id: &str) -> bool {

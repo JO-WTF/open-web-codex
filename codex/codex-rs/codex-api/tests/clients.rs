@@ -1,5 +1,4 @@
 #![allow(clippy::expect_used)]
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -629,7 +628,6 @@ async fn chat_client_sends_only_provider_auth_and_protocol_headers() -> Result<(
         },
         reasoning_effort: None,
         service_tier: None,
-        history_tool_targets: HashMap::new(),
     };
 
     let _stream = client.stream_request(request).await?;
