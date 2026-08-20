@@ -21,6 +21,7 @@ from open_web_codex_provider import (
     ResourceRef,
     create_workspace_file,
     derive_geojson_profile,
+    ensure_workspace_directory,
     trusted_workspace_root,
 )
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,6 +51,7 @@ from .map_card import (
 Provider = Literal["google", "mapbox"]
 TravelMode = Literal["driving", "driving_traffic", "walking", "bicycling", "transit", "two_wheeler"]
 MCP_SERVER_NAME = "map_utils"
+NAVIGATION_OUTPUT_DIRECTORY = PurePosixPath("outputs/warehouse-network/requests")
 
 LOCAL_PRESENTATION_TOOL = ToolAnnotations(
     readOnlyHint=True,
@@ -983,12 +985,29 @@ async def get_route(
 @mcp.tool(structured_output=True, annotations=EXTERNAL_BILLABLE_TOOL)
 async def execute_navigation_matrix(
     navigation_request_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
-    output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    output_relative_path: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=1024,
+            description=(
+                "Create-new JSON path directly under outputs/warehouse-network/requests/."
+            ),
+        ),
+    ],
     ctx: Context[ServerSession, None],
     mode: TravelMode = "driving",
 ) -> NavigationExecutionToolResult:
     """Execute one approved Workspace navigation request and write exact lane facts."""
     workspace, request = _read_navigation_request(ctx, navigation_request_relative_path)
+    output_path = PurePosixPath(output_relative_path)
+    if (
+        output_path.is_absolute()
+        or output_path.parent != NAVIGATION_OUTPUT_DIRECTORY
+        or output_path.suffix.lower() != ".json"
+    ):
+        raise ValueError("generated_output_path_invalid")
+    ensure_workspace_directory(workspace, NAVIGATION_OUTPUT_DIRECTORY.as_posix())
     client = await _client(ctx)
     grouped: dict[tuple[float, float], list[NavigationRouteRequest]] = {}
     for route in request.routes:
@@ -1036,7 +1055,7 @@ async def execute_navigation_matrix(
     try:
         created = create_workspace_file(
             workspace,
-            output_relative_path,
+            output_path.as_posix(),
             matrix.model_dump_json().encode("utf-8"),
             max_bytes=MAX_WORKSPACE_FILE_BYTES,
         )

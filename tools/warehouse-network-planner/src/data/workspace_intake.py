@@ -45,6 +45,12 @@ EXCLUDED_DIRS = {
 }
 SUPPORTED_SUFFIXES = {".xlsx", ".csv", ".json"}
 DEMO_MANIFEST_SCHEMA = "demo_workspace_sources.v1"
+GENERATED_OUTPUT_ROOT = PurePosixPath("outputs/warehouse-network")
+
+
+def _is_generated_output(relative: Path) -> bool:
+    parts = relative.parts
+    return len(parts) >= 2 and parts[:2] == GENERATED_OUTPUT_ROOT.parts
 
 
 def _iter_files(root: Path) -> list[Path]:
@@ -52,7 +58,7 @@ def _iter_files(root: Path) -> list[Path]:
     files: list[Path] = []
     for path in root.rglob("*"):
         relative = path.relative_to(root)
-        if any(part in EXCLUDED_DIRS for part in relative.parts):
+        if any(part in EXCLUDED_DIRS for part in relative.parts) or _is_generated_output(relative):
             continue
         if path.is_symlink():
             if path.suffix.lower() in SUPPORTED_SUFFIXES | {".xls", ".xlsm"}:
@@ -121,6 +127,7 @@ def discover(root: Path) -> list[dict[str, Any]]:
         path
         for path in root.rglob("*")
         if not any(part in EXCLUDED_DIRS for part in path.relative_to(root).parts)
+        and not _is_generated_output(path.relative_to(root))
         and path.is_file()
         and path.suffix.lower() in {".xls", ".xlsm"}
     ]
@@ -223,7 +230,7 @@ def inspect_csv(path: Path) -> dict[str, Any]:
         return {
             "kind": "table",
             "columns": [],
-            "preview": _preview_payload([]),
+            "preview": _preview_payload([], total_count=0, total_count_exact=True),
             "record_count": 0,
             "record_count_exact": True,
         }
@@ -246,17 +253,28 @@ def inspect_csv(path: Path) -> dict[str, Any]:
         "kind": "table",
         "delimiter": delimiter,
         "columns": header,
-        "preview": _preview_payload(preview_rows),
+        "preview": _preview_payload(
+            preview_rows,
+            total_count=record_count,
+            total_count_exact=True,
+        ),
         "record_count": record_count,
         "record_count_exact": True,
     }
 
 
-def _preview_payload(rows: list[Any]) -> dict[str, Any]:
+def _preview_payload(
+    rows: list[Any],
+    *,
+    total_count: int = 0,
+    total_count_exact: bool = False,
+) -> dict[str, Any]:
     return {
         "strategy": "head",
         "limit": MAX_SAMPLE_ROWS,
-        "returned_count": len(rows),
+        "preview_sample_count": len(rows),
+        "total_count": total_count,
+        "total_count_exact": total_count_exact,
         "complete": False,
         "rows": rows,
     }
@@ -342,9 +360,11 @@ def inspect_json(path: Path) -> dict[str, Any]:
                                     "sample": _bounded_json_sample(item),
                                 }
                             )
-                    array["preview"]["returned_count"] = len(array["preview"]["rows"])
+                    array["preview"]["preview_sample_count"] = len(array["preview"]["rows"])
             except (ijson.common.IncompleteJSONError, ijson.common.JSONError) as error:
                 raise ValueError("invalid_json") from error
+        array["preview"]["total_count"] = array["length"]
+        array["preview"]["total_count_exact"] = array["length_exact"]
     return {
         "kind": "json",
         "tree": {"kind": root_kind},
@@ -429,7 +449,11 @@ def inspect_xlsx(path: Path) -> dict[str, Any]:
                     {
                         "sheet": worksheet.title,
                         "columns": [str(value or "").strip() for value in header],
-                        "preview": _preview_payload(preview_rows),
+                        "preview": _preview_payload(
+                            preview_rows,
+                            total_count=record_count,
+                            total_count_exact=True,
+                        ),
                         "record_count": record_count,
                         "record_count_exact": True,
                         "preview_formula_cells": sum(

@@ -12,7 +12,11 @@ from open_web_codex_provider.errors import ProviderContractError, WorkspaceFileE
 from open_web_codex_provider.geojson import GeoJsonResourceRef, derive_geojson_profile
 from open_web_codex_provider.runtime import McpResourceRuntime
 from open_web_codex_provider.store import ResourceStore, resource_ref, workspace_resource_root
-from open_web_codex_provider.workspace import create_workspace_file, trusted_workspace_root
+from open_web_codex_provider.workspace import (
+    create_workspace_file,
+    ensure_workspace_directory,
+    trusted_workspace_root,
+)
 
 SERVER_NAME = "example_provider"
 URI_PREFIX = "example-provider://resources/"
@@ -142,6 +146,27 @@ def test_workspace_namespace_is_private_and_create_new_rejects_links(tmp_path: P
     with pytest.raises(WorkspaceFileError, match="workspace_symlink_rejected"):
         create_workspace_file(workspace, "linked/result.json", b"{}")
     assert trusted_workspace_root(_context(workspace).request_context.meta) == workspace.resolve()
+
+
+def test_workspace_directory_creation_is_bounded_and_rejects_links(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+
+    assert (
+        ensure_workspace_directory(workspace, "outputs/warehouse-network/prepared")
+        == "outputs/warehouse-network/prepared"
+    )
+    assert (workspace / "outputs/warehouse-network/prepared").is_dir()
+    assert (
+        ensure_workspace_directory(workspace, "outputs/warehouse-network/prepared")
+        == "outputs/warehouse-network/prepared"
+    )
+
+    (workspace / "linked").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(WorkspaceFileError, match="workspace_symlink_rejected"):
+        ensure_workspace_directory(workspace, "linked/generated")
 
 
 def test_runtime_rejects_ambiguous_payload_schema(tmp_path: Path) -> None:

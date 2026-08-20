@@ -115,6 +115,37 @@ def create_workspace_file(
     return CreatedWorkspaceFile(relative_path=relative_path, byte_size=len(content))
 
 
+def ensure_workspace_directory(workspace_root: Path, relative_path: str) -> str:
+    """Create one bounded Workspace-relative directory tree without following symlinks."""
+
+    parts = _relative_parts(relative_path)
+    try:
+        root = workspace_root.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise WorkspaceFileError("workspace_root_invalid") from error
+    if not root.is_dir():
+        raise WorkspaceFileError("workspace_root_invalid")
+
+    root_fd = _open_directory(root)
+    parent_fd = root_fd
+    try:
+        for component in parts:
+            try:
+                os.mkdir(component, mode=0o755, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except FileExistsError:
+                pass
+            child_fd = _open_child_directory(parent_fd, component)
+            if parent_fd != root_fd:
+                os.close(parent_fd)
+            parent_fd = child_fd
+    finally:
+        if parent_fd != root_fd:
+            os.close(parent_fd)
+        os.close(root_fd)
+    return PurePosixPath(*parts).as_posix()
+
+
 def _relative_parts(relative_path: str) -> tuple[str, ...]:
     if (
         not isinstance(relative_path, str)

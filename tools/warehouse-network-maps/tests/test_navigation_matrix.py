@@ -6,6 +6,8 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 
+import pytest
+
 from maps_mcp import server
 
 
@@ -49,7 +51,11 @@ def _request() -> dict[str, object]:
 
 
 def test_execute_navigation_matrix_writes_typed_workspace_facts(tmp_path, monkeypatch) -> None:
-    (tmp_path / "navigation-request.json").write_text(json.dumps(_request()), encoding="utf-8")
+    output_dir = tmp_path / "outputs/warehouse-network/requests"
+    output_dir.mkdir(parents=True)
+    request_path = output_dir / "navigation-request.json"
+    result_path = output_dir / "navigation-result.json"
+    request_path.write_text(json.dumps(_request()), encoding="utf-8")
 
     class FakeClient:
         async def distance_matrix(self, origins, destinations, *, mode):
@@ -70,18 +76,27 @@ def test_execute_navigation_matrix_writes_typed_workspace_facts(tmp_path, monkey
     monkeypatch.setattr(server, "_client", fake_client)
     result = asyncio.run(
         server.execute_navigation_matrix(
-            "navigation-request.json",
-            "navigation-result.json",
+            "outputs/warehouse-network/requests/navigation-request.json",
+            "outputs/warehouse-network/requests/navigation-result.json",
             _context(tmp_path),
         )
     )
     assert result.provider == "mapbox"
     assert result.ready_pair_count == 1
     assert result.unreachable_pair_count == 1
-    payload = json.loads((tmp_path / "navigation-result.json").read_text())
+    payload = json.loads(result_path.read_text())
     assert payload["schema_version"] == "navigation_matrix_result.v1"
     assert payload["rows"][0]["distance_km"] == 1.2
     assert payload["rows"][1]["status"] == "unreachable"
+
+    with pytest.raises(ValueError, match="generated_output_path_invalid"):
+        asyncio.run(
+            server.execute_navigation_matrix(
+                "outputs/warehouse-network/requests/navigation-request.json",
+                "navigation-result.json",
+                _context(tmp_path),
+            )
+        )
 
 
 def test_publish_workspace_geojson_publishes_validated_polygon_boundaries(tmp_path) -> None:

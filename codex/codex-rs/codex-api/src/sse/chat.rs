@@ -288,6 +288,68 @@ async fn finish_chat_stream(
         }
         Some(ChatFinishReason::Stop | ChatFinishReason::ToolCalls) => {}
     };
+    let tool_items = tool_calls
+        .into_iter()
+        .map(|tool_call| {
+            if tool_call.id.is_empty() || tool_call.function.name.is_empty() {
+                return Err(ApiError::InvalidRequest {
+                    message: "provider protocol violation: chat completion returned an incomplete tool call"
+                        .to_string(),
+                });
+            }
+            if tool_call.function.arguments.is_empty() {
+                return Err(ApiError::InvalidRequest {
+                    message: "provider protocol violation: chat completion returned a tool call without arguments"
+                        .to_string(),
+                });
+            }
+            serde_json::from_str::<serde_json::Value>(&tool_call.function.arguments).map_err(
+                |error| ApiError::InvalidRequest {
+                    message: format!(
+                        "provider protocol violation: chat completion returned tool call arguments that are not valid JSON: {error}"
+                    ),
+                },
+            )?;
+            let target = tool_targets.get(&tool_call.function.name).ok_or_else(|| {
+                ApiError::InvalidRequest {
+                    message: format!(
+                        "provider protocol violation: chat completion called unavailable tool `{}`; the tool was not offered in this request",
+                        tool_call.function.name
+                    ),
+                }
+            })?;
+            if target.name == "tool_search" && target.namespace.is_none() {
+                Ok(ResponseItem::ToolSearchCall {
+                    id: Some(codex_protocol::ResponseItemId::from_server(
+                        tool_call.id.clone(),
+                    )),
+                    call_id: Some(tool_call.id),
+                    status: None,
+                    execution: "client".to_string(),
+                    arguments: serde_json::from_str(&tool_call.function.arguments).map_err(
+                        |error| ApiError::InvalidRequest {
+                            message: format!(
+                                "provider protocol violation: chat completion returned invalid tool_search arguments: {error}"
+                            ),
+                        },
+                    )?,
+                    internal_chat_message_metadata_passthrough: None,
+                })
+            } else {
+                Ok(ResponseItem::FunctionCall {
+                    id: Some(codex_protocol::ResponseItemId::from_server(
+                        tool_call.id.clone(),
+                    )),
+                    name: target.name.clone(),
+                    namespace: target.namespace.clone(),
+                    arguments: tool_call.function.arguments,
+                    encrypted_function_args: collaboration_plaintext_marker(target),
+                    call_id: tool_call.id,
+                    internal_chat_message_metadata_passthrough: None,
+                })
+            }
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
     // Core's native reducer has one active item. A streamed text Message must
     // therefore be completed before buffered FunctionCall items begin.
     if !assistant_text.is_empty() {
@@ -300,60 +362,7 @@ async fn finish_chat_stream(
             return Ok(());
         }
     }
-    for tool_call in tool_calls {
-        if tool_call.id.is_empty() || tool_call.function.name.is_empty() {
-            return Err(ApiError::Stream(
-                "chat completion returned an incomplete tool call".to_string(),
-            ));
-        }
-        if tool_call.function.arguments.is_empty() {
-            return Err(ApiError::Stream(
-                "chat completion returned a tool call without arguments".to_string(),
-            ));
-        }
-        serde_json::from_str::<serde_json::Value>(&tool_call.function.arguments).map_err(
-            |error| {
-                ApiError::Stream(format!(
-                    "chat completion returned tool call arguments that are not valid JSON: {error}"
-                ))
-            },
-        )?;
-        let target = tool_targets.get(&tool_call.function.name).ok_or_else(|| {
-            ApiError::Stream(format!(
-                "chat completion called unknown tool `{}`",
-                tool_call.function.name
-            ))
-        })?;
-        let item = if target.name == "tool_search" && target.namespace.is_none() {
-            ResponseItem::ToolSearchCall {
-                id: Some(codex_protocol::ResponseItemId::from_server(
-                    tool_call.id.clone(),
-                )),
-                call_id: Some(tool_call.id),
-                status: None,
-                execution: "client".to_string(),
-                arguments: serde_json::from_str(&tool_call.function.arguments).map_err(
-                    |error| {
-                        ApiError::Stream(format!(
-                            "chat completion returned invalid tool_search arguments: {error}"
-                        ))
-                    },
-                )?,
-                internal_chat_message_metadata_passthrough: None,
-            }
-        } else {
-            ResponseItem::FunctionCall {
-                id: Some(codex_protocol::ResponseItemId::from_server(
-                    tool_call.id.clone(),
-                )),
-                name: target.name.clone(),
-                namespace: target.namespace.clone(),
-                arguments: tool_call.function.arguments,
-                encrypted_function_args: collaboration_plaintext_marker(target),
-                call_id: tool_call.id,
-                internal_chat_message_metadata_passthrough: None,
-            }
-        };
+    for item in tool_items {
         if tx_event
             .send(Ok(ResponseEvent::OutputItemAdded(item.clone())))
             .await

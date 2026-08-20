@@ -166,6 +166,9 @@ Workspace 是独立授权执行根，不属于 Thread、Task 或 Run。
   含义不明的 `source_ref` alias 和历史 asset/Dataset ID 必须被拒绝；
 - 文件、Terminal、Git、GitHub 和 Runtime 操作分别重新检查 Workspace grant；
 - symlink、`..`、嵌套 Git root 和路径规范化不能逃逸授权根；
+- 单 Agent 的脚本执行只允许任务 Skill 授权的确定性计算，输入必须是 Data Tool 返回的 exact ready
+  prepared input；脚本不得扫描 raw 数据、覆盖输入或替代领域求解，脚本与 bounded 结果只能 create-new
+  写入 `outputs/warehouse-network/calculations/`；
 - 托管 clone/worktree 只能通过显式 Workspace 生命周期创建和删除；
 - Run 取消、失败、租约过期或恢复不能隐式删除 Workspace；
 - 删除前检查活动 Run、Thread 使用、Terminal、子 worktree 和未交付变更；

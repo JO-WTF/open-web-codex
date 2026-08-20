@@ -25,6 +25,20 @@ fn map_api_error_preserves_retry_delay() {
 }
 
 #[test]
+fn map_api_error_keeps_provider_protocol_violations_non_retryable() {
+    let err = map_api_error(ApiError::InvalidRequest {
+        message: "provider protocol violation: unavailable tool".to_string(),
+    });
+
+    assert!(matches!(
+        err.details(),
+        CodexErrorDetails::InvalidRequest(message)
+            if message == "provider protocol violation: unavailable tool"
+    ));
+    assert_eq!(err.retry_delay(), None);
+}
+
+#[test]
 fn map_api_error_maps_server_overloaded_from_503_body() {
     let body = serde_json::json!({
         "error": {

@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
 from supply_chain_planner.network.models import PlanningInputIdentity
 
 
@@ -179,6 +178,43 @@ class CostCalculationPolicy(MatrixModel):
     rules: list[DemandUnitCostRule] = Field(min_length=1)
 
 
+class ExplicitCostPolicy(MatrixModel):
+    """Caller-supplied numeric cost rules."""
+
+    kind: Literal["explicit"] = "explicit"
+    rules: list[DemandUnitCostRule] = Field(min_length=1)
+
+
+class ObservedQuoteMeanCostPolicy(MatrixModel):
+    """Derive per-layer fallback unit costs from all matching normalized quotes."""
+
+    kind: Literal["observed_quote_mean"] = "observed_quote_mean"
+
+
+CostPolicySelection = Annotated[
+    ExplicitCostPolicy | ObservedQuoteMeanCostPolicy,
+    Field(discriminator="kind"),
+]
+
+
+class QuoteMeanCostRuleEvidence(MatrixModel):
+    layer: NetworkLayer
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    quote_count: int = Field(gt=0)
+    mean_cost_per_demand_unit: float = Field(ge=0)
+
+
+class ObservedQuoteMeanCostEvidence(MatrixModel):
+    method: Literal["observed_quote_mean"] = "observed_quote_mean"
+    tool_version: Literal["observed-quote-mean.v1"] = "observed-quote-mean.v1"
+    formula: Literal["arithmetic_mean(price_per_vehicle / vehicle_capacity)"] = (
+        "arithmetic_mean(price_per_vehicle / vehicle_capacity)"
+    )
+    considered_quote_count: int = Field(gt=0)
+    ignored_quote_count: int = Field(ge=0)
+    rules: list[QuoteMeanCostRuleEvidence] = Field(min_length=1)
+
+
 class CostMatrixStats(MatrixModel):
     expected_pair_count: int = Field(ge=0)
     reused_pair_count: int = Field(ge=0)
@@ -197,6 +233,8 @@ class CostMatrix(MatrixModel):
     rows: list[CostMatrixRow] = Field(default_factory=list)
     missing_routes: list[tuple[str, str, NetworkLayer]] = Field(default_factory=list)
     calculation_rule: CostCalculationPolicy | None = None
+    calculation_rule_source: Literal["explicit", "observed_quote_mean"] | None = None
+    calculation_rule_evidence: ObservedQuoteMeanCostEvidence | None = None
     stats: CostMatrixStats
     input_identity: PlanningInputIdentity
 

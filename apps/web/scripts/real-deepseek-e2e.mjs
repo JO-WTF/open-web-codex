@@ -26,8 +26,13 @@ const fixtureManifestPath = path.join(
 );
 const baseUrl = (process.env.E2E_BASE_URL ?? "http://127.0.0.1:4810").replace(/\/$/, "");
 const apiBase = baseUrl + "/api";
+const scenario = process.env.E2E_REAL_DEEPSEEK_SCENARIO ?? "multi-agent";
+const isSingleAgentScenario = scenario === "single-agent";
 const copilotPackageId =
-  process.env.E2E_COPILOT_PACKAGE_ID ?? "warehouse-network-copilot";
+  process.env.E2E_COPILOT_PACKAGE_ID ??
+  (isSingleAgentScenario
+    ? "warehouse-network-single-agent"
+    : "warehouse-network-copilot");
 const providerSourceId = process.env.E2E_REAL_DEEPSEEK_SOURCE_PROVIDER_ID ?? "deepseek-e2e";
 const model = process.env.E2E_REAL_DEEPSEEK_MODEL ?? "deepseek-v4-flash";
 const toolChoiceMode =
@@ -44,6 +49,21 @@ const password =
   process.env.E2E_ADMIN_PASSWORD ?? "open-web-codex-real-deepseek-e2e";
 const secrets = [password].filter(Boolean);
 const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
+const serviceTargetHours = 12;
+const balikpapanCandidateWarehouseId = "WH-CANDIDATE-BALIKPAPAN";
+const fullNetworkTaskPrompt = [
+  "根据已上传的 mock_data 文件，先计算当前仓网的 12 小时时效达标率。",
+  "在得出上述基线后，评估只新增候选仓 Balikpapan（WH-CANDIDATE-BALIKPAPAN）带来的 12 小时时效达标率变化；必须分别给出城市数量口径和需求量加权口径的变化率。",
+  "请使用当前 warehouse-network-copilot 的 native multi-agent 协同：清理 raw data，",
+  "将处理后的输入写入 outputs/warehouse-network/prepared/，由 network agent 使用同一基线和路线矩阵完成单仓变更评估及地图交付。不要把生成文件写入 Workspace 根目录或 mock_data，不要模拟业务结果，不要使用 shell 代替 MCP。",
+].join("\n");
+const singleAgentTaskPrompt = [
+  "根据已上传的 mock_data 文件，由当前单 Agent 独立计算仓库分布方案：在保留全部已有仓的前提下，使 12 小时需求加权时效达标率至少达到 90%。",
+  "路线统一使用 haversine，绕路系数 1.2、平均速度 42 kph；从新增候选仓数 0 开始递增，选择满足约束的最少新增仓方案，同一仓数下运输成本最低。",
+  "成本必须用完整 prepared input 中全部现有报价按 layer 计算 arithmetic_mean(price_per_vehicle / vehicle_capacity)，不得从 preview 行推算。",
+  "本次明确要求脚本证据：先用 apply_patch 在 outputs/warehouse-network/calculations/ create-new Python 脚本，再执行脚本并把输入 SHA-256、完整报价数、分层报价数、币种、公式和均值写入同目录 JSON；随后将这些均值作为 explicit cost_policy 传给 plan_cost_matrix。",
+  "数据准备文件写入 outputs/warehouse-network/prepared/。不要创建或调用 child Agent，不要把文件写到 Workspace 根目录或 mock_data，不生成地图或报告，不模拟业务结果。",
+].join("\n");
 const results = [];
 const state = {
   token: undefined,
@@ -438,6 +458,30 @@ function safeStructuredSummary(value) {
   return Object.keys(summary).length > 0 ? summary : undefined;
 }
 
+function facilityChangeEvidence(event) {
+  const structured = eventData(event)?.result?.structuredContent;
+  if (!structured || typeof structured !== "object" || Array.isArray(structured)) {
+    return undefined;
+  }
+  const addedWarehouseIds = Array.isArray(structured.added_warehouse_ids)
+    ? structured.added_warehouse_ids.filter((id) => typeof id === "string").slice(0, 8)
+    : [];
+  const coverageAtTarget = Array.isArray(structured.coverage)
+    ? structured.coverage.find((metric) => metric?.target_hours === serviceTargetHours)
+    : undefined;
+  const delta = coverageAtTarget?.delta;
+  return {
+    added_warehouse_ids: addedWarehouseIds,
+    target_hours: coverageAtTarget?.target_hours,
+    city_coverage_rate_delta:
+      typeof delta?.city_coverage_rate === "number" ? delta.city_coverage_rate : undefined,
+    demand_weighted_coverage_rate_delta:
+      typeof delta?.demand_weighted_coverage_rate === "number"
+        ? delta.demand_weighted_coverage_rate
+        : undefined,
+  };
+}
+
 function safeEventItem(event) {
   const data = eventData(event);
   const error = data.error ?? data.result?.error;
@@ -449,6 +493,9 @@ function safeEventItem(event) {
         : undefined;
   const errorMessage =
     typeof error === "object" ? error.message ?? error.detail : undefined;
+  const facilityChange = eventTool(event) === "assess_facility_change"
+    ? facilityChangeEvidence(event)
+    : undefined;
   return {
     thread_id: event.thread_id,
     turn_id: event.turn_id,
@@ -459,6 +506,7 @@ function safeEventItem(event) {
     error_code: typeof errorCode === "string" ? errorCode : undefined,
     error_message: boundedAssistantSummary(errorMessage),
     result_summary: safeStructuredSummary(data.result),
+    facility_change: facilityChange,
   };
 }
 
@@ -688,8 +736,42 @@ function runSelfTests() {
     ])?.invalid_wire_tool_names[0],
     "stale_tool",
   );
+  assert.match(fullNetworkTaskPrompt, /Balikpapan（WH-CANDIDATE-BALIKPAPAN）/);
+  assertBalikpapanFacilityChange(
+    {
+      payload: {
+        data: {
+          tool: "assess_facility_change",
+          arguments: {
+            before_ref: { resource_schema: "network_baseline.v2" },
+            scenario: {
+              add_warehouse_ids: [balikpapanCandidateWarehouseId],
+              remove_warehouse_ids: [],
+              relocations: [],
+              objective: "min_time",
+              service_targets: [serviceTargetHours],
+            },
+          },
+          result: {
+            structuredContent: {
+              added_warehouse_ids: [balikpapanCandidateWarehouseId],
+              coverage: [{
+                target_hours: serviceTargetHours,
+                delta: {
+                  city_coverage_rate: 0.02,
+                  demand_weighted_coverage_rate: 0.03,
+                },
+              }],
+            },
+          },
+        },
+      },
+    },
+    "self-test",
+  );
   log("[PASS] real DeepSeek per-model capability self-test");
   log("[PASS] real DeepSeek current-turn tool-choice self-test");
+  log("[PASS] real DeepSeek Balikpapan facility-change self-test");
 }
 
 function invalidWireToolRound(rounds) {
@@ -705,6 +787,7 @@ const GOLDEN_COMPLETED_TOOLS = [
   "prepare_network_input",
   "prepare_route_matrix",
   "evaluate_network_baseline",
+  "assess_facility_change",
   "prepare_network_coverage_map",
   "create_network_map_card",
 ];
@@ -716,6 +799,45 @@ function completedMcpToolCounts(timeline) {
     counts.set(item.tool, (counts.get(item.tool) ?? 0) + 1);
   }
   return counts;
+}
+
+function assertBalikpapanFacilityChange(event, providerIdValue) {
+  const argumentsValue = eventData(event)?.arguments;
+  const scenario = argumentsValue?.scenario;
+  const evidence = facilityChangeEvidence(event);
+  const exactAddition =
+    Array.isArray(scenario?.add_warehouse_ids) &&
+    scenario.add_warehouse_ids.length === 1 &&
+    scenario.add_warehouse_ids[0] === balikpapanCandidateWarehouseId;
+  const noRemovalOrRelocation =
+    Array.isArray(scenario?.remove_warehouse_ids) &&
+    scenario.remove_warehouse_ids.length === 0 &&
+    Array.isArray(scenario?.relocations) &&
+    scenario.relocations.length === 0;
+  const hasExactServiceTarget =
+    Array.isArray(scenario?.service_targets) &&
+    scenario.service_targets.length === 1 &&
+    scenario.service_targets[0] === serviceTargetHours;
+  const usesBaseline = argumentsValue?.before_ref?.resource_schema === "network_baseline.v2";
+  const resultMatchesRequest =
+    evidence?.added_warehouse_ids.length === 1 &&
+    evidence.added_warehouse_ids[0] === balikpapanCandidateWarehouseId &&
+    evidence.target_hours === serviceTargetHours &&
+    Number.isFinite(evidence.city_coverage_rate_delta) &&
+    Number.isFinite(evidence.demand_weighted_coverage_rate_delta);
+  if (
+    scenario?.objective !== "min_time" ||
+    !exactAddition ||
+    !noRemovalOrRelocation ||
+    !hasExactServiceTarget ||
+    !usesBaseline ||
+    !resultMatchesRequest
+  ) {
+    throw new NativeRuntimeBlocker("balikpapan_facility_change_invalid", {
+      provider_id: providerIdValue,
+      facility_change: evidence,
+    });
+  }
 }
 
 function assertGoldenTimeline(timeline, rounds, providerIdValue) {
@@ -743,6 +865,32 @@ function assertGoldenTimeline(timeline, rounds, providerIdValue) {
     });
   }
 
+  const expectedOrder = [
+    "evaluate_network_baseline",
+    "assess_facility_change",
+    "prepare_network_coverage_map",
+    "create_network_map_card",
+  ];
+  const completedToolIndexes = expectedOrder.map((tool) =>
+    (timeline?.mcp ?? []).findIndex(
+      (item) =>
+        item.tool === tool &&
+        item.event_type === "codex.item.completed" &&
+        item.status === "completed",
+    ),
+  );
+  if (
+    completedToolIndexes.some((index) => index < 0) ||
+    completedToolIndexes.some(
+      (index, position) => position > 0 && index <= completedToolIndexes[position - 1],
+    )
+  ) {
+    throw new NativeRuntimeBlocker("golden_chain_tool_order_invalid", {
+      provider_id: providerIdValue,
+      expected_order: expectedOrder,
+      completed_indexes: completedToolIndexes,
+    });
+  }
   const roleByThread = new Map(
     (timeline?.threads ?? []).map((thread) => [thread.thread_id, thread.role]),
   );
@@ -812,40 +960,40 @@ function installationId(status, packageId) {
 
 async function ensureCopilotActive() {
   let status = await api("/profile/copilots");
-  for (const installation of status.installations ?? []) {
-    const packageId = installation.package_id ?? installation.packageId;
-    if (installation.active && packageId !== copilotPackageId) {
-      await api("/profile/copilots/deactivate", {
-        method: "POST",
-        body: { packageId },
-      });
-    }
-  }
   const current = installationId(status, copilotPackageId);
-  if (!current?.active || String(current.state).toLowerCase() !== "ready") {
-    if (current?.active) {
-      await api("/profile/copilots/deactivate", {
-        method: "POST",
-        body: { packageId: copilotPackageId },
-      });
-      await eventually(
-        async () => {
-          const next = await api("/profile/copilots");
-          return installationId(next, copilotPackageId)?.active === false ? next : undefined;
-        },
-        "Copilot deactivation",
-        120_000,
-        1_000,
-      );
-    }
-    await api("/profile/copilots/activate", {
+  if (!current?.active) {
+    const activated = await api("/profile/copilots/activate", {
       method: "POST",
       body: { packageId: copilotPackageId },
+    });
+    throw new NativeRuntimeBlocker("copilot_restart_required", {
+      package_id: copilotPackageId,
+      restart_required:
+        activated.restartRequired ?? activated.restart_required ?? true,
     });
   }
   status = await api("/profile/copilots");
   const target = installationId(status, copilotPackageId);
   assert(target?.active === true);
+  if (target.restartRequired ?? target.restart_required) {
+    throw new NativeRuntimeBlocker("copilot_restart_required", {
+      package_id: copilotPackageId,
+      state: target.state,
+      restart_required: true,
+    });
+  }
+  const stateValue = String(target.state).toLowerCase();
+  const rootOnlyConfigured =
+    isSingleAgentScenario &&
+    stateValue === "configured" &&
+    (target.agentRolesConfigured ?? target.agent_roles_configured) === true;
+  if (stateValue !== "ready" && !rootOnlyConfigured) {
+    throw new NativeRuntimeBlocker("copilot_runtime_unavailable", {
+      package_id: copilotPackageId,
+      state: target.state,
+      restart_required: false,
+    });
+  }
   return target;
 }
 
@@ -1141,11 +1289,9 @@ async function send(taskId, minimal = false) {
         "第一步必须调用原生 tool_search，查询可用的 multi-agent spawn_agent 工具。",
         "tool_search 成功后只调用一次 spawn_agent，然后停止；不要调用 exec_command，不要读取文件。",
       ].join("\n")
-    : [
-        "根据已上传的 mock_data 文件，计算 12 小时时效达标率并展示地图。",
-        "请使用当前 warehouse-network-copilot 的 native multi-agent 协同：清理 raw data，",
-        "将处理后的输入留在 Workspace，由 network agent 完成路线、12h 求解和地图交付。",
-      ].join("\n");
+    : isSingleAgentScenario
+      ? singleAgentTaskPrompt
+      : fullNetworkTaskPrompt;
   return api("/tasks/" + taskId + "/messages", {
     method: "POST",
     body: {
@@ -1469,8 +1615,8 @@ async function runToolSearchGate(provider) {
 
 async function runGate(provider) {
   const record = await createTaskAndRun(provider.id, "Real DeepSeek 12h network " + stamp);
+  const roundStart = state.proxy.rounds.length;
   try {
-    const roundStart = state.proxy.rounds.length;
     const response = await send(record.task.id);
     assert(response.turn_id);
     const firstRound = await eventually(
@@ -1548,9 +1694,25 @@ async function runGate(provider) {
             .slice(-80),
         }),
     );
+    const facilityChange = allEvents.find(
+      (event) =>
+        eventTool(event) === "assess_facility_change" &&
+        event.event_type === "codex.item.completed" &&
+        eventData(event)?.status === "completed",
+    );
+    if (!facilityChange) {
+      throw new NativeRuntimeBlocker("balikpapan_facility_change_not_completed", {
+        provider_id: provider.id,
+        rounds,
+        native_tool_names: nativeNames,
+      });
+    }
+    assertBalikpapanFacilityChange(facilityChange, provider.id);
     const timeline = await diagnosticTimeline(record);
     logTimeline("ACTOR TIMELINE", timeline);
-    const invalidRound = invalidWireToolRound(state.proxy.rounds);
+    const invalidRound = invalidWireToolRound(
+      state.proxy.rounds.filter((round) => round.round > roundStart),
+    );
     if (invalidRound) {
       throw new NativeRuntimeBlocker("provider_tool_call_not_visible", {
         provider_id: provider.id,
@@ -1589,6 +1751,26 @@ async function runGate(provider) {
         native_tool_names: nativeNames,
       });
     }
+    const workspaceFiles = await api(
+      "/workspaces/" + encodeURIComponent(record.workspace.id) + "/files",
+    );
+    const generatedWorkspaceFiles = workspaceFiles.filter(
+      (relativePath) => !relativePath.startsWith("mock_data/"),
+    );
+    if (
+      !generatedWorkspaceFiles.some((relativePath) =>
+        relativePath.startsWith("outputs/warehouse-network/prepared/"),
+      ) ||
+      generatedWorkspaceFiles.some(
+        (relativePath) => !relativePath.startsWith("outputs/warehouse-network/"),
+      )
+    ) {
+      throw new NativeRuntimeBlocker("generated_workspace_output_scope_invalid", {
+        provider_id: provider.id,
+        generated_workspace_files: generatedWorkspaceFiles.slice(0, 40),
+        generated_workspace_files_truncated: generatedWorkspaceFiles.length > 40,
+      });
+    }
     assertGoldenTimeline(timeline, rounds, provider.id);
     return {
       status: "passed",
@@ -1601,6 +1783,268 @@ async function runGate(provider) {
       map_producer_status: mapProducerEvent.payload?.data?.status,
       round_count: rounds.length,
       native_tool_names: nativeNames,
+    };
+  } catch (error) {
+    const invalidRound = invalidWireToolRound(
+      state.proxy.rounds.filter((round) => round.round > roundStart),
+    );
+    const classified = invalidRound && error?.code !== "provider_tool_call_not_visible"
+      ? new NativeRuntimeBlocker("provider_tool_call_not_visible", {
+          provider_id: provider.id,
+          model,
+          stage: "current_turn",
+          round: {
+            round: invalidRound.round,
+            visible_tool_count: invalidRound.tool_count,
+            visible_tool_names: invalidRound.visible_tool_names,
+            wire_tool_names: invalidRound.wire_tool_names,
+            invalid_wire_tool_names: invalidRound.invalid_wire_tool_names,
+            original_tool_choice: invalidRound.original_tool_choice,
+            effective_tool_choice: invalidRound.effective_tool_choice,
+          },
+        })
+      : error;
+    throw await attachTimeline(classified, record);
+  } finally {
+    await cleanupCase(record);
+  }
+}
+
+async function runSingleAgentGate(provider) {
+  const record = await createTaskAndRun(
+    provider.id,
+    "Real DeepSeek single-agent 90pct network " + stamp,
+  );
+  const roundStart = state.proxy.rounds.length;
+  try {
+    const response = await send(record.task.id);
+    assert(response.turn_id);
+    const firstRound = await eventually(
+      async () =>
+        state.proxy.rounds.find(
+          (round) => round.round > roundStart && round.wire_api === "chat",
+        ),
+      "first real single-Agent Chat request",
+      180_000,
+      250,
+    );
+    if (!firstRound.visible_tool_names.includes("tool_search")) {
+      throw new NativeRuntimeBlocker("provider_tool_search_capability_unavailable", {
+        provider_id: provider.id,
+        model,
+        scenario,
+        visible_tool_names: firstRound.visible_tool_names,
+      });
+    }
+    await waitForTurn(record.task.id, response.turn_id, 600_000);
+    const allEvents = await taskEventsAll(record.task.id);
+    const rounds = state.proxy.rounds
+      .filter((round) => round.round > roundStart)
+      .slice(-80)
+      .map((round) => ({
+        round: round.round,
+        tools_present: round.tools_present,
+        visible_tool_count: round.tool_count,
+        tool_choice: round.tool_choice,
+        structured_tool_calls: round.structured_tool_calls,
+        wire_tool_names: round.wire_tool_names,
+        invalid_wire_tool_names: round.invalid_wire_tool_names,
+      }));
+    const invalidRound = invalidWireToolRound(
+      state.proxy.rounds.filter((round) => round.round > roundStart),
+    );
+    if (invalidRound) {
+      throw new NativeRuntimeBlocker("provider_tool_call_not_visible", {
+        provider_id: provider.id,
+        model,
+        scenario,
+        round: {
+          round: invalidRound.round,
+          visible_tool_names: invalidRound.visible_tool_names,
+          wire_tool_names: invalidRound.wire_tool_names,
+          invalid_wire_tool_names: invalidRound.invalid_wire_tool_names,
+        },
+      });
+    }
+    const timeline = await diagnosticTimeline(record);
+    logTimeline("SINGLE-AGENT TIMELINE", timeline);
+    const nativeNames = nativeToolNames(allEvents);
+    if (
+      timeline.collaboration.length > 0 ||
+      nativeNames.some((name) => /spawn_agent|send_input|wait_agent|resume_agent/.test(name))
+    ) {
+      throw new NativeRuntimeBlocker("single_agent_created_child", {
+        provider_id: provider.id,
+        native_tool_names: nativeNames,
+        collaboration: timeline.collaboration,
+      });
+    }
+
+    const costEvent = allEvents.find(
+      (event) =>
+        /plan_cost_matrix/.test(String(eventTool(event))) &&
+        event.event_type === "codex.item.completed" &&
+        eventData(event)?.status === "completed",
+    );
+    const costResult = costEvent ? eventData(costEvent)?.result?.structuredContent : undefined;
+    if (!costEvent || costResult?.calculation_rule_source !== "explicit") {
+      throw new NativeRuntimeBlocker("single_agent_explicit_mean_cost_not_completed", {
+        provider_id: provider.id,
+        cost_result: safeStructuredSummary(costResult),
+        native_tool_names: nativeNames,
+      });
+    }
+
+    const solveEvents = allEvents.filter(
+      (event) =>
+        /solve_p_median/.test(String(eventTool(event))) &&
+        event.event_type === "codex.item.completed" &&
+        eventData(event)?.status === "completed",
+    );
+    const successfulSolve = solveEvents.findLast((event) => {
+      const result = eventData(event)?.result?.structuredContent;
+      const metric = Array.isArray(result?.coverage)
+        ? result.coverage.find((entry) => entry?.target_hours === serviceTargetHours)
+        : undefined;
+      return (
+        ["optimal", "feasible"].includes(result?.status) &&
+        typeof metric?.demand_weighted_coverage_rate === "number" &&
+        metric.demand_weighted_coverage_rate >= 0.9
+      );
+    });
+    if (!successfulSolve) {
+      throw new NativeRuntimeBlocker("single_agent_90pct_solution_not_completed", {
+        provider_id: provider.id,
+        solve_results: solveEvents.map((event) => {
+          const result = eventData(event)?.result?.structuredContent;
+          return {
+            status: result?.status,
+            opened_candidate_ids: result?.opened_candidate_ids,
+            coverage: result?.coverage,
+          };
+        }),
+        native_tool_names: nativeNames,
+      });
+    }
+    const solution = eventData(successfulSolve)?.result?.structuredContent;
+    const targetCoverage = solution.coverage.find(
+      (metric) => metric.target_hours === serviceTargetHours,
+    );
+
+    const workspaceFiles = await api(
+      "/workspaces/" + encodeURIComponent(record.workspace.id) + "/files",
+    );
+    const generatedWorkspaceFiles = workspaceFiles.filter(
+      (relativePath) => !relativePath.startsWith("mock_data/"),
+    );
+    const calculationFiles = generatedWorkspaceFiles.filter((relativePath) =>
+      relativePath.startsWith("outputs/warehouse-network/calculations/"),
+    );
+    if (
+      !generatedWorkspaceFiles.some((relativePath) =>
+        relativePath.startsWith("outputs/warehouse-network/prepared/"),
+      ) ||
+      !calculationFiles.some((relativePath) => relativePath.endsWith(".py")) ||
+      !calculationFiles.some((relativePath) => relativePath.endsWith(".json")) ||
+      generatedWorkspaceFiles.some(
+        (relativePath) => !relativePath.startsWith("outputs/warehouse-network/"),
+      )
+    ) {
+      throw new NativeRuntimeBlocker("single_agent_generated_output_scope_invalid", {
+        provider_id: provider.id,
+        generated_workspace_files: generatedWorkspaceFiles.slice(0, 60),
+        generated_workspace_files_truncated: generatedWorkspaceFiles.length > 60,
+      });
+    }
+    const calculationJsonPath = calculationFiles.find((relativePath) =>
+      relativePath.endsWith(".json"),
+    );
+    const calculationResponse = await api(
+      "/workspaces/" +
+        encodeURIComponent(record.workspace.id) +
+        "/files/content?path=" +
+        encodeURIComponent(calculationJsonPath),
+    );
+    if (calculationResponse.truncated) {
+      throw new NativeRuntimeBlocker("single_agent_calculation_evidence_truncated", {
+        provider_id: provider.id,
+        path: calculationJsonPath,
+      });
+    }
+    let calculation;
+    try {
+      calculation = JSON.parse(calculationResponse.content);
+    } catch {
+      throw new NativeRuntimeBlocker("single_agent_calculation_evidence_invalid", {
+        provider_id: provider.id,
+        path: calculationJsonPath,
+      });
+    }
+    const costRules = eventData(costEvent)?.arguments?.cost_policy?.rules;
+    const evidenceText = JSON.stringify(calculation);
+    const scalarValues = [];
+    const collectScalars = (value) => {
+      if (value === null || value === undefined) return;
+      if (typeof value === "string" || typeof value === "number") {
+        scalarValues.push(value);
+        return;
+      }
+      if (Array.isArray(value)) {
+        for (const entry of value) collectScalars(entry);
+        return;
+      }
+      if (typeof value === "object") {
+        for (const entry of Object.values(value)) collectScalars(entry);
+      }
+    };
+    collectScalars(calculation);
+    const numericValues = scalarValues
+      .map((value) => (typeof value === "number" ? value : Number(value)))
+      .filter(Number.isFinite);
+    const expectedMeans = {
+      last_mile: 1_968_472.727273,
+      linehaul: 1_252_333.333333,
+    };
+    const calculationValid =
+      scalarValues.some(
+        (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
+      ) &&
+      evidenceText.includes("price_per_vehicle") &&
+      evidenceText.includes("vehicle_capacity") &&
+      evidenceText.includes("IDR") &&
+      [580, 550, 30].every((expected) => numericValues.includes(expected)) &&
+      Object.values(expectedMeans).every((expected) =>
+        numericValues.some((actual) => Math.abs(actual - expected) < 1e-3),
+      ) &&
+      Array.isArray(costRules) &&
+      Object.entries(expectedMeans).every(([layer, expectedMean]) => {
+        const rule = costRules.find((entry) => entry?.layer === layer);
+        return (
+          rule?.currency === "IDR" &&
+          rule?.cost_per_km_per_demand_unit === 0 &&
+          Number.isFinite(rule?.fixed_cost_per_demand_unit) &&
+          Math.abs(rule.fixed_cost_per_demand_unit - expectedMean) < 1e-3
+        );
+      });
+    if (!calculationValid) {
+      throw new NativeRuntimeBlocker("single_agent_calculation_policy_mismatch", {
+        provider_id: provider.id,
+        evidence_keys: Object.keys(calculation),
+        cost_rules: costRules,
+      });
+    }
+    return {
+      status: "passed",
+      provider_id: provider.id,
+      model,
+      run_id: record.run?.id,
+      round_count: rounds.length,
+      native_tool_names: nativeNames,
+      opened_candidate_ids: solution.opened_candidate_ids,
+      demand_weighted_12h_coverage_rate:
+        targetCoverage.demand_weighted_coverage_rate,
+      calculation_files: calculationFiles,
+      calculation_quote_count: 580,
     };
   } catch (error) {
     throw await attachTimeline(error, record);
@@ -1624,13 +2068,19 @@ async function main() {
       supported: ["observe", "force_first_tool"],
     });
   }
+  if (!new Set(["multi-agent", "single-agent"]).has(scenario)) {
+    throw new NativeRuntimeBlocker("invalid_real_deepseek_scenario", {
+      scenario,
+      supported: ["multi-agent", "single-agent"],
+    });
+  }
   state.manifest = await readFixtureManifest();
   state.proxy = await new DeepSeekProbeProxy(toolChoiceMode).start();
   let provider;
   try {
     const version = await ensureAuthenticated();
     await ensureCopilotActive();
-    await enableMultiAgent();
+    if (!isSingleAgentScenario) await enableMultiAgent();
     provider = await configureTemporaryProvider();
     taskProviderId = provider.id;
     state.proxy.bindExactProviderModel(provider.id, model);
@@ -1652,22 +2102,30 @@ async function main() {
     );
     const started = Date.now();
     try {
-      const minimal = await runToolSearchGate(provider);
-      results.push({
-        name: "real DeepSeek D2 native tool gate",
-        ...minimal,
-        durationMs: Date.now() - started,
-      });
-      log("[PASS] real DeepSeek D2 native tool gate");
-      const details = await runGate(provider);
-      const name = "real DeepSeek multi-agent gate";
+      if (!isSingleAgentScenario) {
+        const minimal = await runToolSearchGate(provider);
+        results.push({
+          name: "real DeepSeek D2 native tool gate",
+          ...minimal,
+          durationMs: Date.now() - started,
+        });
+        log("[PASS] real DeepSeek D2 native tool gate");
+      }
+      const details = isSingleAgentScenario
+        ? await runSingleAgentGate(provider)
+        : await runGate(provider);
+      const name = isSingleAgentScenario
+        ? "real DeepSeek single-agent 90pct gate"
+        : "real DeepSeek multi-agent gate";
       results.push({ name, ...details, durationMs: Date.now() - started });
       log("[PASS] " + name);
     } catch (error) {
       if (error instanceof NativeRuntimeBlocker) {
-        const name = results.length > 0
-          ? "real DeepSeek multi-agent gate"
-          : "real DeepSeek D2 native tool gate";
+        const name = isSingleAgentScenario
+          ? "real DeepSeek single-agent 90pct gate"
+          : results.length > 0
+            ? "real DeepSeek multi-agent gate"
+            : "real DeepSeek D2 native tool gate";
         results.push({
           name,
           status: "typed_failure",

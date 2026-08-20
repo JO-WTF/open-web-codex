@@ -409,7 +409,7 @@ child 仍保留各自的 typed MCP surface。Data 与地图 Skill 在成功终�
 error/result summary 与 producer provenance；成功地图调用按 `create_network_map_card` 的 completed
 Item 验收，不把后续模型误选低层 Tool 或求解失败伪装成地图成功。deterministic multi-agent gate
 连续两次通过；真实 Provider 仍可能因模型未作出下一结构化调用或触发审批而 typed 终止，完整真实门
-只在完整 Data→Network→12h→map canonical 链实际完成时计为通过。
+只在完整 Data→Network→12h 基线→Balikpapan 增仓时效变化率→map canonical 链实际完成时计为通过。
 
 后续 backlog 继续遵守已确认边界：official Thread/Turn/Item/history 是唯一会话事实；Browser legacy、
 Terminal/Usage/prompts、Provider 重复 owner、Task creation selection、Run lease/history overlay 与
@@ -521,7 +521,7 @@ producer-time verifier snapshot，恢复不依赖届时 active package registry�
 5. 有候选仓文件则使用；没有则询问省级、市级或用户指定范围。首次归一化保留所有已确认候选仓；
    baseline 通过计算范围排除，不删除已处理的候选事实。
 6. Data Tool 以 create-new 语义把完整 `prepared_network_input.v1`（含确认来源、候选仓和质量问题）
-   写入用户可见 Workspace；该路径和内容身份是唯一 Data→Network 交接。路线/成本/方案等高成本
+   写入用户可见 `outputs/warehouse-network/prepared/`；该路径、内容身份、精确候选仓总数和有界候选仓目录是唯一 Data→Network 交接。路线/成本/方案等高成本
    typed intermediate 继续保存为 MCP Resource。
 7. 候选仓、城市、现网仓、实际分配、需求或原始路线事实任一变化都产生新的完整准备输入；不使用
    candidate delta 或原地修改。校验结果不构成授权、可信等级或自动复用许可。
@@ -533,11 +533,16 @@ producer-time verifier snapshot，恢复不依赖届时 active package registry�
    用户已经提供完整起终点距离、时长与来源方法时，由 Data Tool 写入准备输入，
    Network Tool 按当前分析范围直接物化并验证，不重复询问估算参数或让模型重读 raw 文件。导航则先
    生成精确缺失 lane request，在费用确认后由地理 Tool 自动执行并导入验证结果。
-2. 优先使用用户路线报价；缺失路线时询问计价逻辑，禁止以零成本填补。
+2. 优先使用用户路线报价；用户明确要求用现有报价均值外推时，由 Cost Tool 对 exact prepared input
+   的完整报价按层计算 `mean(price_per_vehicle / vehicle_capacity)`，返回报价数、币种、公式和均值 provenance，
+   不让模型从 preview 推导。用户明确要求脚本证据时，单 Agent 可对同一 prepared input 执行受限脚本并把
+   bounded 结果写入 calculations 目录；缺失路线且没有任何已确认计价口径时才询问，禁止以零成本填补。
 3. 按成本优先或时效优先计算覆盖；计算一个或多个 SLA 目标的满足率，同时明确返回按城市
    数量与按需求量加权的两种口径及确定性的未覆盖城市，模型不得自行汇总。
 4. 计算全网和分仓运输成本，完成增仓、减仓、搬迁三类模拟。
-5. 执行 p-median：明确 `p`，已有仓默认固定；只有用户明确许可时才允许指定已有仓关闭。
+5. 执行 p-median：已有仓默认固定；用户给出 `p` 时按该值求解。用户只要求达到指定需求加权 SLA 的
+   最优分布时，从 `p=0` 递增做有界可行性搜索，以最少新增仓优先、同一 `p` 下运输成本最低，首个 proven
+   feasible solution 即停止；只有用户明确许可时才允许指定已有仓关闭。
 6. 执行给定 SLA 下的成本最优规划，输出覆盖、时效、距离、成本和仓库变动。
 7. 当空间关系有助理解时生成对话内交互地图卡片；Network 从 exact 分配结果产生城市、设施、实际
    分配和城市→仓库 LineString 的通用覆盖 GeoJSON，Maps 只消费该精确几何 ref。结构化计算明细与
@@ -564,7 +569,8 @@ producer-time verifier snapshot，恢复不依赖届时 active package registry�
   Platform 只投影其 exact ref 供当前对话卡片修订鉴权。纯样式修订复用 GeoJSON；新增覆盖线先产生新的
   Network geometry Resource，再产生有 parent 的新 map spec。开发数据库按此 schema 重建，不从历史
   renderer payload 反推 spec。
-- 文件名和目录由用户与 Skill 决定；默认 create-new，同名时询问覆盖、改名或取消。
+- 仓网 Tool 与单 Agent 授权计算只允许在 `outputs/warehouse-network/{prepared,requests,calculations,deliverables}/` 下 create-new；
+  输入源保持原位。文件名可由用户与 Skill 决定，同名时询问改名或取消，不覆盖旧结果。
 - Mock 只在用户明确选择“使用印尼仓网完整示例”时把 fixture 作为普通可见文件放入干净
   Workspace，绝不能在真实输入失败后静默回退。
 
@@ -591,7 +597,7 @@ Data4 strict ResourceRef、完整仓网清单和 pair-level 部分复用都有�
    混充；地图在空间关系有助理解时使用对话卡片。
 3. Artifact 状态只投影真实的生成中、已完成、部分完成或失败；模型文本不能冒充完成。
 4. built-in final map/report Tool 使用 exact `(server, tool)` allowlist 和 typed output schema，原子
-   create-new 写一个自包含 Workspace-relative map JSON 或 report Markdown。Platform 从 producing Run 解析授权
+   create-new 写一个位于 `outputs/warehouse-network/deliverables/` 的自包含 map JSON 或 report Markdown。Platform 从 producing Run 解析授权
    Workspace，复用 `GitRuntime::download_file` 的 relative-path、regular-file、no-follow、physical
    containment 与 100 MiB 边界，即时复制到 Artifact；中间 MCP Resource 永不注册 Artifact。
 5. Artifact delivery 直接附着在 producing official completed Tool Item，并以 Item provenance 做

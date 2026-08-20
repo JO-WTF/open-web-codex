@@ -8,16 +8,9 @@
           "type": "string"
         },
         "demand_quantity": {
-          "anyOf": [
-            {
-              "type": "number"
-            },
-            {
-              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-              "type": "string"
-            }
-          ],
-          "title": "Demand Quantity"
+          "minimum": 0,
+          "title": "Demand Quantity",
+          "type": "number"
         },
         "distance_km": {
           "anyOf": [
@@ -320,16 +313,9 @@
           "type": "string"
         },
         "demand_quantity": {
-          "anyOf": [
-            {
-              "type": "number"
-            },
-            {
-              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-              "type": "string"
-            }
-          ],
-          "title": "Demand Quantity"
+          "minimum": 0,
+          "title": "Demand Quantity",
+          "type": "number"
         },
         "distance_km": {
           "anyOf": [
@@ -514,16 +500,9 @@
       "additionalProperties": false,
       "properties": {
         "assigned_demand": {
-          "anyOf": [
-            {
-              "type": "number"
-            },
-            {
-              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
-              "type": "string"
-            }
-          ],
-          "title": "Assigned Demand"
+          "minimum": 0,
+          "title": "Assigned Demand",
+          "type": "number"
         },
         "crossdock_warehouse_id": {
           "title": "Crossdock Warehouse Id",

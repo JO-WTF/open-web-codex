@@ -1,4 +1,4 @@
-"""Read-only supply-chain data MCP for the Data Agent."""
+"""Typed supply-chain inspection and preparation MCP for the Data Agent."""
 
 from __future__ import annotations
 
@@ -44,6 +44,7 @@ from supply_chain_planner.data.workspace_intake import (
 )
 from supply_chain_planner.network.models import NormalizedInputBatch
 from supply_chain_planner.shared.models import (
+    CandidateWarehouseSummary,
     ConfirmedFieldDecision,
     ConfirmedSourceDecision,
     DataInspectionToolResult,
@@ -53,6 +54,8 @@ from supply_chain_planner.shared.models import (
 )
 from supply_chain_planner.shared.planning_input import load_prepared_network_input
 from supply_chain_planner.shared.resources import SupplyChainResources
+from supply_chain_planner.shared.workspace_outputs import WorkspaceOutputKind
+from supply_chain_planner.shared.workspace_outputs import prepare_workspace_output_path
 
 RESOURCE_URI_PREFIX = "supply-chain://resources/"
 MAX_SOURCE_CATALOG_ENTRIES = 500
@@ -91,13 +94,16 @@ class _SourceProfileResource(BaseModel):
 mcp = FastMCP(
     "Supply Chain Data",
     instructions=(
-        "This is a read-only enterprise data boundary for the supply-chain Data Agent. "
+        "This is a typed enterprise data boundary for the supply-chain Data Agent. Inspection "
+        "tools are read-only; preparation tools may only create new files under the declared "
+        "warehouse-network output directory. "
         "Inputs are validated Workspace-relative paths resolved under the trusted Turn Workspace; "
         "never request or accept organization IDs, Profile IDs, credentials, arbitrary SQL, "
         "filesystem paths, or write statements. Discover and inspect the complete authorized "
-        "Workspace before confirming mappings. Inspection returns exact record counts plus a "
-        "head preview; preview rows are examples only and never the full source. Never use "
-        "the preview row count as the source row count. The initial normalization tool rereads "
+        "Workspace before confirming mappings. Inspection returns a head preview with separate "
+        "preview_sample_count, total_count, and total_count_exact fields; preview rows are examples "
+        "only and never the full source. Never use the preview sample count as the source row count. "
+        "The initial normalization tool rereads "
         "the complete explicitly confirmed source files and preserves every confirmed candidate "
         "warehouse in a user-visible prepared_network_input.v1 Workspace JSON file. Source facts "
         "such as demand, existing warehouses, assignments, routes, costs, or candidates always "
@@ -149,6 +155,11 @@ def _write_prepared_input(
     ctx: Context,
     summary: str,
 ) -> DataPreparationToolResult:
+    output_relative_path = prepare_workspace_output_path(
+        _workspace(ctx),
+        output_relative_path,
+        WorkspaceOutputKind.PREPARED_INPUT,
+    )
     created = _runtime().create_workspace_model(
         ctx,
         output_relative_path,
@@ -159,12 +170,26 @@ def _write_prepared_input(
         _workspace(ctx),
         created.relative_path,
     )
+    candidates = sorted(
+        (warehouse for warehouse in persisted.warehouses if not warehouse.is_existing),
+        key=lambda warehouse: warehouse.warehouse_id,
+    )
     return DataPreparationToolResult(
         summary=summary,
         prepared_input_relative_path=created.relative_path,
         input_identity=identity,
         state=persisted.state,
         issue_count=len(persisted.issues),
+        candidate_warehouse_count=len(candidates),
+        candidate_warehouses=[
+            CandidateWarehouseSummary(
+                warehouse_id=warehouse.warehouse_id,
+                warehouse_name=warehouse.warehouse_name,
+                city_name=warehouse.city_name,
+            )
+            for warehouse in candidates[:64]
+        ],
+        candidate_warehouses_truncated=len(candidates) > 64,
     )
 
 
@@ -278,7 +303,7 @@ def _bound_agent_previews(profile: dict[str, Any]) -> dict[str, Any]:
             preview = result.get("preview")
             if isinstance(preview, dict) and isinstance(preview.get("rows"), list):
                 preview["rows"] = preview["rows"][:3]
-                preview["returned_count"] = len(preview["rows"])
+                preview["preview_sample_count"] = len(preview["rows"])
                 preview["limit"] = min(int(preview.get("limit", 3)), 3)
             return result
         if isinstance(value, list):
@@ -332,7 +357,16 @@ def prepare_network_input(
         ),
     ],
     country_code: Annotated[str, Field(pattern=r"^[A-Za-z]{2}$")],
-    output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    output_relative_path: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=1024,
+            description=(
+                "Create-new JSON path directly under outputs/warehouse-network/prepared/."
+            ),
+        ),
+    ],
     ctx: Context,
     administrative_catalog_relative_path: Annotated[
         str | None,
@@ -425,13 +459,18 @@ def _resolve_confirmed_source_decision(
     decision: ConfirmedSourceDecision,
     source: dict[str, Any],
 ) -> ConfirmedSourceDecision:
-    if decision.mappings:
-        return decision
     suggestions = [
         suggestion
         for suggestion in source.get("mapping_suggestions", [])
         if suggestion.get("role") == decision.role.value
     ]
+    if decision.mappings:
+        if len(suggestions) == 1 and suggestions[0].get("ambiguous") is False:
+            raise ValueError(
+                f"confirmed_mappings_not_allowed_for_unambiguous_source:"
+                f"{decision.relative_path}:{decision.role.value}"
+            )
+        return decision
     if len(suggestions) != 1 or suggestions[0].get("ambiguous") is not False:
         raise ValueError(
             f"confirmed_mappings_required:{decision.relative_path}:{decision.role.value}"
@@ -541,7 +580,16 @@ def _enrich_prepared_geography(
 def prepare_network_geography(
     prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     administrative_catalog_relative_path: str,
-    output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    output_relative_path: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=1024,
+            description=(
+                "Create-new JSON path directly under outputs/warehouse-network/prepared/."
+            ),
+        ),
+    ],
     ctx: Context,
     overrides: list[GeographyOverride] | None = None,
 ) -> DataPreparationToolResult:
@@ -565,7 +613,9 @@ def prepare_network_geography(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Read-only supply-chain data MCP server")
+    parser = argparse.ArgumentParser(
+        description="Typed supply-chain inspection and preparation MCP server"
+    )
     parser.add_argument("--transport", choices=("stdio",), default="stdio")
     parser.parse_args()
 

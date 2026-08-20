@@ -1537,6 +1537,9 @@ mod tests {
     const ROOT_ROLE: &str = include_str!(
         "../../../../copilots/warehouse-network/agents/warehouse_supervisor_root.toml"
     );
+    const SINGLE_AGENT_ROOT_ROLE: &str = include_str!(
+        "../../../../copilots/warehouse-network-single-agent/agents/warehouse_single_agent.toml"
+    );
 
     #[test]
     fn root_agent_toml_becomes_flat_app_server_config_overrides() {
@@ -1552,6 +1555,21 @@ mod tests {
         assert_eq!(config["skills.config"][0]["name"], "warehouse-single-agent");
         assert!(config.get("features").is_none());
         assert!(config.get("plugins").is_none());
+    }
+
+    #[test]
+    fn single_agent_root_keeps_sandboxed_calculation_without_multi_agent() {
+        let role = parse_role_template("warehouse_single_agent", SINGLE_AGENT_ROOT_ROLE)
+            .expect("parse single-Agent Root Role");
+
+        assert_eq!(role["features"]["shell_tool"].as_bool(), Some(true));
+        assert_eq!(role["features"]["multi_agent"].as_bool(), Some(false));
+        let instructions = role["developer_instructions"]
+            .as_str()
+            .expect("single-Agent developer instructions");
+        assert!(instructions.contains("exact prepared_input_relative_path"));
+        assert!(instructions.contains("outputs/warehouse-network/calculations/"));
+        assert!(instructions.contains("If the user explicitly requests a script calculation"));
     }
 
     #[test]

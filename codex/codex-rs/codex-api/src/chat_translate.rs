@@ -196,6 +196,10 @@ pub fn responses_request_to_chat_completions_request(
     // Turn's completed client ToolSearchOutput. It never mutates canonical
     // Prompt.tools or the Core ToolRouter registry.
     tools.extend(current_turn_tools);
+    let parallel_tool_calls = parallel_tool_calls
+        && !tools
+            .iter()
+            .any(|tool| tool.target.name == "tool_search" && tool.target.namespace.is_none());
     let tool_choice = chat_tool_choice(&tool_choice, !tools.is_empty())?;
     // `include`, `prompt_cache_key`, and `client_metadata` are Responses
     // metadata. The known encrypted-reasoning include is omitted as a

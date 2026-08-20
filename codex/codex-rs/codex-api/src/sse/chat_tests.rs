@@ -263,7 +263,26 @@ async fn chat_sse_rejects_invalid_wire_and_terminal_shapes() {
     )
     .await;
     assert!(
-        matches!(&unknown_tool[0], Err(ApiError::Stream(message)) if message.contains("unknown tool `not_offered`"))
+        matches!(&unknown_tool[0], Err(ApiError::InvalidRequest { message }) if message.contains("unavailable tool `not_offered`") && message.contains("not offered in this request"))
+    );
+
+    let mixed_tool_calls = collect(
+        concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"search_1\",\"function\":{\"name\":\"tool_search\",\"arguments\":\"{\\\"query\\\":\\\"route matrix\\\"}\"}},{\"index\":1,\"id\":\"call_1\",\"function\":{\"name\":\"mcp__supply_chain__prepare_route_matrix\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n"
+        ),
+        HashMap::from([(
+            "tool_search".to_string(),
+            ChatToolTarget {
+                name: "tool_search".to_string(),
+                namespace: None,
+            },
+        )]),
+    )
+    .await;
+    assert_eq!(mixed_tool_calls.len(), 1);
+    assert!(
+        matches!(&mixed_tool_calls[0], Err(ApiError::InvalidRequest { message }) if message.contains("mcp__supply_chain__prepare_route_matrix"))
     );
 }
 
@@ -442,7 +461,7 @@ async fn chat_sse_rejects_invalid_tool_delta_shapes_before_completion() {
             "not valid JSON",
         ),
     ];
-    for (_name, body, expected) in cases {
+    for (name, body, expected) in cases {
         let events = collect(
             body,
             HashMap::from([(
@@ -454,9 +473,15 @@ async fn chat_sse_rejects_invalid_tool_delta_shapes_before_completion() {
             )]),
         )
         .await;
-        assert!(
-            matches!(events.last(), Some(Err(ApiError::Stream(message))) if message.contains(expected))
-        );
+        if name == "duplicate-argument-fragment" {
+            assert!(
+                matches!(events.last(), Some(Err(ApiError::InvalidRequest { message })) if message.contains(expected))
+            );
+        } else {
+            assert!(
+                matches!(events.last(), Some(Err(ApiError::Stream(message))) if message.contains(expected))
+            );
+        }
     }
 }
 

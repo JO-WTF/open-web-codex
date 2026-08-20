@@ -25,7 +25,8 @@
     "smoke:codex-app-server": "node scripts/codex-app-server-smoke.mjs",
     "test:codex-harness": "node scripts/test-codex-app-server-harness.mjs",
     "test:e2e:real-platform": "node scripts/real-platform-e2e.mjs",
-    "test:e2e:real-deepseek": "node scripts/real-deepseek-e2e.mjs"
+    "test:e2e:real-deepseek": "node scripts/real-deepseek-e2e.mjs",
+    "test:e2e:real-deepseek-single-agent": "node scripts/real-deepseek-single-agent-e2e.mjs"
   },
   "dependencies": {
     "@pierre/diffs": "^1.0.6",

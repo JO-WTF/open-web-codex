@@ -13,7 +13,14 @@ from _network_fixtures import (
 )
 from open_web_codex_provider import ProviderContractError, ResourceRef, ResourceStore
 from supply_chain_planner.network import server
-from supply_chain_planner.network.matrix_models import CostCalculationPolicy, DemandUnitCostRule
+from supply_chain_planner.network.matrix_models import (
+    CostCalculationPolicy,
+    CostMatrix,
+    DemandUnitCostRule,
+    ExplicitCostPolicy,
+    ObservedQuoteMeanCostEvidence,
+    ObservedQuoteMeanCostPolicy,
+)
 from supply_chain_planner.network.models import RouteQuoteRecord
 from supply_chain_planner.network.optimization_models import (
     KeepAllExistingWarehousePolicy,
@@ -99,6 +106,52 @@ def test_network_planning_tools_use_workspace_input_and_keep_compute_results_as_
 
     assert "resource_ref" in tools["prepare_route_matrix"].outputSchema["properties"]
     assert "prepared_input_relative_path" in tools["prepare_route_matrix"].inputSchema["properties"]
+    assert "cost_policy" in tools["plan_cost_matrix"].inputSchema["properties"]
+    assert "calculation_policy" not in tools["plan_cost_matrix"].inputSchema["properties"]
+    assert "calculation_rule_evidence" in tools["plan_cost_matrix"].outputSchema["properties"]
+    assert "coverage" in tools["solve_p_median"].outputSchema["properties"]
+
+
+def test_plan_cost_matrix_derives_bounded_full_quote_means(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace, _store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    prepared_path = _prepared_input(workspace)
+    routes = _ref(
+        server.prepare_route_matrix(
+            prepared_path,
+            "haversine",
+            ctx,
+            warehouse_scope="all_warehouses",
+            detour_coefficient=1.2,
+            average_speed_kph=42,
+        )
+    )
+
+    result = server.plan_cost_matrix(
+        prepared_path,
+        "all_warehouses",
+        ctx,
+        cost_policy=ObservedQuoteMeanCostPolicy(),
+        route_matrix_ref=routes,
+    )
+
+    assert result.structuredContent is not None
+    evidence = result.structuredContent["calculation_rule_evidence"]
+    assert result.structuredContent["calculation_rule_source"] == "observed_quote_mean"
+    assert result.structuredContent["input_identity"]["schema_version"] == (
+        "prepared_network_input.v1"
+    )
+    assert evidence["considered_quote_count"] == 580
+    assert {rule["layer"]: rule["quote_count"] for rule in evidence["rules"]} == {
+        "last_mile": 550,
+        "linehaul": 30,
+    }
+    matrix = server._runtime().load_model(_ref(result), "cost_matrix.v2", CostMatrix)
+    assert matrix.missing_routes == []
+    assert matrix.calculation_rule_source == "observed_quote_mean"
+    assert matrix.calculation_rule_evidence == ObservedQuoteMeanCostEvidence.model_validate(evidence)
 
 
 def test_prepared_input_drives_baseline_optimization_map_and_report(
@@ -124,7 +177,7 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
             prepared_path,
             "all_warehouses",
             ctx,
-            calculation_policy=_cost_policy(),
+            cost_policy=ExplicitCostPolicy(rules=_cost_policy().rules),
             route_matrix_ref=routes,
         )
     )
@@ -139,18 +192,24 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
             cost_matrix_ref=costs,
         )
     )
-    facility = _ref(
-        server.solve_p_median(
-            prepared_path,
-            routes,
-            costs,
-            2,
-            KeepAllExistingWarehousePolicy(),
-            [6, 12, 18],
-            30,
-            ctx,
-        )
+    facility_result = server.solve_p_median(
+        prepared_path,
+        routes,
+        costs,
+        2,
+        KeepAllExistingWarehousePolicy(),
+        [6, 12, 18],
+        30,
+        ctx,
     )
+    assert facility_result.structuredContent is not None
+    assert facility_result.structuredContent["status"] == "optimal"
+    assert [metric["target_hours"] for metric in facility_result.structuredContent["coverage"]] == [
+        6.0,
+        12.0,
+        18.0,
+    ]
+    facility = _ref(facility_result)
     comparison = _ref(
         server.compare_network_scenarios(
             prepared_path,
@@ -174,14 +233,14 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
 
     report = server.publish_network_planning_report(
         NetworkComparisonReportInput(plan_comparison_ref=comparison),
-        "outputs/network-report.md",
+        "outputs/warehouse-network/deliverables/network-report.md",
         ctx,
     )
     assert report.structuredContent is not None
-    assert (workspace / "outputs/network-report.md").is_file()
+    assert (workspace / "outputs/warehouse-network/deliverables/network-report.md").is_file()
     assert (
         "network_planning_report_markdown.v1"
-        in (workspace / "outputs/network-report.md").read_text()
+        in (workspace / "outputs/warehouse-network/deliverables/network-report.md").read_text()
     )
 
 

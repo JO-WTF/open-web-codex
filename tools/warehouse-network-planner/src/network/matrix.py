@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from decimal import Decimal
 from typing import Literal
 
 from supply_chain_planner.network.geo import haversine_km
@@ -13,11 +14,13 @@ from supply_chain_planner.network.matrix_models import (
     CostMatrixStats,
     DemandUnitCostRule,
     HaversineRouteMatrixStats,
-    NavigationRouteMatrixStats,
     NavigationMatrixRequest,
+    NavigationRouteMatrixStats,
     NavigationRouteRequest,
     NetworkLayer,
+    ObservedQuoteMeanCostEvidence,
     ProvidedRouteMatrixStats,
+    QuoteMeanCostRuleEvidence,
     RouteCostQuote,
     RouteFactProvenance,
     RouteMatrix,
@@ -28,15 +31,16 @@ from supply_chain_planner.network.matrix_models import (
 )
 from supply_chain_planner.network.models import (
     DemandCityRecord,
+    PlanningInputIdentity,
     ProvidedRouteFactRecord,
     RouteQuoteRecord,
-    PlanningInputIdentity,
     WarehouseRecord,
 )
 
 HAVERSINE_TOOL_VERSION = "haversine.v1"
 QUOTE_UNIT_COST_TOOL_VERSION = "quote-unit-cost.v1"
 DISTANCE_UNIT_COST_TOOL_VERSION = "distance-unit-cost.v1"
+OBSERVED_QUOTE_MEAN_TOOL_VERSION = "observed-quote-mean.v1"
 PROVIDED_INPUT_TOOL_VERSION = "provided-input.v1"
 
 
@@ -507,6 +511,8 @@ def build_cost_matrix(
     *,
     warehouse_scope: WarehouseScope,
     input_identity: PlanningInputIdentity,
+    calculation_rule_source: Literal["explicit", "observed_quote_mean"] | None = None,
+    calculation_rule_evidence: ObservedQuoteMeanCostEvidence | None = None,
 ) -> CostMatrix:
     expected = _expected_route_pairs(demand_cities, warehouses)
     expected_set = set(expected)
@@ -630,6 +636,12 @@ def build_cost_matrix(
         rows=rows,
         missing_routes=missing,
         calculation_rule=policy,
+        calculation_rule_source=(
+            calculation_rule_source
+            if calculation_rule_source is not None
+            else ("explicit" if policy is not None else None)
+        ),
+        calculation_rule_evidence=calculation_rule_evidence,
         stats=CostMatrixStats(
             expected_pair_count=len(expected),
             reused_pair_count=reused,
@@ -642,6 +654,75 @@ def build_cost_matrix(
         ),
         input_identity=input_identity,
     )
+
+
+def derive_observed_quote_mean_cost_policy(
+    demand_cities: list[DemandCityRecord],
+    warehouses: list[WarehouseRecord],
+    route_quotes: list[RouteCostQuote | RouteQuoteRecord],
+) -> tuple[CostCalculationPolicy, ObservedQuoteMeanCostEvidence]:
+    """Derive deterministic per-layer fallback costs from complete normalized quotes."""
+
+    required_layers = {
+        layer for _, _, layer in _expected_route_pairs(demand_cities, warehouses)
+    }
+    quote_values: dict[NetworkLayer, list[Decimal]] = {}
+    currencies: set[str] = set()
+    seen: set[tuple[str, str, NetworkLayer]] = set()
+    ignored = 0
+    for quote in route_quotes:
+        key = (quote.origin_id, quote.destination_id, quote.layer)
+        if quote.layer not in required_layers:
+            ignored += 1
+            continue
+        if key in seen:
+            raise ValueError(f"cost_quote_duplicate_pair:{key}")
+        seen.add(key)
+        currency = str(quote.currency).upper()
+        currencies.add(currency)
+        quote_values.setdefault(quote.layer, []).append(
+            Decimal(str(quote.price_per_vehicle)) / Decimal(str(quote.vehicle_capacity))
+        )
+    if len(currencies) > 1:
+        raise ValueError("cost_currency_mismatch")
+    if not currencies:
+        raise ValueError("observed_quote_mean_requires_matching_quotes")
+    missing_layers = sorted(required_layers - set(quote_values))
+    if missing_layers:
+        raise ValueError(
+            "observed_quote_mean_missing_layers:" + ",".join(missing_layers)
+        )
+    currency = next(iter(currencies))
+    evidence_rules: list[QuoteMeanCostRuleEvidence] = []
+    calculation_rules: list[DemandUnitCostRule] = []
+    for layer in sorted(required_layers):
+        values = quote_values[layer]
+        mean = float(
+            (sum(values, Decimal(0)) / Decimal(len(values))).quantize(Decimal("0.000001"))
+        )
+        evidence_rules.append(
+            QuoteMeanCostRuleEvidence(
+                layer=layer,
+                currency=currency,
+                quote_count=len(values),
+                mean_cost_per_demand_unit=mean,
+            )
+        )
+        calculation_rules.append(
+            DemandUnitCostRule(
+                layer=layer,
+                currency=currency,
+                fixed_cost_per_demand_unit=mean,
+                cost_per_km_per_demand_unit=0,
+            )
+        )
+    evidence = ObservedQuoteMeanCostEvidence(
+        tool_version=OBSERVED_QUOTE_MEAN_TOOL_VERSION,
+        considered_quote_count=sum(len(values) for values in quote_values.values()),
+        ignored_quote_count=ignored,
+        rules=evidence_rules,
+    )
+    return CostCalculationPolicy(rules=calculation_rules), evidence
 
 
 def _cost_rules_by_layer(

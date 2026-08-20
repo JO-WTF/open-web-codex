@@ -14,6 +14,8 @@ from supply_chain_planner.shared.models import (
 )
 from supply_chain_planner.shared.resources import SupplyChainResources
 
+PREPARED_OUTPUT_DIR = "outputs/warehouse-network/prepared"
+
 
 def _use_store(tmp_path, monkeypatch) -> ResourceStore:
     resources = SupplyChainResources(tmp_path, tmp_path / "profile")
@@ -31,43 +33,10 @@ def _context(workspace) -> SimpleNamespace:
 
 def _decisions() -> list[ConfirmedSourceDecision]:
     return [
-        ConfirmedSourceDecision.model_validate(
-            {
-                "relative_path": "demand.csv",
-                "role": "demand",
-                "mappings": [
-                    {
-                        "source_field": field,
-                        "target_field": field,
-                        "transform": transform,
-                    }
-                    for field, transform in (
-                        ("city_id", "normalize_identifier"),
-                        ("city_name", "trim"),
-                        ("demand_quantity", "parse_integer"),
-                    )
-                ],
-            }
-        ),
-        ConfirmedSourceDecision.model_validate(
-            {
-                "relative_path": "warehouses.csv",
-                "role": "existing_warehouse",
-                "mappings": [
-                    {
-                        "source_field": field,
-                        "target_field": field,
-                        "transform": transform,
-                    }
-                    for field, transform in (
-                        ("warehouse_id", "normalize_identifier"),
-                        ("warehouse_name", "trim"),
-                        ("warehouse_type", "normalize_warehouse_type"),
-                        ("city_id", "normalize_identifier"),
-                        ("city_name", "trim"),
-                    )
-                ],
-            }
+        ConfirmedSourceDecision(relative_path="demand.csv", role=SourceRole.DEMAND),
+        ConfirmedSourceDecision(
+            relative_path="warehouses.csv",
+            role=SourceRole.EXISTING_WAREHOUSE,
         ),
     ]
 
@@ -97,6 +66,9 @@ def test_data_server_exposes_workspace_preparation_not_cross_agent_data_resource
         "input_identity",
         "state",
         "issue_count",
+        "candidate_warehouse_count",
+        "candidate_warehouses",
+        "candidate_warehouses_truncated",
     }
     assert "resource_ref" not in prepare.outputSchema["properties"]
 
@@ -115,6 +87,73 @@ def test_data_server_exposes_workspace_preparation_not_cross_agent_data_resource
     }
 
 
+def test_source_profile_distinguishes_preview_samples_from_exact_total(
+    tmp_path, monkeypatch
+) -> None:
+    rows = [
+        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,longitude,latitude,"
+        "is_existing"
+    ]
+    rows.extend(
+        f"CAND-{index},Candidate {index},cross_docking,CITY-{index},City {index},"
+        f"{106 + index / 10:.1f},{-6 - index / 10:.1f},false"
+        for index in range(1, 13)
+    )
+    rows[7] = (
+        "WH-CANDIDATE-BALIKPAPAN,Balikpapan Candidate Cross Docking,cross_docking,"
+        "IDN-CITY-021,Balikpapan,116.996737,-1.202072,false"
+    )
+    (tmp_path / "candidate.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    store = _use_store(tmp_path, monkeypatch)
+
+    result = data_server.inspect_workspace_sources(["candidate.csv"], object())
+    assert result.structuredContent is not None
+    profile_ref = ResourceRef.model_validate(result.structuredContent["resource_ref"])
+    source = store.load(profile_ref)["sources"][0]
+    preview = source["structure"]["preview"]
+
+    assert source["structure"]["record_count"] == 12
+    assert preview["preview_sample_count"] == 3
+    assert preview["total_count"] == 12
+    assert preview["total_count_exact"] is True
+    assert "returned_count" not in preview
+    assert "Balikpapan" not in json.dumps(preview["rows"])
+
+    with pytest.raises(ProviderContractError, match="generated_output_path_invalid"):
+        data_server.prepare_network_input(
+            profile_ref,
+            [
+                ConfirmedSourceDecision(
+                    relative_path="candidate.csv",
+                    role=SourceRole.CANDIDATE_WAREHOUSE,
+                )
+            ],
+            "ID",
+            "candidate-catalog.json",
+            _context(tmp_path),
+        )
+
+    prepared = data_server.prepare_network_input(
+        profile_ref,
+        [
+            ConfirmedSourceDecision(
+                relative_path="candidate.csv",
+                role=SourceRole.CANDIDATE_WAREHOUSE,
+            )
+        ],
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/candidate-catalog.json",
+        _context(tmp_path),
+    )
+    assert prepared.candidate_warehouse_count == 12
+    assert prepared.candidate_warehouses_truncated is False
+    assert any(
+        warehouse.warehouse_id == "WH-CANDIDATE-BALIKPAPAN"
+        and warehouse.city_name == "Balikpapan"
+        for warehouse in prepared.candidate_warehouses
+    )
+
+
 def test_prepare_input_writes_a_complete_auditable_workspace_document(
     tmp_path, monkeypatch
 ) -> None:
@@ -123,8 +162,8 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
         encoding="utf-8",
     )
     (tmp_path / "warehouses.csv").write_text(
-        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name\n"
-        "WH-1,Jakarta Center,center,CITY-1,Jakarta\n",
+        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,is_existing\n"
+        "WH-1,Jakarta Center,center,CITY-1,Jakarta,true\n",
         encoding="utf-8",
     )
     (tmp_path / "admin.json").write_text(
@@ -160,7 +199,7 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
             profile_ref,
             _decisions(),
             "IDN",
-            "prepared-input.json",
+            f"{PREPARED_OUTPUT_DIR}/prepared-input.json",
             ctx,
         )
 
@@ -168,22 +207,22 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
         profile_ref,
         _decisions(),
         "ID",
-        "prepared-input.json",
+        f"{PREPARED_OUTPUT_DIR}/prepared-input.json",
         ctx,
     )
     assert isinstance(result, DataPreparationToolResult)
     assert result.state == "needs_geography"
-    assert result.prepared_input_relative_path == "prepared-input.json"
+    assert result.prepared_input_relative_path == f"{PREPARED_OUTPUT_DIR}/prepared-input.json"
     payload = json.loads((tmp_path / result.prepared_input_relative_path).read_text())
     assert payload["schemaVersion"] == "prepared_network_input.v1"
-    assert payload["confirmed_sources"] == [item.model_dump(mode="json") for item in _decisions()]
+    assert all(source["mappings"] for source in payload["confirmed_sources"])
     assert payload["issues"]
     assert result.input_identity.content_sha256
 
     geography = data_server.prepare_network_geography(
         result.prepared_input_relative_path,
         "admin.json",
-        "prepared-input-geography.json",
+        f"{PREPARED_OUTPUT_DIR}/prepared-input-geography.json",
         ctx,
     )
     assert geography.state == "ready"
@@ -196,7 +235,7 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
         profile_ref,
         _decisions(),
         "ID",
-        "prepared-input-atomic.json",
+        f"{PREPARED_OUTPUT_DIR}/prepared-input-atomic.json",
         ctx,
         administrative_catalog_relative_path="admin.json",
     )
@@ -205,29 +244,43 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
     assert atomic_payload["demand_cities"][0]["longitude"] == 106.8
     assert atomic_payload["parent_input_identity"] is None
 
-    automatic = data_server.prepare_network_input(
-        profile_ref,
-        [
-            decision.model_copy(update={"mappings": []})
-            if decision.role == SourceRole.DEMAND
-            else decision
-            for decision in _decisions()
-        ],
-        "ID",
-        "prepared-input-automatic.json",
-        ctx,
-        administrative_catalog_relative_path="admin.json",
+    manual_demand = ConfirmedSourceDecision.model_validate(
+        {
+            "relative_path": "demand.csv",
+            "role": "demand",
+            "mappings": [
+                {
+                    "source_field": field,
+                    "target_field": field,
+                    "transform": transform,
+                }
+                for field, transform in (
+                    ("city_id", "normalize_identifier"),
+                    ("city_name", "trim"),
+                    ("demand_quantity", "parse_integer"),
+                )
+            ],
+        }
     )
-    assert automatic.state == "ready"
-    automatic_payload = json.loads((tmp_path / automatic.prepared_input_relative_path).read_text())
-    assert all(source["mappings"] for source in automatic_payload["confirmed_sources"])
+    with pytest.raises(
+        ValueError,
+        match="confirmed_mappings_not_allowed_for_unambiguous_source",
+    ):
+        data_server.prepare_network_input(
+            profile_ref,
+            [manual_demand, _decisions()[1]],
+            "ID",
+            f"{PREPARED_OUTPUT_DIR}/prepared-input-manual.json",
+            ctx,
+            administrative_catalog_relative_path="admin.json",
+        )
 
     with pytest.raises(ProviderContractError, match="workspace_file_invalid"):
         data_server.prepare_network_input(
             profile_ref,
             _decisions(),
             "ID",
-            "prepared-input.json",
+            f"{PREPARED_OUTPUT_DIR}/prepared-input.json",
             ctx,
         )
 
@@ -236,8 +289,9 @@ def test_candidate_changes_require_a_complete_new_workspace_preparation(
     tmp_path, monkeypatch
 ) -> None:
     (tmp_path / "candidate.csv").write_text(
-        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,longitude,latitude\n"
-        "CAND-1,Jakarta Candidate,center,CITY-1,Jakarta,106.9,-6.3\n",
+        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,longitude,latitude,"
+        "is_existing\n"
+        "CAND-1,Jakarta Candidate,center,CITY-1,Jakarta,106.9,-6.3,false\n",
         encoding="utf-8",
     )
     _use_store(tmp_path, monkeypatch)
@@ -245,54 +299,21 @@ def test_candidate_changes_require_a_complete_new_workspace_preparation(
     profile = data_server.inspect_workspace_sources(["candidate.csv"], object())
     assert profile.structuredContent is not None
     profile_ref = ResourceRef.model_validate(profile.structuredContent["resource_ref"])
-    candidate = ConfirmedSourceDecision.model_validate(
-        {
-            "relative_path": "candidate.csv",
-            "role": "candidate_warehouse",
-            "mappings": [
-                {
-                    "source_field": "warehouse_id",
-                    "target_field": "warehouse_id",
-                    "transform": "normalize_identifier",
-                },
-                {
-                    "source_field": "warehouse_name",
-                    "target_field": "warehouse_name",
-                    "transform": "trim",
-                },
-                {
-                    "source_field": "warehouse_type",
-                    "target_field": "warehouse_type",
-                    "transform": "normalize_warehouse_type",
-                },
-                {
-                    "source_field": "city_id",
-                    "target_field": "city_id",
-                    "transform": "normalize_identifier",
-                },
-                {"source_field": "city_name", "target_field": "city_name", "transform": "trim"},
-                {
-                    "source_field": "longitude",
-                    "target_field": "longitude",
-                    "transform": "parse_decimal",
-                },
-                {
-                    "source_field": "latitude",
-                    "target_field": "latitude",
-                    "transform": "parse_decimal",
-                },
-            ],
-        }
+    candidate = ConfirmedSourceDecision(
+        relative_path="candidate.csv",
+        role=SourceRole.CANDIDATE_WAREHOUSE,
     )
 
     result = data_server.prepare_network_input(
         profile_ref,
         [candidate],
         "ID",
-        "candidate-only-preparation.json",
+        f"{PREPARED_OUTPUT_DIR}/candidate-only-preparation.json",
         ctx,
     )
-    assert result.prepared_input_relative_path == "candidate-only-preparation.json"
+    assert result.prepared_input_relative_path == (
+        f"{PREPARED_OUTPUT_DIR}/candidate-only-preparation.json"
+    )
     assert result.state == "needs_input"
     assert not hasattr(data_server, "normalize_candidate_delta")
     assert not hasattr(data_server, "derive_normalized_network_input")

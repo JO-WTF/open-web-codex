@@ -198,7 +198,7 @@ def test_navigation_request_and_import_use_exact_workspace_contract(tmp_path, mo
     request_result = server.create_navigation_matrix_request(
         prepared_path,
         "existing_only",
-        "navigation-request.json",
+        "outputs/warehouse-network/requests/navigation-request.json",
         ctx,
     )
     request_payload = json.loads(

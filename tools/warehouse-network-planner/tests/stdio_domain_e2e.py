@@ -331,7 +331,10 @@ async def _run_network_s3_then_s2(
                 {
                     "normalized_input_ref": normalized_ref,
                     "warehouse_scope": "all_warehouses",
-                    "calculation_policy": _cost_policy(),
+                    "cost_policy": {
+                        "kind": "explicit",
+                        "rules": _cost_policy()["rules"],
+                    },
                     "route_matrix_ref": routes_ref,
                 },
                 workspace,
@@ -495,7 +498,9 @@ async def _run_network_s3_then_s2(
                 "render_network_comparison_map",
                 {
                     **final_refs,
-                    "output_relative_path": "deliverables/sample2-map.json",
+                    "output_relative_path": (
+                        "outputs/warehouse-network/deliverables/sample2-map.json"
+                    ),
                 },
                 workspace,
             )
@@ -508,7 +513,9 @@ async def _run_network_s3_then_s2(
                         "mode": "comparison",
                         **final_refs,
                     },
-                    "output_relative_path": "deliverables/sample2-report.md",
+                    "output_relative_path": (
+                        "outputs/warehouse-network/deliverables/sample2-report.md"
+                    ),
                 },
                 workspace,
             )
@@ -519,17 +526,20 @@ async def _run_network_s3_then_s2(
                 "network_planning_report_markdown.v1"
             )
             map_payload = json.loads(
-                (workspace / "deliverables/sample2-map.json").read_text(encoding="utf-8")
+                (
+                    workspace / "outputs/warehouse-network/deliverables/sample2-map.json"
+                ).read_text(encoding="utf-8")
             )
-            report_markdown = (workspace / "deliverables/sample2-report.md").read_text(
-                encoding="utf-8"
-            )
+            report_markdown = (
+                workspace / "outputs/warehouse-network/deliverables/sample2-report.md"
+            ).read_text(encoding="utf-8")
             assert map_payload["summary"]["feature_count"] == 187
             assert "# 仓网规划结果简报" in report_markdown
             assert "## 时效覆盖" in report_markdown
             assert "结构化计算结果" in report_markdown
             assert report_result.content[0].text == (
-                "正式简报已生成：[下载中文 Markdown 简报](deliverables/sample2-report.md)"
+                "正式简报已生成：[下载中文 Markdown 简报](outputs/warehouse-network/"
+                "deliverables/sample2-report.md)"
             )
             return [*common_trace, *s3_trace], [*common_trace, *s2_trace]
 
@@ -539,7 +549,6 @@ async def smoke() -> None:
         state_root = Path(directory)
         workspace = state_root / "workspace"
         workspace.mkdir()
-        (workspace / "deliverables").mkdir()
         environment = _environment(state_root)
         normalized_ref, data_trace = await _prepare_normalized_resource(
             workspace,

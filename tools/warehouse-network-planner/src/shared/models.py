@@ -13,6 +13,7 @@ from supply_chain_planner.data.mapping import (
     SourceRole,
     TransformKind,
 )
+from supply_chain_planner.network.matrix_models import ObservedQuoteMeanCostEvidence
 from supply_chain_planner.network.models import (
     CurrentAssignmentRecord,
     DataQualityIssue,
@@ -25,6 +26,7 @@ from supply_chain_planner.network.models import (
 from supply_chain_planner.network.optimization_models import (
     AssignmentComparison,
     CityAssignmentChange,
+    CostSummary,
     CoverageComparison,
     CoverageMetricSummary,
 )
@@ -107,6 +109,12 @@ class DataInspectionToolResult(StrictModel):
     resource_ref: _ResourceRef
 
 
+class CandidateWarehouseSummary(StrictModel):
+    warehouse_id: str = Field(min_length=1, max_length=128)
+    warehouse_name: str = Field(min_length=1, max_length=256)
+    city_name: str = Field(min_length=1, max_length=256)
+
+
 class DataPreparationToolResult(StrictModel):
     """The only Data-to-Network handoff: one exact Workspace input file."""
 
@@ -115,6 +123,9 @@ class DataPreparationToolResult(StrictModel):
     input_identity: PlanningInputIdentity
     state: Literal["ready", "needs_input", "needs_geography"]
     issue_count: int = Field(ge=0)
+    candidate_warehouse_count: int = Field(ge=0)
+    candidate_warehouses: list[CandidateWarehouseSummary] = Field(max_length=64)
+    candidate_warehouses_truncated: bool
 
 
 class RouteMatrixPreparationToolResult(StrictModel):
@@ -127,6 +138,35 @@ class RouteMatrixPreparationToolResult(StrictModel):
         if self.resource_ref.resource_schema != "route_matrix.v2":
             raise ValueError("ready requires route_matrix.v2")
         return self
+
+
+class CostMatrixPlanningToolResult(StrictModel):
+    """Bounded cost-matrix result with auditable fallback-policy evidence."""
+
+    summary: str
+    resource_ref: _ResourceRef
+    input_identity: PlanningInputIdentity
+    calculation_rule_source: Literal["explicit", "observed_quote_mean"] | None = None
+    calculation_rule_evidence: ObservedQuoteMeanCostEvidence | None = None
+    expected_pair_count: int = Field(ge=0)
+    reused_pair_count: int = Field(ge=0)
+    computed_pair_count: int = Field(ge=0)
+    missing_pair_count: int = Field(ge=0)
+
+
+class PMedianSolutionToolResult(StrictModel):
+    """Bounded facility-location result for model and E2E verification."""
+
+    summary: str
+    resource_ref: _ResourceRef
+    input_identity: PlanningInputIdentity
+    status: Literal["optimal", "feasible", "timeout", "infeasible", "unavailable"]
+    optimality: Literal["proven", "feasible_only", "not_available"]
+    active_warehouse_count: int = Field(ge=0)
+    opened_candidate_ids: list[str] = Field(max_length=64)
+    closed_existing_ids: list[str] = Field(max_length=64)
+    cost: CostSummary | None = None
+    coverage: list[CoverageMetricSummary] = Field(max_length=32)
 
 
 class NavigationMatrixRequestToolResult(StrictModel):

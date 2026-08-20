@@ -14,6 +14,7 @@ from .workspace import (
     MAX_WORKSPACE_FILE_BYTES,
     CreatedWorkspaceFile,
     create_workspace_file,
+    ensure_workspace_directory,
     trusted_workspace_root,
 )
 
@@ -32,6 +33,7 @@ __all__ = [
     "bind_runtime",
     "create_workspace_file",
     "derive_geojson_profile",
+    "ensure_workspace_directory",
     "resource_ref",
     "trusted_workspace_root",
     "workspace_resource_root",

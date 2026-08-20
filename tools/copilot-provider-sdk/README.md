@@ -4,8 +4,8 @@
 
 - strict `ResourceRef` envelope、canonical JSON codec、schema 与 payload bounds；
 - provider-scoped、Workspace-isolated 的 typed Resource load/publish store；
-- 从 Codex sandbox metadata 取得当前 Workspace scope，以及 canonical/no-follow、atomic
-  create-new 的 Workspace 文件写入；
+- 从 Codex sandbox metadata 取得当前 Workspace scope，以及 canonical/no-follow 的受控目录创建和
+  atomic create-new Workspace 文件写入；
 - 把这些 primitive 绑定为 MCP Resource read/publish 的小型 runtime adapter。
 
 业务 Tool 仍拥有领域 schema、数据解释、算法、Tool contract 与实际 Resource 内容和生命周期；

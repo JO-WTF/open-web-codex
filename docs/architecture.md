@@ -47,7 +47,7 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | Capability Draft/Release/Installation | 无当前生产 owner | Catalog/Studio/Python publish crate、route、DTO、client、UI 与无 owner 数据表均已删除，不参与启动或 readiness |
 | Work State 与 Platform coordination | 无当前 production owner | work-state-service、route、MCP、gate、schema 与第二控制面已由 Slice 4B.2-A 删除；不建设替代状态机 |
 | Data Intake | 无当前 owner | 生产 route、validation crate、SourceAsset/Dataset/Task binding 表与产品入口已删除；阶段一不建设替代状态机 |
-| 仓网规划能力 | 供应链 Python 包的 domain owners | 当前阶段统一拥有 demand/facility/candidate/location/lane/route/cost records，Data mapping/normalization/geography、candidate-only delta derivation，route/cost fact 与 matrix build/validate/partial reuse，actual/optimized baseline、open/close/relocation scenario、assignment/service/cost evaluation、p-median、before/after comparison、分配覆盖 GeoJSON、地图卡片数据和确定性 Markdown 简报。候选仓增量只派生新的完整不可变输入；需求、现网仓、实际分配、路线或报价事实变动必须完整归一化。Network 覆盖线从精确分配和坐标派生，不含城市/仓库名称分支；它不引入 Platform workflow、缓存或第二份业务状态。报告输入以 discriminated typed contract 区分单一 baseline 评估和完整 baseline-versus-plan comparison，不为交付伪造方案结果。结构化计算结果与业务简报分离，不拥有通用 Resource/Workspace infrastructure。Stage E 已删除 Case/NetworkSnapshot/source_ref/ArtifactRef 与多层 hashes 旧偏离。未来若第二个供应链 Copilot 证明存在稳定公共领域合同，再评估内部提取 |
+| 仓网规划能力 | 供应链 Python 包的 domain owners | 当前阶段统一拥有 demand/facility/candidate/location/lane/route/cost records，Data mapping/normalization/geography、route/cost fact 与 matrix build/validate/partial reuse，actual/optimized baseline、open/close/relocation scenario、assignment/service/cost evaluation、p-median、before/after comparison、分配覆盖 GeoJSON、地图卡片数据和确定性 Markdown 简报。来源预览显式区分样本数与完整总数；完整准备结果返回精确候选仓总数和有界目录。成本 Tool 可在 exact prepared input 内对完整报价按层派生单位成本均值并保留 bounded provenance；单 Agent 只有在任务 Skill 授权或用户明确要求时才可用脚本对同一 prepared input 做确定性聚合，脚本不拥有标准化或求解。需求、候选、现网仓、实际分配、路线或报价事实变动必须完整归一化；生成输入、导航请求、计算证据和最终文件分别只能进入 `outputs/warehouse-network/{prepared,requests,calculations,deliverables}/`。Network 覆盖线从精确分配和坐标派生，不含城市/仓库名称分支；它不引入 Platform workflow、缓存或第二份业务状态。报告输入以 discriminated typed contract 区分单一 baseline 评估和完整 baseline-versus-plan comparison，不为交付伪造方案结果。结构化计算结果与业务简报分离，不拥有通用 Resource/Workspace infrastructure。Stage E 已删除 Case/NetworkSnapshot/source_ref/ArtifactRef 与多层 hashes 旧偏离。未来若第二个供应链 Copilot 证明存在稳定公共领域合同，再评估内部提取 |
 
 Codex Runtime 仍是模型可见对话状态的唯一权威。Platform events、execution、activity
 和协作状态都是投影，不应成为第二个 Thread、Memory 或 Supervisor。
@@ -119,7 +119,9 @@ Platform 侧过滤 Runtime discovery 或 Tool。
 多 Agent 仓网包的 Data/Network Role TOML 只持有
 `plugins.<tool>.mcp_servers.<server>` 下的精确 allowlist 与 Tool 级审批策略；其 Root 没有全局
 仓网 MCP。独立的单 Agent 仓网包由一个 Root Agent 直接启用同一 Data/Network/Maps Tool policy，
-并以 `features.multi_agent=false` 禁止 child Agent。两者只共享根级 Tool package，不互相引用或
+并以 `features.multi_agent=false` 禁止 child Agent；它显式保留 Runtime 原生 shell，只允许任务 Skill
+对 exact ready prepared input 做有界确定性聚合，脚本和结果 create-new 写入 calculations 目录，不能读取
+任意 raw 文件、修改 prepared input 或替代 Planner 求解。两者只共享根级 Tool package，不互相引用或
 通信。Data 的四个有界本地 Tool（发现、检查、完整准备、地理补全）统一预批准；Network 以 `prompt` 为默认，
 预批准路线/成本/验证/分析/选址/比较、coverage GeoJSON 等本地 Tool 与最终 Markdown 报告 `publish_network_planning_report`；`map_utils` 预批准 `create_map_card` 与 `revise_map_card`。
 外部导航、距离矩阵和 final Workspace 地图导出继续保留 official approval。Data→Network 输入是 Data Tool
@@ -209,8 +211,8 @@ revision、operation、dependency、readiness 或 deliverable 状态。
 能力提供不可变 Resource 内容，并以 Profile 私有、canonical Workspace 隔离的物理目录保存
 字节；这一 provider content owner 与 Codex 官方 MCP Resource 合同一致。Data4 与 Network 的
 active surface 以 Workspace 路径和 typed Resource 各司其职：Data Server 的 inspect 只在 Data child
-内发布 `source_profile.v1`，`prepare_network_input` 以显式确认 source mapping 和全部候选仓原子写入
-完整 `prepared_network_input.v1`，`prepare_network_geography` 再从该文件生成新的完整输入。Network
+内发布 `source_profile.v1`，并分别返回预览样本数与完整总数；`prepare_network_input` 以显式确认 source mapping 和全部候选仓原子写入
+`outputs/warehouse-network/prepared/` 下的完整 `prepared_network_input.v1`，同时返回候选仓总数和有界目录；`prepare_network_geography` 再从该文件生成新的完整输入。Network
 Tool 只接受这个确切路径，并为矩阵与方案 Resource 绑定输入内容身份；不存在 candidate delta 或
 Data-to-Network ResourceRef 交接。
 CaseRepository、NetworkSnapshot、

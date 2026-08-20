@@ -8,9 +8,12 @@ from _network_fixtures import (
     network_case,
     route_matrix,
 )
-
 from pydantic import ValidationError
-from supply_chain_planner.network.matrix import build_cost_matrix, build_haversine_route_matrix
+from supply_chain_planner.network.matrix import (
+    build_cost_matrix,
+    build_haversine_route_matrix,
+    derive_observed_quote_mean_cost_policy,
+)
 from supply_chain_planner.network.matrix_models import (
     CostCalculationPolicy,
     CostMatrix,
@@ -255,3 +258,52 @@ def test_indonesia_extra_linehaul_quotes_do_not_invalidate_required_pairs() -> N
     assert matrix.stats.ignored_quote_count == 24
     assert matrix.stats.expected_pair_count == 1_168
     assert matrix.stats.computed_pair_count == 1_168
+
+
+def test_observed_quote_mean_uses_complete_normalized_quote_population() -> None:
+    fixture = indonesia_network_fixture()
+
+    policy, evidence = derive_observed_quote_mean_cost_policy(
+        fixture.demand,
+        fixture.warehouses,
+        indonesia_route_quotes(),
+    )
+
+    evidence_by_layer = {rule.layer: rule for rule in evidence.rules}
+    policy_by_layer = {rule.layer: rule for rule in policy.rules}
+    assert evidence.tool_version == "observed-quote-mean.v1"
+    assert evidence.formula == "arithmetic_mean(price_per_vehicle / vehicle_capacity)"
+    assert evidence.considered_quote_count == 580
+    assert evidence.ignored_quote_count == 0
+    assert evidence_by_layer["last_mile"].quote_count == 550
+    assert evidence_by_layer["last_mile"].mean_cost_per_demand_unit == pytest.approx(
+        1_968_472.727273
+    )
+    assert evidence_by_layer["linehaul"].quote_count == 30
+    assert evidence_by_layer["linehaul"].mean_cost_per_demand_unit == pytest.approx(
+        1_252_333.333333
+    )
+    assert policy_by_layer["last_mile"].fixed_cost_per_demand_unit == pytest.approx(
+        1_968_472.727273
+    )
+    assert policy_by_layer["linehaul"].fixed_cost_per_demand_unit == pytest.approx(
+        1_252_333.333333
+    )
+    assert all(rule.cost_per_km_per_demand_unit == 0 for rule in policy.rules)
+
+
+def test_observed_quote_mean_requires_evidence_for_every_required_layer() -> None:
+    case = network_case()
+    quotes = [
+        RouteCostQuote(
+            origin_id="center-a",
+            destination_id="city-a",
+            layer="last_mile",
+            price_per_vehicle=100,
+            currency="IDR",
+            vehicle_capacity=1,
+        )
+    ]
+
+    with pytest.raises(ValueError, match="observed_quote_mean_missing_layers:linehaul"):
+        derive_observed_quote_mean_cost_policy(case.demand, case.warehouses, quotes)

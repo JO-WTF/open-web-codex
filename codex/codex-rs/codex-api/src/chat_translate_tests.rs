@@ -243,6 +243,7 @@ fn translates_current_turn_tool_search_history_into_chat_tools_and_reverse_targe
     ];
 
     let translated = responses_request_to_chat_completions_request(request).unwrap();
+    assert!(!translated.parallel_tool_calls);
     assert_eq!(
         translated
             .tools

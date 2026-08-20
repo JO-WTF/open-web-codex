@@ -38,10 +38,10 @@ Root 没有仓网 MCP 数据面；上传文件已由 Workspace 授权并交给 D
 
 ## 延迟 MCP Tool 发现
 
-Root 与 child 的 MCP Tool schema 都是 deferred。任何需要 Tool 的新 Turn 都先用 Runtime 原生 `tool_search` 按当前业务目标发现 Tool，且只调用本 Turn 命中的 schema；上一 Turn 的 Tool 名、参数或结果不表示本 Turn 仍已加载。不要由历史 Tool 名直接调用、让平台代为搜索，或用 Resource list 代替 `tool_search`。
+Root 与 child 的 MCP Tool schema 都是 deferred。任何需要 Tool 的新 Turn 都先用 Runtime 原生 `tool_search` 按当前业务目标发现 Tool，且只调用本 Turn 精确搜索结果中实际返回的 schema；搜索到 `spawn_agent` 不表示 `wait_agent`、`resume_agent` 或消息 Tool 同时可用，调用未返回的协作 Tool 前必须再次搜索。上一 Turn 的 Tool 名、参数或结果不表示本 Turn 仍已加载。不要由历史 Tool 名直接调用、让平台代为搜索，或用 Resource list 代替 `tool_search`。
 
 ## 平台原生 HTML 可视化
 
-- 用户要求编写并在对话中展示交互 HTML 时，先在当前授权 Workspace 写入一个安全的相对 `.html` 文件，再在最终 Assistant Message 需要展示的位置原样输出一个独立段落：`::codex-inline-vis{workspace_file="相对路径.html"}`。
+- 用户要求编写并在对话中展示交互 HTML 时，先在当前授权 Workspace 的 `outputs/warehouse-network/deliverables/` 下写入一个安全的 create-new `.html` 文件，再在最终 Assistant Message 需要展示的位置原样输出一个独立段落：`::codex-inline-vis{workspace_file="outputs/warehouse-network/deliverables/文件名.html"}`。不得写入 Workspace 根目录或源数据目录。
 - 这是 Platform 的显式快照合同：Platform 只在该 Agent Message 完成时，以当前 Run/Thread/Workspace 授权读取该文件，存入当前 Thread 的原生可视化目录，并把它改写为 Codex 官方 `file` 引用。不要自行写入 `CODEX_HOME`、绝对路径或 Thread 可视化目录。
 - 不要把 HTML 截图、转换为图片、放进代码块或用普通 Markdown 链接代替该引用；地图继续只使用 Tool 返回的 `artifact` embed，不能把普通 HTML 伪装成地图 Artifact。

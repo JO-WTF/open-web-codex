@@ -142,7 +142,9 @@ terminal summaries. On a full-gate failure it also emits a bounded timeline of
 thread/Turn, collaboration, MCP and map-producer state without keys, full
 prompts, schemas or arguments. If a Provider returns a Tool name absent from
 that request's visible tool set, the gate reports typed
-`provider_tool_call_not_visible` instead of treating it as a Runtime success.
+`provider_tool_call_not_visible`; the Chat seam rejects the whole Tool group as
+a non-retryable provider protocol violation before projecting any FunctionCall
+Item, rather than presenting it as a transient stream disconnect.
 It reuses a registered
 credential environment reference through a temporary Provider and removes that
 Provider, Run, Workspace and Project in its terminal cleanup:
@@ -155,6 +157,21 @@ E2E_REAL_DEEPSEEK_SOURCE_PROVIDER_ID=deepseek \
 npm run test:e2e:real-deepseek
 ```
 
+单 Agent 使用同一真实 Provider、Task、Workspace 和 Runtime 边界，但固定选择
+`warehouse-network-single-agent`，不运行 `spawn_agent` 最小门。它要求 Agent 对完整 prepared input
+创建并执行 calculations 脚本，以 580 条报价的分层单位成本均值构建显式成本策略，再从 0 个候选仓
+开始求解满足 12h 需求加权覆盖至少 90% 的最少新增仓方案。门禁直接断言 completed
+`plan_cost_matrix`、typed `solve_p_median.coverage`、无 child 协作事件，以及 prepared/calculations
+文件全部位于 package-owned 输出目录：
+
+```bash
+E2E_REAL_DEEPSEEK=1 \
+E2E_REAL_DEEPSEEK_TOOL_CHOICE_MODE=observe \
+E2E_BASE_URL=http://127.0.0.1:4810 \
+E2E_REAL_DEEPSEEK_SOURCE_PROVIDER_ID=deepseek \
+npm run test:e2e:real-deepseek-single-agent
+```
+
 This gate requires the source Provider to already have a Platform-managed
 credential. It does not print or persist the credential value.
 
@@ -164,17 +181,23 @@ Provider API, then persists `supportsSearchTool=true` for the exact
 not write `model_catalog_json`, infer capabilities from the model name, or
 retry with prompt variants. It first verifies the minimal
 `tool_search → spawn_agent` path, then runs the full
-`spawn_agent → Data/Network MCP → 12h/map` Task. A missing structured call or
-missing canonical business Tool is returned as a typed failure. The Provider
-capability, Run, Workspace and Project are restored or removed in terminal
-cleanup.
+`spawn_agent → Data/Network MCP → 12h baseline → Balikpapan facility-change
+assessment → map` Task. The assessment must add only
+`WH-CANDIDATE-BALIKPAPAN` to the baseline and return both city-count and
+demand-weighted 12h coverage-rate deltas. A missing structured call or missing
+canonical business Tool is returned as a typed failure. The Provider capability,
+Run, Workspace and Project are restored or removed in terminal cleanup.
 
 The default `observe` mode never rewrites `tool_choice`; the optional
 `force_first_tool` mode is diagnostic only. The Chat bridge keeps the typed
 current-Turn metadata needed to translate deferred tools, consumes it locally,
 and never serializes it into Chat `messages`. The production gate verifies
-structured Skill selection, Data preparation, Network route/12h calculation
-and completed `create_network_map_card` delivery with canonical provenance.
+structured Skill selection, Data preparation, Network route/12h calculation,
+one exact Balikpapan facility-change assessment, and completed
+`create_network_map_card` delivery with canonical provenance.
+All generated Workspace files are constrained to
+`outputs/warehouse-network/{prepared,requests,deliverables}/`; the gate rejects
+root-level or source-directory outputs.
 
 The D6 warehouse package gate disables `shell_tool` in the native Root, Data
 and Network Role configs only; it does not change the Profile-wide capability

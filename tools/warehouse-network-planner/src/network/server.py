@@ -43,6 +43,7 @@ from supply_chain_planner.network.matrix import build_cost_matrix as _build_comp
 from supply_chain_planner.network.matrix import (
     build_navigation_matrix_request,
     build_route_matrix_with_reuse,
+    derive_observed_quote_mean_cost_policy,
 )
 from supply_chain_planner.network.matrix import (
     build_provided_route_matrix as _build_provided_route_matrix,
@@ -56,7 +57,10 @@ from supply_chain_planner.network.matrix import (
 from supply_chain_planner.network.matrix_models import (
     CostCalculationPolicy,
     CostMatrix,
+    CostPolicySelection,
+    ExplicitCostPolicy,
     NavigationMatrixResult,
+    ObservedQuoteMeanCostPolicy,
 )
 from supply_chain_planner.network.matrix_models import RouteMatrix as ComposableRouteMatrix
 from supply_chain_planner.network.models import (
@@ -92,6 +96,7 @@ from supply_chain_planner.network.solver import (
 from supply_chain_planner.shared.models import (
     AssignmentResultResourceRef,
     ComparableNetworkResultRef,
+    CostMatrixPlanningToolResult,
     FacilityChangeAssessmentToolResult,
     FacilityChangeCostComparison,
     NavigationMatrixRequestToolResult,
@@ -102,6 +107,7 @@ from supply_chain_planner.shared.models import (
     NetworkPlanComparisonResourceRef,
     NetworkReportInput,
     NetworkScenarioResourceRef,
+    PMedianSolutionToolResult,
     PreparedNetworkResource,
     RouteMatrixPreparationToolResult,
     UncoveredCitySummary,
@@ -111,6 +117,10 @@ from supply_chain_planner.shared.planning_input import (
     require_matching_input,
 )
 from supply_chain_planner.shared.resources import SupplyChainResources
+from supply_chain_planner.shared.workspace_outputs import (
+    WorkspaceOutputKind,
+    prepare_workspace_output_path,
+)
 
 McpResourceContractError = ProviderContractError
 
@@ -522,11 +532,25 @@ def prepare_network_distribution_map(
 def create_navigation_matrix_request(
     prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     warehouse_scope: Literal["existing_only", "all_warehouses"],
-    output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    output_relative_path: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=1024,
+            description=(
+                "Create-new JSON path directly under outputs/warehouse-network/requests/."
+            ),
+        ),
+    ],
     ctx: Context,
     prior_route_matrix_ref: ResourceRef | None = None,
 ) -> NavigationMatrixRequestToolResult:
     """Write the exact billable navigation lanes for one prepared Workspace input."""
+    output_relative_path = prepare_workspace_output_path(
+        _runtime().require_workspace(ctx),
+        output_relative_path,
+        WorkspaceOutputKind.NAVIGATION_REQUEST,
+    )
     prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
     warehouses = prepared.warehouses
     if warehouse_scope == "existing_only":
@@ -750,15 +774,28 @@ def plan_cost_matrix(
     prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     warehouse_scope: Literal["existing_only", "all_warehouses"],
     ctx: Context,
-    calculation_policy: CostCalculationPolicy | None = None,
+    cost_policy: CostPolicySelection | None = None,
     route_matrix_ref: ResourceRef | None = None,
     prior_cost_matrix_ref: ResourceRef | None = None,
-) -> CallToolResult:
-    """Build quote-first lane costs with an optional explicit calculation policy."""
+) -> Annotated[CallToolResult, CostMatrixPlanningToolResult]:
+    """Build quote-first costs with explicit or full-quote-mean fallback policy."""
     prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
     warehouses = prepared.warehouses
     if warehouse_scope == "existing_only":
         warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
+    calculation_policy = None
+    calculation_rule_source = None
+    calculation_rule_evidence = None
+    if isinstance(cost_policy, ExplicitCostPolicy):
+        calculation_policy = CostCalculationPolicy(rules=cost_policy.rules)
+        calculation_rule_source = "explicit"
+    elif isinstance(cost_policy, ObservedQuoteMeanCostPolicy):
+        calculation_policy, calculation_rule_evidence = derive_observed_quote_mean_cost_policy(
+            prepared.demand_cities,
+            warehouses,
+            prepared.route_quotes,
+        )
+        calculation_rule_source = "observed_quote_mean"
     route_matrix = (
         _runtime().load_model(
             route_matrix_ref,
@@ -791,16 +828,44 @@ def plan_cost_matrix(
         prior.rows if prior is not None else None,
         warehouse_scope=warehouse_scope,
         input_identity=input_identity,
+        calculation_rule_source=calculation_rule_source,
+        calculation_rule_evidence=calculation_rule_evidence,
     )
     stats = matrix.stats
-    return _runtime().publish(
-        matrix.schema_version,
-        matrix,
+    policy_summary = ""
+    if calculation_rule_evidence is not None:
+        policy_summary = "; observed quote means: " + ", ".join(
+            f"{rule.layer}={rule.mean_cost_per_demand_unit:.6f} {rule.currency} "
+            f"from {rule.quote_count} quotes"
+            for rule in calculation_rule_evidence.rules
+        )
+    summary = (
         "Built cost matrix with "
         f"{stats.reused_pair_count} reused, "
         f"{stats.computed_pair_count} computed, and "
-        f"{stats.missing_pair_count} missing lane costs.",
+        f"{stats.missing_pair_count} missing lane costs{policy_summary}."
     )
+    published = _runtime().publish(
+        matrix.schema_version,
+        matrix,
+        summary,
+    )
+    if published.structuredContent is None:
+        raise McpResourceContractError("cost_matrix_result_missing")
+    resource_ref = ResourceRef.model_validate(published.structuredContent["resource_ref"])
+    result = CostMatrixPlanningToolResult(
+        summary=summary,
+        resource_ref=resource_ref,
+        input_identity=input_identity,
+        calculation_rule_source=matrix.calculation_rule_source,
+        calculation_rule_evidence=matrix.calculation_rule_evidence,
+        expected_pair_count=stats.expected_pair_count,
+        reused_pair_count=stats.reused_pair_count,
+        computed_pair_count=stats.computed_pair_count,
+        missing_pair_count=stats.missing_pair_count,
+    )
+    published.structuredContent = result.model_dump(mode="json")
+    return published
 
 
 @mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)
@@ -1201,7 +1266,7 @@ def solve_p_median(
     time_limit_seconds: Annotated[float, Field(gt=0, le=300)],
     ctx: Context,
     service_constraints: list[ServiceCoverageConstraint] | None = None,
-) -> CallToolResult:
+) -> Annotated[CallToolResult, PMedianSolutionToolResult]:
     """Solve finite-candidate min-cost p-median under explicit existing-site policy."""
     if any(target <= 0 for target in service_targets):
         raise McpResourceContractError("p_median_service_targets_invalid")
@@ -1302,16 +1367,36 @@ def solve_p_median(
             else None,
             input_identity=input_identity,
         )
-    return _runtime().publish(
-        solution.schema_version,
-        solution,
+    summary = (
         f"p-median status is {solution.status}; active warehouses "
         f"{len(solution.active_warehouse_ids)}, opened "
         f"[{_bounded_id_summary(solution.opened_candidate_ids)}], closed "
         f"[{_bounded_id_summary(solution.closed_existing_ids)}]; cost "
         f"{_cost_metric_summary(solution.cost)}, coverage "
-        f"{_coverage_metric_summary(solution_coverage) if solution.assignment is not None else 'none'}.",
+        f"{_coverage_metric_summary(solution_coverage) if solution.assignment is not None else 'none'}."
     )
+    published = _runtime().publish(
+        solution.schema_version,
+        solution,
+        summary,
+    )
+    if published.structuredContent is None:
+        raise McpResourceContractError("p_median_result_missing")
+    resource_ref = ResourceRef.model_validate(published.structuredContent["resource_ref"])
+    result = PMedianSolutionToolResult(
+        summary=summary,
+        resource_ref=resource_ref,
+        input_identity=input_identity,
+        status=solution.status,
+        optimality=solution.optimality,
+        active_warehouse_count=len(solution.active_warehouse_ids),
+        opened_candidate_ids=solution.opened_candidate_ids,
+        closed_existing_ids=solution.closed_existing_ids,
+        cost=solution.cost,
+        coverage=solution_coverage,
+    )
+    published.structuredContent = result.model_dump(mode="json")
+    return published
 
 
 def _load_final_delivery_inputs(
@@ -1370,6 +1455,11 @@ def _write_final_delivery_json_bundle(
     ctx: Context,
     summary: str,
 ) -> CallToolResult:
+    output_relative_path = prepare_workspace_output_path(
+        _runtime().require_workspace(ctx),
+        output_relative_path,
+        WorkspaceOutputKind.DELIVERY_JSON,
+    )
     created = _runtime().create_workspace_model(
         ctx,
         output_relative_path,
@@ -1398,8 +1488,11 @@ def _write_final_delivery_markdown(
     ctx: Context,
     summary: str,
 ) -> CallToolResult:
-    if Path(output_relative_path).suffix.lower() != ".md":
-        raise McpResourceContractError("report_output_requires_markdown")
+    output_relative_path = prepare_workspace_output_path(
+        _runtime().require_workspace(ctx),
+        output_relative_path,
+        WorkspaceOutputKind.DELIVERY_MARKDOWN,
+    )
     content = markdown.encode("utf-8")
     try:
         created = _runtime().create_workspace_file(
@@ -1509,7 +1602,16 @@ def prepare_network_coverage_map(
 @mcp.tool(structured_output=True, annotations=FINAL_WORKSPACE_DELIVERY_TOOL)
 def render_network_comparison_map(
     plan_comparison_ref: NetworkPlanComparisonResourceRef,
-    output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    output_relative_path: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=1024,
+            description=(
+                "Create-new JSON path directly under outputs/warehouse-network/deliverables/."
+            ),
+        ),
+    ],
     ctx: Context,
 ) -> CallToolResult:
     """Create a self-contained baseline-versus-facility map JSON file."""
@@ -1535,7 +1637,17 @@ def render_network_comparison_map(
 @mcp.tool(structured_output=True, annotations=FINAL_WORKSPACE_DELIVERY_TOOL)
 def publish_network_planning_report(
     report_input: NetworkReportInput,
-    output_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    output_relative_path: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=1024,
+            description=(
+                "Create-new Markdown path directly under "
+                "outputs/warehouse-network/deliverables/."
+            ),
+        ),
+    ],
     ctx: Context,
 ) -> CallToolResult:
     """Create a Markdown brief for a baseline assessment or plan comparison."""

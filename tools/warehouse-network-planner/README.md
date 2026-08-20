@@ -34,7 +34,7 @@ render_network_comparison_map
 publish_network_planning_report
 ```
 
-Data Tool 将完整准备输入以 create-new 语义写入用户可见的 `prepared_network_input.v1` Workspace JSON；Data/Network Agent 只交接其精确相对路径和内容身份。路线、成本、方案与比较等计算结果写入 Resource Store，并都绑定同一输入身份。Agent 不传原始文件、整张矩阵或完整工具结果。缺失数据、矩阵不完整、求解器不可用和超时都是显式状态；不会自动加载 Mock、填零或切换旧实现。
+Data Tool 将完整准备输入以 create-new 语义写入用户可见的 `outputs/warehouse-network/prepared/` Workspace JSON，并返回精确候选仓总数及有界候选仓目录；Data/Network Agent 只交接其精确相对路径和内容身份。导航请求只写入 `outputs/warehouse-network/requests/`，单 Agent 经 Skill 授权的有界全量统计脚本与结果只写入 `outputs/warehouse-network/calculations/`，最终地图/报告文件只写入 `outputs/warehouse-network/deliverables/`，所有输入源保持原位。路线、成本、方案与比较等计算结果写入 Resource Store，并都绑定同一输入身份。Agent 不传原始文件、整张矩阵或完整工具结果。缺失数据、矩阵不完整、求解器不可用和超时都是显式状态；不会自动加载 Mock、填零或切换旧实现。
 
 Data Tool 会把用户输入中完整的起点、终点、距离、时长与来源方法保存在
 `prepared_network_input.v1`；Network Tool 可以按分析范围把这些事实物化为
@@ -42,6 +42,8 @@ Data Tool 会把用户输入中完整的起点、终点、距离、时长与来�
 同时包含未参与本次分析的候选仓而要求 Data 重新发布资源；也无需让模型重读文件或重新估算。基线和比较结果同时返回按城市数量与按需求量
 加权的覆盖指标，并以 typed Resource 支持实际基线、优化基线或场景之间的比较；模型只负责解释，
 不自行汇总这些数值。
+
+`plan_cost_matrix` 的 `cost_policy` 是当前唯一成本 fallback 选择：`kind=explicit` 接受用户或经授权脚本给出的分层数值规则；`kind=observed_quote_mean` 由 Planner 直接读取完整 prepared input，对当前所需层的全部标准化报价按 `price_per_vehicle / vehicle_capacity` 求算术均值，并把分层报价数、币种、公式、均值和 Tool 版本作为 bounded provenance 返回并写入 `cost_matrix.v2`。该计算不读取 preview，也不把完整报价行送入模型上下文。
 
 地图数据合同只发布仓库、需求城市、分配关系以及逐城市距离、时长和成本等原始事实，不包含
 标题、图层、颜色、大小、标签、悬浮信息或图例。Network Skill 根据用户当次自然语言要求，
@@ -57,7 +59,7 @@ Data Tool 会把用户输入中完整的起点、终点、距离、时长与来�
 
 ## Tool 审批
 
-Data Role 的六个文件准备 Tool 都是已评审的有界本地能力，可在精确 allowlist 内预批准。
+Data Role 的发现/检查 Tool 是只读能力，准备/地理补全 Tool 是只允许在上述 package-owned 输出目录 create-new 的有界本地写入能力，可在精确 allowlist 内预批准。
 Network/standalone Plugin 以 `prompt` 为默认，只对路线准备、baseline、scenario、
 p-median、comparison 和卡片数据准备等无外部副作用的 Tool 配置逐项预批准。对话内地图卡片
 复用 `map_utils/create_map_card` 或 `revise_map_card`，当空间分布、覆盖关系、仓库变动或城市重分配有助于理解时可由

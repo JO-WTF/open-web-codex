@@ -20,6 +20,9 @@ def test_workspace_discovery_returns_bounded_relative_descriptors(tmp_path: Path
         encoding="utf-8",
     )
     (tmp_path / "notes.txt").write_text("ignored", encoding="utf-8")
+    generated = tmp_path / "outputs/warehouse-network/prepared"
+    generated.mkdir(parents=True)
+    (generated / "prepared.json").write_text("{}", encoding="utf-8")
 
     sources = discover(tmp_path)
 
@@ -116,13 +119,17 @@ def test_csv_and_json_profiles_are_structural_samples_with_exact_counts(tmp_path
     assert csv_structure["record_count"] == 25
     assert csv_structure["record_count_exact"] is True
     assert csv_structure["preview"]["strategy"] == "head"
-    assert csv_structure["preview"]["returned_count"] == 20
+    assert csv_structure["preview"]["preview_sample_count"] == 20
+    assert csv_structure["preview"]["total_count"] == 25
+    assert csv_structure["preview"]["total_count_exact"] is True
     assert csv_structure["preview"]["complete"] is False
     assert profiles["nested.json"]["structure"]["arrays"][0]["path"] == "$.orders"
     json_array = profiles["nested.json"]["structure"]["arrays"][0]
     assert json_array["length"] == 25
     assert json_array["length_exact"] is True
-    assert json_array["preview"]["returned_count"] == 3
+    assert json_array["preview"]["preview_sample_count"] == 3
+    assert json_array["preview"]["total_count"] == 25
+    assert json_array["preview"]["total_count_exact"] is True
     assert json_array["preview"]["complete"] is False
 
 
@@ -161,5 +168,8 @@ def test_xlsx_profile_preserves_multiple_sheets_and_bounded_rows(tmp_path: Path)
     ]
     warehouse_sheet = profile["structure"]["sheets"][1]
     assert warehouse_sheet["preview"]["rows"] == [["F1", "Existing", "existing"]]
+    assert warehouse_sheet["preview"]["preview_sample_count"] == 1
+    assert warehouse_sheet["preview"]["total_count"] == 1
+    assert warehouse_sheet["preview"]["total_count_exact"] is True
     assert warehouse_sheet["record_count"] == 1
     assert warehouse_sheet["record_count_exact"] is True

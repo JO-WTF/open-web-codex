@@ -29,4 +29,4 @@ metadata:
 
 用户要求修订已有地图时，纯标题、图层、颜色、图例、hover 或视角只调用 `revise_map_card`，且只接受当前 Turn 由 Platform 注入的精确 `map_spec_ref`：它必须是 `server="map_utils"`、`resource_schema="map_card_spec.v1"`、`uri` 以 `maps-data://map-card-spec/` 开头的 ResourceRef。artifact ID、GeoJSON ref、地图标题、模型文本或“上一张地图”不是 spec；缺少精确选择时返回 `needs_context`，请用户在卡片上选择「基于此图修改」。`map_card_spec_ref_invalid` 或 `map_card_spec_unavailable` 是当前请求的 typed 终态，不构造变体、不重试。需要新覆盖线时先从精确分配结果生成新 GeoJSON。
 
-只在用户明确请求最终报告时调用一次 `publish_network_planning_report`，明确请求导出时才调用地图文件渲染。中间 Resource、导航请求和地图数据不是 Artifact。不要为地图或报告重新求解路线、成本或方案。
+只在用户明确请求最终报告时调用一次 `publish_network_planning_report`，明确请求导出时才调用地图文件渲染。所有 Workspace 最终文件必须 create-new 写入 `outputs/warehouse-network/deliverables/`，不得写入 Workspace 根目录或源数据目录。中间 Resource、导航请求和地图数据不是 Artifact。不要为地图或报告重新求解路线、成本或方案。

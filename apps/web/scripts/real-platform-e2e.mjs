@@ -22,6 +22,8 @@ const fixtureDir = path.join(
   "mock_data",
 );
 const fixtureManifestPath = path.join(fixtureDir, "manifest.json");
+const preparedOutputPath =
+  "outputs/warehouse-network/prepared/prepared_network_input.json";
 const baseUrl = (
   process.env.E2E_BASE_URL ?? "http://127.0.0.1:4810"
 ).replace(/\/$/, "");
@@ -797,11 +799,11 @@ class DeterministicModelServer {
           source_profile_ref: profileRef,
           confirmed_sources: confirmedSources(),
           country_code: "ID",
-          output_relative_path: "prepared_network_input.json",
+          output_relative_path: preparedOutputPath,
           administrative_catalog_relative_path: "mock_data/administrative-areas.json",
         });
       }
-      const preparedPath = findPreparedPath(body) ?? "prepared_network_input.json";
+      const preparedPath = findPreparedPath(body) ?? preparedOutputPath;
       const identity = findFirstKey(body, ["input_identity"]) ?? {};
       return message(
         "data:done",
@@ -813,7 +815,7 @@ class DeterministicModelServer {
     }
 
     if (role === "network") {
-      const preparedPath = findPreparedPath(body) ?? "prepared_network_input.json";
+      const preparedPath = findPreparedPath(body) ?? preparedOutputPath;
       if (!has("network:search-tools")) {
         return toolSearch(
           "network:search-tools",
@@ -890,10 +892,7 @@ class DeterministicModelServer {
             }),
       });
     }
-    if (
-      text.includes("<subagent_notification>") &&
-      !has("root:search-after-child")
-    ) {
+    if (!has("root:search-after-child")) {
       return toolSearch(
         "root:search-after-child",
         "wait agent child completion and continue warehouse planning",
@@ -1457,10 +1456,12 @@ async function runCase(index) {
       assert(schemas.has(schema), "missing Resource provenance for " + schema);
     }
     assert(
-      eventText.includes("prepared_input_relative_path=prepared_network_input.json") &&
+      eventText.includes("prepared_input_relative_path=" + preparedOutputPath) &&
         eventText.includes('"schema_version":"prepared_network_input.v1"') &&
-        eventText.includes('"content_sha256":"'),
-      "prepared Workspace input identity was not reported",
+        eventText.includes('"content_sha256":"') &&
+        eventText.includes('"candidate_warehouse_count":12') &&
+        eventText.includes("WH-CANDIDATE-BALIKPAPAN"),
+      "prepared Workspace input identity or candidate catalog was not reported",
     );
     const mapEvent = events.find(
       (event) =>
@@ -1481,7 +1482,7 @@ async function runCase(index) {
       "/workspaces/" + record.workspace.id + "/files",
     );
     assert(
-      preparedFiles.includes("prepared_network_input.json"),
+      preparedFiles.includes(preparedOutputPath),
       "prepared Workspace file was not persisted",
     );
     assert(
