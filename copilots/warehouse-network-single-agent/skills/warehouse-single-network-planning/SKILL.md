@@ -31,7 +31,7 @@ metadata:
 
 - 当前网络用 `evaluate_network_baseline` 的 `auto` 模式；没有 current assignments 时只能称为 `optimized_existing_footprint`。
 - 新增、关闭或搬迁一个仓库用 `assess_facility_change`；关闭已有仓必须先得到用户许可。
-- 给出新增仓数时用 `opening_policy.kind=exact`；只要求达到时效/需求加权覆盖率时，用一次 `opening_policy.kind=minimum_feasible` 和 `service_constraints`，让 Planner 在总时间预算内从 0 开始有界搜索，不循环调用多个 p-median。
+- 给出新增仓数时用 `opening_policy.kind=exact`；只要求达到时效/需求加权覆盖率时，用一次 `opening_policy.kind=minimum_feasible` 和 `service_constraints`，让 Planner 在总时间预算内先最小化新增仓数、再固定仓数最小化成本，不循环调用多个 p-median。
 - 默认保留所有已有仓；只有用户明确许可并给出可关闭的已有仓 ID 时才允许 closure policy。
 
 Tool 返回的 structured result 和精确 ResourceRef 是后续工作的唯一输入。`infeasible` 只表示搜索中的业务结果；权限、身份不一致、取消、超时、外部失败、能力不可用或输入无效是 typed 终态，应停止并如实报告。

@@ -3,6 +3,7 @@
 import time
 from typing import (
     Annotated,
+    Literal,
 )
 
 from mcp.server.fastmcp import (
@@ -36,21 +37,23 @@ from supply_chain_planner.network.optimization_models import (
     CoverageMetricSummary,
     ExactOpeningPolicy,
     ExistingWarehousePolicy,
+    MinimumFeasibleOpeningPolicy,
     OpeningPolicySelection,
-    PMedianSearchAttempt,
     PMedianSolution,
+    PMedianSolverStage,
     ScenarioResult,
     ScenarioSpec,
     ServiceCoverageConstraint,
     WarehouseChanges,
 )
 from supply_chain_planner.network.solver import (
+    SolverStageOutcome,
     SolverUnavailable,
     compare_assignments,
     coverage_metrics,
-    enumerate_p_median,
     service_metrics,
     solve_assignment,
+    solve_p_median_stage,
     summarize_assignment_cost,
 )
 from supply_chain_planner.shared.models import (
@@ -352,6 +355,26 @@ def assess_facility_change(
     )
 
 
+def _solver_stage_record(
+    outcome: SolverStageOutcome,
+    service_targets: list[float],
+) -> PMedianSolverStage:
+    coverage = (
+        coverage_metrics(outcome.result.assignment, sorted(set(service_targets)))
+        if outcome.result is not None
+        else []
+    )
+    return PMedianSolverStage(
+        kind=outcome.kind,
+        status=outcome.status,
+        optimality=outcome.optimality,
+        selected_number_to_open=outcome.selected_number_to_open,
+        objective_value=outcome.objective_value,
+        best_bound=outcome.best_bound,
+        coverage=coverage,
+    )
+
+
 def solve_p_median(
     prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     route_matrix_ref: ResourceRef,
@@ -361,8 +384,8 @@ def solve_p_median(
         Field(
             description=(
                 "Use exact with number_to_open for one candidate count, or "
-                "minimum_feasible to search candidate counts from zero through the "
-                "bounded maximum and stop at the first feasible count."
+                "minimum_feasible for one bounded minimum-openings stage followed by "
+                "a fixed-count minimum-cost stage."
             )
         ),
     ],
@@ -435,9 +458,7 @@ def solve_p_median(
         optional_existing_ids = set(existing_warehouse_policy.closable_existing_ids)
         fixed_existing_ids = existing_ids - optional_existing_ids
     candidate_count = sum(1 for warehouse in prepared.warehouses if not warehouse.is_existing)
-    if isinstance(opening_policy, ExactOpeningPolicy):
-        opening_counts = [opening_policy.number_to_open]
-    else:
+    if isinstance(opening_policy, MinimumFeasibleOpeningPolicy):
         if not constraints:
             raise McpResourceContractError(
                 "p_median_minimum_feasible_requires_service_constraints"
@@ -449,85 +470,74 @@ def solve_p_median(
         )
         if maximum > candidate_count or maximum > 64:
             raise McpResourceContractError("p_median_opening_policy_bound_invalid")
-        opening_counts = list(range(maximum + 1))
-
     started_at = time.monotonic()
-    attempts: list[PMedianSearchAttempt] = []
-    solved = None
-    timed_out = False
-    unavailable_message: str | None = None
-    solved_number_to_open: int | None = None
-    solution_coverage: list[CoverageMetricSummary] = []
-    for number_to_open in opening_counts:
-        remaining_seconds = time_limit_seconds - (time.monotonic() - started_at)
-        if remaining_seconds <= 0:
-            timed_out = True
-            attempts.append(
-                PMedianSearchAttempt(
-                    number_to_open=number_to_open,
-                    status="timeout",
-                    optimality="not_available",
-                )
+    solver_stages: list[PMedianSolverStage] = []
+    stage_outcomes: list[SolverStageOutcome] = []
+
+    def remaining_seconds() -> float:
+        return time_limit_seconds - (time.monotonic() - started_at)
+
+    def run_stage(
+        kind: Literal["minimum_openings", "minimum_cost"],
+        number_to_open: int | None,
+        maximum_number_to_open: int | None,
+    ) -> SolverStageOutcome:
+        def record(outcome: SolverStageOutcome) -> SolverStageOutcome:
+            solver_stages.append(_solver_stage_record(outcome, service_targets))
+            stage_outcomes.append(outcome)
+            return outcome
+
+        remaining = remaining_seconds()
+        if remaining <= 0:
+            return record(
+                SolverStageOutcome(kind, "timeout", "not_available", None, None, None, None, 0)
             )
-            break
         try:
-            candidate_solution, _branches, attempt_timed_out = enumerate_p_median(
+            outcome = solve_p_median_stage(
                 prepared.demand_cities,
                 prepared.warehouses,
                 routes,
                 costs,
+                kind,
                 number_to_open,
+                maximum_number_to_open,
                 fixed_existing_ids,
                 optional_existing_ids,
-                remaining_seconds,
+                remaining,
                 constraints,
             )
-        except SolverUnavailable as error:
-            unavailable_message = str(error)
-            attempts.append(
-                PMedianSearchAttempt(
-                    number_to_open=number_to_open,
-                    status="unavailable",
-                    optimality="not_available",
+        except SolverUnavailable:
+            return record(
+                SolverStageOutcome(
+                    kind, "unavailable", "not_available", None, None, None, None, 0
                 )
             )
-            break
-        if candidate_solution is None:
-            timed_out = attempt_timed_out
-            attempts.append(
-                PMedianSearchAttempt(
-                    number_to_open=number_to_open,
-                    status="timeout" if attempt_timed_out else "infeasible",
-                    optimality="not_available" if attempt_timed_out else "proven",
-                )
-            )
-            if attempt_timed_out:
-                break
-            continue
-        attempt_status = "timeout" if attempt_timed_out else "optimal"
-        attempt_optimality = "feasible_only" if attempt_timed_out else "proven"
-        attempt_coverage = coverage_metrics(
-            candidate_solution.assignment,
-            sorted(set(service_targets)),
-        )
-        attempts.append(
-            PMedianSearchAttempt(
-                number_to_open=number_to_open,
-                status=attempt_status,
-                optimality=attempt_optimality,
-                objective_value=candidate_solution.objective_value,
-                coverage=attempt_coverage,
-            )
-        )
-        solved = candidate_solution
-        solved_number_to_open = number_to_open
-        timed_out = attempt_timed_out
-        solution_coverage = attempt_coverage
-        break
-    if solved is None:
-        status = (
-            "timeout" if timed_out else ("unavailable" if unavailable_message else "infeasible")
-        )
+        return record(outcome)
+
+    selected_solution = None
+    selected_number_to_open: int | None = None
+    minimum_number_to_open_proven = False
+    final_best_bound: float | None = None
+    if isinstance(opening_policy, ExactOpeningPolicy):
+        stage = run_stage("minimum_cost", opening_policy.number_to_open, None)
+        selected_solution = stage.result
+        selected_number_to_open = stage.selected_number_to_open
+        final_best_bound = stage.best_bound
+    else:
+        first_stage = run_stage("minimum_openings", None, maximum)
+        if first_stage.result is not None:
+            selected_solution = first_stage.result
+            selected_number_to_open = first_stage.selected_number_to_open
+            minimum_number_to_open_proven = first_stage.optimality == "proven"
+            second_stage = run_stage("minimum_cost", selected_number_to_open, None)
+            if second_stage.result is not None:
+                selected_solution = second_stage.result
+                selected_number_to_open = second_stage.selected_number_to_open
+                final_best_bound = second_stage.best_bound
+
+    if selected_solution is None:
+        terminal_stage = stage_outcomes[-1] if stage_outcomes else None
+        status = terminal_stage.status if terminal_stage is not None else "unavailable"
         solution = PMedianSolution(
             status=status,
             active_warehouse_ids=[],
@@ -535,37 +545,43 @@ def solve_p_median(
             closed_existing_ids=[],
             optimality="not_available",
             opening_policy=opening_policy,
-            first_feasible_number_to_open=None,
-            search_attempts=attempts,
-            message=unavailable_message or "No feasible p-median solution was found.",
+            selected_number_to_open=None,
+            minimum_number_to_open_proven=False,
+            solver_stages=solver_stages,
+            message="No feasible p-median solution was found.",
             input_identity=input_identity,
         )
+        solution_coverage: list[CoverageMetricSummary] = []
     else:
-        solution_coverage = coverage_metrics(
-            solved.assignment,
-            sorted(set(service_targets)),
+        stage_statuses = [stage.status for stage in stage_outcomes]
+        all_optimal = all(status == "optimal" for status in stage_statuses)
+        proven = (
+            all_optimal
+            and (isinstance(opening_policy, ExactOpeningPolicy) or minimum_number_to_open_proven)
         )
         solution = PMedianSolution(
-            status="timeout" if timed_out else "optimal",
-            active_warehouse_ids=solved.active_warehouse_ids,
-            opened_candidate_ids=solved.opened_candidate_ids,
-            closed_existing_ids=solved.closed_existing_ids,
-            assignment=solved.assignment,
-            objective_value=solved.objective_value,
-            cost=summarize_assignment_cost(solved.assignment, costs),
-            service=service_metrics(
-                solved.assignment,
-                sorted(set(service_targets)),
-            ),
-            optimality="feasible_only" if timed_out else "proven",
+            status="optimal" if proven else "feasible",
+            active_warehouse_ids=selected_solution.active_warehouse_ids,
+            opened_candidate_ids=selected_solution.opened_candidate_ids,
+            closed_existing_ids=selected_solution.closed_existing_ids,
+            assignment=selected_solution.assignment,
+            objective_value=selected_solution.objective_value,
+            cost=summarize_assignment_cost(selected_solution.assignment, costs),
+            service=service_metrics(selected_solution.assignment, sorted(set(service_targets))),
+            optimality="proven" if proven else "feasible_only",
             opening_policy=opening_policy,
-            first_feasible_number_to_open=solved_number_to_open,
-            search_attempts=attempts,
-            message="The solver returned a feasible solution before the time limit."
-            if timed_out
-            else None,
+            selected_number_to_open=selected_number_to_open,
+            minimum_number_to_open_proven=minimum_number_to_open_proven,
+            solver_stages=solver_stages,
+            best_bound=final_best_bound,
+            message=(
+                None
+                if proven
+                else "A feasible solution was retained; one or more solver stages were not proven optimal."
+            ),
             input_identity=input_identity,
         )
+        solution_coverage = coverage_metrics(selected_solution.assignment, sorted(set(service_targets)))
     summary = (
         f"p-median status is {solution.status}; active warehouses "
         f"{len(solution.active_warehouse_ids)}, opened "
@@ -589,8 +605,9 @@ def solve_p_median(
         status=solution.status,
         optimality=solution.optimality,
         opening_policy=solution.opening_policy,
-        first_feasible_number_to_open=solution.first_feasible_number_to_open,
-        search_attempts=solution.search_attempts,
+        selected_number_to_open=solution.selected_number_to_open,
+        minimum_number_to_open_proven=solution.minimum_number_to_open_proven,
+        solver_stages=solution.solver_stages,
         active_warehouse_count=len(solution.active_warehouse_ids),
         opened_candidate_ids=solution.opened_candidate_ids,
         closed_existing_ids=solution.closed_existing_ids,

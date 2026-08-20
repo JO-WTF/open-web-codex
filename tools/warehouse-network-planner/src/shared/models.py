@@ -30,7 +30,7 @@ from supply_chain_planner.network.optimization_models import (
     CoverageComparison,
     CoverageMetricSummary,
     OpeningPolicySelection,
-    PMedianSearchAttempt,
+    PMedianSolverStage,
 )
 
 
@@ -188,13 +188,55 @@ class PMedianSolutionToolResult(StrictModel):
     status: Literal["optimal", "feasible", "timeout", "infeasible", "unavailable"]
     optimality: Literal["proven", "feasible_only", "not_available"]
     opening_policy: OpeningPolicySelection
-    first_feasible_number_to_open: int | None = Field(default=None, ge=0)
-    search_attempts: list[PMedianSearchAttempt] = Field(max_length=65)
+    selected_number_to_open: int | None = Field(default=None, ge=0)
+    minimum_number_to_open_proven: bool
+    solver_stages: list[PMedianSolverStage] = Field(min_length=1, max_length=2)
     active_warehouse_count: int = Field(ge=0)
     opened_candidate_ids: list[str] = Field(max_length=64)
     closed_existing_ids: list[str] = Field(max_length=64)
     cost: CostSummary | None = None
     coverage: list[CoverageMetricSummary] = Field(max_length=32)
+
+    @model_validator(mode="after")
+    def validate_solution_contract(self):
+        if self.selected_number_to_open is not None and self.selected_number_to_open != len(
+            self.opened_candidate_ids
+        ):
+            raise ValueError("selected_number_to_open_mismatch")
+        if self.status in {"optimal", "feasible"}:
+            if self.selected_number_to_open is None:
+                raise ValueError("selected_number_to_open_required")
+            if (self.status, self.optimality) not in {
+                ("optimal", "proven"),
+                ("feasible", "feasible_only"),
+            }:
+                raise ValueError("solution_status_optimality_mismatch")
+        else:
+            if (self.status, self.optimality) not in {
+                ("timeout", "not_available"),
+                ("infeasible", "not_available"),
+                ("unavailable", "not_available"),
+            }:
+                raise ValueError("solution_status_optimality_mismatch")
+        if self.status not in {"optimal", "feasible"} and (
+            self.selected_number_to_open is not None
+            or self.active_warehouse_count
+            or self.opened_candidate_ids
+            or self.closed_existing_ids
+            or self.cost is not None
+            or self.coverage
+        ):
+            raise ValueError("unsolved_solution_fields_forbidden")
+        if self.minimum_number_to_open_proven:
+            first = self.solver_stages[0]
+            if not (
+                self.opening_policy.kind == "minimum_feasible"
+                and first.kind == "minimum_openings"
+                and first.status == "optimal"
+                and first.optimality == "proven"
+            ):
+                raise ValueError("minimum_number_proof_invalid")
+        return self
 
 
 class NavigationMatrixRequestToolResult(StrictModel):
@@ -247,7 +289,7 @@ class AssignmentResultResourceRef(_ResourceRef):
     resource_schema: Literal[
         "network_baseline.v2",
         "network_scenario.v2",
-        "facility_location_solution.v3",
+        "facility_location_solution.v4",
     ]
 
 
@@ -255,7 +297,7 @@ class ComparableNetworkResultRef(_ResourceRef):
     resource_schema: Literal[
         "network_baseline.v2",
         "network_scenario.v2",
-        "facility_location_solution.v3",
+        "facility_location_solution.v4",
     ] = Field(description="Comparable network result schema.")
 
 

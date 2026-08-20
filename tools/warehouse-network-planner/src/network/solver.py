@@ -5,8 +5,9 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from collections.abc import Iterable
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 
 from supply_chain_planner.network.matrix_models import CostMatrix, RouteMatrix
 from supply_chain_planner.network.models import (
@@ -31,6 +32,18 @@ from supply_chain_planner.network.optimization_models import (
 
 class SolverUnavailable(RuntimeError):
     """The declared deterministic solver dependency is not installed."""
+
+
+@dataclass(frozen=True)
+class SolverStageOutcome:
+    kind: Literal["minimum_openings", "minimum_cost"]
+    status: Literal["optimal", "feasible", "timeout", "infeasible", "unavailable"]
+    optimality: Literal["proven", "feasible_only", "not_available"]
+    result: FacilityLocationResult | None
+    selected_number_to_open: int | None
+    objective_value: float | None
+    best_bound: float | None
+    branches: int
 
 
 @lru_cache(maxsize=1)
@@ -448,12 +461,14 @@ def _assignment_objective_value(assignment: AssignmentResult) -> float:
     )
 
 
-def enumerate_p_median(
+def solve_p_median_stage(
     demand: list[DemandCityRecord],
     warehouses: list[WarehouseRecord],
     route_matrix: RouteMatrix,
     cost_matrix: CostMatrix,
-    number_to_open: int,
+    stage_kind: Literal["minimum_openings", "minimum_cost"],
+    number_to_open: int | None,
+    maximum_number_to_open: int | None,
     fixed_existing_ids: set[str],
     optional_existing_ids: set[str],
     time_limit_seconds: float,
@@ -462,8 +477,14 @@ def enumerate_p_median(
     cp_model = _load_cp_model()
     if cp_model is None:
         raise SolverUnavailable("ortools is not installed")
-    if number_to_open < 0 or time_limit_seconds <= 0:
+    if time_limit_seconds <= 0 or (number_to_open is not None and number_to_open < 0):
         raise ValueError("invalid_solver_parameters")
+    if stage_kind == "minimum_openings" and (
+        maximum_number_to_open is None or maximum_number_to_open < 0
+    ):
+        raise ValueError("minimum_openings_bound_required")
+    if stage_kind == "minimum_cost" and number_to_open is None:
+        raise ValueError("minimum_cost_number_required")
 
     demand_rows = sorted(demand, key=lambda row: row.city_id)
     warehouse_rows = sorted(warehouses, key=lambda row: row.warehouse_id)
@@ -494,8 +515,12 @@ def enumerate_p_median(
         for warehouse in warehouse_rows
         if not warehouse.is_existing and warehouse.warehouse_id not in fixed
     ]
-    if number_to_open > len(candidates):
-        return None, 0, False
+    if stage_kind == "minimum_cost" and number_to_open > len(candidates):
+        return SolverStageOutcome(
+            stage_kind, "infeasible", "proven", None, None, None, None, 0
+        )
+    if stage_kind == "minimum_openings" and maximum_number_to_open > len(candidates):
+        maximum_number_to_open = len(candidates)
 
     routes = _route_index(route_matrix)
     costs = _cost_index(cost_matrix)
@@ -513,9 +538,13 @@ def enumerate_p_median(
             if upstream is None:
                 raise ValueError(f"warehouse_upstream_center_missing:{warehouse.warehouse_id}")
             model.Add(open_variables[warehouse.warehouse_id] <= upstream)
-    model.Add(
-        sum(open_variables[warehouse.warehouse_id] for warehouse in candidates) == number_to_open
+    candidate_open_count = sum(
+        open_variables[warehouse.warehouse_id] for warehouse in candidates
     )
+    if stage_kind == "minimum_openings":
+        model.Add(candidate_open_count <= maximum_number_to_open)
+    else:
+        model.Add(candidate_open_count == number_to_open)
 
     assignment_variables: dict[tuple[str, str], Any] = {}
     objective_terms = []
@@ -532,7 +561,9 @@ def enumerate_p_median(
             objective_terms.append(int(round(cost * 1000 * float(city.demand_quantity))) * variable)
             choices.append((warehouse, route))
         if not choices:
-            return None, 0, False
+            return SolverStageOutcome(
+                stage_kind, "infeasible", "proven", None, None, None, None, 0
+            )
         model.Add(
             sum(
                 assignment_variables[(city.city_id, warehouse.warehouse_id)]
@@ -560,14 +591,19 @@ def enumerate_p_median(
         )
         model.Add(sum(eligible) >= required)
 
-    model.Minimize(sum(objective_terms))
+    model.Minimize(candidate_open_count if stage_kind == "minimum_openings" else sum(objective_terms))
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_seconds
     solver.parameters.num_search_workers = 1
     solver.parameters.random_seed = 0
     status = solver.Solve(model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return None, int(solver.NumBranches()), status == cp_model.UNKNOWN
+    branches = int(solver.NumBranches())
+    if status == cp_model.UNKNOWN:
+        return SolverStageOutcome(stage_kind, "timeout", "not_available", None, None, None, None, branches)
+    if status == cp_model.INFEASIBLE:
+        return SolverStageOutcome(stage_kind, "infeasible", "proven", None, None, None, None, branches)
+    if status != cp_model.OPTIMAL and status != cp_model.FEASIBLE:
+        return SolverStageOutcome(stage_kind, "unavailable", "not_available", None, None, None, None, branches)
 
     active = {
         warehouse_id
@@ -628,7 +664,24 @@ def enumerate_p_median(
         closed_existing_ids=sorted(existing_ids - active),
         assignment=assignment,
     )
-    return result, int(solver.NumBranches()), status != cp_model.OPTIMAL
+    selected_number_to_open = len(result.opened_candidate_ids)
+    objective_value = (
+        float(selected_number_to_open)
+        if stage_kind == "minimum_openings"
+        else result.objective_value
+    )
+    raw_bound = float(solver.BestObjectiveBound())
+    best_bound = raw_bound if stage_kind == "minimum_openings" else raw_bound / 1000
+    return SolverStageOutcome(
+        stage_kind,
+        "optimal" if status == cp_model.OPTIMAL else "feasible",
+        "proven" if status == cp_model.OPTIMAL else "feasible_only",
+        result,
+        selected_number_to_open,
+        objective_value,
+        best_bound,
+        branches,
+    )
 
 
 def by_warehouse_cost(assignment: AssignmentResult) -> dict[str, float]:

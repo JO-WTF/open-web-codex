@@ -23,7 +23,7 @@ metadata:
 
 - 当前网络用 `evaluate_network_baseline`；省略 `coverage_mode` 或使用 `auto`，由 Tool 判断真实当前分配还是 `optimized_existing_footprint`。没有 current assignments 时不得称为真实现状。
 - 新增、关闭或搬迁一个仓库用 `assess_facility_change`。关闭已有仓必须先得到用户许可；比较只引用该 Tool 同时返回的成本、时效、活动仓、受影响城市和重分配城市。
-- 用户给出新增仓数时，用 `opening_policy={kind:"exact",number_to_open:n}`；只要求达到时效/需求加权覆盖率而未给仓数时，用一次 `opening_policy={kind:"minimum_feasible",maximum_number_to_open:n}`，把约束放入 `service_constraints`。Planner 在一个总时间预算内从 0 开始搜索，返回每个仓数的可行性、首个可行仓数、coverage 和最优性；不要循环调用多个 p-median。
+- 用户给出新增仓数时，用 `opening_policy={kind:"exact",number_to_open:n}`；只要求达到时效/需求加权覆盖率而未给仓数时，用一次 `opening_policy={kind:"minimum_feasible",maximum_number_to_open:n}`，把约束放入 `service_constraints`。Planner 在一个总时间预算内先最小化新增仓数，再固定该仓数最小化成本，返回最多两个 `solver_stages`、selected number、coverage 和最优性；不要循环调用多个 p-median。
 - 默认保留所有已有仓。只有用户明确许可并给出可关闭的已有仓 ID 时才允许 closure policy。
 
 Tool 成功结果和精确 ResourceRef 是后续工作的唯一输入。`infeasible` 是 minimum-feasible 搜索中的业务结果；权限、身份不一致、取消、超时、外部失败、能力不可用或输入无效是当前请求的 typed 终态，应如实停止并报告。

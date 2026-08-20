@@ -37,13 +37,14 @@ from supply_chain_planner.network.optimization_models import (
     ComparableNetworkView,
     ExactOpeningPolicy,
     PMedianSolution,
+    PMedianSolverStage,
 )
 from supply_chain_planner.network.solver import (
     compare_assignments,
     coverage_metrics,
-    enumerate_p_median,
     service_metrics,
     solve_current_assignment,
+    solve_p_median_stage,
     summarize_assignment_cost,
 )
 
@@ -143,17 +144,20 @@ def sample2_delivery() -> Sample2Delivery:
         cost=summarize_assignment_cost(baseline_assignment, costs),
         input_identity=TEST_INPUT_IDENTITY,
     )
-    best, _, timed_out = enumerate_p_median(
+    outcome = solve_p_median_stage(
         fixture.demand,
         fixture.warehouses,
         routes,
         costs,
+        stage_kind="minimum_cost",
         number_to_open=2,
+        maximum_number_to_open=None,
         fixed_existing_ids=existing_ids,
         optional_existing_ids=set(),
         time_limit_seconds=10,
     )
-    assert timed_out is False
+    best = outcome.result
+    assert outcome.status == "optimal"
     assert best is not None
     facility = PMedianSolution(
         status="optimal",
@@ -167,6 +171,16 @@ def sample2_delivery() -> Sample2Delivery:
         service=service_metrics(best.assignment, targets),
         optimality="proven",
         opening_policy=ExactOpeningPolicy(number_to_open=2),
+        selected_number_to_open=2,
+        solver_stages=[
+            PMedianSolverStage(
+                kind="minimum_cost",
+                status="optimal",
+                optimality="proven",
+                selected_number_to_open=2,
+                objective_value=best.objective_value,
+            )
+        ],
     )
     comparison = compare_assignments(
         baseline.assignment,

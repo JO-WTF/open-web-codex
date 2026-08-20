@@ -168,10 +168,10 @@ def _load_comparable_resource(
             "network_scenario.v2",
             ScenarioResult,
         )
-    elif resource_ref.resource_schema == "facility_location_solution.v3":
+    elif resource_ref.resource_schema == "facility_location_solution.v4":
         result = _runtime().load_model(
             resource_ref,
-            "facility_location_solution.v3",
+            "facility_location_solution.v4",
             PMedianSolution,
         )
         if result.assignment is None:

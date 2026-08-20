@@ -548,8 +548,8 @@ producer-time verifier snapshot，恢复不依赖届时 active package registry�
    数量与按需求量加权的两种口径及确定性的未覆盖城市，模型不得自行汇总。
 4. 计算全网和分仓运输成本，完成增仓、减仓、搬迁三类模拟。
 5. 执行 p-median：已有仓默认固定；用户给出 `p` 时传 `opening_policy.kind=exact`。用户只要求达到指定需求加权 SLA 的
-   最优分布时，传一次 `opening_policy.kind=minimum_feasible`，Planner 在一个总时间预算内从 `p=0` 递增做有界可行性搜索，
-   以最少新增仓优先、同一 `p` 下运输成本最低，并返回每个 `p` 的可行性、首个可行仓数和最终 coverage；只有用户明确许可时才允许指定已有仓关闭。
+   最优分布时，传一次 `opening_policy.kind=minimum_feasible`，Planner 在一个总时间预算内先最小化新增仓数、再固定仓数最小化成本，
+   返回最多两个 `solver_stages`、selected number 和最终 coverage；只有用户明确许可时才允许指定已有仓关闭。
 6. 执行给定 SLA 下的成本最优规划，输出覆盖、时效、距离、成本和仓库变动。
 7. 当空间关系有助理解时生成对话内交互地图卡片；Network 从 exact 分配结果产生城市、设施、实际
    分配和城市→仓库 LineString 的通用覆盖 GeoJSON，Maps 只消费该精确几何 ref。结构化计算明细与

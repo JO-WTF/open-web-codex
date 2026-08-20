@@ -44,6 +44,11 @@ from supply_chain_planner.network.optimization_models import (
     ScenarioSpec,
     ServiceCoverageConstraint,
 )
+from supply_chain_planner.network.solver import (
+    SolverStageOutcome,
+    SolverUnavailable,
+    solve_p_median_stage,
+)
 from supply_chain_planner.shared.models import (
     ComparableNetworkResultRef,
     NetworkComparisonReportInput,
@@ -105,6 +110,32 @@ def _cost_policy() -> CostCalculationPolicy:
     )
 
 
+def _pmedian_fixture(tmp_path: Path, monkeypatch):
+    workspace, _store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    prepared_path = _prepared_input(workspace)
+    routes = _ref(
+        route_tools.prepare_route_matrix(
+            prepared_path,
+            "haversine",
+            ctx,
+            warehouse_scope=AllWarehousesScope(),
+            detour_coefficient=1.2,
+            average_speed_kph=42,
+        )
+    )
+    costs = _ref(
+        cost_tools.plan_cost_matrix(
+            prepared_path,
+            AllWarehousesScope(),
+            ctx,
+            cost_policy=ExplicitCostPolicy(rules=_cost_policy().rules),
+            route_matrix_ref=routes,
+        )
+    )
+    return workspace, ctx, prepared_path, routes, costs
+
+
 def test_network_planning_tools_use_workspace_input_and_keep_compute_results_as_resources() -> None:
     tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
     for name in (
@@ -132,7 +163,7 @@ def test_network_planning_tools_use_workspace_input_and_keep_compute_results_as_
     assert "coverage" in tools["solve_p_median"].outputSchema["properties"]
     assert "opening_policy" in tools["solve_p_median"].inputSchema["properties"]
     assert "number_to_open" not in tools["solve_p_median"].inputSchema["properties"]
-    assert "search_attempts" in tools["solve_p_median"].outputSchema["properties"]
+    assert "solver_stages" in tools["solve_p_median"].outputSchema["properties"]
 
 
 def test_comparable_loader_rejects_facility_without_assignment(monkeypatch) -> None:
@@ -150,7 +181,7 @@ def test_comparable_loader_rejects_facility_without_assignment(monkeypatch) -> N
             "type": "mcp_resource",
             "server": "supply_chain",
             "uri": "supply-chain://resources/facility",
-            "resource_schema": "facility_location_solution.v3",
+            "resource_schema": "facility_location_solution.v4",
         }
     )
     with pytest.raises(ProviderContractError, match="comparable_assignment_unavailable"):
@@ -530,13 +561,13 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
     )
     assert facility_result.structuredContent is not None
     assert facility_result.structuredContent["status"] == "optimal"
-    assert facility_result.structuredContent["first_feasible_number_to_open"] == 2
-    assert [attempt["number_to_open"] for attempt in facility_result.structuredContent["search_attempts"]] == [0, 1, 2]
-    assert [attempt["optimality"] for attempt in facility_result.structuredContent["search_attempts"]] == [
-        "proven",
-        "proven",
-        "proven",
+    assert facility_result.structuredContent["selected_number_to_open"] == 2
+    assert facility_result.structuredContent["minimum_number_to_open_proven"] is True
+    assert [stage["kind"] for stage in facility_result.structuredContent["solver_stages"]] == [
+        "minimum_openings",
+        "minimum_cost",
     ]
+    assert len(facility_result.structuredContent["solver_stages"]) <= 2
     assert [metric["target_hours"] for metric in facility_result.structuredContent["coverage"]] == [
         6.0,
         12.0,
@@ -715,6 +746,355 @@ def test_minimum_feasible_requires_service_constraints(tmp_path: Path, monkeypat
             30,
             ctx,
         )
+
+
+def test_minimum_feasible_retains_stage1_when_stage2_times_out(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace, _store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    prepared_path = _prepared_input(workspace)
+    routes = _ref(
+        route_tools.prepare_route_matrix(
+            prepared_path,
+            "haversine",
+            ctx,
+            warehouse_scope=AllWarehousesScope(),
+            detour_coefficient=1.2,
+            average_speed_kph=42,
+        )
+    )
+    costs = _ref(
+        cost_tools.plan_cost_matrix(
+            prepared_path,
+            AllWarehousesScope(),
+            ctx,
+            cost_policy=ExplicitCostPolicy(rules=_cost_policy().rules),
+            route_matrix_ref=routes,
+        )
+    )
+    real_stage_solver = solve_p_median_stage
+    calls: list[str] = []
+
+    def fake_stage(*args, **kwargs):
+        kind = kwargs.get("stage_kind", args[4])
+        calls.append(kind)
+        if kind == "minimum_cost":
+            return SolverStageOutcome(
+                kind,
+                "timeout",
+                "not_available",
+                None,
+                None,
+                None,
+                None,
+                0,
+            )
+        outcome = real_stage_solver(*args, **kwargs)
+        return SolverStageOutcome(
+            kind,
+            "feasible",
+            "feasible_only",
+            outcome.result,
+            outcome.selected_number_to_open,
+            outcome.objective_value,
+            outcome.best_bound,
+            outcome.branches,
+        )
+
+    monkeypatch.setattr(facility_tools, "solve_p_median_stage", fake_stage)
+    result = facility_tools.solve_p_median(
+        prepared_path,
+        routes,
+        costs,
+        MinimumFeasibleOpeningPolicy(maximum_number_to_open=3),
+        KeepAllExistingWarehousePolicy(),
+        [12],
+        30,
+        ctx,
+        service_constraints=[ServiceCoverageConstraint(target_hours=12, minimum_coverage=0.9)],
+    )
+    assert result.structuredContent is not None
+    assert calls == ["minimum_openings", "minimum_cost"]
+    assert result.structuredContent["status"] == "feasible"
+    assert result.structuredContent["optimality"] == "feasible_only"
+    assert result.structuredContent["selected_number_to_open"] == 2
+    assert [stage["status"] for stage in result.structuredContent["solver_stages"]] == [
+        "feasible",
+        "timeout",
+    ]
+
+
+@pytest.mark.parametrize("stage2_status", ["feasible", "timeout", "unavailable"])
+def test_minimum_feasible_stage2_statuses_retain_stage1(
+    tmp_path: Path, monkeypatch, stage2_status: str
+) -> None:
+    _workspace, ctx, prepared_path, routes, costs = _pmedian_fixture(tmp_path, monkeypatch)
+    real_stage_solver = solve_p_median_stage
+    calls: list[str] = []
+
+    def fake_stage(*args, **kwargs):
+        kind = args[4]
+        calls.append(kind)
+        if kind == "minimum_openings":
+            outcome = real_stage_solver(*args, **kwargs)
+            return outcome
+        if stage2_status == "feasible":
+            first = real_stage_solver(
+                args[0],
+                args[1],
+                args[2],
+                args[3],
+                "minimum_cost",
+                args[5],
+                args[6],
+                args[7],
+                args[8],
+                args[9],
+                args[10],
+            )
+            return SolverStageOutcome(
+                kind,
+                "feasible",
+                "feasible_only",
+                first.result,
+                first.selected_number_to_open,
+                first.objective_value,
+                first.best_bound,
+                first.branches,
+            )
+        return SolverStageOutcome(
+            kind,
+            stage2_status,
+            "not_available",
+            None,
+            None,
+            None,
+            None,
+            0,
+        )
+
+    monkeypatch.setattr(facility_tools, "solve_p_median_stage", fake_stage)
+    result = facility_tools.solve_p_median(
+        prepared_path,
+        routes,
+        costs,
+        MinimumFeasibleOpeningPolicy(maximum_number_to_open=3),
+        KeepAllExistingWarehousePolicy(),
+        [12],
+        30,
+        ctx,
+        service_constraints=[ServiceCoverageConstraint(target_hours=12, minimum_coverage=0.9)],
+    )
+    assert result.structuredContent is not None
+    assert calls == ["minimum_openings", "minimum_cost"]
+    assert result.structuredContent["status"] == "feasible"
+    assert result.structuredContent["optimality"] == "feasible_only"
+    assert result.structuredContent["minimum_number_to_open_proven"] is True
+    assert len(result.structuredContent["solver_stages"]) == 2
+    assert result.structuredContent["selected_number_to_open"] == 2
+
+
+def test_minimum_feasible_stage1_feasible_stage2_optimal_is_not_proven(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _workspace, ctx, prepared_path, routes, costs = _pmedian_fixture(tmp_path, monkeypatch)
+    real_stage_solver = solve_p_median_stage
+    calls: list[str] = []
+
+    def fake_stage(*args, **kwargs):
+        kind = args[4]
+        calls.append(kind)
+        outcome = real_stage_solver(*args, **kwargs)
+        if kind == "minimum_openings":
+            return SolverStageOutcome(
+                kind,
+                "feasible",
+                "feasible_only",
+                outcome.result,
+                outcome.selected_number_to_open,
+                outcome.objective_value,
+                outcome.best_bound,
+                outcome.branches,
+            )
+        return outcome
+
+    monkeypatch.setattr(facility_tools, "solve_p_median_stage", fake_stage)
+    result = facility_tools.solve_p_median(
+        prepared_path,
+        routes,
+        costs,
+        MinimumFeasibleOpeningPolicy(maximum_number_to_open=3),
+        KeepAllExistingWarehousePolicy(),
+        [12],
+        30,
+        ctx,
+        service_constraints=[ServiceCoverageConstraint(target_hours=12, minimum_coverage=0.9)],
+    )
+    assert result.structuredContent is not None
+    assert calls == ["minimum_openings", "minimum_cost"]
+    assert result.structuredContent["status"] == "feasible"
+    assert result.structuredContent["optimality"] == "feasible_only"
+    assert result.structuredContent["minimum_number_to_open_proven"] is False
+
+
+@pytest.mark.parametrize("stage1_status", ["infeasible", "timeout", "unavailable"])
+def test_minimum_feasible_stage1_terminal_does_not_run_stage2(
+    tmp_path: Path, monkeypatch, stage1_status: str
+) -> None:
+    _workspace, ctx, prepared_path, routes, costs = _pmedian_fixture(tmp_path, monkeypatch)
+    calls: list[str] = []
+
+    def fake_stage(*args, **kwargs):
+        calls.append(args[4])
+        return SolverStageOutcome(
+            "minimum_openings",
+            stage1_status,
+            "proven" if stage1_status == "infeasible" else "not_available",
+            None,
+            None,
+            None,
+            None,
+            0,
+        )
+
+    monkeypatch.setattr(facility_tools, "solve_p_median_stage", fake_stage)
+    result = facility_tools.solve_p_median(
+        prepared_path,
+        routes,
+        costs,
+        MinimumFeasibleOpeningPolicy(maximum_number_to_open=3),
+        KeepAllExistingWarehousePolicy(),
+        [12],
+        30,
+        ctx,
+        service_constraints=[ServiceCoverageConstraint(target_hours=12, minimum_coverage=0.9)],
+    )
+    assert result.structuredContent is not None
+    assert calls == ["minimum_openings"]
+    assert result.structuredContent["status"] == stage1_status
+    assert result.structuredContent["optimality"] == "not_available"
+    assert result.structuredContent["selected_number_to_open"] is None
+    assert len(result.structuredContent["solver_stages"]) == 1
+
+
+def test_minimum_feasible_stage1_solver_unavailable_is_typed_terminal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _workspace, ctx, prepared_path, routes, costs = _pmedian_fixture(tmp_path, monkeypatch)
+
+    def unavailable(*_args, **_kwargs):
+        raise SolverUnavailable("test unavailable")
+
+    monkeypatch.setattr(facility_tools, "solve_p_median_stage", unavailable)
+    result = facility_tools.solve_p_median(
+        prepared_path,
+        routes,
+        costs,
+        MinimumFeasibleOpeningPolicy(maximum_number_to_open=3),
+        KeepAllExistingWarehousePolicy(),
+        [12],
+        30,
+        ctx,
+        service_constraints=[ServiceCoverageConstraint(target_hours=12, minimum_coverage=0.9)],
+    )
+    assert result.structuredContent is not None
+    assert result.structuredContent["status"] == "unavailable"
+    assert result.structuredContent["solver_stages"][0]["status"] == "unavailable"
+
+
+def test_exact_policy_runs_one_minimum_cost_stage(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _workspace, ctx, prepared_path, routes, costs = _pmedian_fixture(tmp_path, monkeypatch)
+    real_stage_solver = solve_p_median_stage
+    calls: list[str] = []
+
+    def fake_stage(*args, **kwargs):
+        calls.append(args[4])
+        return real_stage_solver(*args, **kwargs)
+
+    monkeypatch.setattr(facility_tools, "solve_p_median_stage", fake_stage)
+    result = facility_tools.solve_p_median(
+        prepared_path,
+        routes,
+        costs,
+        ExactOpeningPolicy(number_to_open=2),
+        KeepAllExistingWarehousePolicy(),
+        [12],
+        30,
+        ctx,
+    )
+    assert result.structuredContent is not None
+    assert calls == ["minimum_cost"]
+    assert result.structuredContent["status"] == "optimal"
+    assert result.structuredContent["optimality"] == "proven"
+    assert result.structuredContent["selected_number_to_open"] == 2
+    assert result.structuredContent["minimum_number_to_open_proven"] is False
+    assert len(result.structuredContent["solver_stages"]) == 1
+
+
+def test_solver_stages_share_decreasing_remaining_budget(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _workspace, ctx, prepared_path, routes, costs = _pmedian_fixture(tmp_path, monkeypatch)
+    real_stage_solver = solve_p_median_stage
+    remaining: list[float] = []
+
+    def fake_stage(*args, **kwargs):
+        remaining.append(args[9])
+        return real_stage_solver(*args, **kwargs)
+
+    monkeypatch.setattr(facility_tools, "solve_p_median_stage", fake_stage)
+    result = facility_tools.solve_p_median(
+        prepared_path,
+        routes,
+        costs,
+        MinimumFeasibleOpeningPolicy(maximum_number_to_open=3),
+        KeepAllExistingWarehousePolicy(),
+        [12],
+        30,
+        ctx,
+        service_constraints=[ServiceCoverageConstraint(target_hours=12, minimum_coverage=0.9)],
+    )
+    assert result.structuredContent is not None
+    assert len(remaining) == 2
+    assert 0 < remaining[1] < remaining[0] <= 30
+
+
+def test_budget_exhaustion_records_synthetic_stage2_timeout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _workspace, ctx, prepared_path, routes, costs = _pmedian_fixture(tmp_path, monkeypatch)
+    clock = iter([0.0, 0.0, 100.0])
+    monkeypatch.setattr(facility_tools.time, "monotonic", lambda: next(clock))
+    calls: list[str] = []
+
+    def fake_stage(*args, **kwargs):
+        calls.append(args[4])
+        return solve_p_median_stage(*args, **kwargs)
+
+    monkeypatch.setattr(facility_tools, "solve_p_median_stage", fake_stage)
+    result = facility_tools.solve_p_median(
+        prepared_path,
+        routes,
+        costs,
+        MinimumFeasibleOpeningPolicy(maximum_number_to_open=3),
+        KeepAllExistingWarehousePolicy(),
+        [12],
+        30,
+        ctx,
+        service_constraints=[ServiceCoverageConstraint(target_hours=12, minimum_coverage=0.9)],
+    )
+    assert result.structuredContent is not None
+    assert calls == ["minimum_openings"]
+    assert result.structuredContent["status"] == "feasible"
+    assert result.structuredContent["optimality"] == "feasible_only"
+    assert result.structuredContent["minimum_number_to_open_proven"] is True
+    assert [stage["status"] for stage in result.structuredContent["solver_stages"]] == [
+        "optimal",
+        "timeout",
+    ]
 
 
 def test_scenario_validation_stops_before_loading_missing_workspace_inputs() -> None:

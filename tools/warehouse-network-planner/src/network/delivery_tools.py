@@ -105,7 +105,7 @@ def _load_assignment_coverage_result(
             "scenario",
             scenario.input_identity,
         )
-    facility = _runtime().load_model(resource_ref, "facility_location_solution.v3", PMedianSolution)
+    facility = _runtime().load_model(resource_ref, "facility_location_solution.v4", PMedianSolution)
     if facility.assignment is None:
         raise McpResourceContractError("coverage_assignment_required")
     if facility.status not in {"optimal", "feasible"}:

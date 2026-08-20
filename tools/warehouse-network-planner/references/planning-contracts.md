@@ -14,7 +14,7 @@ Every calculation starts from immutable MCP Resources:
   one explicit current or candidate facility set.
 - `network_assignment_comparison.v2`: deltas between compatible baseline, scenario and
   facility-location results.
-- `facility_location_solution.v3`: target, selected candidates, exact-solver scope,
+- `facility_location_solution.v4`: target, selected candidates, two-stage solver stages,
   assumptions and its assignment reference.
 - `network_comparison_map_bundle.v2` and `network_planning_report_markdown.v2`: the
   bounded map-card projection and final Markdown delivery contracts.

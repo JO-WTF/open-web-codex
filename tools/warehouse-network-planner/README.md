@@ -51,7 +51,7 @@ Data Tool 会把用户输入中完整的起点、终点、距离、时长与来�
 
 `plan_cost_matrix` 的 `cost_policy` 是当前唯一成本 fallback 选择：`kind=explicit` 接受显式分层数值规则；`kind=observed_quote_mean` 由 Planner 直接读取完整 prepared input，对当前所需层的全部标准化报价按 `price_per_vehicle / vehicle_capacity` 求算术均值，并把 `warehouse_quote_mean_calculation.v1` 的 prepared input identity、完整报价总数、分层报价数、币种、公式、均值和 Tool 版本作为 bounded provenance 返回并绑定到 `cost_matrix.v3`。用户明确要求脚本时，必须把同一 typed evidence 写入 calculations 目录并传 `quote_mean_evidence_relative_path`；Planner 会从完整输入重算并校验，脚本 JSON 不是第二份业务真相。该计算不读取 preview，也不把完整报价行送入模型上下文。
 
-`solve_p_median` 的 `opening_policy` 支持 `exact` 和一次有界的 `minimum_feasible` 搜索。后者在一个总 `time_limit_seconds` 内从 0 个候选仓开始，返回每个仓数的 typed 可行性、首个可行仓数和最终 coverage，避免由 Agent 循环调用多个求解 Tool。报价均值外推且距离成本为零只是敏感性方案；没有仓租、建设、容量或吞吐成本时，结果不得称为经济意义上的全局最优。
+`solve_p_median` 的 `opening_policy` 支持 `exact` 和一次有界的 `minimum_feasible` 两阶段求解。后者在一个总 `time_limit_seconds` 内先最小化新增仓数，再在该仓数下最小化成本，返回最多两个 typed `solver_stages`、`selected_number_to_open` 和最终 coverage，避免由 Agent 循环调用多个求解 Tool。报价均值外推且距离成本为零只是敏感性方案；没有仓租、建设、容量或吞吐成本时，结果不得称为经济意义上的全局最优。
 
 地图数据合同只发布仓库、需求城市、分配关系以及逐城市距离、时长和成本等原始事实，不包含
 标题、图层、颜色、大小、标签、悬浮信息或图例。Network Skill 根据用户当次自然语言要求，

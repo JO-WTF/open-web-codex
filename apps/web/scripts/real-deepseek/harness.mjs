@@ -781,7 +781,12 @@ async function runSelfTests() {
       {
         status: "optimal",
         opening_policy: { kind: "minimum_feasible" },
-        first_feasible_number_to_open: 1,
+        selected_number_to_open: 1,
+        minimum_number_to_open_proven: true,
+        solver_stages: [
+          { kind: "minimum_openings", status: "optimal", optimality: "proven" },
+          { kind: "minimum_cost", status: "optimal", optimality: "proven" },
+        ],
         coverage: [{
           target_hours: serviceTargetHours,
           demand_weighted_coverage_rate: 0.9,

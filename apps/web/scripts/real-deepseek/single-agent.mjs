@@ -14,7 +14,12 @@ export function isMinimumFeasibleSolution(result, serviceTargetHours) {
   return (
     ["optimal", "feasible"].includes(result?.status) &&
     result?.opening_policy?.kind === "minimum_feasible" &&
-    Number.isInteger(result?.first_feasible_number_to_open) &&
+    Number.isInteger(result?.selected_number_to_open) &&
+    typeof result?.minimum_number_to_open_proven === "boolean" &&
+    Array.isArray(result?.solver_stages) &&
+    result.solver_stages.length <= 2 &&
+    result.solver_stages.some((stage) => stage?.kind === "minimum_openings") &&
+    result.solver_stages.some((stage) => stage?.kind === "minimum_cost") &&
     typeof metric?.demand_weighted_coverage_rate === "number" &&
     metric.demand_weighted_coverage_rate >= 0.9
   );

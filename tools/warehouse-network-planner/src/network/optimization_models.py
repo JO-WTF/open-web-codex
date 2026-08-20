@@ -5,7 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from supply_chain_planner.network.models import PlanningInputIdentity
 
 
@@ -198,16 +198,41 @@ class ServiceCoverageConstraint(OptimizationModel):
     minimum_coverage: float = Field(gt=0, le=1)
 
 
-class PMedianSearchAttempt(OptimizationModel):
-    number_to_open: int = Field(ge=0)
+class PMedianSolverStage(OptimizationModel):
+    kind: Literal["minimum_openings", "minimum_cost"]
     status: Literal["optimal", "feasible", "timeout", "infeasible", "unavailable"]
     optimality: Literal["proven", "feasible_only", "not_available"]
+    selected_number_to_open: int | None = Field(default=None, ge=0)
     objective_value: float | None = Field(default=None, ge=0)
+    best_bound: float | None = None
     coverage: list[CoverageMetricSummary] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_stage_outcome(self):
+        expected = {
+            "optimal": "proven",
+            "feasible": "feasible_only",
+            "timeout": "not_available",
+            "infeasible": "proven",
+            "unavailable": "not_available",
+        }[self.status]
+        if self.optimality != expected:
+            raise ValueError("solver_stage_optimality_mismatch")
+        if self.status in {"optimal", "feasible"}:
+            if self.selected_number_to_open is None or self.objective_value is None:
+                raise ValueError("solver_stage_solution_fields_required")
+        elif (
+            self.selected_number_to_open is not None
+            or self.objective_value is not None
+            or self.best_bound is not None
+            or self.coverage
+        ):
+            raise ValueError("solver_stage_failure_fields_forbidden")
+        return self
 
 
 class PMedianSolution(OptimizationModel):
-    schema_version: Literal["facility_location_solution.v3"] = "facility_location_solution.v3"
+    schema_version: Literal["facility_location_solution.v4"] = "facility_location_solution.v4"
     status: Literal["optimal", "feasible", "timeout", "infeasible", "unavailable"]
     active_warehouse_ids: list[str]
     opened_candidate_ids: list[str]
@@ -219,10 +244,57 @@ class PMedianSolution(OptimizationModel):
     service: list[ServiceMetric] = Field(default_factory=list)
     optimality: Literal["proven", "feasible_only", "not_available"]
     opening_policy: OpeningPolicySelection
-    first_feasible_number_to_open: int | None = Field(default=None, ge=0)
-    search_attempts: list[PMedianSearchAttempt] = Field(default_factory=list)
+    selected_number_to_open: int | None = Field(default=None, ge=0)
+    minimum_number_to_open_proven: bool = False
+    solver_stages: list[PMedianSolverStage] = Field(default_factory=list, max_length=2)
     message: str | None = None
     input_identity: PlanningInputIdentity
+
+    @model_validator(mode="after")
+    def validate_selected_count(self):
+        if self.selected_number_to_open is not None and self.selected_number_to_open != len(
+            self.opened_candidate_ids
+        ):
+            raise ValueError("selected_number_to_open_mismatch")
+        if self.assignment is None and self.selected_number_to_open is not None:
+            raise ValueError("selected_number_to_open_requires_assignment")
+        if self.assignment is not None and self.selected_number_to_open is None:
+            raise ValueError("selected_number_to_open_required")
+        if not self.solver_stages:
+            raise ValueError("solver_stages_required")
+        if self.assignment is not None:
+            if (self.status, self.optimality) not in {
+                ("optimal", "proven"),
+                ("feasible", "feasible_only"),
+            }:
+                raise ValueError("solution_status_optimality_mismatch")
+        else:
+            if (self.status, self.optimality) not in {
+                ("timeout", "not_available"),
+                ("infeasible", "not_available"),
+                ("unavailable", "not_available"),
+            }:
+                raise ValueError("solution_status_optimality_mismatch")
+        if self.assignment is None and (
+            self.active_warehouse_ids
+            or self.opened_candidate_ids
+            or self.closed_existing_ids
+            or self.cost is not None
+            or self.objective_value is not None
+            or self.best_bound is not None
+            or self.service
+        ):
+            raise ValueError("unsolved_solution_fields_forbidden")
+        if self.minimum_number_to_open_proven:
+            first = self.solver_stages[0]
+            if not (
+                self.opening_policy.kind == "minimum_feasible"
+                and first.kind == "minimum_openings"
+                and first.status == "optimal"
+                and first.optimality == "proven"
+            ):
+                raise ValueError("minimum_number_proof_invalid")
+        return self
 
 
 class ComparableNetworkView(OptimizationModel):

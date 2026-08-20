@@ -399,6 +399,9 @@ async def _run_network_s3_then_s2(
             facility_ref = facility_result.structuredContent["resource_ref"]
             facility = await _read_resource(session, facility_ref)
             assert facility["status"] == "optimal"
+            assert facility["selected_number_to_open"] == 2
+            assert facility["minimum_number_to_open_proven"] is False
+            assert [stage["kind"] for stage in facility["solver_stages"]] == ["minimum_cost"]
             assert facility["opened_candidate_ids"] == EXPECTED_OPENED
             assert facility["closed_existing_ids"] == []
             assert len(facility["active_warehouse_ids"]) == 13

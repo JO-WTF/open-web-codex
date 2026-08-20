@@ -19,11 +19,12 @@ from supply_chain_planner.network.optimization_models import (
     ExactOpeningPolicy,
     PMedianRequest,
     PMedianSolution,
+    PMedianSolverStage,
     ScenarioSpec,
 )
 from supply_chain_planner.network.solver import (
-    enumerate_p_median,
     service_metrics,
+    solve_p_median_stage,
     summarize_assignment_cost,
 )
 
@@ -42,18 +43,21 @@ build_haversine_route_matrix = _with_identity(build_haversine_route_matrix)
 
 def test_p_median_keeps_fixed_existing_warehouses_and_opens_requested_candidates() -> None:
     case = network_case()
-    best, _, timed_out = enumerate_p_median(
+    outcome = solve_p_median_stage(
         case.demand,
         case.warehouses,
         route_matrix(case),
         complete_cost_matrix(case),
+        stage_kind="minimum_cost",
         number_to_open=1,
+        maximum_number_to_open=None,
         fixed_existing_ids={"center-a", "cross-b"},
         optional_existing_ids=set(),
         time_limit_seconds=5,
     )
 
-    assert timed_out is False
+    best = outcome.result
+    assert outcome.status == "optimal"
     assert best is not None
     assert {"center-a", "cross-b"}.issubset(best.active_warehouse_ids)
     assert best.opened_candidate_ids == ["candidate-c"]
@@ -65,12 +69,14 @@ def test_p_median_requires_complete_explicit_existing_policy() -> None:
     case = network_case()
 
     with pytest.raises(ValueError, match="existing_policy_incomplete"):
-        enumerate_p_median(
+        solve_p_median_stage(
             case.demand,
             case.warehouses,
             route_matrix(case),
             complete_cost_matrix(case),
+            stage_kind="minimum_cost",
             number_to_open=1,
+            maximum_number_to_open=None,
             fixed_existing_ids=set(),
             optional_existing_ids=set(),
             time_limit_seconds=5,
@@ -102,18 +108,21 @@ def test_sample2_opens_exactly_two_candidates_with_existing_sites_explicitly_fix
         warehouse.warehouse_id for warehouse in fixture.warehouses if warehouse.is_existing
     }
 
-    result, _, timed_out = enumerate_p_median(
+    outcome = solve_p_median_stage(
         fixture.demand,
         fixture.warehouses,
         routes,
         costs,
+        stage_kind="minimum_cost",
         number_to_open=2,
+        maximum_number_to_open=None,
         fixed_existing_ids=fixed_existing,
         optional_existing_ids=set(),
         time_limit_seconds=10,
     )
 
-    assert timed_out is False
+    result = outcome.result
+    assert outcome.status == "optimal"
     assert result is not None
     assert len(result.opened_candidate_ids) == 2
     assert fixed_existing.issubset(result.active_warehouse_ids)
@@ -130,6 +139,16 @@ def test_sample2_opens_exactly_two_candidates_with_existing_sites_explicitly_fix
         service=service_metrics(result.assignment, [6, 12, 18]),
         optimality="proven",
         opening_policy=ExactOpeningPolicy(number_to_open=2),
+        selected_number_to_open=2,
+        solver_stages=[
+            PMedianSolverStage(
+                kind="minimum_cost",
+                status="optimal",
+                optimality="proven",
+                selected_number_to_open=2,
+                objective_value=result.objective_value,
+            )
+        ],
     )
     assert solution.cost is not None
     assert solution.cost.complete is True
@@ -140,6 +159,32 @@ def test_sample2_opens_exactly_two_candidates_with_existing_sites_explicitly_fix
     assert [metric.target_hours for metric in solution.service] == [6, 12, 18]
 
 
+def test_solver_stage_and_solution_validators_reject_semantic_mismatch() -> None:
+    with pytest.raises(ValidationError, match="solver_stage_failure_fields_forbidden"):
+        PMedianSolverStage(
+            kind="minimum_cost",
+            status="timeout",
+            optimality="not_available",
+            selected_number_to_open=1,
+            objective_value=1,
+        )
+    with pytest.raises(ValidationError, match="solution_status_optimality_mismatch"):
+        PMedianSolution(
+            status="timeout",
+            active_warehouse_ids=[],
+            opened_candidate_ids=[],
+            closed_existing_ids=[],
+            optimality="proven",
+            opening_policy=ExactOpeningPolicy(number_to_open=0),
+            solver_stages=[
+                PMedianSolverStage(
+                    kind="minimum_cost",
+                    status="timeout",
+                    optimality="not_available",
+                )
+            ],
+            input_identity=TEST_INPUT_IDENTITY,
+        )
 def test_planning_objective_and_existing_policy_have_no_hidden_defaults() -> None:
     with pytest.raises(ValidationError):
         ScenarioSpec()
