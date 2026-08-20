@@ -76,6 +76,10 @@ binding 还必须来自同一 trusted shared build fingerprint。Browser
 只接收/提交 package ID，不能提交服务器路径。存在可用包时，新建 Thread 必须显式选择一个包；
 没有默认包、Prompt 分类或显示名推断。Task 持久该选择，Run 与 Turn 复用它。
 
+当前本地迁移实测把两个仓网包和 meeting 包的 package-local Tool 环境从约 12.2 GiB 历史 build
+收敛为 descriptor-only package 根与 405 MiB shared build store；未变化 Tool 的热 prepare 为 1 秒。
+这些目录都是 SDK-owned disposable build/cache，不包含 Workspace、Profile、数据库或用户业务文件。
+
 安装表以 `(profile_id, package_id)` 为主键，只持久 `desired_active`、source/configured revision、
 精确 managed Skill/child Role ID 与安全 failure code，不持久或伪造 Runtime ready。所有 available
 包在 clean Profile 建立 desired 安装，数据库 desired state 在冷启动时权威收敛。每个包只有一个

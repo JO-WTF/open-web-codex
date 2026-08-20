@@ -18,8 +18,8 @@
 多用户产品或完整 hardening 矩阵已经完成。独立单 Agent 包已有静态组合、共享 Tool、package-keyed
 Root config 和 Web 显式选择的 E1/E2 证据；本轮将真实 DeepSeek 入口拆为多 Agent 业务、单 Agent
 业务和独立 Tool capability 三个门，并将成本证据收敛为 typed schema、选址收敛为
-`minimum_feasible` 有界求解。新的单 Agent typed-evidence 付费复跑仍待完成，不能用旧 E3 结果替代
-新合同证据；该门复用既有 Profile，不把它扩大成 clean Profile E4。
+`minimum_feasible` 有界求解。新的自然语言多 Agent 与单 Agent 业务门均已用
+`deepseek-v4-flash` 完成真实付费复跑；该门复用既有 Profile，不把它扩大成 clean Profile E4。
 
 阶段二 Copilot SDK 已提供 `copilot init` 源码脚手架和 `copilot validate` 静态组合
 验证；`copilot dev` 提供隔离 discovery probe：通过官方 app-server 握手、
@@ -61,7 +61,7 @@ SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，�
 | 维度 | 当前等级 |
 | --- | --- |
 | 真实多 Agent 运行 | 多 Agent 仓网包的阶段一 normal path 已通过真实 Web E2E |
-| 单 Agent 仓网运行 | 独立 package、Root config、共享 Tool 与 Web 选择合同已通过静态/focused gate；当前入口与 typed evidence/`minimum_feasible` 合同已收敛，付费真实复跑待完成，clean Profile E4 未运行 |
+| 单 Agent 仓网运行 | 独立 package、Root config、共享 Tool 与 Web 选择合同已通过静态/focused gate；自然语言真实门已完成 580 条报价 evidence 绑定与 `minimum_feasible` 90% 覆盖，clean Profile E4 未运行 |
 | Root 用户输入与 execution projection | 阶段一 normal path 可用；pending approval 刷新恢复已通过 |
 | Tool/Skill SDK 与 Studio | Copilot 源码 `init`/`validate`、通用环境 `prepare`、隔离 `dev` 与本地 fixture `test` 存在；旧 Web Studio 已删除 |
 | Agent/Supervisor 创作 | 旧 Web authoring 已删除；阶段一仅直接编辑 Profile Skill/Role |
@@ -101,6 +101,12 @@ child、准备输入交接、12h baseline、只新增 `WH-CANDIDATE-BALIKPAPAN` 
 failure。严格的 Tool 次数、顺序、Network Resource inventory 和 topology 只属于
 `real-platform-e2e.mjs` 的 fake/deterministic 合同门。临时 Provider、Run、Workspace、Project 与原
 Provider 选择在终态清理。
+
+当前自然语言复跑结果：多 Agent 门 26 个有效 Chat 轮次、98.407 秒，完成 Data/Network child、
+12h baseline、只新增 Balikpapan 的两种有限变化率与地图；单 Agent 门 23 个有效 Chat 轮次、
+97.383 秒，以 580 条完整报价生成并绑定脚本 evidence，选择 Balikpapan 与 Jambi，12h 需求加权
+覆盖率为 `0.9005214995572174`。deterministic multi-agent Gate 1/2 均通过。模型在个别真实轮次中
+出现可见的参数纠正或无害探索，但没有不可见 wire Tool、已接受 Tool 后断流、权限/身份失败或清理失败。
 
 Chat 与 Responses 共用同一个 Thread/Turn/ToolRouter/Agent/Skill/MCP 主干。Chat 仅在 wire 边界把
 canonical Responses request 转为 Chat Completions，并把 SSE 恢复为 `ResponseEvent`；当前 Turn 的
@@ -215,20 +221,19 @@ Network route/baseline/coverage → create_network_map_card(completed) → close
 deterministic multi-agent gate 在 clean service restart 后连续两次通过，未发现 shell/tool loop 或
 残留 Run/Workspace 冲突。
 
-#### D7：真实 DeepSeek 单 Agent 全量报价与 90% 选址门（合同已更新，付费复跑待完成）
+#### D7：真实 DeepSeek 单 Agent 全量报价与 90% 选址门（当前合同已通过）
 
 `test:e2e:real-deepseek-single-agent` 固定选择 `warehouse-network-single-agent`，不运行或允许
-`spawn_agent`。旧 E3 记录曾在一次 Root Turn 中完成 `discover_workspace_sources → inspect_workspace_sources →
+`spawn_agent`。当前自然语言门在一次 Root Turn 中完成 `discover_workspace_sources → inspect_workspace_sources →
 prepare_network_input → prepare_route_matrix → plan_cost_matrix → solve_p_median`，collaboration 与
 mailbox timeline 均为空，并在 `outputs/warehouse-network/calculations/` create-new 执行 Python
-脚本；这些是历史证据，不替代当前入口的付费复跑。
+脚本和 typed evidence。
 
 成本 Tool 以 `warehouse_quote_mean_calculation.v1` typed evidence 校验并绑定 `observed_quote_mean`；
 业务门验收 `opening_policy.kind=minimum_feasible` 的 typed 结果和 90% 目标，不把模型采用的
-Tool 次数或顺序当作业务成功条件。此前一次结果选择 `WH-CANDIDATE-BALIKPAPAN` 与 `WH-CANDIDATE-JAMBI`，12h 需求加权覆盖率为
+Tool 次数或顺序当作业务成功条件。当前结果选择 `WH-CANDIDATE-BALIKPAPAN` 与 `WH-CANDIDATE-JAMBI`，12h 需求加权覆盖率为
 `0.9005214995572174`。门禁从 `solve_p_median` 的 bounded typed `coverage` 断言数值，不读取最终
-Assistant 文本判定成功。旧门的付费运行记录与本次合同变更分开保存；当前 typed evidence/入口拆分的
-真实复跑仍待完成，不能把旧门的结果当作新门通过。成本均值外推是敏感性方案，缺少仓租、建设、容量和吞吐成本时不称为经济全局最优。首次启用或 source revision 变化仍需要正式冷启动，
+Assistant 文本判定成功。成本均值外推是敏感性方案，缺少仓租、建设、容量和吞吐成本时不称为经济全局最优。首次启用或 source revision 变化仍需要正式冷启动，
 测试在 `restartRequired=true` 时报告 typed `copilot_restart_required`，不会继续到 Task 503。单 Agent
 没有可预先 spawn 的 child Role，因此安装投影在 Task 前保持 `Configured`；当前 revision 且
 状态保持 `Configured` 时允许创建 Task，Root/child 的真实 MCP 执行能力由随后完整业务 Turn 证明，
@@ -470,7 +475,7 @@ malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除�
 | Package Compiler | 无当前生产 owner；阶段二目标文档保留设计输入 | 不再是阶段一能力 |
 | Profile Installation | Platform 从显式可信应用根发现一级 Copilot 目录，按 `(Profile, package)` 持久 desired state、configured revision、managed Skill/child Role IDs 与安全 failure；Browser 只传 package ID；冷启动在 app-server 前合并收敛或清理精确 native destinations | E2 focused + 既有真实 PostgreSQL lifecycle；新的多 package schema/compile gate 已通过，完整双包 PostgreSQL/Runtime restart gate 待补。没有 Catalog/Release/Marketplace、多用户产品流或动态热切换 |
 | Runtime discovery/readiness | 当前 instance 每次 status 最多调用一次官方 `skills/list(forceReload)`，按 package 声明 Skill 交集投影 `Installed/Configured/Unavailable/Failed`；不再有 Copilot `Ready` 或 MCP inventory 字段，Role/MCP 可执行性由真实 Task/child MCP completion gate 证明 | built-in native gate E2；无 DB ready |
-| Copilot / Tool SDK | Copilot `init` 生成最小组合源码；一个 package 只声明一个 `[root]`。`validate` 支持 package-local Tool 或根级 `tool.toml` 引用，shared Tool 必须经显式 registry；`prepare` 在 Tool/Profile/Workspace 外准备依赖并生成 typed descriptor，`dev`/`test` 保留 official Runtime normal-case gate。checked-in meeting 与单/多 Agent 仓网包复用同一合同 | E2 既有本地 discovery/normal-case gate；92 项 SDK 单测和三个 checked-in package 的共享 registry validate 已通过。没有生产模型质量验收、Web Studio 或 Marketplace |
+| Copilot / Tool SDK | Copilot `init` 生成最小组合源码；一个 package 只声明一个 `[root]`。`validate` 支持 package-local Tool 或根级 `tool.toml` 引用，shared Tool 必须经显式 registry；`prepare` 在 Tool/Profile/Workspace 外准备依赖并生成 typed descriptor，`dev`/`test` 保留 official Runtime normal-case gate。checked-in meeting 与单/多 Agent 仓网包复用同一合同 | E2 既有本地 discovery/normal-case gate；114 项 SDK 单测和三个 checked-in package 的共享 registry validate 已通过。没有生产模型质量验收、Web Studio 或 Marketplace |
 | Skill 创作 | 阶段一仅支持直接编辑 Profile Skill；公开 SDK/Web 创作后移 | 无阶段一产品流 |
 | Agent/Supervisor Studio | 旧 Settings/Sidebar Studio 已删除；原生 Profile Agent 配置保留 | 无阶段一 authoring 产品流 |
 | Copilot Builder | 没有 Web 创作入口；现有 Profile 安装状态 API 不是 Builder、Catalog 或 Marketplace | E0 |
