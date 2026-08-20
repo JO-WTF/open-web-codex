@@ -16,16 +16,8 @@ id = "warehouse-data-preparation"
 path = "skills/warehouse-data-preparation"
 
 [[skills]]
-id = "warehouse-single-route-planning"
-path = "skills/warehouse-single-route-planning"
-
-[[skills]]
-id = "warehouse-single-network-analysis"
-path = "skills/warehouse-single-network-analysis"
-
-[[skills]]
-id = "warehouse-single-network-optimization"
-path = "skills/warehouse-single-network-optimization"
+id = "warehouse-single-network-planning"
+path = "skills/warehouse-single-network-planning"
 
 [[skills]]
 id = "warehouse-single-map-delivery"

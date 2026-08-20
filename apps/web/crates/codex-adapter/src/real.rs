@@ -2148,7 +2148,7 @@ mod tests {
                     main_prompt: None,
                 },
                 ThreadSkillConfig {
-                    name: "warehouse-route-planning".to_string(),
+                    name: "warehouse-network-planning".to_string(),
                     enabled: false,
                     main_prompt: None,
                 },
@@ -2169,7 +2169,7 @@ mod tests {
                     "skills.config": [
                         { "name": "warehouse-supervisor", "enabled": true },
                         { "name": "warehouse-data", "enabled": false },
-                        { "name": "warehouse-route-planning", "enabled": false },
+                        { "name": "warehouse-network-planning", "enabled": false },
                     ],
                 },
             })

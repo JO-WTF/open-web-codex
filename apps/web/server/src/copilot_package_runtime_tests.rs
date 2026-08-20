@@ -35,11 +35,9 @@ use uuid::Uuid;
 
 use crate::copilot_package::CopilotPackageAssets;
 
-const WAREHOUSE_SKILLS: [&str; 6] = [
+const WAREHOUSE_SKILLS: [&str; 4] = [
     "warehouse-data",
-    "warehouse-route-planning",
-    "warehouse-network-analysis",
-    "warehouse-network-optimization",
+    "warehouse-network-planning",
     "warehouse-map-delivery",
     "warehouse-supervisor",
 ];
@@ -1404,16 +1402,8 @@ models = [{{ model_id = "mock-model", context_window = 25600, supports_search_to
             "仅供仓网 Supervisor 原生创建的 data_agent 使用",
         ),
         (
-            "warehouse-route-planning",
-            "仅供 network_agent 使用。为精确仓网输入准备",
-        ),
-        (
-            "warehouse-network-analysis",
-            "仅供 network_agent 使用。评估当前仓网",
-        ),
-        (
-            "warehouse-network-optimization",
-            "仅供 network_agent 使用。用户明确要求新增仓",
+            "warehouse-network-planning",
+            "仅供 network_agent 使用。准备路线与成本",
         ),
         (
             "warehouse-map-delivery",
@@ -1509,20 +1499,14 @@ models = [{{ model_id = "mock-model", context_window = 25600, supports_search_to
     assert!(
         root_developer_text.contains("### Available skills")
             && root_developer_text.contains("- warehouse-supervisor: ")
-            && [
-                "warehouse-data",
-                "warehouse-route-planning",
-                "warehouse-network-analysis",
-                "warehouse-network-optimization",
-                "warehouse-map-delivery",
-            ]
+            && ["warehouse-data", "warehouse-network-planning", "warehouse-map-delivery"]
             .iter()
             .all(|skill| !root_developer_text.contains(&format!("- {skill}: "))),
         "the multi-Agent Root exposed task Skills outside its declared scope: {root_developer_text}",
     );
     assert!(
         !root_user_text.contains("<name>warehouse-data</name>")
-            && !root_user_text.contains("<name>warehouse-route-planning</name>"),
+            && !root_user_text.contains("<name>warehouse-network-planning</name>"),
         "unselected task Skills leaked their bodies into Root context: {root_user_text}",
     );
 
@@ -1589,17 +1573,10 @@ models = [{{ model_id = "mock-model", context_window = 25600, supports_search_to
     assert_child_skill_policy(
         &network_request,
         &[
-            ("warehouse-route-planning", "仅供 network_agent 使用"),
-            ("warehouse-network-analysis", "仅供 network_agent 使用"),
-            ("warehouse-network-optimization", "仅供 network_agent 使用"),
+            ("warehouse-network-planning", "仅供 network_agent 使用"),
             ("warehouse-map-delivery", "仅供 network_agent 使用"),
         ],
-        &[
-            "warehouse-route-planning",
-            "warehouse-network-analysis",
-            "warehouse-network-optimization",
-            "warehouse-map-delivery",
-        ],
+        &["warehouse-network-planning", "warehouse-map-delivery"],
     );
     let network_mcp = adapter
         .query_profile(ProfileQuery::McpServers {

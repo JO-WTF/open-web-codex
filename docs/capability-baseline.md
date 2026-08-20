@@ -385,14 +385,14 @@ Slice 3A 只审计 Codex 原生路径并运行定向测试，没有修改 `codex
 这些证据把 Skill/MCP 热刷新与 Role 应用语义提升到 E1。Slice 3B.1 已进一步实现启动前
 Profile seed 与显式应用资产 composition：
 
-- checked-in `copilots/warehouse-network` 提供 Root Supervisor、Data、Network
-  三项 Skill 默认内容和 `data_agent`、`network_agent` 两项原生 Role 默认配置；
+- checked-in `copilots/warehouse-network` 提供 Supervisor、Data、Network planning、Map delivery
+  四项 Skill 默认内容和 `data_agent`、`network_agent` 两项原生 Role 默认配置；
 - checked-in `copilots/warehouse-network-single-agent` 是不同 package ID 的独立 Copilot；它用
   一个 Root Agent 直接启用相同仓网 Tool policy 并关闭 multi-agent。该 Root Agent 配置不会作为
   child Role 安装；当前证据为 package validate、Root config projection 和 focused contract；
 - Profile Host 只接受 native Skill/Role 两种 typed startup destination，并显式区分普通
   `Seed` 与 package-managed `Managed`。普通 seed 仍只在缺失时 create-new 并保留已存在内容；
-  多 Agent 仓网包使用其三项 Skill 和两项 Role 声明 ID，部署升级在 Runtime 启动前只在
+  多 Agent 仓网包使用其四项 Skill 和两项 Role 声明 ID，部署升级在 Runtime 启动前只在
   内容漂移时原子更新。duplicate spec 在任何写入前拒绝；symlink、目录、逃逸和非法输入失败；
   `config.toml`、用户其他 Skill/Role 与 Workspace 不受影响。6 项单测通过；
 - 仓网验收 Profile 通过 Codex 官方进程级 feature override，在首次请求前关闭

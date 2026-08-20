@@ -27,15 +27,7 @@ name = "warehouse-data-preparation"
 enabled = true
 
 [[skills.config]]
-name = "warehouse-single-route-planning"
-enabled = true
-
-[[skills.config]]
-name = "warehouse-single-network-analysis"
-enabled = true
-
-[[skills.config]]
-name = "warehouse-single-network-optimization"
+name = "warehouse-single-network-planning"
 enabled = true
 
 [[skills.config]]

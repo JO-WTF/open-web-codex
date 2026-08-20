@@ -16,8 +16,7 @@ Root 没有仓网 MCP 数据面；上传文件已由 Workspace 授权并交给 D
 ## Child Skill 选择
 
 - Data child 的 `items` 必须包含精确 `$warehouse-data` Skill item 和一个任务 Text item。
-- 12h 基线与地图的 Network child `items` 必须依次包含 `$warehouse-route-planning`、`$warehouse-network-analysis`、`$warehouse-map-delivery` Skill item，再包含一个任务 Text item；不加载 optimization Skill。
-- 只有设施变化或选址求解才额外包含 `$warehouse-network-optimization` Skill item。
+- 12h 基线、设施变化和选址的 Network child `items` 必须包含 `$warehouse-network-planning` Skill item；地图任务再包含 `$warehouse-map-delivery` Skill item；最后放一个任务 Text item。
 - 创建 Data child 必须显式传 `agent_type="data_agent"`，创建 Network child 必须显式传 `agent_type="network_agent"`；不得省略 `agent_type` 而产生 default child，也不得让一个 child 再创建另一个业务 child。Data 与 Network 都必须是当前 Root 的直接 child。
 - Skill item 的 `path` 必须按当前 Root catalog 的 `### Skill roots` 展开对应短 locator，得到同一 entry 的绝对 `SKILL.md` 路径；不得改名、跨 root 查找或构造不存在的路径。新 child Turn 没有精确结构化 Skill item 时返回 `needs_context` 并停止；不得让 child 用 `read_mcp_resource`、shell、历史 Skill 内容或路径猜测补读正文。
 

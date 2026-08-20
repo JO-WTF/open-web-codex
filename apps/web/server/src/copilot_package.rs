@@ -1641,14 +1641,8 @@ mod tests {
         include_str!("../../../../copilots/warehouse-network/skills/warehouse-supervisor/SKILL.md");
     const DATA_SKILL: &str =
         include_str!("../../../../copilots/warehouse-network/skills/warehouse-data/SKILL.md");
-    const ROUTE_SKILL: &str = include_str!(
-        "../../../../copilots/warehouse-network/skills/warehouse-route-planning/SKILL.md"
-    );
-    const ANALYSIS_SKILL: &str = include_str!(
-        "../../../../copilots/warehouse-network/skills/warehouse-network-analysis/SKILL.md"
-    );
-    const OPTIMIZATION_SKILL: &str = include_str!(
-        "../../../../copilots/warehouse-network/skills/warehouse-network-optimization/SKILL.md"
+    const PLANNING_SKILL: &str = include_str!(
+        "../../../../copilots/warehouse-network/skills/warehouse-network-planning/SKILL.md"
     );
     const MAP_DELIVERY_SKILL: &str = include_str!(
         "../../../../copilots/warehouse-network/skills/warehouse-map-delivery/SKILL.md"
@@ -1711,7 +1705,7 @@ mod tests {
         assert!(SUPERVISOR_SKILL.contains(
             "权限拒绝、身份不一致、取消、超时、外部失败、能力不可用或 Tool 已执行的终态失败必须如实报告并停止当前请求"
         ));
-        assert!(ANALYSIS_SKILL.contains("缺少输入或 Tool 终态失败时返回 typed 结果并停止"));
+        assert!(PLANNING_SKILL.contains("infeasible"));
     }
 
     #[test]
@@ -1725,10 +1719,8 @@ mod tests {
         assert!(!SUPERVISOR_SKILL.contains("`list_agents`"));
         assert!(!SUPERVISOR_SKILL.contains("`followup_task`"));
         assert!(SUPERVISOR_SKILL.contains("`$warehouse-data`"));
-        assert!(SUPERVISOR_SKILL.contains("`$warehouse-route-planning`"));
-        assert!(SUPERVISOR_SKILL.contains("`$warehouse-network-analysis`"));
+        assert!(SUPERVISOR_SKILL.contains("`$warehouse-network-planning`"));
         assert!(SUPERVISOR_SKILL.contains("`$warehouse-map-delivery`"));
-        assert!(SUPERVISOR_SKILL.contains("`$warehouse-network-optimization`"));
     }
 
     #[test]
@@ -1812,16 +1804,8 @@ id = "warehouse-data"
 path = "skills/warehouse-data"
 
 [[skills]]
-id = "warehouse-route-planning"
-path = "skills/warehouse-route-planning"
-
-[[skills]]
-id = "warehouse-network-analysis"
-path = "skills/warehouse-network-analysis"
-
-[[skills]]
-id = "warehouse-network-optimization"
-path = "skills/warehouse-network-optimization"
+id = "warehouse-network-planning"
+path = "skills/warehouse-network-planning"
 
 [[skills]]
 id = "warehouse-map-delivery"
@@ -1862,18 +1846,8 @@ runtime = "tools/maps/runtime.toml"
             false,
         );
         write_file(
-            &package.join("skills/warehouse-route-planning/SKILL.md"),
-            ROUTE_SKILL,
-            false,
-        );
-        write_file(
-            &package.join("skills/warehouse-network-analysis/SKILL.md"),
-            ANALYSIS_SKILL,
-            false,
-        );
-        write_file(
-            &package.join("skills/warehouse-network-optimization/SKILL.md"),
-            OPTIMIZATION_SKILL,
+            &package.join("skills/warehouse-network-planning/SKILL.md"),
+            PLANNING_SKILL,
             false,
         );
         write_file(
@@ -2056,17 +2030,7 @@ runtime = "tools/maps/runtime.toml"
                     main_prompt: None,
                 },
                 ThreadSkillConfig {
-                    name: "warehouse-route-planning".to_string(),
-                    enabled: false,
-                    main_prompt: None,
-                },
-                ThreadSkillConfig {
-                    name: "warehouse-network-analysis".to_string(),
-                    enabled: false,
-                    main_prompt: None,
-                },
-                ThreadSkillConfig {
-                    name: "warehouse-network-optimization".to_string(),
+                    name: "warehouse-network-planning".to_string(),
                     enabled: false,
                     main_prompt: None,
                 },
@@ -2402,12 +2366,7 @@ runtime = "tools/maps/runtime.toml"
             .collect::<Vec<_>>();
         assert_eq!(
             network_skill_names,
-            vec![
-                "warehouse-route-planning",
-                "warehouse-network-analysis",
-                "warehouse-network-optimization",
-                "warehouse-map-delivery",
-            ]
+            vec!["warehouse-network-planning", "warehouse-map-delivery",]
         );
         assert!(!data.to_string().contains("__OPEN_WEB_CODEX_"));
         assert!(!network.to_string().contains("__OPEN_WEB_CODEX_"));
@@ -2415,7 +2374,7 @@ runtime = "tools/maps/runtime.toml"
         assert!(network.get("plugins").is_none());
         assert_eq!(
             assets.startup_files(&profile).expect("startup files").len(),
-            8
+            6
         );
         assert!(!profile.join("config.toml").exists());
     }
@@ -2431,7 +2390,7 @@ runtime = "tools/maps/runtime.toml"
         );
         assert_eq!(
             assets.startup_files(&profile).expect("startup files").len(),
-            8
+            6
         );
         assert!(assets
             .root_execution_config(&profile)

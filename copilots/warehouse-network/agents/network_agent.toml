@@ -29,15 +29,7 @@ name = "warehouse-data"
 enabled = false
 
 [[skills.config]]
-name = "warehouse-route-planning"
-enabled = true
-
-[[skills.config]]
-name = "warehouse-network-analysis"
-enabled = true
-
-[[skills.config]]
-name = "warehouse-network-optimization"
+name = "warehouse-network-planning"
 enabled = true
 
 [[skills.config]]

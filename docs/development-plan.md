@@ -349,10 +349,10 @@ Runtime agent projection 与 provider_call_metrics，并断言 provider speculat
 ProfileHost、Server 和 Web 删除本地 capability manifest；ProfileHost 只 typed 校验官方四字段
 和 owned `codexHome`。测试库随后被精确删除。
 
-退出：干净 Profile 在 Root Thread 创建前完成固定 Role 注册并发现三项 Skill；Data/Network
+退出：干净 Profile 在 Root Thread 创建前完成固定 Role 注册并发现四项 Skill；Data/Network
 native spawn 成功且只看到各自允许的 MCP tools；Skill、Role 内容和 MCP 的上述热更新边界有
-真实门；缺失任一 Role/Skill/MCP/tool 或发生 config warning/reload/status 失败时明确
-unavailable，不产生或沿用 false readiness；Workspace 中没有 capability 文件。
+真实门；缺失任一 Role/Skill/tool 或发生 config warning/reload/status 失败时明确 unavailable，
+不产生或沿用 false readiness；Workspace 中没有 capability 文件。
 
 ### Slice 4：原生协同与 child elicitation
 

@@ -928,13 +928,8 @@ class DeterministicModelServer {
               items: [
                 {
                   type: "skill",
-                  name: "warehouse-route-planning",
-                  path: exactSkillPath(text, "warehouse-route-planning"),
-                },
-                {
-                  type: "skill",
-                  name: "warehouse-network-analysis",
-                  path: exactSkillPath(text, "warehouse-network-analysis"),
+                  name: "warehouse-network-planning",
+                  path: exactSkillPath(text, "warehouse-network-planning"),
                 },
                 {
                   type: "skill",
@@ -1317,16 +1312,14 @@ async function runCase(index) {
     if (
       !networkRequestText.includes("# 仓网地图与交付") ||
       !networkRequestText.includes("# 路线与成本矩阵") ||
-      !networkRequestText.includes("# 仓网分析")
+      !networkRequestText.includes("# 仓网规划")
     ) {
       throw new NativeRuntimeBlocker("child_skill_body_not_injected", {
         role: "network_agent",
-        catalog_mentions_route: networkRequestText.includes("warehouse-route-planning"),
-        catalog_mentions_analysis: networkRequestText.includes("warehouse-network-analysis"),
+        catalog_mentions_planning: networkRequestText.includes("warehouse-network-planning"),
         catalog_mentions_map: networkRequestText.includes("warehouse-map-delivery"),
         explicit_mentions_preserved:
-          networkRequestText.includes("$warehouse-route-planning") &&
-          networkRequestText.includes("$warehouse-network-analysis") &&
+          networkRequestText.includes("$warehouse-network-planning") &&
           networkRequestText.includes("$warehouse-map-delivery"),
       });
     }
@@ -1367,8 +1360,7 @@ async function runCase(index) {
       [
         ["warehouse-data"],
         [
-          "warehouse-route-planning",
-          "warehouse-network-analysis",
+          "warehouse-network-planning",
           "warehouse-map-delivery",
         ],
       ],
