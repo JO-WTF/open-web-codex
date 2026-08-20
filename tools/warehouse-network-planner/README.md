@@ -13,6 +13,11 @@
 | --- | --- |
 | `supply_chain_data` | 发现和检查授权 Workspace 的 CSV/JSON/XLSX，发布来源画像、映射、标准化输入和行政区结果 |
 | `supply_chain` | 构建路线/成本矩阵，计算覆盖、成本、场景、p-median、服务约束选址、比较地图和报告 |
+
+`network/server.py` 只负责创建 FastMCP、按固定顺序注册一个 Resource template 与 13 个公开 Tool、
+解析 transport 和初始化 Runtime。Network Tool 的 owner 分别位于 `tool_runtime.py`、`route_tools.py`、
+`cost_tools.py`、`analysis_tools.py`、`facility_tools.py` 与 `delivery_tools.py`；它们共享同一个
+Workspace/Profile-scoped ResourceStore accessor，不各自创建 MCP 或业务缓存。
 没有独立的 Indonesia 或 Demo MCP。国家由用户问题确定，行政区能力属于 `supply_chain_data`；地图由 Network Agent 使用 Planner 的确定性地图工具生成。示例数据只能由用户显式放入 Workspace，工具不会在失败时自动回退到 Demo fixture。
 
 ## 当前网络工具

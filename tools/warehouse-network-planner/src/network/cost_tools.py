@@ -1,0 +1,249 @@
+"""Owner module for cost tools."""
+
+import math
+from pathlib import (
+    PurePosixPath,
+)
+from typing import (
+    Annotated,
+    Literal,
+)
+
+from mcp.server.fastmcp import (
+    Context,
+)
+from mcp.types import (
+    CallToolResult,
+)
+from open_web_codex_provider import (
+    ResourceRef,
+)
+from pydantic import (
+    Field,
+    ValidationError,
+)
+from supply_chain_planner.data.workspace_intake import (
+    read_json_document,
+)
+from supply_chain_planner.network.matrix import (
+    build_cost_matrix as _build_composable_cost_matrix,
+)
+from supply_chain_planner.network.matrix import (
+    derive_observed_quote_mean_cost_policy,
+)
+from supply_chain_planner.network.matrix_models import (
+    CostCalculationPolicy,
+    CostMatrix,
+    CostPolicySelection,
+    ExplicitCostPolicy,
+    ObservedQuoteMeanCostEvidence,
+    ObservedQuoteMeanCostPolicy,
+)
+from supply_chain_planner.network.matrix_models import (
+    RouteMatrix as ComposableRouteMatrix,
+)
+from supply_chain_planner.shared.models import (
+    CostMatrixPlanningToolResult,
+)
+from supply_chain_planner.shared.planning_input import (
+    require_matching_input,
+)
+
+from .tool_runtime import (
+    CONTENT_ADDRESSED_RESOURCE_TOOL,
+    McpResourceContractError,
+    _load_ready_network,
+    _runtime,
+)
+
+
+def _validate_quote_mean_evidence_path(
+    relative_path: str,
+    prepared_input_relative_path: str,
+) -> str:
+    """Accept only a create-new typed evidence file in the package output dir."""
+
+    candidate = PurePosixPath(relative_path)
+    expected_parent = PurePosixPath("outputs/warehouse-network/calculations")
+    if (
+        candidate.is_absolute()
+        or candidate.as_posix() != relative_path
+        or candidate.parent != expected_parent
+        or candidate.suffix.lower() != ".json"
+        or candidate.name in {"", ".", ".."}
+        or relative_path == prepared_input_relative_path
+    ):
+        raise McpResourceContractError("cost_evidence_path_invalid")
+    return candidate.as_posix()
+
+
+def _quote_mean_evidence_matches(
+    expected: ObservedQuoteMeanCostEvidence,
+    supplied: ObservedQuoteMeanCostEvidence,
+) -> bool:
+    """Compare script evidence to canonical Tool output without float noise."""
+
+    if (
+        expected.schema_version != supplied.schema_version
+        or expected.prepared_input_relative_path != supplied.prepared_input_relative_path
+        or expected.input_identity != supplied.input_identity
+        or expected.total_quote_count != supplied.total_quote_count
+        or expected.method != supplied.method
+        or expected.tool_version != supplied.tool_version
+        or expected.formula != supplied.formula
+        or expected.considered_quote_count != supplied.considered_quote_count
+        or expected.ignored_quote_count != supplied.ignored_quote_count
+    ):
+        return False
+    expected_rules = {rule.layer: rule for rule in expected.rules}
+    supplied_rules = {rule.layer: rule for rule in supplied.rules}
+    if (
+        len(expected.rules) != len(supplied.rules)
+        or len(expected_rules) != len(expected.rules)
+        or len(supplied_rules) != len(supplied.rules)
+        or set(expected_rules) != set(supplied_rules)
+    ):
+        return False
+    return all(
+        expected_rules[layer].currency == supplied_rules[layer].currency
+        and expected_rules[layer].quote_count == supplied_rules[layer].quote_count
+        and math.isclose(
+            expected_rules[layer].mean_cost_per_demand_unit,
+            supplied_rules[layer].mean_cost_per_demand_unit,
+            rel_tol=0,
+            abs_tol=1e-6,
+        )
+        for layer in expected_rules
+    )
+
+
+def plan_cost_matrix(
+    prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
+    warehouse_scope: Literal["existing_only", "all_warehouses"],
+    ctx: Context,
+    cost_policy: CostPolicySelection | None = None,
+    route_matrix_ref: ResourceRef | None = None,
+    prior_cost_matrix_ref: ResourceRef | None = None,
+    quote_mean_evidence_relative_path: Annotated[str | None, Field(max_length=1024)] = None,
+) -> Annotated[CallToolResult, CostMatrixPlanningToolResult]:
+    """Build quote-first costs with explicit or full-quote-mean fallback policy."""
+    prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
+    warehouses = prepared.warehouses
+    if warehouse_scope == "existing_only":
+        warehouses = [warehouse for warehouse in warehouses if warehouse.is_existing]
+    calculation_policy = None
+    calculation_rule_source = None
+    calculation_rule_evidence = None
+    if isinstance(cost_policy, ExplicitCostPolicy):
+        if quote_mean_evidence_relative_path is not None:
+            raise McpResourceContractError("cost_evidence_requires_observed_quote_mean")
+        calculation_policy = CostCalculationPolicy(rules=cost_policy.rules)
+        calculation_rule_source = "explicit"
+    elif isinstance(cost_policy, ObservedQuoteMeanCostPolicy):
+        calculation_policy, calculation_rule_evidence = derive_observed_quote_mean_cost_policy(
+            prepared.demand_cities,
+            warehouses,
+            prepared.route_quotes,
+            prepared_input_relative_path=prepared_input_relative_path,
+            input_identity=input_identity,
+        )
+        calculation_rule_source = "observed_quote_mean"
+        if quote_mean_evidence_relative_path is not None:
+            evidence_path = _validate_quote_mean_evidence_path(
+                quote_mean_evidence_relative_path,
+                prepared_input_relative_path,
+            )
+            try:
+                evidence_payload = read_json_document(
+                    _runtime().require_workspace(ctx),
+                    evidence_path,
+                )
+                supplied_evidence = ObservedQuoteMeanCostEvidence.model_validate(
+                    evidence_payload
+                )
+            except (ValueError, ValidationError) as error:
+                raise McpResourceContractError("cost_evidence_invalid") from error
+            if not _quote_mean_evidence_matches(calculation_rule_evidence, supplied_evidence):
+                raise McpResourceContractError("cost_evidence_mismatch")
+            quote_mean_evidence_relative_path = evidence_path
+        else:
+            quote_mean_evidence_relative_path = None
+    elif quote_mean_evidence_relative_path is not None:
+        raise McpResourceContractError("cost_evidence_requires_observed_quote_mean")
+    route_matrix = (
+        _runtime().load_model(
+            route_matrix_ref,
+            "route_matrix.v2",
+            ComposableRouteMatrix,
+        )
+        if route_matrix_ref is not None
+        else None
+    )
+    if route_matrix is not None:
+        try:
+            require_matching_input(input_identity, route_matrix.input_identity)
+        except ValueError as error:
+            raise McpResourceContractError("cost_route_input_identity_mismatch") from error
+    prior = (
+        _runtime().load_model(
+            prior_cost_matrix_ref,
+            "cost_matrix.v2",
+            CostMatrix,
+        )
+        if prior_cost_matrix_ref is not None
+        else None
+    )
+    matrix = _build_composable_cost_matrix(
+        prepared.demand_cities,
+        warehouses,
+        prepared.route_quotes,
+        calculation_policy,
+        route_matrix,
+        prior.rows if prior is not None else None,
+        warehouse_scope=warehouse_scope,
+        input_identity=input_identity,
+        calculation_rule_source=calculation_rule_source,
+        calculation_rule_evidence=calculation_rule_evidence,
+        calculation_rule_evidence_path=quote_mean_evidence_relative_path,
+    )
+    stats = matrix.stats
+    policy_summary = ""
+    if calculation_rule_evidence is not None:
+        policy_summary = "; observed quote means: " + ", ".join(
+            f"{rule.layer}={rule.mean_cost_per_demand_unit:.6f} {rule.currency} "
+            f"from {rule.quote_count} quotes"
+            for rule in calculation_rule_evidence.rules
+        )
+    summary = (
+        "Built cost matrix with "
+        f"{stats.reused_pair_count} reused, "
+        f"{stats.computed_pair_count} computed, and "
+        f"{stats.missing_pair_count} missing lane costs{policy_summary}."
+    )
+    published = _runtime().publish(
+        matrix.schema_version,
+        matrix,
+        summary,
+    )
+    if published.structuredContent is None:
+        raise McpResourceContractError("cost_matrix_result_missing")
+    resource_ref = ResourceRef.model_validate(published.structuredContent["resource_ref"])
+    result = CostMatrixPlanningToolResult(
+        summary=summary,
+        resource_ref=resource_ref,
+        input_identity=input_identity,
+        calculation_rule_source=matrix.calculation_rule_source,
+        calculation_rule_evidence=matrix.calculation_rule_evidence,
+        calculation_rule_evidence_path=matrix.calculation_rule_evidence_path,
+        expected_pair_count=stats.expected_pair_count,
+        reused_pair_count=stats.reused_pair_count,
+        computed_pair_count=stats.computed_pair_count,
+        missing_pair_count=stats.missing_pair_count,
+    )
+    published.structuredContent = result.model_dump(mode="json")
+    return published
+
+
+def register_tools(mcp, *, phase: str = "all") -> None:
+    if phase in ("all", "all"):
+        mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)(plan_cost_matrix)

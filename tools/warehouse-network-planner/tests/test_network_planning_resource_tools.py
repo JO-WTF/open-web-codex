@@ -13,7 +13,15 @@ from _network_fixtures import (
     indonesia_route_quotes,
 )
 from open_web_codex_provider import ProviderContractError, ResourceRef, ResourceStore
-from supply_chain_planner.network import server
+from supply_chain_planner.network import (
+    analysis_tools,
+    cost_tools,
+    delivery_tools,
+    facility_tools,
+    route_tools,
+    server,
+    tool_runtime,
+)
 from supply_chain_planner.network.matrix_models import (
     CostCalculationPolicy,
     CostMatrix,
@@ -40,7 +48,7 @@ def _runtime(tmp_path: Path, monkeypatch) -> tuple[Path, ResourceStore]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     resources = SupplyChainResources(workspace, tmp_path / "profile")
-    monkeypatch.setattr(server, "_supply_chain_resources", resources)
+    monkeypatch.setattr(tool_runtime, "_supply_chain_resources", resources)
     return workspace, resources.store
 
 
@@ -126,7 +134,7 @@ def test_plan_cost_matrix_derives_bounded_full_quote_means(
     ctx = _context(workspace)
     prepared_path = _prepared_input(workspace)
     routes = _ref(
-        server.prepare_route_matrix(
+        route_tools.prepare_route_matrix(
             prepared_path,
             "haversine",
             ctx,
@@ -138,7 +146,7 @@ def test_plan_cost_matrix_derives_bounded_full_quote_means(
 
     calculation_dir = workspace / "outputs/warehouse-network/calculations"
     calculation_dir.mkdir(parents=True)
-    derived = server.plan_cost_matrix(
+    derived = cost_tools.plan_cost_matrix(
         prepared_path,
         "all_warehouses",
         ctx,
@@ -152,7 +160,7 @@ def test_plan_cost_matrix_derives_bounded_full_quote_means(
         encoding="utf-8",
     )
 
-    result = server.plan_cost_matrix(
+    result = cost_tools.plan_cost_matrix(
         prepared_path,
         "all_warehouses",
         ctx,
@@ -173,7 +181,7 @@ def test_plan_cost_matrix_derives_bounded_full_quote_means(
         "last_mile": 550,
         "linehaul": 30,
     }
-    matrix = server._runtime().load_model(_ref(result), "cost_matrix.v2", CostMatrix)
+    matrix = tool_runtime._runtime().load_model(_ref(result), "cost_matrix.v2", CostMatrix)
     assert matrix.missing_routes == []
     assert matrix.calculation_rule_source == "observed_quote_mean"
     assert matrix.calculation_rule_evidence_path == evidence_path
@@ -187,7 +195,7 @@ def test_plan_cost_matrix_rejects_unbound_quote_mean_evidence(
     ctx = _context(workspace)
     prepared_path = _prepared_input(workspace)
     routes = _ref(
-        server.prepare_route_matrix(
+        route_tools.prepare_route_matrix(
             prepared_path,
             "haversine",
             ctx,
@@ -196,7 +204,7 @@ def test_plan_cost_matrix_rejects_unbound_quote_mean_evidence(
             average_speed_kph=42,
         )
     )
-    derived = server.plan_cost_matrix(
+    derived = cost_tools.plan_cost_matrix(
         prepared_path,
         "all_warehouses",
         ctx,
@@ -211,7 +219,7 @@ def test_plan_cost_matrix_rejects_unbound_quote_mean_evidence(
     evidence_path = "outputs/warehouse-network/calculations/unbound.json"
     (workspace / evidence_path).write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ProviderContractError, match="cost_evidence_mismatch"):
-        server.plan_cost_matrix(
+        cost_tools.plan_cost_matrix(
             prepared_path,
             "all_warehouses",
             ctx,
@@ -228,7 +236,7 @@ def test_plan_cost_matrix_rejects_duplicate_quote_mean_layers(
     ctx = _context(workspace)
     prepared_path = _prepared_input(workspace)
     routes = _ref(
-        server.prepare_route_matrix(
+        route_tools.prepare_route_matrix(
             prepared_path,
             "haversine",
             ctx,
@@ -237,7 +245,7 @@ def test_plan_cost_matrix_rejects_duplicate_quote_mean_layers(
             average_speed_kph=42,
         )
     )
-    derived = server.plan_cost_matrix(
+    derived = cost_tools.plan_cost_matrix(
         prepared_path,
         "all_warehouses",
         ctx,
@@ -252,7 +260,7 @@ def test_plan_cost_matrix_rejects_duplicate_quote_mean_layers(
     evidence_path = "outputs/warehouse-network/calculations/duplicate-layer.json"
     (workspace / evidence_path).write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ProviderContractError, match="cost_evidence_mismatch"):
-        server.plan_cost_matrix(
+        cost_tools.plan_cost_matrix(
             prepared_path,
             "all_warehouses",
             ctx,
@@ -271,7 +279,7 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
     prepared_path = _prepared_input(workspace)
 
     routes = _ref(
-        server.prepare_route_matrix(
+        route_tools.prepare_route_matrix(
             prepared_path,
             "haversine",
             ctx,
@@ -281,7 +289,7 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
         )
     )
     costs = _ref(
-        server.plan_cost_matrix(
+        cost_tools.plan_cost_matrix(
             prepared_path,
             "all_warehouses",
             ctx,
@@ -290,7 +298,7 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
         )
     )
     baseline = _ref(
-        server.evaluate_network_baseline(
+        analysis_tools.evaluate_network_baseline(
             prepared_path,
             routes,
             "min_cost",
@@ -300,7 +308,7 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
             cost_matrix_ref=costs,
         )
     )
-    facility_result = server.solve_p_median(
+    facility_result = facility_tools.solve_p_median(
         prepared_path,
         routes,
         costs,
@@ -327,7 +335,7 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
     ]
     facility = _ref(facility_result)
     comparison = _ref(
-        server.compare_network_scenarios(
+        analysis_tools.compare_network_scenarios(
             prepared_path,
             baseline,
             facility,
@@ -336,18 +344,18 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
         )
     )
 
-    map_result = server.prepare_network_comparison_map(comparison, ctx)
+    map_result = delivery_tools.prepare_network_comparison_map(comparison, ctx)
     assert map_result.structuredContent is not None
     assert (
         map_result.structuredContent["data_ref"]["resource_schema"]
         == "network_comparison_geojson.v1"
     )
 
-    coverage = server.prepare_network_coverage_map(prepared_path, facility, ctx)
+    coverage = delivery_tools.prepare_network_coverage_map(prepared_path, facility, ctx)
     assert coverage.structuredContent is not None
     assert coverage.structuredContent["feature_count"] > 0
 
-    report = server.publish_network_planning_report(
+    report = delivery_tools.publish_network_planning_report(
         NetworkComparisonReportInput(plan_comparison_ref=comparison),
         "outputs/warehouse-network/deliverables/network-report.md",
         ctx,
@@ -365,7 +373,7 @@ def test_minimum_feasible_requires_service_constraints(tmp_path: Path, monkeypat
     ctx = _context(workspace)
     prepared_path = _prepared_input(workspace)
     routes = _ref(
-        server.prepare_route_matrix(
+        route_tools.prepare_route_matrix(
             prepared_path,
             "haversine",
             ctx,
@@ -375,7 +383,7 @@ def test_minimum_feasible_requires_service_constraints(tmp_path: Path, monkeypat
         )
     )
     costs = _ref(
-        server.plan_cost_matrix(
+        cost_tools.plan_cost_matrix(
             prepared_path,
             "all_warehouses",
             ctx,
@@ -387,7 +395,7 @@ def test_minimum_feasible_requires_service_constraints(tmp_path: Path, monkeypat
         ProviderContractError,
         match="p_median_minimum_feasible_requires_service_constraints",
     ):
-        server.solve_p_median(
+        facility_tools.solve_p_median(
             prepared_path,
             routes,
             costs,
@@ -409,7 +417,7 @@ def test_scenario_validation_stops_before_loading_missing_workspace_inputs() -> 
         request_context=SimpleNamespace(meta=SimpleNamespace(model_extra={}))
     )
     with pytest.raises(ProviderContractError, match="scenario_service_targets_invalid"):
-        server._load_facility_scenario_inputs(
+        facility_tools._load_facility_scenario_inputs(
             "not-loaded.json",
             unknown,
             None,

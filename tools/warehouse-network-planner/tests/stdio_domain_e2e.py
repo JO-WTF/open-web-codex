@@ -273,10 +273,12 @@ async def _run_network_s3_then_s2(
             await asyncio.wait_for(session.initialize(), timeout=30)
             inventory = {tool.name for tool in (await session.list_tools()).tools}
             assert inventory == {
+                "create_navigation_matrix_request",
                 "prepare_route_matrix",
-                "register_navigation_route_matrix",
+                "import_navigation_matrix",
                 "plan_cost_matrix",
                 "prepare_network_comparison_map",
+                "prepare_network_coverage_map",
                 "prepare_network_distribution_map",
                 "evaluate_network_baseline",
                 "assess_facility_change",

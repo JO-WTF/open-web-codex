@@ -8,9 +8,11 @@ from types import SimpleNamespace
 import pytest
 from _network_fixtures import network_case
 from open_web_codex_provider import ProviderContractError, ResourceRef, ResourceStore
-from supply_chain_planner.network import server
+from supply_chain_planner.network import analysis_tools, route_tools, server, tool_runtime
+from supply_chain_planner.network.matrix import RouteMatrix as ComposableRouteMatrix
 from supply_chain_planner.network.matrix_models import NavigationMatrixResult, RouteMatrixRow
 from supply_chain_planner.network.models import CurrentAssignmentRecord
+from supply_chain_planner.network.optimization_models import BaselineResult
 from supply_chain_planner.shared.models import PreparedNetworkResource
 from supply_chain_planner.shared.planning_input import load_prepared_network_input
 from supply_chain_planner.shared.resources import SupplyChainResources
@@ -20,7 +22,7 @@ def _runtime(tmp_path: Path, monkeypatch) -> tuple[Path, ResourceStore]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     resources = SupplyChainResources(workspace, tmp_path / "profile")
-    monkeypatch.setattr(server, "_supply_chain_resources", resources)
+    monkeypatch.setattr(tool_runtime, "_supply_chain_resources", resources)
     return workspace, resources.store
 
 
@@ -106,7 +108,7 @@ def test_network_rejects_matrix_from_another_prepared_workspace_input(
     first_path = _write_prepared_input(workspace, "prepared-a.json")
     second_path = _write_prepared_input(workspace, "prepared-b.json", city_name="Renamed City")
 
-    routes = server.prepare_route_matrix(
+    routes = route_tools.prepare_route_matrix(
         first_path,
         "haversine",
         ctx,
@@ -115,14 +117,14 @@ def test_network_rejects_matrix_from_another_prepared_workspace_input(
         average_speed_kph=40,
     )
     route_ref = _result_ref(routes)
-    stored_routes = server._runtime().load_model(
-        route_ref, "route_matrix.v2", server.ComposableRouteMatrix
+    stored_routes = tool_runtime._runtime().load_model(
+        route_ref, "route_matrix.v2", ComposableRouteMatrix
     )
     _prepared, expected_identity = load_prepared_network_input(workspace, first_path)
     assert stored_routes.input_identity == expected_identity
 
     with pytest.raises(ProviderContractError, match="baseline_input_identity_mismatch"):
-        server.evaluate_network_baseline(
+        analysis_tools.evaluate_network_baseline(
             second_path,
             route_ref,
             "min_time",
@@ -141,7 +143,7 @@ def test_baseline_auto_uses_optimized_existing_when_assignments_are_absent(
     payload = json.loads((workspace / prepared_path).read_text(encoding="utf-8"))
     payload["current_assignments"] = []
     (workspace / prepared_path).write_text(json.dumps(payload), encoding="utf-8")
-    routes = server.prepare_route_matrix(
+    routes = route_tools.prepare_route_matrix(
         prepared_path,
         "haversine",
         ctx,
@@ -149,15 +151,15 @@ def test_baseline_auto_uses_optimized_existing_when_assignments_are_absent(
         detour_coefficient=1.2,
         average_speed_kph=40,
     )
-    baseline = server.evaluate_network_baseline(
+    baseline = analysis_tools.evaluate_network_baseline(
         prepared_path,
         _result_ref(routes),
         "min_time",
         [12],
         ctx,
     )
-    stored = server._runtime().load_model(
-        _result_ref(baseline), "network_baseline.v2", server.BaselineResult
+    stored = tool_runtime._runtime().load_model(
+        _result_ref(baseline), "network_baseline.v2", BaselineResult
     )
     assert stored.label == "optimized_existing_footprint"
 
@@ -166,7 +168,7 @@ def test_workspace_input_mutation_invalidates_existing_matrix(tmp_path, monkeypa
     workspace, _store = _runtime(tmp_path, monkeypatch)
     ctx = _context(workspace)
     prepared_path = _write_prepared_input(workspace, "prepared.json")
-    routes = server.prepare_route_matrix(
+    routes = route_tools.prepare_route_matrix(
         prepared_path,
         "haversine",
         ctx,
@@ -181,7 +183,7 @@ def test_workspace_input_mutation_invalidates_existing_matrix(tmp_path, monkeypa
         payload.replace("City A", "Changed City", 1), encoding="utf-8"
     )
     with pytest.raises(ProviderContractError, match="baseline_input_identity_mismatch"):
-        server.evaluate_network_baseline(
+        analysis_tools.evaluate_network_baseline(
             prepared_path,
             route_ref,
             "min_time",
@@ -195,7 +197,7 @@ def test_navigation_request_and_import_use_exact_workspace_contract(tmp_path, mo
     workspace, _store = _runtime(tmp_path, monkeypatch)
     ctx = _context(workspace)
     prepared_path = _write_prepared_input(workspace, "prepared.json")
-    request_result = server.create_navigation_matrix_request(
+    request_result = route_tools.create_navigation_matrix_request(
         prepared_path,
         "existing_only",
         "outputs/warehouse-network/requests/navigation-request.json",
@@ -228,14 +230,14 @@ def test_navigation_request_and_import_use_exact_workspace_contract(tmp_path, mo
         ],
     )
     (workspace / "navigation-result.json").write_text(result.model_dump_json(), encoding="utf-8")
-    imported = server.import_navigation_matrix(
+    imported = route_tools.import_navigation_matrix(
         prepared_path,
         "navigation-result.json",
         ctx,
     )
     route_ref = _result_ref(imported)
-    route_matrix = server._runtime().load_model(
-        route_ref, "route_matrix.v2", server.ComposableRouteMatrix
+    route_matrix = tool_runtime._runtime().load_model(
+        route_ref, "route_matrix.v2", ComposableRouteMatrix
     )
     assert route_matrix.method == "navigation"
     assert route_matrix.input_identity == request_result.input_identity
