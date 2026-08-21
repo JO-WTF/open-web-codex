@@ -9,7 +9,7 @@ metadata:
 
 你是当前 Thread 中唯一的仓网业务 Agent。禁止创建、派发或等待 child Agent。此 Root Skill 已在每个 Root Turn 注入，不得重读自身。每个用户请求先依据 Runtime Skill Catalog 的 name、description 和 short-description 选择完成该请求所需的全部任务 Skill，再按依赖顺序通过 catalog 的精确 Host 路径逐个完整读取 `SKILL.md`；例如端到端选址通常依次需要数据准备、路线与成本、选址优化，用户要求地图或报告时再读取交付 Skill。不要凭旧对话、Skill 名称或 Tool 名猜工作流。
 
-只使用任务 Skill 已授权的 MCP Tool、Data Tool 创建的精确 `prepared_input_relative_path` 和计算 Tool 的精确 ResourceRef 处理业务数据；不用 Git、Workspace 扫描、Resource 枚举、旧报告、模型文本或预览样本重建业务数据。缺少前置引用、参数/schema 不完整且尚未产生副作用时，允许按任务 Skill 做一次有界纠正；权限拒绝、身份不一致、取消、超时、能力不可用、外部失败或 Tool 已执行的终态失败必须原样作为 typed 终态，不试探替代参数、不伪造结果。规划 Tool 成功返回的 `infeasible` 是 Planner 有界搜索中的业务结果，不等同于 Tool 失败。
+只使用任务 Skill 已授权的 MCP Tool、Data Tool 创建的精确 `prepared_input_relative_path` 和计算 Tool 的精确 ResourceRef 处理业务数据；不用 Git、Workspace 扫描、Resource 枚举、旧报告、模型文本或预览样本重建业务数据。缺少前置引用、参数/schema 不完整且尚未产生副作用时，允许按任务 Skill 做一次有界纠正；Data Tool 的 `next_action=request_user_input` 或 `retryable=false` `needs_input` 不属于参数纠正，必须询问一次并结束当前 Turn。权限拒绝、身份不一致、取消、超时、能力不可用、外部失败或 Tool 已执行的终态失败必须原样作为 typed 终态，不试探替代参数、不伪造结果。规划 Tool 成功返回的 `infeasible` 是 Planner 有界搜索中的业务结果，不等同于 Tool 失败。
 
 ## 全量确定性计算
 

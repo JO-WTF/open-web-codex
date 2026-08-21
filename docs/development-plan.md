@@ -278,7 +278,7 @@ Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。
 2. 使用 Codex 原生 `$CODEX_HOME/skills` 与 `$CODEX_HOME/agents/*.toml`。每个 Copilot 只有一个
    小型常驻 Root Skill；任务 Skill 通过 Runtime Catalog 的 name、description、short-description 和 locator
    渐进发现，只有原生选中后才加载完整正文。Role TOML 源码只持有 Plugin/server policy；选中的 server 内 Tool
-   一律通过 deferred `tool_search` 发现，不维护 `enabled_tools` 名称白名单；命中 schema 只在同一 Turn 的下一次模型调用有效，新 Turn 重新搜索。SDK prepared descriptor 提供 transport，Server
+   一律通过 deferred `tool_search` 发现，不维护 `enabled_tools` 名称白名单；命中 schema 只在同一 Turn 的下一次模型调用有效，新 Turn 重新搜索。已关闭 child 恢复后必须用 `send_input.items` 重新注入精确任务 Skill，领域 Tool 需要时 fresh `tool_search` 是该 child Turn 的第一项 Tool 调用；禁止纯文本 follow-up 复用历史 Skill/Tool。SDK prepared descriptor 提供 transport，Server
    在当前 Profile 下解析 typed binding 后合成 Role-local MCP。不改 Profile `config.toml`、全局 role allowlist
    或 Codex built-in roles。Profile Host 的普通 startup file 只为 clean Profile seed 默认文件
    并保留已存在内容；仓网三项内置 Skill 与两项内置 Role 是显式 managed 保留 ID，部署升级
@@ -533,7 +533,8 @@ producer-time verifier snapshot，恢复不依赖届时 active package registry�
 6. Data Tool 以 create-new 语义把完整 `prepared_network_input.v1`（含确认来源、候选仓和质量问题）
    写入用户可见 `outputs/warehouse-network/prepared/`；该路径、内容身份、精确候选仓总数和有界候选仓目录是唯一 Data→Network 交接。路线/成本/方案等高成本
    typed intermediate 继续保存为 MCP Resource。
-7. 候选仓、城市、现网仓、实际分配、需求或原始路线事实任一变化都产生新的完整准备输入；不使用
+7. Data inspect 对缺少必填业务字段返回 `needs_input`、`retryable=false` 和 bounded requirements；同一未解决缺口进入 prepare 时返回 no-write typed 终态。多 Agent 由 Data child 一次交回 Root 询问，单 Agent 直接询问一次；没有新用户输入或修正文件时不得重试。
+8. 候选仓、城市、现网仓、实际分配、需求或原始路线事实任一变化都产生新的完整准备输入；不使用
    candidate delta 或原地修改。校验结果不构成授权、可信等级或自动复用许可。
 
 #### 距离、成本与分析

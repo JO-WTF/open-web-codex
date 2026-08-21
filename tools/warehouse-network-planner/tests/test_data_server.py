@@ -65,11 +65,17 @@ def test_data_server_exposes_workspace_preparation_not_cross_agent_data_resource
         "output_relative_path",
     }
     assert set(prepare.outputSchema["required"]) == {
+        "outcome",
         "summary",
+        "next_action",
+        "retryable",
+        "requirements",
         "prepared_input_relative_path",
         "input_identity",
         "state",
         "issue_count",
+        "issues",
+        "issues_truncated",
         "candidate_warehouse_count",
         "candidate_warehouses",
         "candidate_warehouses_truncated",
@@ -79,6 +85,10 @@ def test_data_server_exposes_workspace_preparation_not_cross_agent_data_resource
     inspect_tool = tools["inspect_workspace_sources"]
     assert set(inspect_tool.outputSchema["required"]) == {
         "summary",
+        "state",
+        "next_action",
+        "retryable",
+        "requirements",
         "source_profile",
         "inspection_identity",
         "inspected_relative_paths",
@@ -98,6 +108,64 @@ def test_data_server_exposes_workspace_preparation_not_cross_agent_data_resource
         "idempotentHint": False,
         "openWorldHint": False,
     }
+
+
+def test_missing_warehouse_type_is_typed_non_retryable_user_input(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "demand.csv").write_text(
+        "city_id,city_name,demand_quantity\nCITY-1,Jakarta,50\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "warehouses.csv").write_text(
+        "warehouse_id,warehouse_name,city_id,city_name,is_existing\n"
+        "WH-1,Jakarta Center,CITY-1,Jakarta,true\n",
+        encoding="utf-8",
+    )
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    inspected = data_server.inspect_workspace_sources(
+        ["demand.csv", "warehouses.csv"], ctx
+    )
+    assert inspected.structuredContent is not None
+    inspection = inspected.structuredContent
+
+    assert inspection["state"] == "needs_input"
+    assert inspection["next_action"] == "request_user_input"
+    assert inspection["retryable"] is False
+    assert inspection["requirements"] == [
+        {
+            "code": "required_fields_missing",
+            "relative_path": "warehouses.csv",
+            "candidate_roles": ["existing_warehouse"],
+            "missing_required_fields": ["warehouse_type"],
+            "question": (
+                "文件 warehouses.csv 缺少仓型字段 warehouse_type。"
+                "请在源数据中补充该列，每行使用 center 或 cross_docking，然后再继续。"
+            ),
+        }
+    ]
+
+    output_path = f"{PREPARED_OUTPUT_DIR}/must-not-write.json"
+    blocked = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(inspection["inspection_identity"]),
+        inspection["inspected_relative_paths"],
+        _decisions(),
+        "ID",
+        output_path,
+        ctx,
+    )
+
+    assert blocked.outcome == "needs_input"
+    assert blocked.state == "needs_input"
+    assert blocked.next_action == "request_user_input"
+    assert blocked.retryable is False
+    assert blocked.prepared_input_relative_path is None
+    assert blocked.input_identity is None
+    assert blocked.requirements == [
+        data_server.DataSourceRequirement.model_validate(inspection["requirements"][0])
+    ]
+    assert not (tmp_path / output_path).exists()
 
 
 def test_source_profile_distinguishes_preview_samples_from_exact_total(

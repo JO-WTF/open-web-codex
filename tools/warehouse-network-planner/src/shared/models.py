@@ -71,13 +71,15 @@ class ConfirmedFieldDecision(StrictModel):
     factor: Decimal | None = None
 
 
-class ConfirmedSourceDecision(StrictModel):
+class ConfirmedSourceInputDecision(StrictModel):
+    """One caller decision before required-field completeness is resolved."""
+
     relative_path: str = Field(min_length=1, max_length=1024)
     role: SourceRole
     mappings: list[ConfirmedFieldDecision] = Field(default_factory=list, max_length=64)
 
     @model_validator(mode="after")
-    def validate_role_mapping(self) -> ConfirmedSourceDecision:
+    def validate_role_mapping_shape(self) -> ConfirmedSourceInputDecision:
         if self.role == SourceRole.ADMINISTRATIVE_CATALOG:
             raise ValueError("administrative catalog is prepared by the geography tool")
         if not self.mappings:
@@ -96,7 +98,19 @@ class ConfirmedSourceDecision(StrictModel):
             raise ValueError("confirmed target fields must be unique")
         if len(set(sources)) != len(sources):
             raise ValueError("confirmed source fields must be unique")
-        missing = sorted(REQUIRED_FIELDS[self.role] - set(targets))
+        return self
+
+
+class ConfirmedSourceDecision(ConfirmedSourceInputDecision):
+    """Complete mapping persisted in one prepared network input."""
+
+    @model_validator(mode="after")
+    def validate_required_role_mapping(self) -> ConfirmedSourceDecision:
+        if not self.mappings:
+            return self
+        missing = sorted(
+            REQUIRED_FIELDS[self.role] - {mapping.target_field for mapping in self.mappings}
+        )
         if missing:
             raise ValueError(
                 f"confirmed mapping for {self.role.value} is missing required fields: "
@@ -122,13 +136,49 @@ class SourceInspectionIdentity(StrictModel):
     source_count: int = Field(ge=1, le=500)
 
 
+class DataSourceRequirement(StrictModel):
+    """A source decision that cannot progress without explicit user input."""
+
+    code: Literal[
+        "required_fields_missing",
+        "source_role_confirmation_required",
+        "field_mapping_confirmation_required",
+    ]
+    relative_path: str = Field(min_length=1, max_length=1024)
+    candidate_roles: list[SourceRole] = Field(min_length=1, max_length=5)
+    missing_required_fields: list[str] = Field(max_length=16)
+    question: str = Field(min_length=1, max_length=400)
+
+    @model_validator(mode="after")
+    def validate_canonical_requirement(self) -> DataSourceRequirement:
+        if self.candidate_roles != sorted(set(self.candidate_roles), key=lambda item: item.value):
+            raise ValueError("candidate_roles_not_canonical")
+        if self.missing_required_fields != sorted(set(self.missing_required_fields)):
+            raise ValueError("missing_required_fields_not_canonical")
+        if self.code == "required_fields_missing" and not self.missing_required_fields:
+            raise ValueError("missing_required_fields_required")
+        return self
+
+
 class DataInspectionToolResult(StrictModel):
     """Bounded inline inspection result; it is not a Resource."""
 
     summary: str
+    state: Literal["ready", "needs_input"]
+    next_action: Literal["confirm_sources", "request_user_input"]
+    retryable: Literal[False]
+    requirements: list[DataSourceRequirement] = Field(max_length=500)
     source_profile: dict[str, Any]
     inspection_identity: SourceInspectionIdentity
     inspected_relative_paths: list[str] = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_inspection_state(self) -> DataInspectionToolResult:
+        expected_state = "needs_input" if self.requirements else "ready"
+        expected_action = "request_user_input" if self.requirements else "confirm_sources"
+        if self.state != expected_state or self.next_action != expected_action:
+            raise ValueError("inspection_state_invalid")
+        return self
 
 
 class CandidateWarehouseSummary(StrictModel):
@@ -140,14 +190,47 @@ class CandidateWarehouseSummary(StrictModel):
 class DataPreparationToolResult(StrictModel):
     """The only Data-to-Network handoff: one exact Workspace input file."""
 
+    outcome: Literal["prepared", "needs_input"]
     summary: str
-    prepared_input_relative_path: str = Field(min_length=1, max_length=1024)
-    input_identity: PlanningInputIdentity
+    next_action: Literal["handoff", "prepare_geography", "request_user_input"]
+    retryable: Literal[False]
+    requirements: list[DataSourceRequirement] = Field(max_length=500)
+    prepared_input_relative_path: str | None = Field(max_length=1024)
+    input_identity: PlanningInputIdentity | None
     state: Literal["ready", "needs_input", "needs_geography"]
     issue_count: int = Field(ge=0)
+    issues: list[DataQualityIssue] = Field(max_length=64)
+    issues_truncated: bool
     candidate_warehouse_count: int = Field(ge=0)
     candidate_warehouses: list[CandidateWarehouseSummary] = Field(max_length=64)
     candidate_warehouses_truncated: bool
+
+    @model_validator(mode="after")
+    def validate_preparation_outcome(self) -> DataPreparationToolResult:
+        if self.outcome == "needs_input":
+            if (
+                self.state != "needs_input"
+                or self.next_action != "request_user_input"
+                or not self.requirements
+                or self.prepared_input_relative_path is not None
+                or self.input_identity is not None
+            ):
+                raise ValueError("blocked_preparation_outcome_invalid")
+            return self
+        if (
+            self.prepared_input_relative_path is None
+            or self.input_identity is None
+            or self.requirements
+        ):
+            raise ValueError("prepared_outcome_invalid")
+        expected_action = {
+            "ready": "handoff",
+            "needs_input": "request_user_input",
+            "needs_geography": "prepare_geography",
+        }[self.state]
+        if self.next_action != expected_action:
+            raise ValueError("prepared_next_action_invalid")
+        return self
 
 
 class RouteMatrixPreparationToolResult(StrictModel):

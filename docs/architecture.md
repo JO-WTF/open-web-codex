@@ -54,6 +54,12 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 Root execution config；这样 `close_agent` 后仍能恢复 child Role 的 MCP inventory，
 而浏览器不能选择或扩大该配置，Platform 也不复制 Resource 内容。
 
+业务 child 的后续 Turn 不复用初次 spawn 的 Skill 或 ToolSearch 结果。Root 对已关闭
+child 先调用 `resume_agent`，再以 `send_input.items` 重新传入当前 Runtime Catalog 中的
+精确任务 Skill 和新任务 Text；child 在需要领域 Tool 时把本 Turn 的原生 `tool_search`
+作为第一项 Tool 调用。Chat bridge 已按 `turn_id` 排除恢复前 ToolSearch schema，fresh search
+为空时 child 返回 typed unavailable，不尝试历史 Tool、Resource inventory 或 shell。
+
 Codex Runtime 仍是模型可见对话状态的唯一权威。Platform events、execution、activity
 和协作状态都是投影，不应成为第二个 Thread、Memory 或 Supervisor。
 
@@ -224,7 +230,7 @@ revision、operation、dependency、readiness 或 deliverable 状态。
 字节；Data inspection 不发布 Resource。Data4 与 Network 的 active surface 以 inline inspection
 identity、Workspace 路径和 typed Network Resource 各司其职：Data Server 的 inspect 返回有界
 `source_profile`、预览样本数与完整总数、`workspace_source_inspection.v1` identity 及精确
-inspected paths；`prepare_network_input` 重新检查同一完整 regular files，若路径集合或任一字节变化
+inspected paths；必填业务字段缺失时，inspect 直接返回 `needs_input`、`retryable=false`、精确文件/候选角色/缺失字段和一次用户问题，prepare 对同一未解决缺口同样返回 no-write typed 终态而不抛可试探的参数错误；`prepare_network_input` 重新检查同一完整 regular files，若路径集合或任一字节变化
 则返回 `source_inspection_changed` 且不写文件，否则以显式确认 mapping 和全部候选仓原子写入
 `outputs/warehouse-network/prepared/` 下的完整 `prepared_network_input.v1`，同时返回候选仓总数和有界目录；`prepare_network_geography` 再从该文件生成新的完整输入。Network
 Tool 只接受这个确切路径，并为矩阵与方案 Resource 绑定输入内容身份；不存在 candidate delta 或

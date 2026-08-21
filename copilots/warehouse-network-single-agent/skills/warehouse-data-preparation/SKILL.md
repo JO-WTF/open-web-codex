@@ -11,6 +11,9 @@ metadata:
 
 调用 `prepare_network_input` 时必须原样传回 inspection identity 与 inspected paths；Tool 会重新检查完整文件并在路径集合或任一字节变化时返回 `source_inspection_changed`，不写 prepared 输出。
 
+若 inspect 返回 `state=needs_input`、`next_action=request_user_input` 或非空 `requirements`，立即使用 Tool 给出的 `question` 向用户询问一次并结束当前 Turn；不得调用 prepare、再次 inspect、重新搜索 Tool、改写 mappings 或猜默认值。若 prepare 返回 `outcome=needs_input` 或 `next_action=request_user_input`，执行同一终止规则；`retryable=false` 表示没有新用户输入或修正文件时禁止再次调用。缺少 `warehouse_type` 时要求源文件逐行补充 `center` 或 `cross_docking`，不把所有仓猜成同一仓型。若已创建 prepared 文件但 `state=needs_input`，只依据返回的有界 `issues` 询问，不读取文件补猜。
+
 首次准备必须保留全部已确认候选仓；用户要求地图展示候选仓时，候选 source 必须纳入该输入，即使 baseline 使用 `existing_only`。`existing_only` 只限制 Network 的计算范围，不能删除已确认候选仓。任何候选、需求、现网仓、当前分配、路线事实或报价变化都完整准备一个新的 Workspace 输入，并 create-new 写入 `outputs/warehouse-network/prepared/*.json`，不得写入 Workspace 根目录或源数据目录。需要地理补全时使用已确认国家的行政区目录，直到得到 `ready` `prepared_network_input.v1`；原样保留 Tool 返回的 `prepared_input_relative_path`、`input_identity`、候选仓总数和有界候选仓目录，不构造 URI；目录被截断时不得断言候选仓不存在。
 
 文件角色、字段映射、国家、候选仓、成本规则或数据缺口不明确时，只询问真正缺失的业务选择。`prepare_network_input` 成功是本次数据准备的 terminal Tool 结果；随后只返回精确 Workspace 输入路径、输入身份与有界数据质量结论，不再调用 `read_mcp_resource`、`list_mcp_resources`、`inspect_workspace_sources`、`tool_search` 或其他 Tool，也不计算覆盖、成本、方案或地图。
+`needs_input` 同样是 terminal 结果：同一 Turn 最多询问一次，随后停止；只有用户在新 Turn 提供答案或上传修正文件后才重新检查。

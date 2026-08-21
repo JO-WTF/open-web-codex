@@ -1650,6 +1650,12 @@ mod tests {
     const SINGLE_AGENT_MAP_DELIVERY_SKILL: &str = include_str!(
         "../../../../copilots/warehouse-network-single-agent/skills/warehouse-single-map-delivery/SKILL.md"
     );
+    const SINGLE_AGENT_DATA_SKILL: &str = include_str!(
+        "../../../../copilots/warehouse-network-single-agent/skills/warehouse-data-preparation/SKILL.md"
+    );
+    const SINGLE_AGENT_ROOT_SKILL: &str = include_str!(
+        "../../../../copilots/warehouse-network-single-agent/skills/warehouse-single-agent/SKILL.md"
+    );
     const DATA_ROLE: &str =
         include_str!("../../../../copilots/warehouse-network/agents/data_agent.toml");
     const NETWORK_ROLE: &str =
@@ -1711,9 +1717,7 @@ mod tests {
     #[test]
     fn warehouse_supervisor_skill_selects_the_native_child_continuation_mode() {
         assert!(SUPERVISOR_SKILL.contains("统一使用原生 Multi-Agent V1"));
-        assert!(
-            SUPERVISOR_SKILL.contains("先 `resume_agent(id)`，再用 `send_input(target, message)`")
-        );
+        assert!(SUPERVISOR_SKILL.contains("先 `resume_agent(id)`"));
         assert!(SUPERVISOR_SKILL.contains("`fork_turns=\"none\"`"));
         assert!(SUPERVISOR_SKILL.contains("不得省略后退回默认 `all`"));
         assert!(!SUPERVISOR_SKILL.contains("`list_agents`"));
@@ -1721,6 +1725,26 @@ mod tests {
         assert!(SUPERVISOR_SKILL.contains("`$warehouse-data`"));
         assert!(SUPERVISOR_SKILL.contains("`$warehouse-network-planning`"));
         assert!(SUPERVISOR_SKILL.contains("`$warehouse-map-delivery`"));
+        assert!(SUPERVISOR_SKILL.contains("必须用 `send_input.items` 开启新 child Turn"));
+        assert!(SUPERVISOR_SKILL.contains("不得使用 `send_input.message`"));
+        assert!(SUPERVISOR_SKILL.contains("任何 Tool 动作前先按当前目标调用 native `tool_search`"));
+        assert!(!SUPERVISOR_SKILL.contains("`send_input(target, message)`"));
+    }
+
+    #[test]
+    fn resumed_warehouse_roles_require_fresh_tool_search_before_any_other_tool() {
+        for (role, expected_skill) in [
+            (DATA_ROLE, "$warehouse-data"),
+            (NETWORK_ROLE, "$warehouse-*"),
+        ] {
+            assert!(role.contains("this applies again after `resume_agent`"));
+            assert!(role.contains("the first model-visible Tool call must be native `tool_search`"));
+            assert!(
+                role.contains("Only Tools returned by this exact current-Turn search are callable")
+            );
+            assert!(role.contains("return `capability_unavailable` and stop"));
+            assert!(role.contains(expected_skill));
+        }
     }
 
     #[test]
@@ -1728,6 +1752,17 @@ mod tests {
         assert!(DATA_SKILL
             .contains("`prepare_network_input` 成功是本次 Data 工作的 terminal Tool 结果"));
         assert!(DATA_SKILL.contains("不要再调用 `read_mcp_resource`、`list_mcp_resources`"));
+    }
+
+    #[test]
+    fn warehouse_data_skills_stop_and_ask_on_typed_missing_input() {
+        assert!(DATA_SKILL.contains("`retryable=false` 明确禁止"));
+        assert!(DATA_SKILL.contains("同一 child Turn 最多发送一次缺口消息"));
+        assert!(SUPERVISOR_SKILL.contains("Data child 返回 `needs_input` 时"));
+        assert!(SUPERVISOR_SKILL.contains("向用户询问一次 Tool 给出的业务问题"));
+        assert!(SINGLE_AGENT_DATA_SKILL.contains("立即使用 Tool 给出的 `question` 向用户询问一次"));
+        assert!(SINGLE_AGENT_DATA_SKILL.contains("同一 Turn 最多询问一次"));
+        assert!(SINGLE_AGENT_ROOT_SKILL.contains("必须询问一次并结束当前 Turn"));
     }
 
     #[test]

@@ -13,6 +13,8 @@ Root 没有仓网 MCP 数据面；上传文件已由 Workspace 授权并交给 D
 
 数据发现、映射、标准化和地理补全由 `data_agent`（昵称 `Wanwan`）处理；路线、分析、选址、地图和报告由 `network_agent` 处理。Data→Network 的唯一业务数据交接是 Data Tool 返回的精确 `prepared_input_relative_path` 与 `input_identity`；路线、成本和方案仍以 Network Tool 的精确 ResourceRef 交接。Root 不读取或搬运业务内容。只有缺少前置引用、参数/schema 不完整且尚未产生副作用时，才允许在同一 child 上做一次有界纠正后继续；权限拒绝、身份不一致、取消、超时、外部失败、能力不可用或 Tool 已执行的终态失败必须如实报告并停止当前请求。
 
+Data child 返回 `needs_input` 时，Root 不得把它当成可纠正 Tool 参数错误，不得恢复、重派或新建 Data child。原样合并相同文件的缺口，向用户询问一次 Tool 给出的业务问题并结束当前 Root Turn；只有用户在新 Turn 提供了答案或上传修正文件后才继续。缺少 `warehouse_type` 时必须明确要求源数据逐行补充 `center` 或 `cross_docking`，不能默认所有仓同型。
+
 ## Child Skill 选择
 
 - Data child 的 `items` 必须包含精确 `$warehouse-data` Skill item 和一个任务 Text item。
@@ -24,7 +26,8 @@ Root 没有仓网 MCP 数据面；上传文件已由 Workspace 授权并交给 D
 
 当前仓网 Copilot 统一使用原生 Multi-Agent V1。每个后续请求从当前 Thread 已可见的 spawn、wait、resume 与 child terminal Item 中确认相关 child 的稳定 target 与终态；没有可验证 target 时返回 `needs_context`，不猜测 child。
 
-- 前一 child 已完成，且正确性依赖它尚未结构化的判断、调查过程或上下文时，复用该非 Root child：对已关闭 child 先 `resume_agent(id)`，再用 `send_input(target, message)` 续派并 `wait_agent`；未关闭 child 直接 `send_input` 后 `wait_agent`。不得把消息发给 Root。
+- 前一 child 已完成，且正确性依赖它尚未结构化的判断、调查过程或上下文时，复用该非 Root child：对已关闭 child 先 `resume_agent(id)`；随后必须用 `send_input.items` 开启新 child Turn，重新传入与本次职责匹配的全部精确 Skill item，最后放一个新的任务 Text item。不得使用 `send_input.message`，不得假设初次 spawn 的 Skill 或 ToolSearch 结果仍对恢复 Turn 生效。Text item 必须明确“这是新 Turn；任何 Tool 动作前先按当前目标调用 native `tool_search`，只使用本次搜索返回的 Tool”。未关闭但已完成的 child 也使用同一 structured `items` 合同；发送后再 `wait_agent`。不得把消息发给 Root。
+- 恢复 child 时，Root 从当前 Runtime Skill catalog 重新展开 Skill locator；不能复用历史 Skill 正文、历史绝对路径字符串或前一 Turn 的 Tool 名/schema。Data child 每次传 `$warehouse-data`；Network child 按新任务重新传 `$warehouse-network-planning`，需要地图时再传 `$warehouse-map-delivery`。
 - 当前请求已具备完整 `prepared_input_relative_path`、其 `input_identity`、必要的计算 ResourceRef、业务参数、用户许可和交付要求时，创建新的有界 child，并显式传 `fork_turns="none"`。`items` 先列出本次精确 Skill item，最后放当前目标和确切路径/引用的 Text item，不复制前一轮完整历史。
 - 任何 `spawn_agent` 都必须显式声明 `fork_turns`；不得省略后退回默认 `all`。child 已失败、拒绝、取消、超时或中断时不自动重试或重派；仅在用户发起新的请求后，才按上述规则创建新的有界工作。
 

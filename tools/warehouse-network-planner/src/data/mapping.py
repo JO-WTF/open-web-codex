@@ -171,6 +171,25 @@ class SuggestedRoleMapping:
     field_mappings: tuple[SuggestedFieldMapping, ...]
 
 
+@dataclass(frozen=True)
+class SuggestedRoleRequirement:
+    """One likely source role that is blocked by missing required fields."""
+
+    role: SourceRole
+    confidence: float
+    missing_required_fields: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _RoleMappingAssessment:
+    role: SourceRole
+    confidence: float
+    ambiguous: bool
+    field_mappings: tuple[SuggestedFieldMapping, ...]
+    matched_required_fields: frozenset[str]
+    missing_required_fields: frozenset[str]
+
+
 def suggest_role_mappings(fields: Sequence[FieldObservation]) -> list[SuggestedRoleMapping]:
     """Suggest domain roles from validated structural fields without source identity.
 
@@ -179,6 +198,60 @@ def suggest_role_mappings(fields: Sequence[FieldObservation]) -> list[SuggestedR
     than one alias is present; callers must confirm an ambiguous suggestion.
     """
 
+    proposals = [
+        SuggestedRoleMapping(
+            role=assessment.role,
+            confidence=assessment.confidence,
+            ambiguous=assessment.ambiguous,
+            field_mappings=assessment.field_mappings,
+        )
+        for assessment in _assess_role_mappings(fields)
+        if not assessment.missing_required_fields
+    ]
+    ambiguous_roles = _ambiguous_roles(proposals)
+    return [
+        replace(item, ambiguous=True) if item.role in ambiguous_roles else item
+        for item in proposals
+    ]
+
+
+def suggest_role_requirements(fields: Sequence[FieldObservation]) -> list[SuggestedRoleRequirement]:
+    """Return only high-confidence partial roles that need user-supplied fields.
+
+    A partial role must match at least two required fields. Only the strongest
+    coverage tier is returned so a demand table does not receive unrelated
+    warehouse or route questions.
+    """
+
+    all_assessments = _assess_role_mappings(fields)
+    assessments = [
+        assessment
+        for assessment in all_assessments
+        if assessment.missing_required_fields
+        and len(assessment.matched_required_fields) >= 2
+        and len(assessment.matched_required_fields) / len(REQUIRED_FIELDS[assessment.role])
+        >= 0.6
+    ]
+    if not assessments:
+        return []
+    strongest = max(
+        len(item.matched_required_fields) / len(REQUIRED_FIELDS[item.role])
+        for item in assessments
+    )
+    return [
+        SuggestedRoleRequirement(
+            role=item.role,
+            confidence=item.confidence,
+            missing_required_fields=tuple(sorted(item.missing_required_fields)),
+        )
+        for item in assessments
+        if strongest
+        - len(item.matched_required_fields) / len(REQUIRED_FIELDS[item.role])
+        < 0.05
+    ]
+
+
+def _assess_role_mappings(fields: Sequence[FieldObservation]) -> list[_RoleMappingAssessment]:
     columns: dict[str, list[FieldObservation]] = defaultdict(list)
     for field in fields:
         columns[_normalized(field.name)].append(field)
@@ -188,31 +261,11 @@ def suggest_role_mappings(fields: Sequence[FieldObservation]) -> list[SuggestedR
         for field in columns.get(key, [])
         for value in field.sample_values
     }
-    proposals: list[SuggestedRoleMapping] = []
+    assessments: list[_RoleMappingAssessment] = []
     for role, targets in TARGET_ALIASES.items():
-        if role not in REQUIRED_FIELDS:
-            continue
-        if role == SourceRole.CURRENT_ASSIGNMENT and columns.keys() & {
-            "warehouse_type",
-            "warehouse_name",
-            "facility_type",
-            "is_existing",
-            "is_fixed",
-        }:
-            continue
-        if role == SourceRole.EXISTING_WAREHOUSE and existing_values and existing_values <= {
-            "false",
-            "0",
-            "no",
-            "n",
-        }:
-            continue
-        if role == SourceRole.CANDIDATE_WAREHOUSE and existing_values and existing_values <= {
-            "true",
-            "1",
-            "yes",
-            "y",
-        }:
+        if role not in REQUIRED_FIELDS or not _role_is_applicable(
+            role, set(columns), existing_values
+        ):
             continue
         field_mappings: list[SuggestedFieldMapping] = []
         matched_targets: set[str] = set()
@@ -240,22 +293,56 @@ def suggest_role_mappings(fields: Sequence[FieldObservation]) -> list[SuggestedR
                     reason_code="exact_name" if exact else "alias",
                 )
             )
-        if not REQUIRED_FIELDS[role].issubset(matched_targets):
+        required = REQUIRED_FIELDS[role]
+        matched_required = frozenset(required & matched_targets)
+        missing_required = frozenset(required - matched_targets)
+        if not matched_required:
             continue
-        confidence = sum(item.score for item in field_mappings) / max(1, len(field_mappings))
-        proposals.append(
-            SuggestedRoleMapping(
+        mapping_confidence = sum(item.score for item in field_mappings) / max(
+            1, len(field_mappings)
+        )
+        coverage = len(matched_required) / len(required)
+        assessments.append(
+            _RoleMappingAssessment(
                 role=role,
-                confidence=confidence,
+                confidence=mapping_confidence * coverage,
                 ambiguous=ambiguous,
                 field_mappings=tuple(field_mappings),
+                matched_required_fields=matched_required,
+                missing_required_fields=missing_required,
             )
         )
-    ambiguous_roles = _ambiguous_roles(proposals)
-    return [
-        replace(item, ambiguous=True) if item.role in ambiguous_roles else item
-        for item in proposals
-    ]
+    return assessments
+
+
+def _role_is_applicable(
+    role: SourceRole,
+    column_names: set[str],
+    existing_values: set[str],
+) -> bool:
+    if role == SourceRole.CURRENT_ASSIGNMENT and column_names & {
+        "warehouse_type",
+        "warehouse_name",
+        "facility_type",
+        "is_existing",
+        "is_fixed",
+    }:
+        return False
+    if role == SourceRole.EXISTING_WAREHOUSE and existing_values and existing_values <= {
+        "false",
+        "0",
+        "no",
+        "n",
+    }:
+        return False
+    if role == SourceRole.CANDIDATE_WAREHOUSE and existing_values and existing_values <= {
+        "true",
+        "1",
+        "yes",
+        "y",
+    }:
+        return False
+    return True
 
 
 def _ambiguous_roles(proposals: Sequence[SuggestedRoleMapping]) -> set[SourceRole]:

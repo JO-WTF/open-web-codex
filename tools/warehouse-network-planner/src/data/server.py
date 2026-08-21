@@ -27,9 +27,12 @@ from supply_chain_planner.data.geography import (
     load_administrative_catalog as _load_administrative_catalog,
 )
 from supply_chain_planner.data.mapping import (
+    REQUIRED_FIELDS,
     FieldObservation,
+    SourceRole,
     TransformSpec,
     suggest_role_mappings,
+    suggest_role_requirements,
 )
 from supply_chain_planner.data.normalization import (
     ConfirmedFieldMapping,
@@ -49,8 +52,10 @@ from supply_chain_planner.shared.models import (
     CandidateWarehouseSummary,
     ConfirmedFieldDecision,
     ConfirmedSourceDecision,
+    ConfirmedSourceInputDecision,
     DataInspectionToolResult,
     DataPreparationToolResult,
+    DataSourceRequirement,
     GeographyOverride,
     PreparedNetworkResource,
     SourceInspectionIdentity,
@@ -93,6 +98,9 @@ mcp = FastMCP(
         "head preview has separate "
         "preview_sample_count, total_count, and total_count_exact fields; preview rows are examples "
         "only and never the full source. Never use the preview sample count as the source row count. "
+        "Inspection reports missing business fields as a typed needs_input result with "
+        "retryable=false. Ask the user once and stop the current Turn; never retry preparation "
+        "against unchanged sources. "
         "The initial normalization tool rereads "
         "the complete explicitly confirmed source files and preserves every confirmed candidate "
         "warehouse in a user-visible prepared_network_input.v1 Workspace JSON file. Source facts "
@@ -145,12 +153,23 @@ def _write_prepared_input(
         (warehouse for warehouse in persisted.warehouses if not warehouse.is_existing),
         key=lambda warehouse: warehouse.warehouse_id,
     )
+    next_action = {
+        "ready": "handoff",
+        "needs_input": "request_user_input",
+        "needs_geography": "prepare_geography",
+    }[persisted.state]
     return DataPreparationToolResult(
+        outcome="prepared",
         summary=summary,
+        next_action=next_action,
+        retryable=False,
+        requirements=[],
         prepared_input_relative_path=created.relative_path,
         input_identity=identity,
         state=persisted.state,
         issue_count=len(persisted.issues),
+        issues=persisted.issues[:64],
+        issues_truncated=len(persisted.issues) > 64,
         candidate_warehouse_count=len(candidates),
         candidate_warehouses=[
             CandidateWarehouseSummary(
@@ -161,6 +180,31 @@ def _write_prepared_input(
             for warehouse in candidates[:64]
         ],
         candidate_warehouses_truncated=len(candidates) > 64,
+    )
+
+
+def _needs_input_result(
+    requirements: list[DataSourceRequirement],
+) -> DataPreparationToolResult:
+    summary = " ".join(requirement.question for requirement in requirements)
+    return DataPreparationToolResult(
+        outcome="needs_input",
+        summary=(
+            f"{summary} Do not retry prepare_network_input until the user supplies the "
+            "requested business input or uploads corrected source data."
+        ),
+        next_action="request_user_input",
+        retryable=False,
+        requirements=requirements,
+        prepared_input_relative_path=None,
+        input_identity=None,
+        state="needs_input",
+        issue_count=0,
+        issues=[],
+        issues_truncated=False,
+        candidate_warehouse_count=0,
+        candidate_warehouses=[],
+        candidate_warehouses_truncated=False,
     )
 
 
@@ -189,14 +233,26 @@ def inspect_workspace_sources(
     complete source snapshot and must not be used as the source row count.
     """
     profile = _inspect_workspace_sources(relative_paths, ctx)
+    requirements = _profile_requirements(profile)
     content_sha256, source_count = source_inspection_identity(_workspace(ctx), relative_paths)
     identity = SourceInspectionIdentity(
         content_sha256=content_sha256,
         source_count=source_count,
     )
-    summary = f"Inspected {source_count} authorized Workspace sources."
+    if requirements:
+        summary = (
+            f"Inspected {source_count} authorized Workspace sources; "
+            f"{len(requirements)} source requirement(s) need user input. "
+            "Do not call prepare_network_input until they are resolved."
+        )
+    else:
+        summary = f"Inspected {source_count} authorized Workspace sources."
     result = DataInspectionToolResult(
         summary=summary,
+        state="needs_input" if requirements else "ready",
+        next_action="request_user_input" if requirements else "confirm_sources",
+        retryable=False,
+        requirements=requirements,
         source_profile=profile,
         inspection_identity=identity,
         inspected_relative_paths=sorted(relative_paths),
@@ -217,7 +273,13 @@ def _inspect_workspace_sources(
         raise ValueError("relative_paths must not contain duplicates")
     sources = [inspect(_workspace(ctx), relative_path) for relative_path in relative_paths]
     for source in sources:
-        source["mapping_suggestions"] = _mapping_suggestions(source["structure"])
+        suggestions, requirements = _mapping_analysis(
+            str(source["relative_path"]), source["structure"]
+        )
+        source["mapping_suggestions"] = suggestions
+        source["mapping_requirements"] = [
+            requirement.model_dump(mode="json") for requirement in requirements
+        ]
     return _bound_agent_previews(
         {
             "schemaVersion": "source_profile.v1",
@@ -226,7 +288,10 @@ def _inspect_workspace_sources(
     )
 
 
-def _mapping_suggestions(structure: dict[str, Any]) -> list[dict[str, Any]]:
+def _mapping_analysis(
+    relative_path: str,
+    structure: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[DataSourceRequirement]]:
     observations: list[FieldObservation] = []
 
     def add(columns: list[Any], rows: list[Any]) -> None:
@@ -262,7 +327,7 @@ def _mapping_suggestions(structure: dict[str, Any]) -> list[dict[str, Any]]:
                 FieldObservation(name=name, sample_values=tuple(samples[:3]))
                 for name, samples in values.items()
             )
-    return [
+    suggestions = [
         {
             "role": suggestion.role.value,
             "confidence": suggestion.confidence,
@@ -280,6 +345,42 @@ def _mapping_suggestions(structure: dict[str, Any]) -> list[dict[str, Any]]:
         }
         for suggestion in suggest_role_mappings(observations)
     ]
+    grouped_requirements: dict[tuple[str, ...], list[SourceRole]] = {}
+    for requirement in suggest_role_requirements(observations):
+        grouped_requirements.setdefault(requirement.missing_required_fields, []).append(
+            requirement.role
+        )
+    requirements = [
+        DataSourceRequirement(
+            code="required_fields_missing",
+            relative_path=relative_path,
+            candidate_roles=sorted(roles, key=lambda item: item.value),
+            missing_required_fields=list(missing_fields),
+            question=_missing_fields_question(relative_path, missing_fields),
+        )
+        for missing_fields, roles in sorted(grouped_requirements.items())
+    ]
+    return suggestions, requirements
+
+
+def _missing_fields_question(relative_path: str, missing_fields: tuple[str, ...]) -> str:
+    if missing_fields == ("warehouse_type",):
+        return (
+            f"文件 {relative_path} 缺少仓型字段 warehouse_type。请在源数据中补充该列，"
+            "每行使用 center 或 cross_docking，然后再继续。"
+        )
+    fields = ", ".join(missing_fields)
+    return f"文件 {relative_path} 缺少必需字段：{fields}。请补充源数据后再继续。"
+
+
+def _profile_requirements(profile: dict[str, Any]) -> list[DataSourceRequirement]:
+    requirements: list[DataSourceRequirement] = []
+    for source in profile.get("sources", []):
+        requirements.extend(
+            DataSourceRequirement.model_validate(requirement)
+            for requirement in source.get("mapping_requirements", [])
+        )
+    return requirements
 
 
 def _bound_agent_previews(profile: dict[str, Any]) -> dict[str, Any]:
@@ -306,7 +407,7 @@ def prepare_network_input(
     inspection_identity: SourceInspectionIdentity,
     inspected_relative_paths: list[str],
     confirmed_sources: Annotated[
-        list[ConfirmedSourceDecision],
+        list[ConfirmedSourceInputDecision],
         Field(
             description=(
                 "Confirmed demand, warehouse, assignment, or route sources only. "
@@ -347,9 +448,7 @@ def prepare_network_input(
     Data-to-Network handoff.
     """
     inspection_identity = SourceInspectionIdentity.model_validate(inspection_identity)
-    confirmed_sources = [
-        ConfirmedSourceDecision.model_validate(decision) for decision in confirmed_sources
-    ]
+    confirmed_sources = [_source_input_decision(decision) for decision in confirmed_sources]
     profile = _inspect_workspace_sources(inspected_relative_paths, ctx)
     content_sha256, source_count = source_inspection_identity(
         _workspace(ctx), inspected_relative_paths
@@ -375,6 +474,19 @@ def prepare_network_input(
         raise ValueError("confirmed_source_relative_paths_must_be_unique")
     if not set(selected_paths) <= inspected_set or not set(selected_paths) <= set(available):
         raise ValueError("confirmed_source_not_in_inspected_paths")
+    requirements = [
+        requirement
+        for decision in confirmed_sources
+        if (
+            requirement := _confirmed_source_requirement(
+                decision,
+                available[decision.relative_path],
+            )
+        )
+        is not None
+    ]
+    if requirements:
+        return _needs_input_result(requirements)
     resolved_sources = [
         _resolve_confirmed_source_decision(decision, available[decision.relative_path])
         for decision in confirmed_sources
@@ -433,8 +545,65 @@ def prepare_network_input(
     )
 
 
+def _confirmed_source_requirement(
+    decision: ConfirmedSourceInputDecision,
+    source: dict[str, Any],
+) -> DataSourceRequirement | None:
+    if decision.mappings:
+        missing_fields = tuple(
+            sorted(
+                REQUIRED_FIELDS[decision.role]
+                - {mapping.target_field for mapping in decision.mappings}
+            )
+        )
+        if not missing_fields:
+            return None
+        return DataSourceRequirement(
+            code="required_fields_missing",
+            relative_path=decision.relative_path,
+            candidate_roles=[decision.role],
+            missing_required_fields=list(missing_fields),
+            question=_missing_fields_question(decision.relative_path, missing_fields),
+        )
+
+    suggestions = [
+        suggestion
+        for suggestion in source.get("mapping_suggestions", [])
+        if suggestion.get("role") == decision.role.value
+    ]
+    if len(suggestions) == 1 and suggestions[0].get("ambiguous") is False:
+        return None
+
+    for raw_requirement in source.get("mapping_requirements", []):
+        requirement = DataSourceRequirement.model_validate(raw_requirement)
+        if decision.role in requirement.candidate_roles:
+            return requirement
+
+    if suggestions:
+        return DataSourceRequirement(
+            code="source_role_confirmation_required",
+            relative_path=decision.relative_path,
+            candidate_roles=[decision.role],
+            missing_required_fields=[],
+            question=(
+                f"文件 {decision.relative_path} 的业务角色存在歧义。"
+                f"请确认它是否属于 {decision.role.value}，并确认字段映射后再继续。"
+            ),
+        )
+    return DataSourceRequirement(
+        code="field_mapping_confirmation_required",
+        relative_path=decision.relative_path,
+        candidate_roles=[decision.role],
+        missing_required_fields=[],
+        question=(
+            f"文件 {decision.relative_path} 无法完整映射为 {decision.role.value}。"
+            "请补充缺失字段或明确提供完整字段映射后再继续。"
+        ),
+    )
+
+
 def _resolve_confirmed_source_decision(
-    decision: ConfirmedSourceDecision,
+    decision: ConfirmedSourceInputDecision,
     source: dict[str, Any],
 ) -> ConfirmedSourceDecision:
     suggestions = [
@@ -448,7 +617,7 @@ def _resolve_confirmed_source_decision(
                 f"confirmed_mappings_not_allowed_for_unambiguous_source:"
                 f"{decision.relative_path}:{decision.role.value}"
             )
-        return decision
+        return ConfirmedSourceDecision.model_validate(decision.model_dump(mode="json"))
     if len(suggestions) != 1 or suggestions[0].get("ambiguous") is not False:
         raise ValueError(
             f"confirmed_mappings_required:{decision.relative_path}:{decision.role.value}"
@@ -478,6 +647,14 @@ def _resolve_confirmed_source_decision(
         role=decision.role,
         mappings=mappings,
     )
+
+
+def _source_input_decision(
+    decision: ConfirmedSourceInputDecision | ConfirmedSourceDecision | dict[str, Any],
+) -> ConfirmedSourceInputDecision:
+    if isinstance(decision, ConfirmedSourceInputDecision):
+        return ConfirmedSourceInputDecision.model_validate(decision.model_dump(mode="json"))
+    return ConfirmedSourceInputDecision.model_validate(decision)
 
 
 def _enrich_prepared_geography(

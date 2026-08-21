@@ -117,6 +117,55 @@ async def smoke() -> None:
                     "outputs/warehouse-network/prepared/"
                 )
                 assert prepared.structuredContent["input_identity"]["content_sha256"]
+                (workspace / "warehouses-missing-type.csv").write_text(
+                    "warehouse_id,warehouse_name,city_id,city_name,is_existing\n"
+                    "WH-1,Jakarta Center,city-1,Jakarta,true\n",
+                    encoding="utf-8",
+                )
+                blocked_inspection = await asyncio.wait_for(
+                    session.call_tool(
+                        "inspect_workspace_sources",
+                        {"relative_paths": ["warehouses-missing-type.csv"]},
+                        meta=meta,
+                    ),
+                    timeout=10,
+                )
+                assert blocked_inspection.isError is not True
+                blocked_profile = blocked_inspection.structuredContent
+                assert blocked_profile["state"] == "needs_input"
+                assert blocked_profile["retryable"] is False
+                assert blocked_profile["requirements"][0]["missing_required_fields"] == [
+                    "warehouse_type"
+                ]
+                blocked = await asyncio.wait_for(
+                    session.call_tool(
+                        "prepare_network_input",
+                        {
+                            "inspection_identity": blocked_profile["inspection_identity"],
+                            "inspected_relative_paths": blocked_profile[
+                                "inspected_relative_paths"
+                            ],
+                            "confirmed_sources": [
+                                {
+                                    "relative_path": "warehouses-missing-type.csv",
+                                    "role": "existing_warehouse",
+                                }
+                            ],
+                            "country_code": "ID",
+                            "output_relative_path": (
+                                "outputs/warehouse-network/prepared/blocked.json"
+                            ),
+                        },
+                        meta=meta,
+                    ),
+                    timeout=10,
+                )
+                assert blocked.isError is not True
+                assert blocked.structuredContent["outcome"] == "needs_input"
+                assert blocked.structuredContent["next_action"] == "request_user_input"
+                assert blocked.structuredContent["retryable"] is False
+                assert blocked.structuredContent["prepared_input_relative_path"] is None
+                assert not (workspace / "outputs/warehouse-network/prepared/blocked.json").exists()
         planning_parameters = StdioServerParameters(
             command=sys.executable,
             args=["-m", "supply_chain_planner.network.server"],
