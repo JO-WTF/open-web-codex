@@ -455,6 +455,8 @@ def _count_csv_records(path: Path, delimiter: str) -> int:
 def inspect_json(path: Path) -> dict[str, Any]:
     arrays: dict[str, dict[str, Any]] = {}
     object_keys: dict[str, set[str]] = {}
+    administrative_metadata: dict[str, Any] = {}
+    metadata_keys = {"country_code", "admin_level", "schema_version"}
     node_count = 0
     root_kind = "unknown"
     with path.open("rb") as stream:
@@ -471,6 +473,8 @@ def inspect_json(path: Path) -> dict[str, Any]:
                 root_kind = "array"
             if event == "string" and isinstance(value, str) and len(value) > MAX_JSON_STRING:
                 raise ValueError("json_string_limit_exceeded")
+            if prefix in metadata_keys and event in {"string", "number", "boolean", "null"}:
+                administrative_metadata[prefix] = _bounded_representative(value)
             if event == "start_array":
                 array_key = prefix or "$"
                 array_path = _json_array_path(array_key)
@@ -551,6 +555,7 @@ def inspect_json(path: Path) -> dict[str, Any]:
         "object_keys": {path: sorted(keys) for path, keys in object_keys.items()},
         "arrays": list(arrays.values()),
         "node_count": node_count,
+        "administrative_metadata": administrative_metadata,
     }
 
 

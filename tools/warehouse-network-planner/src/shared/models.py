@@ -251,6 +251,7 @@ class DataInspectionInspected(StrictModel):
     summary: str
     next_action: Literal["confirm_sources"]
     retryable: Literal[False]
+    country_code: str | None = Field(default=None, pattern=r"^[A-Z]{2}$")
     source_profile: dict[str, Any]
     inspection_identity: SourceInspectionIdentity
     inspected_relative_paths: list[str] = Field(min_length=1, max_length=64)

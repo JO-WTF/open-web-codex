@@ -286,8 +286,8 @@ def discover_workspace_sources(ctx: Context) -> dict[str, Any]:
 def inspect_workspace_sources(
     relative_paths: list[str],
     required_roles: Annotated[list[PlanningSourceRole], Field(min_length=1, max_length=5)],
-    country_code: Annotated[str, Field(pattern=r"^[A-Za-z]{2}$")],
     ctx: Context,
+    country_code: Annotated[str | None, Field(pattern=r"^[A-Za-z]{2}$")] = None,
 ) -> Annotated[CallToolResult, DataInspectionToolResult]:
     """Inspect selected Workspace files and return one bounded inline profile.
 
@@ -295,7 +295,7 @@ def inspect_workspace_sources(
     complete source snapshot and must not be used as the source row count.
     """
     required_roles = _canonical_required_roles(required_roles)
-    country = country_code.strip().upper()
+    country = country_code.strip().upper() if country_code is not None else None
     root = _workspace(ctx)
     if not relative_paths:
         raise ValueError("relative_paths must contain at least one Workspace-relative path")
@@ -314,16 +314,22 @@ def inspect_workspace_sources(
         raise ValueError("prepared_candidate_not_found")
     raw_paths = [path for path in relative_paths if path not in selected_candidate_paths]
     candidate_paths = sorted(selected_candidate_paths)
-    fresh_candidates, candidate_warnings = _fresh_prepared_candidates(
-        root, candidate_paths, required_roles, country
-    )
-    if fresh_candidates:
-        if len({item[2].content_sha256 for item in fresh_candidates}) == 1:
-            selected = min(fresh_candidates, key=lambda item: item[0])
-            return _prepared_ready_result(selected, candidate_warnings)
-        return _prepared_selection_result(fresh_candidates)
+    candidate_warnings: list[str] = []
+    if country is not None:
+        fresh_candidates, candidate_warnings = _fresh_prepared_candidates(
+            root, candidate_paths, required_roles, country
+        )
+        if fresh_candidates:
+            if len({item[2].content_sha256 for item in fresh_candidates}) == 1:
+                selected = min(fresh_candidates, key=lambda item: item[0])
+                return _prepared_ready_result(selected, candidate_warnings)
+            return _prepared_selection_result(fresh_candidates)
     if not raw_paths:
-        raise ProviderContractError("prepared_candidate_unavailable")
+        raise ProviderContractError(
+            "prepared_candidate_country_required"
+            if country is None
+            else "prepared_candidate_unavailable"
+        )
     inspected = _inspect_workspace_sources(raw_paths, ctx)
     if isinstance(inspected, DataInspectionSelectionRequired):
         summary = inspected.summary
@@ -333,6 +339,16 @@ def inspect_workspace_sources(
             structuredContent=result.model_dump(mode="json", by_alias=True),
         )
     profile = inspected
+    derived_country, country_warnings = _derive_inspected_country(profile, country)
+    if country is None and derived_country is not None and candidate_paths:
+        fresh_candidates, candidate_warnings = _fresh_prepared_candidates(
+            root, candidate_paths, required_roles, derived_country
+        )
+        if fresh_candidates:
+            if len({item[2].content_sha256 for item in fresh_candidates}) == 1:
+                selected = min(fresh_candidates, key=lambda item: item[0])
+                return _prepared_ready_result(selected, candidate_warnings)
+            return _prepared_selection_result(fresh_candidates)
     content_sha256, source_count = source_inspection_identity(root, raw_paths)
     identity = SourceInspectionIdentity(
         content_sha256=content_sha256,
@@ -351,18 +367,56 @@ def inspect_workspace_sources(
             summary=summary,
             next_action="confirm_sources",
             retryable=False,
+            country_code=derived_country,
             source_profile=profile,
             inspection_identity=identity,
             inspected_relative_paths=sorted(raw_paths),
-            warnings=candidate_warnings[:64],
-            warning_count=len(candidate_warnings),
-            warnings_truncated=len(candidate_warnings) > 64,
+            warnings=(candidate_warnings + country_warnings)[:64],
+            warning_count=len(candidate_warnings) + len(country_warnings),
+            warnings_truncated=len(candidate_warnings) + len(country_warnings) > 64,
         )
     )
     return CallToolResult(
         content=[TextContent(type="text", text=summary)],
         structuredContent=result.model_dump(mode="json", by_alias=True),
     )
+
+
+def _derive_inspected_country(
+    profile: dict[str, Any], explicit_country: str | None
+) -> tuple[str | None, list[str]]:
+    if explicit_country is not None:
+        return explicit_country, []
+    codes: list[str] = []
+    metadata_seen = False
+    invalid_metadata = False
+    for source in profile.get("sources", []):
+        units = source.get("units", [])
+        if not any(
+            assessment.get("role") == SourceRole.ADMINISTRATIVE_CATALOG.value
+            for unit in units
+            if isinstance(unit, dict)
+            for assessment in unit.get("role_assessments", [])
+            if isinstance(assessment, dict)
+        ):
+            continue
+        metadata = source.get("administrative_metadata")
+        if not isinstance(metadata, dict):
+            continue
+        metadata_seen = True
+        value = metadata.get("country_code")
+        if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z]{2}", value.strip()):
+            invalid_metadata = True
+            continue
+        codes.append(value.strip().upper())
+    if invalid_metadata:
+        return None, ["country_code_metadata_invalid"]
+    unique_codes = sorted(set(codes))
+    if len(unique_codes) == 1:
+        return unique_codes[0], []
+    if len(unique_codes) > 1:
+        return None, ["country_code_metadata_conflict"]
+    return None, ["country_code_metadata_missing" if metadata_seen else "country_code_not_found"]
 
 
 def _canonical_required_roles(
@@ -492,6 +546,9 @@ def _inspect_workspace_sources(
     for relative_path in relative_paths:
         source = inspect(_workspace(ctx), relative_path)
         structure = source.pop("structure")
+        metadata = structure.get("administrative_metadata")
+        if isinstance(metadata, dict) and metadata:
+            source["administrative_metadata"] = metadata
         units = _mapping_analysis(str(source["relative_path"]), structure)
         source["units"] = units
         unit_count += len(units)

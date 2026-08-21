@@ -106,6 +106,7 @@ def test_data_server_exposes_workspace_preparation_not_cross_agent_data_resource
     )
 
     inspect_tool = tools["inspect_workspace_sources"]
+    assert "country_code" not in inspect_tool.inputSchema["required"]
     required_role_schema = inspect_tool.inputSchema["properties"]["required_roles"]
     planning_role_definition = inspect_tool.inputSchema["$defs"][
         required_role_schema["items"]["$ref"].split("/")[-1]
@@ -187,8 +188,8 @@ def test_missing_warehouse_type_is_typed_non_retryable_user_input(
     inspected = data_server.inspect_workspace_sources(
         ["demand.csv", "warehouses.csv"],
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     )
     assert inspected.structuredContent is not None
     inspection = inspected.structuredContent
@@ -347,7 +348,10 @@ def test_source_profile_distinguishes_preview_samples_from_exact_total(
     _use_store(tmp_path, monkeypatch)
 
     result = data_server.inspect_workspace_sources(
-        ["candidate.csv"], [SourceRole.CANDIDATE_WAREHOUSE], "ID", object()
+        ["candidate.csv"],
+        [SourceRole.CANDIDATE_WAREHOUSE],
+        ctx=object(),
+        country_code="ID",
     )
     assert result.structuredContent is not None
     inspection = result.structuredContent
@@ -402,6 +406,91 @@ def test_source_profile_distinguishes_preview_samples_from_exact_total(
     assert any(item["code"] == "source_data_invalid" for item in prepared_payload["requirements"])
 
 
+def test_inspection_derives_country_from_admin_metadata_without_guessing(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "demand.csv").write_text(
+        "city_id,city_name,demand_quantity\nC-1,Jakarta,10\n", encoding="utf-8"
+    )
+    (tmp_path / "warehouse.csv").write_text(
+        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,is_existing\n"
+        "W-1,Jakarta,center,C-1,Jakarta,true\n",
+        encoding="utf-8",
+    )
+    admin = {
+        "country_code": "ID",
+        "admin_level": "city",
+        "schema_version": "administrative_catalog.v1",
+        "rows": [],
+    }
+    (tmp_path / "admin-id.json").write_text(json.dumps(admin), encoding="utf-8")
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+
+    derived = data_server.inspect_workspace_sources(
+        ["demand.csv", "admin-id.json"],
+        [SourceRole.DEMAND],
+        ctx=ctx,
+    ).structuredContent
+    assert derived["country_code"] == "ID"
+    admin_source = next(
+        source for source in derived["source_profile"]["sources"] if source["relative_path"] == "admin-id.json"
+    )
+    assert admin_source["administrative_metadata"] == {
+        key: admin[key] for key in ("country_code", "admin_level", "schema_version")
+    }
+
+    (tmp_path / "ordinary.json").write_text(
+        json.dumps({"schema_version": "ordinary.v1", "rows": []}), encoding="utf-8"
+    )
+    mixed = data_server.inspect_workspace_sources(
+        ["demand.csv", "ordinary.json", "admin-id.json"],
+        [SourceRole.DEMAND],
+        ctx=ctx,
+    ).structuredContent
+    assert mixed["country_code"] == "ID"
+
+    missing = data_server.inspect_workspace_sources(
+        ["demand.csv"], [SourceRole.DEMAND], ctx=ctx
+    ).structuredContent
+    assert missing["country_code"] is None
+    assert "country_code_not_found" in missing["warnings"]
+
+    conflict_admin = dict(admin, country_code="MY")
+    (tmp_path / "admin-my.json").write_text(json.dumps(conflict_admin), encoding="utf-8")
+    conflict = data_server.inspect_workspace_sources(
+        ["demand.csv", "admin-id.json", "admin-my.json"],
+        [SourceRole.DEMAND],
+        ctx=ctx,
+    ).structuredContent
+    assert conflict["country_code"] is None
+    assert "country_code_metadata_conflict" in conflict["warnings"]
+
+    explicit = data_server.inspect_workspace_sources(
+        ["demand.csv", "warehouse.csv", "admin-id.json"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        ctx=ctx,
+        country_code="MY",
+    ).structuredContent
+    assert explicit["country_code"] == "MY"
+    mismatch = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(explicit["inspection_identity"]),
+        explicit["inspected_relative_paths"],
+        [
+            SourceSelection(relative_path="demand.csv", unit_ref="table", role=SourceRole.DEMAND),
+            SourceSelection(
+                relative_path="warehouse.csv", unit_ref="table", role=SourceRole.EXISTING_WAREHOUSE
+            ),
+        ],
+        "MY",
+        f"{PREPARED_OUTPUT_DIR}/admin-country-mismatch.json",
+        ctx,
+        administrative_catalog_relative_path="admin-id.json",
+    ).model_dump(mode="json", by_alias=True)
+    assert mismatch["outcome"] == "needs_input"
+    assert mismatch["requirements"][0]["candidate_roles"] == ["administrative_catalog"]
+
+
 def test_current_mock_sources_have_no_global_false_demand_blockers(tmp_path, monkeypatch) -> None:
     fixture = tmp_path / "fixture"
     fixture.mkdir()
@@ -414,8 +503,8 @@ def test_current_mock_sources_have_no_global_false_demand_blockers(tmp_path, mon
     result = data_server.inspect_workspace_sources(
         sorted(path.name for path in fixture.iterdir() if path.suffix in {".csv", ".json"}),
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
-        "ID",
-        object(),
+        ctx=object(),
+        country_code="ID",
     )
     assert result.structuredContent is not None
     inspection = result.structuredContent
@@ -459,8 +548,8 @@ def test_current_mock_sources_prepare_from_full_units_and_keep_preview_tail_rows
     inspected = data_server.inspect_workspace_sources(
         sorted(selected_names),
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     )
     assert inspected.structuredContent is not None
     profile = inspected.structuredContent
@@ -528,8 +617,8 @@ def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate
     first = data_server.inspect_workspace_sources(
         raw_paths,
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     created = data_server.prepare_network_input(
         SourceInspectionIdentity.model_validate(first["inspection_identity"]),
@@ -550,21 +639,33 @@ def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate
     unselected = data_server.inspect_workspace_sources(
         raw_paths,
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     assert unselected["outcome"] == "inspected"
     reuse_paths = raw_paths + [created_payload["prepared_input_relative_path"]]
     reused = data_server.inspect_workspace_sources(
         reuse_paths,
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     assert reused["outcome"] == "prepared_ready"
     assert reused["operation"] == "reused"
     assert reused["prepared_input_relative_path"] == created_payload["prepared_input_relative_path"]
     assert "source_profile" not in reused
+    reused_from_admin_country = data_server.inspect_workspace_sources(
+        reuse_paths,
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
+        ctx=ctx,
+    ).structuredContent
+    assert reused_from_admin_country["outcome"] == "prepared_ready"
+    with pytest.raises(ProviderContractError, match="prepared_candidate_country_required"):
+        data_server.inspect_workspace_sources(
+            [created_payload["prepared_input_relative_path"]],
+            [SourceRole.DEMAND],
+            ctx=ctx,
+        )
 
     canonical_copy = tmp_path / f"{PREPARED_OUTPUT_DIR}/a-copy.json"
     canonical_copy.write_bytes(
@@ -576,8 +677,8 @@ def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate
             f"{PREPARED_OUTPUT_DIR}/a-copy.json",
         ],
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     assert canonical["outcome"] == "prepared_ready"
     assert canonical["prepared_input_relative_path"] == f"{PREPARED_OUTPUT_DIR}/a-copy.json"
@@ -595,8 +696,8 @@ def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate
             f"{PREPARED_OUTPUT_DIR}/changed.json",
         ],
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     assert ambiguous["outcome"] == "prepared_selection_required"
     assert ambiguous["candidate_count"] == 2
@@ -606,16 +707,16 @@ def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate
     missing_role = data_server.inspect_workspace_sources(
         raw_paths + [created_payload["prepared_input_relative_path"]],
         [SourceRole.DEMAND, SourceRole.CURRENT_ASSIGNMENT],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     assert missing_role["outcome"] == "inspected"
     assert any("required_roles_missing" in warning for warning in missing_role["warnings"])
     wrong_country = data_server.inspect_workspace_sources(
         raw_paths + [created_payload["prepared_input_relative_path"]],
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
-        "MY",
-        ctx,
+        ctx=ctx,
+        country_code="MY",
     ).structuredContent
     assert wrong_country["outcome"] == "inspected"
     assert any("country_mismatch" in warning for warning in wrong_country["warnings"])
@@ -626,8 +727,8 @@ def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate
     needs_geography = data_server.inspect_workspace_sources(
         raw_paths + [f"{PREPARED_OUTPUT_DIR}/needs-geography.json"],
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     assert needs_geography["outcome"] == "inspected"
     assert any("state_not_ready" in warning for warning in needs_geography["warnings"])
@@ -641,8 +742,8 @@ def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate
     mapping_mismatch = data_server.inspect_workspace_sources(
         raw_paths + [f"{PREPARED_OUTPUT_DIR}/mapping-mismatch.json"],
         [SourceRole.DEMAND],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     assert mapping_mismatch["outcome"] == "inspected"
     assert any("prepared_selected_source_identity_invalid" in warning for warning in mapping_mismatch["warnings"])
@@ -652,8 +753,8 @@ def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate
     invalid_candidate = data_server.inspect_workspace_sources(
         raw_paths + [f"{PREPARED_OUTPUT_DIR}/invalid.json"],
         [SourceRole.DEMAND],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     assert invalid_candidate["outcome"] == "inspected"
     assert any("prepared_network_input_invalid" in warning for warning in invalid_candidate["warnings"])
@@ -662,15 +763,15 @@ def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate
         data_server.inspect_workspace_sources(
             reuse_paths + [created_payload["prepared_input_relative_path"]],
             [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
-            "ID",
-            ctx,
+            ctx=ctx,
+            country_code="ID",
         )
     with pytest.raises(ValueError, match="prepared_candidate_not_found"):
         data_server.inspect_workspace_sources(
             [f"{PREPARED_OUTPUT_DIR}/missing.json"],
             [SourceRole.DEMAND],
-            "ID",
-            ctx,
+            ctx=ctx,
+            country_code="ID",
         )
 
     (tmp_path / "population-snapshot.csv").write_text(
@@ -680,8 +781,8 @@ def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate
     still_reused = data_server.inspect_workspace_sources(
         reuse_paths,
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     assert still_reused["outcome"] == "prepared_ready"
 
@@ -689,8 +790,8 @@ def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate
     admin_stale = data_server.inspect_workspace_sources(
         reuse_paths,
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     assert admin_stale["outcome"] == "inspected"
     assert any("administrative_catalog_changed" in warning for warning in admin_stale["warnings"])
@@ -703,8 +804,8 @@ def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate
     stale = data_server.inspect_workspace_sources(
         reuse_paths,
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     assert stale["outcome"] == "inspected"
     assert stale["warnings"]
@@ -714,8 +815,8 @@ def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate
         data_server.inspect_workspace_sources(
             reuse_paths,
             [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
-            "ID",
-            ctx,
+            ctx=ctx,
+            country_code="ID",
         )
     (tmp_path / "demand-cities.csv").write_bytes(original_demand)
     outside = tmp_path / "outside-demand.csv"
@@ -726,8 +827,8 @@ def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate
         data_server.inspect_workspace_sources(
             reuse_paths,
             [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
-            "ID",
-            ctx,
+            ctx=ctx,
+            country_code="ID",
         )
 
 
@@ -748,8 +849,8 @@ def test_prepare_uses_one_post_read_snapshot_for_identity_and_provenance(
     inspection = data_server.inspect_workspace_sources(
         ["demand.csv", "warehouse.csv"],
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     original_snapshot = data_server.source_inspection_snapshot
     snapshot_calls = 0
@@ -812,8 +913,8 @@ def test_xlsx_and_json_units_are_not_aggregated(tmp_path, monkeypatch) -> None:
     result = data_server.inspect_workspace_sources(
         ["network.xlsx", "nested.json"],
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
-        "ID",
-        object(),
+        ctx=object(),
+        country_code="ID",
     )
     assert result.structuredContent is not None
     sources = {item["relative_path"]: item for item in result.structuredContent["source_profile"]["sources"]}
@@ -835,7 +936,10 @@ def test_xlsx_and_json_units_are_not_aggregated(tmp_path, monkeypatch) -> None:
         "array_prefix": "payload.nested.item.tags",
     }
     xlsx_inspected = data_server.inspect_workspace_sources(
-        ["network.xlsx"], [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE], "ID", object()
+        ["network.xlsx"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        ctx=object(),
+        country_code="ID",
     )
     assert xlsx_inspected.structuredContent is not None
     xlsx_profile = xlsx_inspected.structuredContent
@@ -871,7 +975,10 @@ def test_explicit_mapping_handles_chinese_and_random_headers_without_name_infere
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
     inspected = data_server.inspect_workspace_sources(
-        ["random.csv", "opaque.csv"], [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE], "ID", ctx
+        ["random.csv", "opaque.csv"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        ctx=ctx,
+        country_code="ID",
     )
     assert inspected.structuredContent is not None
     profile = inspected.structuredContent
@@ -927,7 +1034,10 @@ def test_one_csv_unit_can_supply_multiple_selected_roles_without_duplicate_reads
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
     inspected = data_server.inspect_workspace_sources(
-        ["combined.csv"], [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE], "ID", ctx
+        ["combined.csv"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        ctx=ctx,
+        country_code="ID",
     )
     assert inspected.structuredContent is not None
     profile = inspected.structuredContent
@@ -990,7 +1100,10 @@ def test_nested_json_array_unit_is_read_exactly_and_unselected_array_is_ignored(
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
     inspected = data_server.inspect_workspace_sources(
-        ["nested.json", "warehouse.csv"], [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE], "ID", ctx
+        ["nested.json", "warehouse.csv"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        ctx=ctx,
+        country_code="ID",
     )
     assert inspected.structuredContent is not None
     profile = inspected.structuredContent
@@ -1040,7 +1153,10 @@ def test_selected_full_data_invalid_value_outside_preview_is_needs_input_no_writ
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
     profile = data_server.inspect_workspace_sources(
-        ["demand.csv", "warehouse.csv"], [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE], "ID", ctx
+        ["demand.csv", "warehouse.csv"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        ctx=ctx,
+        country_code="ID",
     )
     assert profile.structuredContent is not None
     inspection = profile.structuredContent
@@ -1077,7 +1193,10 @@ def test_source_changed_covers_missing_selected_file_without_writing(
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
     profile = data_server.inspect_workspace_sources(
-        ["demand.csv", "warehouse.csv"], [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE], "ID", ctx
+        ["demand.csv", "warehouse.csv"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        ctx=ctx,
+        country_code="ID",
     )
     assert profile.structuredContent is not None
     inspection = profile.structuredContent
@@ -1107,7 +1226,12 @@ def test_invalid_source_unit_field_and_required_mapping_are_contract_errors(
     )
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
-    profile = data_server.inspect_workspace_sources(["demand.csv"], [SourceRole.DEMAND], "ID", ctx)
+    profile = data_server.inspect_workspace_sources(
+        ["demand.csv"],
+        [SourceRole.DEMAND],
+        ctx=ctx,
+        country_code="ID",
+    )
     assert profile.structuredContent is not None
     inspection = profile.structuredContent
     identity = SourceInspectionIdentity.model_validate(inspection["inspection_identity"])
@@ -1172,7 +1296,10 @@ def test_xlsx_selected_sheet_formula_is_a_full_data_blocker(tmp_path, monkeypatc
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
     profile = data_server.inspect_workspace_sources(
-        ["formula.xlsx"], [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE], "ID", ctx
+        ["formula.xlsx"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        ctx=ctx,
+        country_code="ID",
     )
     assert profile.structuredContent is not None
     inspection = profile.structuredContent
@@ -1214,8 +1341,8 @@ def test_same_role_units_merge_exact_duplicates_and_block_conflicts_no_write(
     profile = data_server.inspect_workspace_sources(
         ["demand-a.csv", "demand-b.csv", "warehouse.csv"],
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     selections = [
         SourceSelection(relative_path="demand-a.csv", unit_ref="table", role=SourceRole.DEMAND),
@@ -1240,8 +1367,8 @@ def test_same_role_units_merge_exact_duplicates_and_block_conflicts_no_write(
     conflict_profile = data_server.inspect_workspace_sources(
         ["demand-a.csv", "demand-b.csv", "warehouse.csv"],
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     conflict = data_server.prepare_network_input(
         SourceInspectionIdentity.model_validate(conflict_profile["inspection_identity"]),
@@ -1294,8 +1421,8 @@ def test_geography_error_is_attributed_to_warehouse_unit_not_first_demand_unit(
     profile = data_server.inspect_workspace_sources(
         ["demand.csv", "warehouse.csv", "admin.json"],
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     result = data_server.prepare_network_input(
         SourceInspectionIdentity.model_validate(profile["inspection_identity"]),
@@ -1349,8 +1476,8 @@ def test_candidate_geography_error_is_attributed_to_candidate_unit(
     profile = data_server.inspect_workspace_sources(
         ["demand.csv", "candidate.csv", "admin.json"],
         [SourceRole.DEMAND, SourceRole.CANDIDATE_WAREHOUSE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     result = data_server.prepare_network_input(
         SourceInspectionIdentity.model_validate(profile["inspection_identity"]),
@@ -1388,8 +1515,8 @@ def test_administrative_catalog_exception_is_attributed_to_admin_document(
     profile = data_server.inspect_workspace_sources(
         ["demand.csv", "warehouse.csv", "bad-admin.json"],
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
-        "ID",
-        ctx,
+        ctx=ctx,
+        country_code="ID",
     ).structuredContent
     result = data_server.prepare_network_input(
         SourceInspectionIdentity.model_validate(profile["inspection_identity"]),
@@ -1415,11 +1542,19 @@ def test_inspection_limits_are_explicit_selection_errors(tmp_path, monkeypatch) 
         (tmp_path / name).write_text("city_id,city_name\nC-1,Jakarta\n", encoding="utf-8")
     _use_store(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="at least one Workspace-relative path"):
-        data_server.inspect_workspace_sources([], [SourceRole.DEMAND], "ID", object())
+        data_server.inspect_workspace_sources(
+            [],
+            [SourceRole.DEMAND],
+            ctx=object(),
+            country_code="ID",
+        )
 
     monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_FILES", 1)
     file_limited = data_server.inspect_workspace_sources(
-        ["a.csv", "b.csv"], [SourceRole.DEMAND], "ID", object()
+        ["a.csv", "b.csv"],
+        [SourceRole.DEMAND],
+        ctx=object(),
+        country_code="ID",
     )
     assert file_limited.structuredContent is not None
     assert file_limited.structuredContent["outcome"] == "selection_required"
@@ -1444,7 +1579,10 @@ def test_inspection_limits_are_explicit_selection_errors(tmp_path, monkeypatch) 
     monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_FILES", 64)
     monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_UNITS", 1)
     unit_limited = data_server.inspect_workspace_sources(
-        ["multi.xlsx"], [SourceRole.DEMAND], "ID", object()
+        ["multi.xlsx"],
+        [SourceRole.DEMAND],
+        ctx=object(),
+        country_code="ID",
     )
     assert unit_limited.structuredContent is not None
     assert unit_limited.structuredContent["outcome"] == "selection_required"
@@ -1455,7 +1593,10 @@ def test_inspection_limits_are_explicit_selection_errors(tmp_path, monkeypatch) 
     monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_UNITS", 128)
     monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_BYTES", 1)
     byte_limited = data_server.inspect_workspace_sources(
-        ["a.csv"], [SourceRole.DEMAND], "ID", object()
+        ["a.csv"],
+        [SourceRole.DEMAND],
+        ctx=object(),
+        country_code="ID",
     )
     assert byte_limited.structuredContent is not None
     assert byte_limited.structuredContent["outcome"] == "selection_required"
@@ -1499,8 +1640,8 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
     profile = data_server.inspect_workspace_sources(
         ["demand.csv", "warehouses.csv", "admin.json"],
         [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
-        "ID",
-        object(),
+        ctx=object(),
+        country_code="ID",
     )
     assert profile.structuredContent is not None
     inspection = profile.structuredContent
@@ -1688,7 +1829,10 @@ def test_candidate_changes_require_a_complete_new_workspace_preparation(
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
     profile = data_server.inspect_workspace_sources(
-        ["candidate.csv"], [SourceRole.CANDIDATE_WAREHOUSE], "ID", object()
+        ["candidate.csv"],
+        [SourceRole.CANDIDATE_WAREHOUSE],
+        ctx=object(),
+        country_code="ID",
     )
     assert profile.structuredContent is not None
     inspection = profile.structuredContent
@@ -1726,10 +1870,16 @@ def test_inspection_identity_is_order_independent_and_rejects_changed_inputs(
     ctx = _context(tmp_path)
 
     first = data_server.inspect_workspace_sources(
-        ["b.csv", "a.csv"], [SourceRole.DEMAND], "ID", ctx
+        ["b.csv", "a.csv"],
+        [SourceRole.DEMAND],
+        ctx=ctx,
+        country_code="ID",
     )
     second = data_server.inspect_workspace_sources(
-        ["a.csv", "b.csv"], [SourceRole.DEMAND], "ID", ctx
+        ["a.csv", "b.csv"],
+        [SourceRole.DEMAND],
+        ctx=ctx,
+        country_code="ID",
     )
     first_identity = first.structuredContent["inspection_identity"]
     assert first_identity == second.structuredContent["inspection_identity"]
@@ -1771,11 +1921,17 @@ def test_inspection_rejects_symlink_and_data_resource_surface_is_empty(tmp_path,
     _use_store(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="workspace_source_symlink_rejected"):
         data_server.inspect_workspace_sources(
-            ["linked.csv"], [SourceRole.DEMAND], "ID", _context(tmp_path)
+            ["linked.csv"],
+            [SourceRole.DEMAND],
+            ctx=_context(tmp_path),
+            country_code="ID",
         )
     with pytest.raises(ValueError, match="workspace_source_symlink_rejected"):
         data_server.inspect_workspace_sources(
-            ["../outside.csv"], [SourceRole.DEMAND], "ID", _context(tmp_path)
+            ["../outside.csv"],
+            [SourceRole.DEMAND],
+            ctx=_context(tmp_path),
+            country_code="ID",
         )
     assert asyncio.run(data_server.mcp.list_resources()) == []
     assert asyncio.run(data_server.mcp.list_resource_templates()) == []
