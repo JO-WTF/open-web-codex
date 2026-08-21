@@ -3,8 +3,8 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前事实与证据 |
-| 观察日期 | 2026-08-21 |
-| 代码快照 | ADR-025 source-unit/prepared v2 合同；真实 DeepSeek v2 复验待 Root 本轮执行 |
+| 观察日期 | 2026-08-22 |
+| 代码快照 | ADR-025 source-unit/prepared v2 合同；真实 Web + DeepSeek Flash 三段业务验收已通过 |
 | 当前阶段 | 阶段二已进入；阶段一仓网 Copilot 正常业务闭环作为已通过基线 |
 | 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) + [ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) + [ADR-024](adr/024-warehouse-copilot-contract-simplification.md) + [ADR-025](adr/025-source-unit-prepared-v2-reuse.md) |
 
@@ -19,8 +19,9 @@
 Root config 和 Web 显式选择的 E1/E2 证据；本轮将真实 DeepSeek 入口拆为多 Agent 业务、单 Agent
 业务和独立 Tool capability 三个门，并将成本证据收敛为 typed schema、选址收敛为
 `minimum_feasible` 有界求解。此前 ADR-024 的自然语言多 Agent 与单 Agent 业务门曾用
-`deepseek-v4-flash` 完成真实付费复跑，但该证据不覆盖 ADR-025 的 source-unit/prepared v2 合同；
-当前 v2 真实门待 Root 本轮复验，不把旧门扩大成 clean Profile E4。
+`deepseek-v4-flash` 完成真实付费复跑。2026-08-22 又从 Web 新建 Workspace、上传 Downloads 的
+6 个 mock data 文件，并在同一多 Agent Task 中完成 ADR-025 的 source-unit/prepared v2 三段验收；
+该证据仍不扩大成 clean Profile E4。
 
 阶段二 Copilot SDK 已提供 `copilot init` 源码脚手架和 `copilot validate` 静态组合
 验证；`copilot dev` 提供隔离 discovery probe：通过官方 app-server 握手、
@@ -83,8 +84,29 @@ SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，�
 | E4 | 从 clean DB/Profile 的真实业务 Task 入口完成阶段一 normal path，并通过一次关键 pending approval 刷新恢复 |
 
 ADR-023/024/025 已将 Data→Network 输入、source-unit 选择、prepared provenance、导航执行和地图装配合同切换到新的 Tool 实现。ADR-025 当前已有
-Planner/Maps、stdio 和确定性 Copilot 证据；真实 DeepSeek v2 业务门待 Root 本轮复验。下方旧 E4 记录适用于被替代的 Data Resource/手工导航路径，不能作为当前
+Planner/Maps、stdio、确定性 Copilot 和真实 Web + DeepSeek Flash 证据。下方旧 E4 记录适用于被替代的 Data Resource/手工导航路径，不能作为当前
 合同的 E4 声明。单 Agent 与多 Agent 仍需按新的 Workspace 输入、导航确认、地图和报告路径持续复验。多用户、完整失败/竞态矩阵、a11y 和视觉细节仍属于后续 hardening。
+
+### 2026-08-22 ADR-025 真实 Web 三段验收
+
+Root 在 Web 新建 `DeepSeek Flash 仓网验收` Workspace，从 Downloads/mock_data 上传 6 个业务文件，
+选择 `warehouse-network-copilot`、DeepSeek E2E Provider、`deepseek-v4-flash`，并确认 Tool search 开启。
+三段业务在同一 Task 中完成，地图均在 Web 实际显示为 `Ready`，浏览器控制台无错误：
+
+- 12h 基线：回答 2 分 35 秒，地图 Ready 约 2 分 51 秒；城市口径 66.0%（33/50），需求加权
+  81.5%（41,399/50,815），580 条路线事实形成 556 对、0 缺失，地图 117 个要素。
+- 新增 Balikpapan：回答 4 分 52 秒，地图 Ready 约 5 分 33 秒；`WH-CANDIDATE-BALIKPAPAN`
+  已纳入 prepared input，城市与需求加权口径均为 0.0pp 变化。上传数据缺少候选仓路线，结果明确
+  报告 51 对缺失而没有伪造参数；场景地图 130 个要素并高亮新增启用仓。
+- 90% 最少仓数：首次 2 分 37 秒返回一次 `needs_input`；确认需求加权口径、haversine 1.3/40kph
+  与完整报价 `observed_quote_mean` 后，最终回答 2 分 25 秒，端到端约 6 分 41 秒。最小方案为
+  13 仓，即现有 11 仓加 Balikpapan、Jambi；最少新增仓数 2 已证明，12h 需求加权达标率
+  90.07%，城市口径 76.0%，地图 131 个要素。
+
+验收过程中记录 5 次失败或中断：国家询问过早、两次 Provider/Runtime 重连、Data 漏选路线角色且
+Root 丢失地图 embed、以及 90% 求解前的一次必要参数输入。前三类机制问题已分别由 typed country
+推导、current-request Tool search/路线依赖、Root exact map embed 转发修复；Provider 使用用户更新的
+有效凭据；最后一项以显式估算口径继续，没有把默认值伪装成原始事实。
 
 ### 2026-08-20 ADR-024 真实 DeepSeek 生产门记录（不作为 ADR-025 v2 验收证据）
 
@@ -124,8 +146,8 @@ Data 往返、把单设施路线缩到精确候选集、把最小仓数求解限
 package-keyed 重复环境。首次新 fingerprint 的 Copilot 环境准备观测为 31 秒，随后同 fingerprint
 冷启动准备为 1 秒；GC 只移除未被 descriptor 引用的 build。
 
-最终回归证据：Copilot SDK 114、Provider SDK 11、Planner 153、Maps 38、Web Vitest 184 files/
-1341 tests、两个 4-Skill Copilot manifest、八个 Skill validator、Web Rust 全 workspace gate 与两次
+最终回归证据：Copilot SDK 114、Provider SDK 11、Planner 186、Maps 38、Web Vitest 184 files/
+1348 tests、两个 4-Skill Copilot manifest、八个 Skill validator、Web Rust 148 passed/7 ignored 与两次
 deterministic multi-agent gate 全部通过；Rust 中要求外部 PostgreSQL/真实 Runtime 的 ignored 门仍按
 各自前置条件保留，不冒充已运行。
 

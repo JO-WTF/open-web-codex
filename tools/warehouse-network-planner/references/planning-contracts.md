@@ -35,7 +35,9 @@ application or repository state.
 For Data intake, `inspect_workspace_sources` accepts only the five planning roles
 `demand`, `existing_warehouse`, `candidate_warehouse`, `current_assignment` and `route_quote`;
 an administrative catalog is included in inspected paths but is passed separately to preparation.
-The Tool returns a bounded inline
+`country_code` is optional: when omitted, the Tool derives one only from a uniquely identified
+administrative catalog metadata record; missing or conflicting metadata leaves it null with a bounded
+warning. The Tool returns a bounded inline
 `workspace_source_profile.v2`, exact source units, `preview_sample_count`, `total_count`,
 `total_count_exact`, `inspection_identity` and inspected relative paths. Preview rows are schema
 examples only; `total_count` is the complete unit count. A fresh prepared candidate is reused only
