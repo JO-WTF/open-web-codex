@@ -9,7 +9,6 @@ from supply_chain_planner.data.mapping import (
     suggest_role_mappings,
 )
 from supply_chain_planner.shared.models import (
-    ConfirmedSourceDecision,
     SourceSelection,
 )
 
@@ -38,14 +37,8 @@ def test_confirmed_mapping_rejects_unknown_duplicate_and_missing_targets() -> No
         with pytest.raises(ValidationError, match=message):
             SourceSelection.model_validate({**base, "mappings": mappings})
 
-    with pytest.raises(ValidationError, match="missing required fields"):
-        ConfirmedSourceDecision.model_validate(
-            {
-                key: value
-                for key, value in {**base, "mappings": base["mappings"][:-1]}.items()
-                if key != "unit_ref"
-            }
-        )
+    incomplete = SourceSelection.model_validate({**base, "mappings": base["mappings"][:-1]})
+    assert len(incomplete.mappings) == 2
 
     incomplete = SourceSelection.model_validate(
         {**base, "mappings": base["mappings"][:-1]}

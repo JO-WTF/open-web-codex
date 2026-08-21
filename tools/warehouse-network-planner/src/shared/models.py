@@ -45,25 +45,6 @@ class StrictModel(BaseModel):
         return self
 
 
-class PreparedNetworkResource(StrictModel):
-    """Validated, user-visible Workspace input for one network-planning run."""
-
-    schema_version: Literal["prepared_network_input.v1"] = Field(
-        default="prepared_network_input.v1",
-        alias="schemaVersion",
-    )
-    country_code: str = Field(pattern=r"^[A-Z]{2}$")
-    state: Literal["ready", "needs_input", "needs_geography"]
-    demand_cities: list[DemandCityRecord]
-    warehouses: list[WarehouseRecord]
-    current_assignments: list[CurrentAssignmentRecord]
-    route_quotes: list[RouteQuoteRecord]
-    provided_route_facts: list[ProvidedRouteFactRecord] = Field(default_factory=list)
-    issues: list[DataQualityIssue] = Field(default_factory=list)
-    confirmed_sources: list[ConfirmedSourceDecision] = Field(default_factory=list)
-    parent_input_identity: PlanningInputIdentity | None = None
-
-
 class ConfirmedFieldDecision(StrictModel):
     source_field: str = Field(min_length=1, max_length=256)
     target_field: str = Field(min_length=1, max_length=128)
@@ -114,25 +95,97 @@ class SourceSelection(StrictModel):
         return self
 
 
-class ConfirmedSourceDecision(StrictModel):
-    """Internal v1 prepared-file mapping until prepared v2 provenance lands."""
+class PreparationRoleCounts(StrictModel):
+    demand: int = Field(ge=0)
+    existing_warehouse: int = Field(ge=0)
+    candidate_warehouse: int = Field(ge=0)
+    current_assignment: int = Field(ge=0)
+    route_quote: int = Field(ge=0)
+    provided_route_fact: int = Field(ge=0)
 
-    relative_path: str = Field(min_length=1, max_length=1024)
-    role: SourceRole
-    mappings: list[ConfirmedFieldDecision] = Field(default_factory=list, max_length=64)
+
+class PreparedSourceSelection(SourceSelection):
+    """Resolved v2 provenance for one selected raw source unit."""
+
+    raw_content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
 
     @model_validator(mode="after")
-    def validate_required_role_mapping(self) -> ConfirmedSourceDecision:
-        if not self.mappings:
-            return self
-        missing = sorted(
-            REQUIRED_FIELDS[self.role] - {mapping.target_field for mapping in self.mappings}
+    def validate_resolved_mapping(self) -> PreparedSourceSelection:
+        missing = REQUIRED_FIELDS[self.role] - {
+            mapping.target_field for mapping in self.mappings
+        }
+        if not self.mappings or missing:
+            raise ValueError("prepared_source_mapping_incomplete")
+        canonical = sorted(
+            self.mappings,
+            key=lambda mapping: (
+                mapping.target_field,
+                mapping.source_field,
+                mapping.transform.value,
+                str(mapping.factor),
+            ),
         )
-        if missing:
-            raise ValueError(
-                f"confirmed mapping for {self.role.value} is missing required fields: "
-                f"{', '.join(missing)}"
-            )
+        if self.mappings != canonical:
+            raise ValueError("prepared_source_mappings_not_canonical")
+        return self
+
+
+class PreparedAdministrativeCatalog(StrictModel):
+    relative_path: str = Field(min_length=1, max_length=1024)
+    content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class PreparedNetworkResource(StrictModel):
+    """Validated, provenance-bound Workspace input for network planning."""
+
+    schema_version: Literal["prepared_network_input.v2"] = Field(
+        default="prepared_network_input.v2",
+        alias="schemaVersion",
+    )
+    country_code: str = Field(pattern=r"^[A-Z]{2}$")
+    state: Literal["ready", "needs_geography"]
+    demand_cities: list[DemandCityRecord]
+    warehouses: list[WarehouseRecord]
+    current_assignments: list[CurrentAssignmentRecord]
+    route_quotes: list[RouteQuoteRecord]
+    provided_route_facts: list[ProvidedRouteFactRecord] = Field(default_factory=list)
+    issues: list[DataQualityIssue] = Field(default_factory=list, max_length=64)
+    issue_count: int = Field(ge=0)
+    issues_truncated: bool
+    roles: list[SourceRole] = Field(min_length=1, max_length=5)
+    source_selections: list[PreparedSourceSelection] = Field(min_length=1, max_length=640)
+    administrative_catalog: PreparedAdministrativeCatalog | None = None
+    selected_source_identity: str = Field(pattern=r"^[a-f0-9]{64}$")
+    role_counts: PreparationRoleCounts
+
+    @model_validator(mode="after")
+    def validate_prepared_contract(self) -> PreparedNetworkResource:
+        if self.roles != sorted(set(self.roles), key=lambda role: role.value):
+            raise ValueError("prepared_roles_not_canonical")
+        if set(self.roles) != {selection.role for selection in self.source_selections}:
+            raise ValueError("prepared_roles_mismatch")
+        selection_keys = [
+            (selection.relative_path, selection.unit_ref, selection.role.value)
+            for selection in self.source_selections
+        ]
+        if selection_keys != sorted(selection_keys) or len(selection_keys) != len(set(selection_keys)):
+            raise ValueError("prepared_source_selections_not_canonical")
+        if any(issue.severity != "warning" for issue in self.issues):
+            raise ValueError("prepared_error_issue_forbidden")
+        if len(self.issues) != min(self.issue_count, 64):
+            raise ValueError("prepared_issue_count_bounded_length_mismatch")
+        if self.issues_truncated != (self.issue_count > 64):
+            raise ValueError("prepared_issue_count_truncation_mismatch")
+        actual = PreparationRoleCounts(
+            demand=len(self.demand_cities),
+            existing_warehouse=sum(item.is_existing for item in self.warehouses),
+            candidate_warehouse=sum(not item.is_existing for item in self.warehouses),
+            current_assignment=len(self.current_assignments),
+            route_quote=len(self.route_quotes),
+            provided_route_fact=len(self.provided_route_facts),
+        )
+        if actual != self.role_counts:
+            raise ValueError("prepared_role_counts_mismatch")
         return self
 
 
@@ -145,8 +198,8 @@ class GeographyOverride(StrictModel):
 class SourceInspectionIdentity(StrictModel):
     """Identity of the exact regular Workspace files inspected by Data."""
 
-    schema_version: Literal["workspace_source_inspection.v1"] = Field(
-        default="workspace_source_inspection.v1",
+    schema_version: Literal["workspace_source_inspection.v2"] = Field(
+        default="workspace_source_inspection.v2",
         alias="schemaVersion",
     )
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -201,6 +254,17 @@ class DataInspectionInspected(StrictModel):
     source_profile: dict[str, Any]
     inspection_identity: SourceInspectionIdentity
     inspected_relative_paths: list[str] = Field(min_length=1, max_length=64)
+    warnings: list[str] = Field(max_length=64)
+    warning_count: int = Field(ge=0)
+    warnings_truncated: bool
+
+    @model_validator(mode="after")
+    def validate_warning_count(self) -> DataInspectionInspected:
+        if len(self.warnings) != min(self.warning_count, 64):
+            raise ValueError("inspection_warning_count_bounded_length_mismatch")
+        if self.warnings_truncated != (self.warning_count > 64):
+            raise ValueError("inspection_warning_count_truncation_mismatch")
+        return self
 
 
 class DataInspectionSelectionRequired(StrictModel):
@@ -216,10 +280,61 @@ class DataInspectionSelectionRequired(StrictModel):
     limit: InspectionLimitCounts
 
 
+class PreparedCandidateSummary(StrictModel):
+    prepared_input_relative_path: str = Field(min_length=1, max_length=1024)
+    input_identity: PlanningInputIdentity
+    role_counts: PreparationRoleCounts
+
+
+class DataInspectionPreparedReady(StrictModel):
+    outcome: Literal["prepared_ready"]
+    schema_version: Literal["workspace_source_profile.v2"] = Field(alias="schemaVersion")
+    operation: Literal["reused"]
+    summary: str
+    next_action: Literal["handoff"]
+    retryable: Literal[False]
+    prepared_input_relative_path: str = Field(min_length=1, max_length=1024)
+    input_identity: PlanningInputIdentity
+    role_counts: PreparationRoleCounts
+    warnings: list[str] = Field(max_length=64)
+    warning_count: int = Field(ge=0)
+    warnings_truncated: bool
+
+    @model_validator(mode="after")
+    def validate_warning_count(self) -> DataInspectionPreparedReady:
+        if len(self.warnings) != min(self.warning_count, 64):
+            raise ValueError("prepared_warning_count_bounded_length_mismatch")
+        if self.warnings_truncated != (self.warning_count > 64):
+            raise ValueError("prepared_warning_count_truncation_mismatch")
+        return self
+
+
+class DataInspectionPreparedSelectionRequired(StrictModel):
+    outcome: Literal["prepared_selection_required"]
+    schema_version: Literal["workspace_source_profile.v2"] = Field(alias="schemaVersion")
+    summary: str
+    next_action: Literal["request_user_input"]
+    retryable: Literal[False]
+    candidates: list[PreparedCandidateSummary] = Field(max_length=64)
+    candidate_count: int = Field(ge=1)
+    candidates_truncated: bool
+
+    @model_validator(mode="after")
+    def validate_candidate_count(self) -> DataInspectionPreparedSelectionRequired:
+        if len(self.candidates) != min(self.candidate_count, 64):
+            raise ValueError("prepared_candidate_count_bounded_length_mismatch")
+        if self.candidates_truncated != (self.candidate_count > 64):
+            raise ValueError("prepared_candidate_count_truncation_mismatch")
+        return self
+
+
 class DataInspectionToolResult(
     RootModel[
         Annotated[
-            DataInspectionInspected | DataInspectionSelectionRequired,
+            DataInspectionInspected
+            | DataInspectionSelectionRequired
+            | DataInspectionPreparedReady
+            | DataInspectionPreparedSelectionRequired,
             Field(discriminator="outcome"),
         ]
     ]
@@ -233,18 +348,9 @@ class CandidateWarehouseSummary(StrictModel):
     city_name: str = Field(min_length=1, max_length=256)
 
 
-class PreparationRoleCounts(StrictModel):
-    demand: int = Field(ge=0)
-    existing_warehouse: int = Field(ge=0)
-    candidate_warehouse: int = Field(ge=0)
-    current_assignment: int = Field(ge=0)
-    route_quote: int = Field(ge=0)
-    provided_route_fact: int = Field(ge=0)
-
-
 class DataPreparationReady(StrictModel):
     outcome: Literal["ready"]
-    operation: Literal["created"]
+    operation: Literal["created", "reused"]
     summary: str
     next_action: Literal["handoff", "prepare_geography"]
     retryable: Literal[False]
@@ -255,9 +361,6 @@ class DataPreparationReady(StrictModel):
     warnings: list[str] = Field(max_length=64)
     warning_count: int = Field(ge=0)
     warnings_truncated: bool
-    issue_count: int = Field(ge=0)
-    issues: list[DataQualityIssue] = Field(max_length=64)
-    issues_truncated: bool
     candidate_warehouse_count: int = Field(ge=0)
     candidate_warehouses: list[CandidateWarehouseSummary] = Field(max_length=64)
     candidate_warehouses_truncated: bool
@@ -268,10 +371,6 @@ class DataPreparationReady(StrictModel):
             raise ValueError("warning_count_bounded_length_mismatch")
         if self.warnings_truncated != (self.warning_count > 64):
             raise ValueError("warning_count_truncation_mismatch")
-        if len(self.issues) != min(self.issue_count, 64):
-            raise ValueError("issue_count_bounded_length_mismatch")
-        if self.issues_truncated != (self.issue_count > 64):
-            raise ValueError("issue_count_truncation_mismatch")
         if len(self.candidate_warehouses) != min(self.candidate_warehouse_count, 64):
             raise ValueError("candidate_count_bounded_length_mismatch")
         if self.candidate_warehouses_truncated != (

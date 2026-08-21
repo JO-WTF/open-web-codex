@@ -807,14 +807,29 @@ class DeterministicModelServer {
             "mock_data/population-snapshot.csv",
             "mock_data/route-quotes.csv",
           ],
+          required_roles: ["demand", "existing_warehouse", "candidate_warehouse", "route_quote"],
+          country_code: "ID",
         });
       }
       if (!has("data:prepare")) {
+        const preparedReady = findLatestKey(
+          body,
+          ["outcome"],
+          (value) => value?.outcome === "prepared_ready" && typeof value?.prepared_input_relative_path === "string",
+        );
+        if (preparedReady) {
+          return message(
+            "data:done",
+            "已复用 fresh prepared input。prepared_input_relative_path=" +
+              preparedReady.prepared_input_relative_path +
+              " input_identity=" + JSON.stringify(preparedReady.input_identity),
+          );
+        }
         const inspectionIdentity = findLatestKey(
           body,
           ["inspection_identity"],
           (value) =>
-            value?.schemaVersion === "workspace_source_inspection.v1" &&
+            value?.schemaVersion === "workspace_source_inspection.v2" &&
             typeof value?.content_sha256 === "string" &&
             Number.isInteger(value?.source_count),
         );
@@ -830,7 +845,7 @@ class DeterministicModelServer {
         return mcp("data:prepare", "prepare_network_input", {
           inspection_identity: inspectionIdentity,
           inspected_relative_paths: inspectedRelativePaths,
-          confirmed_sources: confirmedSources(),
+          source_selections: sourceSelections(),
           country_code: "ID",
           output_relative_path: preparedOutputPath,
           administrative_catalog_relative_path: "mock_data/administrative-areas.json",
@@ -842,8 +857,8 @@ class DeterministicModelServer {
           body,
           ["input_identity"],
           (value) =>
-            (value?.schema_version === "prepared_network_input.v1" ||
-              value?.schemaVersion === "prepared_network_input.v1") &&
+            (value?.schema_version === "prepared_network_input.v2" ||
+              value?.schemaVersion === "prepared_network_input.v2") &&
             typeof value?.content_sha256 === "string",
         ) ?? {};
       return message(
@@ -1000,22 +1015,26 @@ class DeterministicModelServer {
   }
 }
 
-function confirmedSources() {
+function sourceSelections() {
   return [
     {
       relative_path: "mock_data/demand-cities.csv",
+      unit_ref: "table",
       role: "demand",
     },
     {
       relative_path: "mock_data/existing-warehouses.csv",
+      unit_ref: "table",
       role: "existing_warehouse",
     },
     {
       relative_path: "mock_data/candidate-warehouses.csv",
+      unit_ref: "table",
       role: "candidate_warehouse",
     },
     {
       relative_path: "mock_data/route-quotes.csv",
+      unit_ref: "table",
       role: "route_quote",
     },
   ];

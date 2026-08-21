@@ -21,7 +21,7 @@ metadata:
 
 - JSON 顶层只允许以下 exact 字段，不得 alias、缺字段或增加字段：`schema_version`、`prepared_input_relative_path`、`input_identity`、`total_quote_count`、`method`、`tool_version`、`formula`、`considered_quote_count`、`ignored_quote_count`、`rules`。
 - 常量必须逐字为：`schema_version = "warehouse_quote_mean_calculation.v1"`、`method = "observed_quote_mean"`、`tool_version = "observed-quote-mean.v1"`、`formula = "arithmetic_mean(price_per_vehicle / vehicle_capacity)"`。
-- `prepared_input_relative_path` 必须是本次 exact prepared input 的 Workspace 相对路径；`input_identity` 顶层只允许 `schema_version` 与 `content_sha256`，其值必须分别为 `"prepared_network_input.v1"` 与 64 位小写 SHA-256。不得使用 preview 身份或脚本自身身份。
+- `prepared_input_relative_path` 必须是本次 exact prepared input 的 Workspace 相对路径；`input_identity` 顶层只允许 `schema_version` 与 `content_sha256`，其值必须分别为 `"prepared_network_input.v2"` 与 64 位小写 SHA-256。不得使用 preview 身份或脚本自身身份。
 - `total_quote_count` 是完整报价总数；`considered_quote_count` 与 `ignored_quote_count` 必须是完整输入上的整数计数并彼此一致，不能用 preview 行数代替。
 - `rules` 中每个所需报价层必须且只能有一项；每项只允许 `layer`、`currency`、`quote_count`、`mean_cost_per_demand_unit` 四个字段。`quote_count` 为整数，`currency` 为实际币种，均值是该层 `price_per_vehicle / vehicle_capacity` 的算术均值。禁止 `fixed_cost`、`cost_per_km` 或其他别名/额外成本字段。
 - 脚本执行后，先读取并检查 JSON，再把它的 Workspace 相对路径原样作为 `quote_mean_evidence_relative_path`，与 `cost_policy.kind = observed_quote_mean` 一起传给 `plan_cost_matrix`。Planner 必须从完整 prepared input 重算、逐字段绑定该 evidence，并返回绑定后的成本矩阵；Planner 重算值是唯一数值真相，脚本 JSON 不是第二份成本事实。

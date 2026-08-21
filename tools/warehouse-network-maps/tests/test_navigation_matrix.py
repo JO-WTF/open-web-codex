@@ -21,7 +21,7 @@ def _request() -> dict[str, object]:
     return {
         "schema_version": "navigation_matrix_request.v2",
         "input_identity": {
-            "schema_version": "prepared_network_input.v1",
+            "schema_version": "prepared_network_input.v2",
             "content_sha256": "0" * 64,
         },
         "warehouse_scope": {"kind": "all_warehouses"},

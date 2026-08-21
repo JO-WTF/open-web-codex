@@ -94,7 +94,7 @@ class GeoJsonToolResult(BaseModel):
 class NavigationInputIdentity(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["prepared_network_input.v1"]
+    schema_version: Literal["prepared_network_input.v2"]
     content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 

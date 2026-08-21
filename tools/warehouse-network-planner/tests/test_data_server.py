@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from openpyxl import Workbook
 from pydantic import ValidationError
 from supply_chain_planner.data import server as data_server
 from supply_chain_planner.data.mapping import SourceRole
+from supply_chain_planner.data.workspace_intake import SourceInspectionSnapshot
 from supply_chain_planner.shared.models import (
     DataPreparationNeedsInput,
     DataPreparationReady,
@@ -105,14 +107,14 @@ def test_data_server_exposes_workspace_preparation_not_cross_agent_data_resource
 
     inspect_tool = tools["inspect_workspace_sources"]
     inspection_schema = inspect_tool.outputSchema
-    assert inspection_schema["discriminator"] == {
-        "propertyName": "outcome",
-        "mapping": {
-            "inspected": "#/$defs/DataInspectionInspected",
-            "selection_required": "#/$defs/DataInspectionSelectionRequired",
-        },
+    assert inspection_schema["discriminator"]["propertyName"] == "outcome"
+    assert set(inspection_schema["discriminator"]["mapping"]) == {
+        "inspected",
+        "selection_required",
+        "prepared_ready",
+        "prepared_selection_required",
     }
-    assert len(inspection_schema["oneOf"]) == 2
+    assert len(inspection_schema["oneOf"]) == 4
     branch_required = [
         set(inspection_schema["$defs"][ref["$ref"].split("/")[-1]]["required"])
         for ref in inspection_schema["oneOf"]
@@ -126,6 +128,9 @@ def test_data_server_exposes_workspace_preparation_not_cross_agent_data_resource
         "source_profile",
         "inspection_identity",
         "inspected_relative_paths",
+        "warnings",
+        "warning_count",
+        "warnings_truncated",
     } in branch_required
     assert {
         "outcome",
@@ -168,7 +173,10 @@ def test_missing_warehouse_type_is_typed_non_retryable_user_input(
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
     inspected = data_server.inspect_workspace_sources(
-        ["demand.csv", "warehouses.csv"], ctx
+        ["demand.csv", "warehouses.csv"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        "ID",
+        ctx,
     )
     assert inspected.structuredContent is not None
     inspection = inspected.structuredContent
@@ -293,16 +301,12 @@ def test_preparation_bounded_count_contract_rejects_underfilled_or_wrong_flags()
         "warnings": [],
         "warning_count": 0,
         "warnings_truncated": False,
-        "issue_count": 0,
-        "issues": [],
-        "issues_truncated": False,
         "candidate_warehouse_count": 0,
         "candidate_warehouses": [],
         "candidate_warehouses_truncated": False,
     }
     for field, value in (
         ("warning_count", 1),
-        ("issue_count", 1),
         ("candidate_warehouse_count", 1),
     ):
         with pytest.raises(ValidationError):
@@ -330,7 +334,9 @@ def test_source_profile_distinguishes_preview_samples_from_exact_total(
     (tmp_path / "candidate.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
     _use_store(tmp_path, monkeypatch)
 
-    result = data_server.inspect_workspace_sources(["candidate.csv"], object())
+    result = data_server.inspect_workspace_sources(
+        ["candidate.csv"], [SourceRole.CANDIDATE_WAREHOUSE], "ID", object()
+    )
     assert result.structuredContent is not None
     inspection = result.structuredContent
     source = inspection["source_profile"]["sources"][0]
@@ -394,7 +400,10 @@ def test_current_mock_sources_have_no_global_false_demand_blockers(tmp_path, mon
     _use_store(fixture, monkeypatch)
 
     result = data_server.inspect_workspace_sources(
-        sorted(path.name for path in fixture.iterdir() if path.suffix in {".csv", ".json"}), object()
+        sorted(path.name for path in fixture.iterdir() if path.suffix in {".csv", ".json"}),
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
+        "ID",
+        object(),
     )
     assert result.structuredContent is not None
     inspection = result.structuredContent
@@ -435,7 +444,12 @@ def test_current_mock_sources_prepare_from_full_units_and_keep_preview_tail_rows
             (tmp_path / path.name).write_bytes(path.read_bytes())
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
-    inspected = data_server.inspect_workspace_sources(sorted(selected_names), ctx)
+    inspected = data_server.inspect_workspace_sources(
+        sorted(selected_names),
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
+        "ID",
+        ctx,
+    )
     assert inspected.structuredContent is not None
     profile = inspected.structuredContent
     selections = [
@@ -479,6 +493,288 @@ def test_current_mock_sources_prepare_from_full_units_and_keep_preview_tail_rows
     assert any(item["city_name"] == "Balikpapan" for item in prepared["warehouses"])
 
 
+def test_fresh_prepared_input_is_reused_and_only_selected_raw_changes_invalidate_it(
+    tmp_path, monkeypatch
+) -> None:
+    fixture_root = Path(__file__).parents[3] / "apps/web/scripts/fixtures/warehouse-network/mock_data"
+    selected_names = {
+        "administrative-areas.json",
+        "candidate-warehouses.csv",
+        "demand-cities.csv",
+        "existing-warehouses.csv",
+        "population-snapshot.csv",
+        "route-quotes.csv",
+    }
+    for path in fixture_root.iterdir():
+        if path.name in selected_names:
+            (tmp_path / path.name).write_bytes(path.read_bytes())
+    original_admin = (tmp_path / "administrative-areas.json").read_bytes()
+    original_demand = (tmp_path / "demand-cities.csv").read_bytes()
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    raw_paths = sorted(selected_names)
+    first = data_server.inspect_workspace_sources(
+        raw_paths,
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
+        "ID",
+        ctx,
+    ).structuredContent
+    created = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(first["inspection_identity"]),
+        first["inspected_relative_paths"],
+        [
+            SourceSelection(relative_path="demand-cities.csv", unit_ref="table", role=SourceRole.DEMAND),
+            SourceSelection(relative_path="existing-warehouses.csv", unit_ref="table", role=SourceRole.EXISTING_WAREHOUSE),
+            SourceSelection(relative_path="candidate-warehouses.csv", unit_ref="table", role=SourceRole.CANDIDATE_WAREHOUSE),
+            SourceSelection(relative_path="route-quotes.csv", unit_ref="table", role=SourceRole.ROUTE_QUOTE),
+        ],
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/reuse.json",
+        ctx,
+        administrative_catalog_relative_path="administrative-areas.json",
+    )
+    created_payload = created.model_dump(mode="json", by_alias=True)
+    assert created_payload["outcome"] == "ready"
+    unselected = data_server.inspect_workspace_sources(
+        raw_paths,
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
+        "ID",
+        ctx,
+    ).structuredContent
+    assert unselected["outcome"] == "inspected"
+    reuse_paths = raw_paths + [created_payload["prepared_input_relative_path"]]
+    reused = data_server.inspect_workspace_sources(
+        reuse_paths,
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
+        "ID",
+        ctx,
+    ).structuredContent
+    assert reused["outcome"] == "prepared_ready"
+    assert reused["operation"] == "reused"
+    assert reused["prepared_input_relative_path"] == created_payload["prepared_input_relative_path"]
+    assert "source_profile" not in reused
+
+    canonical_copy = tmp_path / f"{PREPARED_OUTPUT_DIR}/a-copy.json"
+    canonical_copy.write_bytes(
+        (tmp_path / created_payload["prepared_input_relative_path"]).read_bytes()
+    )
+    canonical = data_server.inspect_workspace_sources(
+        raw_paths + [
+            created_payload["prepared_input_relative_path"],
+            f"{PREPARED_OUTPUT_DIR}/a-copy.json",
+        ],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
+        "ID",
+        ctx,
+    ).structuredContent
+    assert canonical["outcome"] == "prepared_ready"
+    assert canonical["prepared_input_relative_path"] == f"{PREPARED_OUTPUT_DIR}/a-copy.json"
+    canonical_copy.unlink()
+
+    changed_payload = json.loads(
+        (tmp_path / created_payload["prepared_input_relative_path"]).read_text(encoding="utf-8")
+    )
+    changed_payload["demand_cities"][0]["city_name"] = "Changed City"
+    changed_path = tmp_path / f"{PREPARED_OUTPUT_DIR}/changed.json"
+    changed_path.write_text(json.dumps(changed_payload), encoding="utf-8")
+    ambiguous = data_server.inspect_workspace_sources(
+        raw_paths + [
+            created_payload["prepared_input_relative_path"],
+            f"{PREPARED_OUTPUT_DIR}/changed.json",
+        ],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
+        "ID",
+        ctx,
+    ).structuredContent
+    assert ambiguous["outcome"] == "prepared_selection_required"
+    assert ambiguous["candidate_count"] == 2
+    assert ambiguous["candidates_truncated"] is False
+    assert "source_profile" not in ambiguous
+
+    missing_role = data_server.inspect_workspace_sources(
+        raw_paths + [created_payload["prepared_input_relative_path"]],
+        [SourceRole.DEMAND, SourceRole.CURRENT_ASSIGNMENT],
+        "ID",
+        ctx,
+    ).structuredContent
+    assert missing_role["outcome"] == "inspected"
+    assert any("required_roles_missing" in warning for warning in missing_role["warnings"])
+    wrong_country = data_server.inspect_workspace_sources(
+        raw_paths + [created_payload["prepared_input_relative_path"]],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        "MY",
+        ctx,
+    ).structuredContent
+    assert wrong_country["outcome"] == "inspected"
+    assert any("country_mismatch" in warning for warning in wrong_country["warnings"])
+    needs_geography_payload = dict(changed_payload)
+    needs_geography_payload["state"] = "needs_geography"
+    needs_geography_path = tmp_path / f"{PREPARED_OUTPUT_DIR}/needs-geography.json"
+    needs_geography_path.write_text(json.dumps(needs_geography_payload), encoding="utf-8")
+    needs_geography = data_server.inspect_workspace_sources(
+        raw_paths + [f"{PREPARED_OUTPUT_DIR}/needs-geography.json"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        "ID",
+        ctx,
+    ).structuredContent
+    assert needs_geography["outcome"] == "inspected"
+    assert any("state_not_ready" in warning for warning in needs_geography["warnings"])
+
+    mapping_payload = json.loads(
+        (tmp_path / created_payload["prepared_input_relative_path"]).read_text(encoding="utf-8")
+    )
+    mapping_payload["source_selections"][0]["mappings"][0]["source_field"] = "missing_field"
+    mapping_path = tmp_path / f"{PREPARED_OUTPUT_DIR}/mapping-mismatch.json"
+    mapping_path.write_text(json.dumps(mapping_payload), encoding="utf-8")
+    mapping_mismatch = data_server.inspect_workspace_sources(
+        raw_paths + [f"{PREPARED_OUTPUT_DIR}/mapping-mismatch.json"],
+        [SourceRole.DEMAND],
+        "ID",
+        ctx,
+    ).structuredContent
+    assert mapping_mismatch["outcome"] == "inspected"
+    assert any("prepared_selected_source_identity_invalid" in warning for warning in mapping_mismatch["warnings"])
+
+    invalid_candidate_path = tmp_path / f"{PREPARED_OUTPUT_DIR}/invalid.json"
+    invalid_candidate_path.write_text('{"schemaVersion":"prepared_network_input.v1"}', encoding="utf-8")
+    invalid_candidate = data_server.inspect_workspace_sources(
+        raw_paths + [f"{PREPARED_OUTPUT_DIR}/invalid.json"],
+        [SourceRole.DEMAND],
+        "ID",
+        ctx,
+    ).structuredContent
+    assert invalid_candidate["outcome"] == "inspected"
+    assert any("prepared_network_input_invalid" in warning for warning in invalid_candidate["warnings"])
+
+    with pytest.raises(ValueError, match="relative_paths must not contain duplicates"):
+        data_server.inspect_workspace_sources(
+            reuse_paths + [created_payload["prepared_input_relative_path"]],
+            [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
+            "ID",
+            ctx,
+        )
+    with pytest.raises(ValueError, match="prepared_candidate_not_found"):
+        data_server.inspect_workspace_sources(
+            [f"{PREPARED_OUTPUT_DIR}/missing.json"],
+            [SourceRole.DEMAND],
+            "ID",
+            ctx,
+        )
+
+    (tmp_path / "population-snapshot.csv").write_text(
+        (tmp_path / "population-snapshot.csv").read_text() + "extra,Extra,Province,1\n",
+        encoding="utf-8",
+    )
+    still_reused = data_server.inspect_workspace_sources(
+        reuse_paths,
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
+        "ID",
+        ctx,
+    ).structuredContent
+    assert still_reused["outcome"] == "prepared_ready"
+
+    (tmp_path / "administrative-areas.json").write_bytes(original_admin + b"\n")
+    admin_stale = data_server.inspect_workspace_sources(
+        reuse_paths,
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
+        "ID",
+        ctx,
+    ).structuredContent
+    assert admin_stale["outcome"] == "inspected"
+    assert any("administrative_catalog_changed" in warning for warning in admin_stale["warnings"])
+    (tmp_path / "administrative-areas.json").write_bytes(original_admin)
+
+    (tmp_path / "demand-cities.csv").write_text(
+        (tmp_path / "demand-cities.csv").read_text() + "\n",
+        encoding="utf-8",
+    )
+    stale = data_server.inspect_workspace_sources(
+        reuse_paths,
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
+        "ID",
+        ctx,
+    ).structuredContent
+    assert stale["outcome"] == "inspected"
+    assert stale["warnings"]
+
+    (tmp_path / "demand-cities.csv").unlink()
+    with pytest.raises(ValueError, match="workspace_source_not_found"):
+        data_server.inspect_workspace_sources(
+            reuse_paths,
+            [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
+            "ID",
+            ctx,
+        )
+    (tmp_path / "demand-cities.csv").write_bytes(original_demand)
+    outside = tmp_path / "outside-demand.csv"
+    outside.write_bytes(original_demand)
+    (tmp_path / "demand-cities.csv").unlink()
+    (tmp_path / "demand-cities.csv").symlink_to(outside)
+    with pytest.raises(ValueError, match="workspace_source_symlink_rejected"):
+        data_server.inspect_workspace_sources(
+            reuse_paths,
+            [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE, SourceRole.CANDIDATE_WAREHOUSE, SourceRole.ROUTE_QUOTE],
+            "ID",
+            ctx,
+        )
+
+
+def test_prepare_uses_one_post_read_snapshot_for_identity_and_provenance(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "demand.csv").write_text(
+        "city_id,city_name,demand_quantity,longitude,latitude\nC-1,Jakarta,10,106.8,-6.2\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "warehouse.csv").write_text(
+        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,longitude,latitude,is_existing\n"
+        "W-1,Jakarta Center,center,C-1,Jakarta,106.8,-6.2,true\n",
+        encoding="utf-8",
+    )
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    inspection = data_server.inspect_workspace_sources(
+        ["demand.csv", "warehouse.csv"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        "ID",
+        ctx,
+    ).structuredContent
+    original_snapshot = data_server.source_inspection_snapshot
+    snapshot_calls = 0
+
+    def changed_after_read(root, relative_paths):
+        nonlocal snapshot_calls
+        snapshot_calls += 1
+        snapshot = original_snapshot(root, relative_paths)
+        if snapshot_calls == 2:
+            return SourceInspectionSnapshot(
+                content_sha256="f" * 64,
+                source_count=snapshot.source_count,
+                file_sha256=snapshot.file_sha256,
+            )
+        return snapshot
+
+    monkeypatch.setattr(data_server, "source_inspection_snapshot", changed_after_read)
+    result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(inspection["inspection_identity"]),
+        inspection["inspected_relative_paths"],
+        [
+            SourceSelection(relative_path="demand.csv", unit_ref="table", role=SourceRole.DEMAND),
+            SourceSelection(
+                relative_path="warehouse.csv", unit_ref="table", role=SourceRole.EXISTING_WAREHOUSE
+            ),
+        ],
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/snapshot-race.json",
+        ctx,
+    )
+
+    payload = result.model_dump(mode="json", by_alias=True)
+    assert snapshot_calls == 2
+    assert payload["outcome"] == "source_changed"
+    assert not (tmp_path / f"{PREPARED_OUTPUT_DIR}/snapshot-race.json").exists()
+
+
 def test_xlsx_and_json_units_are_not_aggregated(tmp_path, monkeypatch) -> None:
     workbook = Workbook()
     workbook.active.title = "需求"
@@ -501,7 +797,12 @@ def test_xlsx_and_json_units_are_not_aggregated(tmp_path, monkeypatch) -> None:
         encoding="utf-8",
     )
     _use_store(tmp_path, monkeypatch)
-    result = data_server.inspect_workspace_sources(["network.xlsx", "nested.json"], object())
+    result = data_server.inspect_workspace_sources(
+        ["network.xlsx", "nested.json"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        "ID",
+        object(),
+    )
     assert result.structuredContent is not None
     sources = {item["relative_path"]: item for item in result.structuredContent["source_profile"]["sources"]}
     xlsx_units = {unit["unit_ref"]: unit for unit in sources["network.xlsx"]["units"]}
@@ -521,7 +822,9 @@ def test_xlsx_and_json_units_are_not_aggregated(tmp_path, monkeypatch) -> None:
         "path": "$.payload.nested[*].tags",
         "array_prefix": "payload.nested.item.tags",
     }
-    xlsx_inspected = data_server.inspect_workspace_sources(["network.xlsx"], object())
+    xlsx_inspected = data_server.inspect_workspace_sources(
+        ["network.xlsx"], [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE], "ID", object()
+    )
     assert xlsx_inspected.structuredContent is not None
     xlsx_profile = xlsx_inspected.structuredContent
     xlsx_result = data_server.prepare_network_input(
@@ -555,7 +858,9 @@ def test_explicit_mapping_handles_chinese_and_random_headers_without_name_infere
     )
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
-    inspected = data_server.inspect_workspace_sources(["random.csv", "opaque.csv"], ctx)
+    inspected = data_server.inspect_workspace_sources(
+        ["random.csv", "opaque.csv"], [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE], "ID", ctx
+    )
     assert inspected.structuredContent is not None
     profile = inspected.structuredContent
     selections = [
@@ -609,7 +914,9 @@ def test_one_csv_unit_can_supply_multiple_selected_roles_without_duplicate_reads
     )
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
-    inspected = data_server.inspect_workspace_sources(["combined.csv"], ctx)
+    inspected = data_server.inspect_workspace_sources(
+        ["combined.csv"], [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE], "ID", ctx
+    )
     assert inspected.structuredContent is not None
     profile = inspected.structuredContent
     result = data_server.prepare_network_input(
@@ -670,7 +977,9 @@ def test_nested_json_array_unit_is_read_exactly_and_unselected_array_is_ignored(
     )
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
-    inspected = data_server.inspect_workspace_sources(["nested.json", "warehouse.csv"], ctx)
+    inspected = data_server.inspect_workspace_sources(
+        ["nested.json", "warehouse.csv"], [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE], "ID", ctx
+    )
     assert inspected.structuredContent is not None
     profile = inspected.structuredContent
     selections = [
@@ -718,7 +1027,9 @@ def test_selected_full_data_invalid_value_outside_preview_is_needs_input_no_writ
     (tmp_path / "warehouse.csv").write_text("".join(rows), encoding="utf-8")
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
-    profile = data_server.inspect_workspace_sources(["demand.csv", "warehouse.csv"], ctx)
+    profile = data_server.inspect_workspace_sources(
+        ["demand.csv", "warehouse.csv"], [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE], "ID", ctx
+    )
     assert profile.structuredContent is not None
     inspection = profile.structuredContent
     result = data_server.prepare_network_input(
@@ -753,7 +1064,9 @@ def test_source_changed_covers_missing_selected_file_without_writing(
     )
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
-    profile = data_server.inspect_workspace_sources(["demand.csv", "warehouse.csv"], ctx)
+    profile = data_server.inspect_workspace_sources(
+        ["demand.csv", "warehouse.csv"], [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE], "ID", ctx
+    )
     assert profile.structuredContent is not None
     inspection = profile.structuredContent
     (tmp_path / "warehouse.csv").unlink()
@@ -782,7 +1095,7 @@ def test_invalid_source_unit_field_and_required_mapping_are_contract_errors(
     )
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
-    profile = data_server.inspect_workspace_sources(["demand.csv"], ctx)
+    profile = data_server.inspect_workspace_sources(["demand.csv"], [SourceRole.DEMAND], "ID", ctx)
     assert profile.structuredContent is not None
     inspection = profile.structuredContent
     identity = SourceInspectionIdentity.model_validate(inspection["inspection_identity"])
@@ -846,7 +1159,9 @@ def test_xlsx_selected_sheet_formula_is_a_full_data_blocker(tmp_path, monkeypatc
     workbook.save(tmp_path / "formula.xlsx")
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
-    profile = data_server.inspect_workspace_sources(["formula.xlsx"], ctx)
+    profile = data_server.inspect_workspace_sources(
+        ["formula.xlsx"], [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE], "ID", ctx
+    )
     assert profile.structuredContent is not None
     inspection = profile.structuredContent
     result = data_server.prepare_network_input(
@@ -885,7 +1200,10 @@ def test_same_role_units_merge_exact_duplicates_and_block_conflicts_no_write(
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
     profile = data_server.inspect_workspace_sources(
-        ["demand-a.csv", "demand-b.csv", "warehouse.csv"], ctx
+        ["demand-a.csv", "demand-b.csv", "warehouse.csv"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        "ID",
+        ctx,
     ).structuredContent
     selections = [
         SourceSelection(relative_path="demand-a.csv", unit_ref="table", role=SourceRole.DEMAND),
@@ -908,7 +1226,10 @@ def test_same_role_units_merge_exact_duplicates_and_block_conflicts_no_write(
         demand_header + "C-1,Surabaya,10,106.8,-6.2\n", encoding="utf-8"
     )
     conflict_profile = data_server.inspect_workspace_sources(
-        ["demand-a.csv", "demand-b.csv", "warehouse.csv"], ctx
+        ["demand-a.csv", "demand-b.csv", "warehouse.csv"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        "ID",
+        ctx,
     ).structuredContent
     conflict = data_server.prepare_network_input(
         SourceInspectionIdentity.model_validate(conflict_profile["inspection_identity"]),
@@ -959,7 +1280,10 @@ def test_geography_error_is_attributed_to_warehouse_unit_not_first_demand_unit(
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
     profile = data_server.inspect_workspace_sources(
-        ["demand.csv", "warehouse.csv", "admin.json"], ctx
+        ["demand.csv", "warehouse.csv", "admin.json"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        "ID",
+        ctx,
     ).structuredContent
     result = data_server.prepare_network_input(
         SourceInspectionIdentity.model_validate(profile["inspection_identity"]),
@@ -1011,7 +1335,10 @@ def test_candidate_geography_error_is_attributed_to_candidate_unit(
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
     profile = data_server.inspect_workspace_sources(
-        ["demand.csv", "candidate.csv", "admin.json"], ctx
+        ["demand.csv", "candidate.csv", "admin.json"],
+        [SourceRole.DEMAND, SourceRole.CANDIDATE_WAREHOUSE],
+        "ID",
+        ctx,
     ).structuredContent
     result = data_server.prepare_network_input(
         SourceInspectionIdentity.model_validate(profile["inspection_identity"]),
@@ -1047,7 +1374,10 @@ def test_administrative_catalog_exception_is_attributed_to_admin_document(
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
     profile = data_server.inspect_workspace_sources(
-        ["demand.csv", "warehouse.csv", "bad-admin.json"], ctx
+        ["demand.csv", "warehouse.csv", "bad-admin.json"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        "ID",
+        ctx,
     ).structuredContent
     result = data_server.prepare_network_input(
         SourceInspectionIdentity.model_validate(profile["inspection_identity"]),
@@ -1073,10 +1403,12 @@ def test_inspection_limits_are_explicit_selection_errors(tmp_path, monkeypatch) 
         (tmp_path / name).write_text("city_id,city_name\nC-1,Jakarta\n", encoding="utf-8")
     _use_store(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="at least one Workspace-relative path"):
-        data_server.inspect_workspace_sources([], object())
+        data_server.inspect_workspace_sources([], [SourceRole.DEMAND], "ID", object())
 
     monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_FILES", 1)
-    file_limited = data_server.inspect_workspace_sources(["a.csv", "b.csv"], object())
+    file_limited = data_server.inspect_workspace_sources(
+        ["a.csv", "b.csv"], [SourceRole.DEMAND], "ID", object()
+    )
     assert file_limited.structuredContent is not None
     assert file_limited.structuredContent["outcome"] == "selection_required"
     assert set(file_limited.structuredContent) == {
@@ -1099,7 +1431,9 @@ def test_inspection_limits_are_explicit_selection_errors(tmp_path, monkeypatch) 
     workbook.save(tmp_path / "multi.xlsx")
     monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_FILES", 64)
     monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_UNITS", 1)
-    unit_limited = data_server.inspect_workspace_sources(["multi.xlsx"], object())
+    unit_limited = data_server.inspect_workspace_sources(
+        ["multi.xlsx"], [SourceRole.DEMAND], "ID", object()
+    )
     assert unit_limited.structuredContent is not None
     assert unit_limited.structuredContent["outcome"] == "selection_required"
     assert unit_limited.structuredContent["observed"]["files"] == 1
@@ -1108,7 +1442,9 @@ def test_inspection_limits_are_explicit_selection_errors(tmp_path, monkeypatch) 
 
     monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_UNITS", 128)
     monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_BYTES", 1)
-    byte_limited = data_server.inspect_workspace_sources(["a.csv"], object())
+    byte_limited = data_server.inspect_workspace_sources(
+        ["a.csv"], [SourceRole.DEMAND], "ID", object()
+    )
     assert byte_limited.structuredContent is not None
     assert byte_limited.structuredContent["outcome"] == "selection_required"
     assert byte_limited.structuredContent["observed"]["bytes"] > 1
@@ -1149,7 +1485,10 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
     profile = data_server.inspect_workspace_sources(
-        ["demand.csv", "warehouses.csv", "admin.json"], object()
+        ["demand.csv", "warehouses.csv", "admin.json"],
+        [SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        "ID",
+        object(),
     )
     assert profile.structuredContent is not None
     inspection = profile.structuredContent
@@ -1182,23 +1521,92 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
     assert result_payload["state"] == "needs_geography"
     assert result_payload["prepared_input_relative_path"] == f"{PREPARED_OUTPUT_DIR}/prepared-input.json"
     payload = json.loads((tmp_path / result_payload["prepared_input_relative_path"]).read_text())
-    assert payload["schemaVersion"] == "prepared_network_input.v1"
-    assert all(source["mappings"] for source in payload["confirmed_sources"])
+    assert payload["schemaVersion"] == "prepared_network_input.v2"
+    assert all(source["mappings"] for source in payload["source_selections"])
     assert payload["issues"]
     assert result_payload["input_identity"]["content_sha256"]
 
+    original_admin = (tmp_path / "admin.json").read_bytes()
+    original_admin_reader = data_server.read_json_document_with_sha256
+
+    def mutate_admin_before_enrichment(root, relative_path):
+        if relative_path == "admin.json":
+            changed = json.loads((root / relative_path).read_text(encoding="utf-8"))
+            changed["rows"][0]["longitude"] = 107.1
+            (root / relative_path).write_text(json.dumps(changed), encoding="utf-8")
+        return original_admin_reader(root, relative_path)
+
+    monkeypatch.setattr(data_server, "read_json_document_with_sha256", mutate_admin_before_enrichment)
+    raced_primary = data_server.prepare_network_input(
+        inspection_identity,
+        inspected_paths,
+        _decisions(),
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/prepared-input-admin-race.json",
+        ctx,
+        administrative_catalog_relative_path="admin.json",
+    )
+    raced_primary_payload = raced_primary.model_dump(mode="json", by_alias=True)
+    assert raced_primary_payload["outcome"] == "source_changed"
+    assert not (tmp_path / f"{PREPARED_OUTPUT_DIR}/prepared-input-admin-race.json").exists()
+    (tmp_path / "admin.json").write_bytes(original_admin)
+    monkeypatch.setattr(data_server, "read_json_document_with_sha256", original_admin_reader)
+
+    original_demand = (tmp_path / "demand.csv").read_bytes()
+    (tmp_path / "demand.csv").write_bytes(original_demand + b"\n")
+    stale_geography = data_server.prepare_network_geography(
+        result_payload["prepared_input_relative_path"],
+        "admin.json",
+        f"{PREPARED_OUTPUT_DIR}/prepared-input-geography-stale.json",
+        ctx,
+    )
+    assert stale_geography.model_dump(mode="json", by_alias=True)["outcome"] == "source_changed"
+    assert not (tmp_path / f"{PREPARED_OUTPUT_DIR}/prepared-input-geography-stale.json").exists()
+    (tmp_path / "demand.csv").write_bytes(original_demand)
+
+    updated_admin = json.loads((tmp_path / "admin.json").read_text(encoding="utf-8"))
+    updated_admin["rows"][0]["longitude"] = 107.0
+    (tmp_path / "admin-updated.json").write_text(
+        json.dumps(updated_admin), encoding="utf-8"
+    )
+    updated_geography = data_server.prepare_network_geography(
+        result_payload["prepared_input_relative_path"],
+        "admin-updated.json",
+        f"{PREPARED_OUTPUT_DIR}/prepared-input-geography-updated.json",
+        ctx,
+    )
+    updated_payload = updated_geography.model_dump(mode="json", by_alias=True)
+    assert updated_payload["outcome"] == "ready"
+    updated_document = json.loads(
+        (tmp_path / updated_payload["prepared_input_relative_path"]).read_text(encoding="utf-8")
+    )
+    assert updated_document["administrative_catalog"]["relative_path"] == "admin-updated.json"
+    assert updated_document["demand_cities"][0]["longitude"] == 107.0
+
+    catalog_reads: list[str] = []
+
+    def counted_admin_reader(root, relative_path):
+        catalog_reads.append(relative_path)
+        return original_admin_reader(root, relative_path)
+
+    monkeypatch.setattr(data_server, "read_json_document_with_sha256", counted_admin_reader)
     geography = data_server.prepare_network_geography(
         result_payload["prepared_input_relative_path"],
         "admin.json",
         f"{PREPARED_OUTPUT_DIR}/prepared-input-geography.json",
         ctx,
     )
+    monkeypatch.setattr(data_server, "read_json_document_with_sha256", original_admin_reader)
     geography_payload = geography.model_dump(mode="json", by_alias=True)
     assert geography_payload["state"] == "ready"
     enriched = json.loads((tmp_path / geography_payload["prepared_input_relative_path"]).read_text())
     assert enriched["demand_cities"][0]["longitude"] == 106.8
-    assert enriched["parent_input_identity"] == result_payload["input_identity"]
+    assert enriched["selected_source_identity"]
     assert geography_payload["input_identity"] != result_payload["input_identity"]
+    assert catalog_reads == ["admin.json"]
+    assert enriched["administrative_catalog"]["content_sha256"] == hashlib.sha256(
+        original_admin
+    ).hexdigest()
 
     atomic = data_server.prepare_network_input(
         inspection_identity,
@@ -1213,7 +1621,7 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
     assert atomic_payload_result["state"] == "ready"
     atomic_payload = json.loads((tmp_path / atomic_payload_result["prepared_input_relative_path"]).read_text())
     assert atomic_payload["demand_cities"][0]["longitude"] == 106.8
-    assert atomic_payload["parent_input_identity"] is None
+    assert atomic_payload["administrative_catalog"]["relative_path"] == "admin.json"
 
     manual_demand = SourceSelection.model_validate(
         {
@@ -1267,7 +1675,9 @@ def test_candidate_changes_require_a_complete_new_workspace_preparation(
     )
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
-    profile = data_server.inspect_workspace_sources(["candidate.csv"], object())
+    profile = data_server.inspect_workspace_sources(
+        ["candidate.csv"], [SourceRole.CANDIDATE_WAREHOUSE], "ID", object()
+    )
     assert profile.structuredContent is not None
     inspection = profile.structuredContent
     inspection_identity = SourceInspectionIdentity.model_validate(
@@ -1303,8 +1713,12 @@ def test_inspection_identity_is_order_independent_and_rejects_changed_inputs(
     _use_store(tmp_path, monkeypatch)
     ctx = _context(tmp_path)
 
-    first = data_server.inspect_workspace_sources(["b.csv", "a.csv"], ctx)
-    second = data_server.inspect_workspace_sources(["a.csv", "b.csv"], ctx)
+    first = data_server.inspect_workspace_sources(
+        ["b.csv", "a.csv"], [SourceRole.DEMAND], "ID", ctx
+    )
+    second = data_server.inspect_workspace_sources(
+        ["a.csv", "b.csv"], [SourceRole.DEMAND], "ID", ctx
+    )
     first_identity = first.structuredContent["inspection_identity"]
     assert first_identity == second.structuredContent["inspection_identity"]
     assert first.structuredContent["inspected_relative_paths"] == ["a.csv", "b.csv"]
@@ -1344,8 +1758,12 @@ def test_inspection_rejects_symlink_and_data_resource_surface_is_empty(tmp_path,
     (tmp_path / "linked.csv").symlink_to(tmp_path / "outside.csv")
     _use_store(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="workspace_source_symlink_rejected"):
-        data_server.inspect_workspace_sources(["linked.csv"], _context(tmp_path))
-    with pytest.raises(ValueError, match="invalid_workspace_relative_path"):
-        data_server.inspect_workspace_sources(["../outside.csv"], _context(tmp_path))
+        data_server.inspect_workspace_sources(
+            ["linked.csv"], [SourceRole.DEMAND], "ID", _context(tmp_path)
+        )
+    with pytest.raises(ValueError, match="workspace_source_symlink_rejected"):
+        data_server.inspect_workspace_sources(
+            ["../outside.csv"], [SourceRole.DEMAND], "ID", _context(tmp_path)
+        )
     assert asyncio.run(data_server.mcp.list_resources()) == []
     assert asyncio.run(data_server.mcp.list_resource_templates()) == []

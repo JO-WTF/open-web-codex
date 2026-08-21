@@ -16,6 +16,7 @@ import re
 import stat
 import zipfile
 from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
@@ -261,18 +262,46 @@ def _sha256_file(path: Path) -> str:
 
 def source_inspection_identity(root: Path, relative_paths: list[str]) -> tuple[str, int]:
     """Hash sorted exact Workspace paths and each complete regular-file digest."""
+    snapshot = source_inspection_snapshot(root, relative_paths)
+    return snapshot.content_sha256, snapshot.source_count
+
+
+@dataclass(frozen=True)
+class SourceInspectionSnapshot:
+    """One complete read of an inspected path set and its per-file digests."""
+
+    content_sha256: str
+    source_count: int
+    file_sha256: dict[str, str]
+
+
+def source_inspection_snapshot(root: Path, relative_paths: list[str]) -> SourceInspectionSnapshot:
+    """Return aggregate and per-file identities from one sorted source read."""
     if not relative_paths or len(relative_paths) > MAX_FILES:
         raise ValueError("relative_paths must contain 1-500 Workspace-relative paths")
     if len(set(relative_paths)) != len(relative_paths):
         raise ValueError("relative_paths must not contain duplicates")
     digest = hashlib.sha256()
+    file_sha256: dict[str, str] = {}
     for relative_path in sorted(relative_paths):
         path = _validated_source_path(root, relative_path)
+        content_sha256 = _sha256_file(path)
+        file_sha256[relative_path] = content_sha256
         digest.update(relative_path.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(_sha256_file(path).encode("ascii"))
+        digest.update(content_sha256.encode("ascii"))
         digest.update(b"\n")
-    return digest.hexdigest(), len(relative_paths)
+    return SourceInspectionSnapshot(
+        content_sha256=digest.hexdigest(),
+        source_count=len(relative_paths),
+        file_sha256=file_sha256,
+    )
+
+
+def source_content_sha256(root: Path, relative_path: str) -> str:
+    """Return the complete digest for one validated Workspace source file."""
+
+    return _sha256_file(_validated_source_path(root, relative_path))
 
 
 def inspect(root: Path, relative_path: str) -> dict[str, Any]:

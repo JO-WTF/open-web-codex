@@ -37,7 +37,7 @@ Data child 返回 `needs_input` 时，Root 不得把它当成可纠正 Tool 参�
 
 ## 候选仓可视化
 
-用户要求地图展示候选仓时，先确认当前 `prepared_network_input.v1` Workspace 文件已包含用户确认的 candidate source。若没有，派发 Data child 完整纳入该 candidate source，得到新的 `prepared_input_relative_path` 和 `input_identity` 后再生成地图；`existing_only` 只限制 baseline 的计算范围，不能作为从准备输入或 GeoJSON 删除候选仓的理由。
+用户要求地图展示候选仓时，先确认当前 `prepared_network_input.v2` Workspace 文件已包含用户确认的 candidate source。若没有，派发 Data child 完整纳入该 candidate source，得到新的 `prepared_input_relative_path` 和 `input_identity` 后再生成地图；`existing_only` 只限制 baseline 的计算范围，不能作为从准备输入或 GeoJSON 删除候选仓的理由。
 
 ## 延迟 MCP Tool 发现
 

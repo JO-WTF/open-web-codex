@@ -20,7 +20,7 @@ class PlanningInputIdentity(NetworkRecord):
     mixed matrices and solved results.
     """
 
-    schema_version: Literal["prepared_network_input.v1"] = "prepared_network_input.v1"
+    schema_version: Literal["prepared_network_input.v2"] = "prepared_network_input.v2"
     content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 

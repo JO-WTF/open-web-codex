@@ -2,7 +2,7 @@
 
 ## Prepared input, Resource and Artifact lifecycle
 
-Every calculation starts from one create-new `prepared_network_input.v1` file under
+Every calculation starts from one create-new `prepared_network_input.v2` file under
 `outputs/warehouse-network/prepared/`. The Data Agent hands off only its exact Workspace-relative
 path, `input_identity`, readiness and bounded quality summaries. The file contains the confirmed
 demand, warehouse, assignment, route-quote and optional provided-route facts; it is not an MCP
@@ -32,12 +32,14 @@ scope or assumptions creates a new Resource.
 Resource files default to the owning Profile's `CODEX_HOME`; they are not shared
 application or repository state.
 
-For Data intake, `inspect_workspace_sources` returns a bounded inline `source_profile.v1`, exact
-`preview_sample_count`, `total_count`, `total_count_exact`, `inspection_identity` and inspected
-relative paths. `prepare_network_input` rereads the selected complete files and recomputes the
-identity before writing; a path, byte or selected-set change returns `source_inspection_changed`
-without creating output. Data registers no Resource or Resource template, so callers must not use
-`read_mcp_resource` for the inspection result.
+For Data intake, `inspect_workspace_sources` returns a bounded inline
+`workspace_source_profile.v2`, exact source units, `preview_sample_count`, `total_count`,
+`total_count_exact`, `inspection_identity` and inspected relative paths. A fresh prepared candidate
+is reused only when its exact output path is included in the inspection selection and its selected
+raw provenance is still fresh; otherwise inspection returns the raw profile. `prepare_network_input`
+rereads the selected complete units and recomputes the identity before writing; a path, byte or
+selected-set change returns `source_changed` without creating output. Data registers no Resource
+or Resource template, so callers must not use `read_mcp_resource` for the inspection result.
 
 Every Network Resource-producing Tool also returns `resource_name` in its structured result.
 Use that exact stable name when citing evidence; never expose or relabel the opaque

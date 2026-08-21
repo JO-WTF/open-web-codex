@@ -52,8 +52,11 @@ from supply_chain_planner.network.solver import (
 from supply_chain_planner.shared.models import (
     ComparableNetworkResultRef,
     NetworkComparisonReportInput,
+    PreparationRoleCounts,
     PreparedNetworkResource,
+    PreparedSourceSelection,
 )
+from supply_chain_planner.shared.planning_input import derive_selected_source_identity
 from supply_chain_planner.shared.resources import SupplyChainResources
 
 
@@ -78,6 +81,80 @@ def _prepared_input(workspace: Path, path: str = "prepared-network.json") -> str
         RouteQuoteRecord.model_validate(item.model_dump(mode="python"))
         for item in indonesia_route_quotes()
     ]
+    if Path(path).parent == Path("."):
+        path = f"outputs/warehouse-network/prepared/{Path(path).name}"
+    (workspace / "fixture").mkdir(exist_ok=True)
+    (workspace / "fixture/input.csv").write_text("city_id,city_name,demand_quantity\n", encoding="utf-8")
+    source_selections = [
+        PreparedSourceSelection(
+            relative_path="fixture/input.csv",
+            unit_ref="table",
+            role=role,
+            mappings=sorted(
+                mappings,
+                key=lambda mapping: (
+                    mapping["target_field"],
+                    mapping["source_field"],
+                    mapping["transform"],
+                    str(mapping.get("factor")),
+                ),
+            ),
+            raw_content_sha256="0" * 64,
+        )
+        for role, mappings in (
+            (
+                "demand",
+                [
+                    {"source_field": "city_id", "target_field": "city_id", "transform": "trim"},
+                    {"source_field": "city_name", "target_field": "city_name", "transform": "trim"},
+                    {"source_field": "demand_quantity", "target_field": "demand_quantity", "transform": "parse_integer"},
+                ],
+            ),
+            (
+                "existing_warehouse",
+                [
+                    {"source_field": "city_id", "target_field": "city_id", "transform": "trim"},
+                    {"source_field": "city_name", "target_field": "city_name", "transform": "trim"},
+                    {"source_field": "warehouse_id", "target_field": "warehouse_id", "transform": "trim"},
+                    {"source_field": "warehouse_name", "target_field": "warehouse_name", "transform": "trim"},
+                    {"source_field": "warehouse_type", "target_field": "warehouse_type", "transform": "normalize_warehouse_type"},
+                ],
+            ),
+            (
+                "candidate_warehouse",
+                [
+                    {"source_field": "city_id", "target_field": "city_id", "transform": "trim"},
+                    {"source_field": "city_name", "target_field": "city_name", "transform": "trim"},
+                    {"source_field": "warehouse_id", "target_field": "warehouse_id", "transform": "trim"},
+                    {"source_field": "warehouse_name", "target_field": "warehouse_name", "transform": "trim"},
+                    {"source_field": "warehouse_type", "target_field": "warehouse_type", "transform": "normalize_warehouse_type"},
+                ],
+            ),
+            (
+                "current_assignment",
+                [
+                    {"source_field": "demand_city_id", "target_field": "demand_city_id", "transform": "trim"},
+                    {"source_field": "serving_warehouse_id", "target_field": "serving_warehouse_id", "transform": "trim"},
+                ],
+            ),
+            (
+                "route_quote",
+                [
+                    {"source_field": "origin_id", "target_field": "origin_id", "transform": "trim"},
+                    {"source_field": "destination_id", "target_field": "destination_id", "transform": "trim"},
+                    {"source_field": "price_per_vehicle", "target_field": "price_per_vehicle", "transform": "parse_decimal"},
+                ],
+            ),
+        )
+    ]
+    role_counts = PreparationRoleCounts(
+        demand=len(fixture.demand),
+        existing_warehouse=sum(item.is_existing for item in fixture.warehouses),
+        candidate_warehouse=sum(not item.is_existing for item in fixture.warehouses),
+        current_assignment=len(indonesia_current_assignments()),
+        route_quote=len(quotes),
+        provided_route_fact=len(indonesia_provided_route_facts()),
+    )
     prepared = PreparedNetworkResource(
         country_code="ID",
         state="ready",
@@ -86,8 +163,20 @@ def _prepared_input(workspace: Path, path: str = "prepared-network.json") -> str
         current_assignments=indonesia_current_assignments(),
         route_quotes=quotes,
         provided_route_facts=indonesia_provided_route_facts(),
+        issue_count=0,
+        issues=[],
+        issues_truncated=False,
+        roles=["candidate_warehouse", "current_assignment", "demand", "existing_warehouse", "route_quote"],
+        source_selections=sorted(
+            source_selections,
+            key=lambda item: (item.relative_path, item.unit_ref, item.role.value),
+        ),
+        selected_source_identity=derive_selected_source_identity("ID", source_selections, None),
+        role_counts=role_counts,
     )
-    (workspace / path).write_text(prepared.model_dump_json(by_alias=True), encoding="utf-8")
+    target = workspace / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(prepared.model_dump_json(by_alias=True), encoding="utf-8")
     return path
 
 
@@ -319,7 +408,7 @@ def test_plan_cost_matrix_derives_bounded_full_quote_means(
     evidence = result.structuredContent["calculation_rule_evidence"]
     assert result.structuredContent["calculation_rule_source"] == "observed_quote_mean"
     assert result.structuredContent["input_identity"]["schema_version"] == (
-        "prepared_network_input.v1"
+        "prepared_network_input.v2"
     )
     assert evidence["considered_quote_count"] == 580
     assert evidence["total_quote_count"] == 580

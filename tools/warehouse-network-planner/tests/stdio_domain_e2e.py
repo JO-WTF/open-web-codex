@@ -154,7 +154,17 @@ async def _prepare_normalized_resource(
             profile = await _call(
                 session,
                 "inspect_workspace_sources",
-                {"relative_paths": relative_paths},
+                {
+                    "relative_paths": relative_paths,
+                    "required_roles": [
+                        "demand",
+                        "existing_warehouse",
+                        "candidate_warehouse",
+                        "current_assignment",
+                        "route_quote",
+                    ],
+                    "country_code": "ID",
+                },
                 workspace,
             )
             trace.append("prepare_network_input")

@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import pytest
 from _network_fixtures import network_case
 from open_web_codex_provider import ProviderContractError, ResourceRef, ResourceStore
+from supply_chain_planner.data.mapping import SourceRole
+from supply_chain_planner.data.workspace_intake import source_content_sha256
 from supply_chain_planner.network import analysis_tools, route_tools, server, tool_runtime
 from supply_chain_planner.network.matrix import RouteMatrix as ComposableRouteMatrix
 from supply_chain_planner.network.matrix_models import (
@@ -19,8 +21,17 @@ from supply_chain_planner.network.matrix_models import (
 )
 from supply_chain_planner.network.models import CurrentAssignmentRecord
 from supply_chain_planner.network.optimization_models import BaselineResult
-from supply_chain_planner.shared.models import PreparedNetworkResource
-from supply_chain_planner.shared.planning_input import load_prepared_network_input
+from supply_chain_planner.shared import planning_input
+from supply_chain_planner.shared.models import (
+    PreparationRoleCounts,
+    PreparedNetworkResource,
+    PreparedSourceSelection,
+)
+from supply_chain_planner.shared.planning_input import (
+    derive_selected_source_identity,
+    load_prepared_network_input,
+    validate_prepared_freshness,
+)
 from supply_chain_planner.shared.resources import SupplyChainResources
 
 
@@ -50,6 +61,58 @@ def _write_prepared_input(
         item.model_copy(update={"city_name": city_name}) if item.city_id == "city-a" else item
         for item in fixture.demand
     ]
+    if Path(relative_path).parent == Path("."):
+        relative_path = f"outputs/warehouse-network/prepared/{Path(relative_path).name}"
+    (workspace / "fixture").mkdir(exist_ok=True)
+    (workspace / "fixture/demand.csv").write_text("city_id,city_name,demand_quantity\n", encoding="utf-8")
+    (workspace / "fixture/warehouses.csv").write_text("warehouse_id,warehouse_name,warehouse_type,city_id,city_name\n", encoding="utf-8")
+    source_selections = [
+        PreparedSourceSelection(
+            relative_path="fixture/demand.csv",
+            unit_ref="table",
+            role="demand",
+            mappings=[
+                {"source_field": "city_id", "target_field": "city_id", "transform": "trim"},
+                {"source_field": "city_name", "target_field": "city_name", "transform": "trim"},
+                {"source_field": "demand_quantity", "target_field": "demand_quantity", "transform": "parse_integer"},
+            ],
+            raw_content_sha256=source_content_sha256(workspace, "fixture/demand.csv"),
+        ),
+        PreparedSourceSelection(
+            relative_path="fixture/warehouses.csv",
+            unit_ref="table",
+            role="candidate_warehouse",
+            mappings=[
+                {"source_field": "city_id", "target_field": "city_id", "transform": "trim"},
+                {"source_field": "city_name", "target_field": "city_name", "transform": "trim"},
+                {"source_field": "warehouse_id", "target_field": "warehouse_id", "transform": "trim"},
+                {"source_field": "warehouse_name", "target_field": "warehouse_name", "transform": "trim"},
+                {"source_field": "warehouse_type", "target_field": "warehouse_type", "transform": "normalize_warehouse_type"},
+            ],
+            raw_content_sha256=source_content_sha256(workspace, "fixture/warehouses.csv"),
+        ),
+        PreparedSourceSelection(
+            relative_path="fixture/warehouses.csv",
+            unit_ref="table",
+            role="existing_warehouse",
+            mappings=[
+                {"source_field": "city_id", "target_field": "city_id", "transform": "trim"},
+                {"source_field": "city_name", "target_field": "city_name", "transform": "trim"},
+                {"source_field": "warehouse_id", "target_field": "warehouse_id", "transform": "trim"},
+                {"source_field": "warehouse_name", "target_field": "warehouse_name", "transform": "trim"},
+                {"source_field": "warehouse_type", "target_field": "warehouse_type", "transform": "normalize_warehouse_type"},
+            ],
+            raw_content_sha256=source_content_sha256(workspace, "fixture/warehouses.csv"),
+        ),
+    ]
+    role_counts = PreparationRoleCounts(
+        demand=len(demand),
+        existing_warehouse=sum(item.is_existing for item in fixture.warehouses),
+        candidate_warehouse=sum(not item.is_existing for item in fixture.warehouses),
+        current_assignment=2,
+        route_quote=0,
+        provided_route_fact=0,
+    )
     prepared = PreparedNetworkResource(
         country_code="ID",
         state="ready",
@@ -67,8 +130,17 @@ def _write_prepared_input(
             ),
         ],
         route_quotes=[],
+        issue_count=0,
+        issues=[],
+        issues_truncated=False,
+        roles=["candidate_warehouse", "demand", "existing_warehouse"],
+        source_selections=source_selections,
+        selected_source_identity=derive_selected_source_identity("ID", source_selections, None),
+        role_counts=role_counts,
     )
-    (workspace / relative_path).write_text(
+    target = workspace / relative_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
         prepared.model_dump_json(by_alias=True),
         encoding="utf-8",
     )
@@ -140,6 +212,117 @@ def test_network_rejects_matrix_from_another_prepared_workspace_input(
         )
 
 
+def test_network_load_uses_self_contained_prepared_snapshot_when_raw_sources_are_gone(
+    tmp_path, monkeypatch
+) -> None:
+    workspace, _store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    prepared_path = _write_prepared_input(workspace, "prepared-snapshot.json")
+    (workspace / "fixture/demand.csv").unlink()
+    (workspace / "fixture/warehouses.csv").unlink()
+
+    prepared, identity = load_prepared_network_input(workspace, prepared_path)
+
+    assert prepared.state == "ready"
+    assert identity.content_sha256
+    routes = route_tools.prepare_route_matrix(
+        prepared_path,
+        "haversine",
+        ctx,
+        warehouse_scope=ExistingOnlyWarehouseScope(),
+        detour_coefficient=1.2,
+        average_speed_kph=40,
+    )
+    assert routes.structuredContent is not None
+
+
+@pytest.mark.parametrize("relative_path", ["/tmp/secret.csv", "../secret.csv"])
+def test_network_loader_rejects_malicious_prepared_provenance_path(
+    tmp_path, monkeypatch, relative_path: str
+) -> None:
+    workspace, _store = _runtime(tmp_path, monkeypatch)
+    prepared_path = _write_prepared_input(workspace, "prepared-malicious.json")
+    payload = json.loads((workspace / prepared_path).read_text(encoding="utf-8"))
+    payload["source_selections"][0]["relative_path"] = relative_path
+    selections = [PreparedSourceSelection.model_validate(item) for item in payload["source_selections"]]
+    payload["selected_source_identity"] = derive_selected_source_identity(
+        payload["country_code"], selections, None
+    )
+    (workspace / prepared_path).write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="prepared_provenance_path_invalid"):
+        load_prepared_network_input(workspace, prepared_path)
+
+
+def test_prepared_freshness_hashes_and_inspects_each_unique_raw_file_once(
+    tmp_path, monkeypatch
+) -> None:
+    workspace, _store = _runtime(tmp_path, monkeypatch)
+    prepared_path = _write_prepared_input(workspace, "prepared-fresh.json")
+    prepared, _identity = load_prepared_network_input(workspace, prepared_path)
+    original_hash = planning_input.source_content_sha256
+    original_inspect = planning_input.inspect
+    calls = {"hash": [], "inspect": []}
+
+    def counted_hash(root, relative_path):
+        calls["hash"].append(relative_path)
+        return original_hash(root, relative_path)
+
+    def counted_inspect(root, relative_path):
+        calls["inspect"].append(relative_path)
+        return original_inspect(root, relative_path)
+
+    monkeypatch.setattr(planning_input, "source_content_sha256", counted_hash)
+    monkeypatch.setattr(planning_input, "inspect", counted_inspect)
+    fresh, reason = validate_prepared_freshness(
+        workspace,
+        prepared,
+        required_roles=[SourceRole.DEMAND, SourceRole.EXISTING_WAREHOUSE],
+        country_code="ID",
+    )
+
+    assert fresh is True
+    assert reason == "fresh"
+    assert calls["inspect"] == ["fixture/demand.csv", "fixture/warehouses.csv"]
+    assert calls["hash"] == [
+        "fixture/demand.csv",
+        "fixture/demand.csv",
+        "fixture/warehouses.csv",
+        "fixture/warehouses.csv",
+    ]
+
+
+def test_prepared_freshness_rejects_file_changed_between_hashes(
+    tmp_path, monkeypatch
+) -> None:
+    workspace, _store = _runtime(tmp_path, monkeypatch)
+    prepared_path = _write_prepared_input(workspace, "prepared-race.json")
+    prepared, _identity = load_prepared_network_input(workspace, prepared_path)
+    original_hash = planning_input.source_content_sha256
+    demand_hash_calls = 0
+
+    def changing_hash(root, relative_path):
+        nonlocal demand_hash_calls
+        value = original_hash(root, relative_path)
+        if relative_path == "fixture/demand.csv":
+            demand_hash_calls += 1
+            if demand_hash_calls == 2:
+                return "f" * 64
+        return value
+
+    monkeypatch.setattr(planning_input, "source_content_sha256", changing_hash)
+    fresh, reason = validate_prepared_freshness(
+        workspace,
+        prepared,
+        required_roles=[SourceRole.DEMAND],
+        country_code="ID",
+    )
+
+    assert fresh is False
+    assert reason == "source_changed"
+    assert demand_hash_calls == 2
+
+
 def test_baseline_auto_uses_optimized_existing_when_assignments_are_absent(
     tmp_path, monkeypatch
 ) -> None:
@@ -148,6 +331,7 @@ def test_baseline_auto_uses_optimized_existing_when_assignments_are_absent(
     prepared_path = _write_prepared_input(workspace, "prepared-auto.json")
     payload = json.loads((workspace / prepared_path).read_text(encoding="utf-8"))
     payload["current_assignments"] = []
+    payload["role_counts"]["current_assignment"] = 0
     (workspace / prepared_path).write_text(json.dumps(payload), encoding="utf-8")
     routes = route_tools.prepare_route_matrix(
         prepared_path,
@@ -215,7 +399,7 @@ def test_navigation_request_and_import_use_exact_workspace_contract(tmp_path, mo
     assert request_payload["schema_version"] == "navigation_matrix_request.v2"
     assert request_payload["warehouse_scope"] == {"kind": "existing_only"}
     assert request_payload["warehouse_ids"] == sorted(
-        item["warehouse_id"] for item in json.loads((workspace / "prepared.json").read_text())["warehouses"] if item["is_existing"]
+        item["warehouse_id"] for item in json.loads((workspace / prepared_path).read_text())["warehouses"] if item["is_existing"]
     )
     result = NavigationMatrixResult(
         input_identity=request_result.input_identity,

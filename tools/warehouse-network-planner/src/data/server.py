@@ -8,7 +8,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Any
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -46,17 +46,23 @@ from supply_chain_planner.data.normalization import (
 from supply_chain_planner.data.workspace_intake import (
     discover,
     inspect,
-    read_json_document,
+    read_json_document_with_sha256,
     read_unit_rows,
     source_inspection_identity,
+    source_inspection_snapshot,
     workspace_source_metadata,
 )
-from supply_chain_planner.network.models import NormalizedInputBatch
+from supply_chain_planner.network.models import (
+    DataQualityIssue,
+    NormalizedInputBatch,
+    PlanningInputIdentity,
+)
 from supply_chain_planner.shared.models import (
     CandidateWarehouseSummary,
     ConfirmedFieldDecision,
-    ConfirmedSourceDecision,
     DataInspectionInspected,
+    DataInspectionPreparedReady,
+    DataInspectionPreparedSelectionRequired,
     DataInspectionSelectionRequired,
     DataInspectionToolResult,
     DataPreparationNeedsInput,
@@ -67,11 +73,18 @@ from supply_chain_planner.shared.models import (
     GeographyOverride,
     InspectionLimitCounts,
     PreparationRoleCounts,
+    PreparedAdministrativeCatalog,
+    PreparedCandidateSummary,
     PreparedNetworkResource,
+    PreparedSourceSelection,
     SourceInspectionIdentity,
     SourceSelection,
 )
-from supply_chain_planner.shared.planning_input import load_prepared_network_input
+from supply_chain_planner.shared.planning_input import (
+    derive_selected_source_identity,
+    load_prepared_network_input,
+    validate_prepared_freshness,
+)
 from supply_chain_planner.shared.resources import SupplyChainResources
 from supply_chain_planner.shared.workspace_outputs import (
     WorkspaceOutputKind,
@@ -104,15 +117,15 @@ mcp = FastMCP(
         "never request or accept organization IDs, Profile IDs, credentials, arbitrary SQL, "
         "filesystem paths, or write statements. Discover and inspect the complete authorized "
         "Workspace before confirming mappings. Inspection returns one bounded inline profile and "
-        "workspace_source_inspection.v1 identity; Data does not publish a source Resource. The "
+        "workspace_source_inspection.v2 identity; Data does not publish a source Resource. The "
         "head preview has separate "
         "preview_sample_count, total_count, and total_count_exact fields; preview rows are examples "
         "only and never the full source. Never use the preview sample count as the source row count. "
         "Inspection reports independent source-unit role assessments; partial or ambiguous units "
         "do not block inspection. Only the selected sources are validated during preparation. "
         "The initial normalization tool rereads "
-        "the complete explicitly confirmed source files and preserves every confirmed candidate "
-        "warehouse in a user-visible prepared_network_input.v1 Workspace JSON file. Source facts "
+        "the complete explicitly selected source units and preserves every selected candidate "
+        "warehouse in a user-visible prepared_network_input.v2 Workspace JSON file. Source facts "
         "such as demand, existing warehouses, assignments, routes, costs, or candidates always "
         "require a complete new preparation. Return the exact Workspace-relative output path and "
         "its content identity to the Network Planning Agent. Do not paste unbounded source rows "
@@ -167,7 +180,7 @@ def _write_prepared_input(
         for issue in persisted.issues
         if issue.severity == "warning"
     ]
-    warning_count = len(warnings)
+    warning_count = persisted.issue_count
     result = DataPreparationReady(
         outcome="ready",
         operation="created",
@@ -187,10 +200,7 @@ def _write_prepared_input(
         ),
         warnings=warnings[:64],
         warning_count=warning_count,
-        warnings_truncated=warning_count > 64,
-        issue_count=len(persisted.issues),
-        issues=persisted.issues[:64],
-        issues_truncated=len(persisted.issues) > 64,
+        warnings_truncated=persisted.issues_truncated,
         candidate_warehouse_count=len(candidates),
         candidate_warehouses=[
             CandidateWarehouseSummary(
@@ -274,6 +284,8 @@ def discover_workspace_sources(ctx: Context) -> dict[str, Any]:
 @mcp.tool(structured_output=True, annotations=READ_ONLY_LOCAL_TOOL)
 def inspect_workspace_sources(
     relative_paths: list[str],
+    required_roles: Annotated[list[SourceRole], Field(min_length=1, max_length=5)],
+    country_code: Annotated[str, Field(pattern=r"^[A-Za-z]{2}$")],
     ctx: Context,
 ) -> Annotated[CallToolResult, DataInspectionToolResult]:
     """Inspect selected Workspace files and return one bounded inline profile.
@@ -281,7 +293,37 @@ def inspect_workspace_sources(
     Preview rows are examples for schema inspection only. They are never a
     complete source snapshot and must not be used as the source row count.
     """
-    inspected = _inspect_workspace_sources(relative_paths, ctx)
+    required_roles = _canonical_required_roles(required_roles)
+    country = country_code.strip().upper()
+    root = _workspace(ctx)
+    if not relative_paths:
+        raise ValueError("relative_paths must contain at least one Workspace-relative path")
+    if len(set(relative_paths)) != len(relative_paths):
+        raise ValueError("relative_paths must not contain duplicates")
+    selected_candidate_paths = {
+        path for path in relative_paths if _is_prepared_candidate_path(path)
+    }
+    discovered_candidate_paths = {
+        str(source["relative_path"])
+        for source in discover(root)
+        if source.get("kind") == "prepared_candidate"
+    }
+    unknown_candidate_paths = selected_candidate_paths - discovered_candidate_paths
+    if unknown_candidate_paths:
+        raise ValueError("prepared_candidate_not_found")
+    raw_paths = [path for path in relative_paths if path not in selected_candidate_paths]
+    candidate_paths = sorted(selected_candidate_paths)
+    fresh_candidates, candidate_warnings = _fresh_prepared_candidates(
+        root, candidate_paths, required_roles, country
+    )
+    if fresh_candidates:
+        if len({item[2].content_sha256 for item in fresh_candidates}) == 1:
+            selected = min(fresh_candidates, key=lambda item: item[0])
+            return _prepared_ready_result(selected, candidate_warnings)
+        return _prepared_selection_result(fresh_candidates)
+    if not raw_paths:
+        raise ProviderContractError("prepared_candidate_unavailable")
+    inspected = _inspect_workspace_sources(raw_paths, ctx)
     if isinstance(inspected, DataInspectionSelectionRequired):
         summary = inspected.summary
         result = DataInspectionToolResult(root=inspected)
@@ -290,7 +332,7 @@ def inspect_workspace_sources(
             structuredContent=result.model_dump(mode="json", by_alias=True),
         )
     profile = inspected
-    content_sha256, source_count = source_inspection_identity(_workspace(ctx), relative_paths)
+    content_sha256, source_count = source_inspection_identity(root, raw_paths)
     identity = SourceInspectionIdentity(
         content_sha256=content_sha256,
         source_count=source_count,
@@ -310,11 +352,121 @@ def inspect_workspace_sources(
             retryable=False,
             source_profile=profile,
             inspection_identity=identity,
-            inspected_relative_paths=sorted(relative_paths),
+            inspected_relative_paths=sorted(raw_paths),
+            warnings=candidate_warnings[:64],
+            warning_count=len(candidate_warnings),
+            warnings_truncated=len(candidate_warnings) > 64,
         )
     )
     return CallToolResult(
         content=[TextContent(type="text", text=summary)],
+        structuredContent=result.model_dump(mode="json", by_alias=True),
+    )
+
+
+def _canonical_required_roles(required_roles: list[SourceRole]) -> list[SourceRole]:
+    if any(role == SourceRole.ADMINISTRATIVE_CATALOG for role in required_roles):
+        raise ValueError("required_roles_must_not_include_administrative_catalog")
+    if len(required_roles) != len(set(required_roles)):
+        raise ValueError("required_roles_must_be_unique")
+    return sorted(required_roles, key=lambda role: role.value)
+
+
+def _is_prepared_candidate_path(relative_path: str) -> bool:
+    candidate = PurePosixPath(relative_path)
+    return (
+        candidate.parent == PurePosixPath("outputs/warehouse-network/prepared")
+        and candidate.suffix.lower() == ".json"
+    )
+
+
+def _fresh_prepared_candidates(
+    root: Path,
+    candidate_paths: list[str],
+    required_roles: list[SourceRole],
+    country_code: str,
+) -> tuple[list[tuple[str, PreparedNetworkResource, PlanningInputIdentity]], list[str]]:
+    fresh: list[tuple[str, PreparedNetworkResource, PlanningInputIdentity]] = []
+    warnings: list[str] = []
+    for path in sorted(candidate_paths):
+        try:
+            prepared, identity = load_prepared_network_input(root, path)
+            valid, reason = validate_prepared_freshness(
+                root,
+                prepared,
+                required_roles=required_roles,
+                country_code=country_code,
+            )
+            if valid:
+                fresh.append((path, prepared, identity))
+            else:
+                warnings.append(f"prepared candidate {path} ignored: {reason}")
+        except ValueError as error:
+            reason = str(error).splitlines()[0] or "candidate_invalid"
+            warnings.append(f"prepared candidate {path} ignored: {reason}")
+        except OSError:
+            warnings.append(f"prepared candidate {path} ignored: candidate_unavailable")
+    return fresh, warnings
+
+
+def _prepared_ready_result(
+    candidate: tuple[str, PreparedNetworkResource, PlanningInputIdentity],
+    warnings: list[str],
+) -> CallToolResult:
+    path, prepared, identity = candidate
+    persisted_warnings = [
+        issue.business_message
+        for issue in prepared.issues
+        if issue.severity == "warning"
+    ]
+    all_warnings = persisted_warnings + warnings
+    result = DataInspectionToolResult(
+        root=DataInspectionPreparedReady(
+            outcome="prepared_ready",
+            schemaVersion="workspace_source_profile.v2",
+            operation="reused",
+            summary=f"Reused fresh prepared input {path} for the requested roles.",
+            next_action="handoff",
+            retryable=False,
+            prepared_input_relative_path=path,
+            input_identity=identity,
+            role_counts=prepared.role_counts,
+            warnings=all_warnings[:64],
+            warning_count=prepared.issue_count + len(warnings),
+            warnings_truncated=prepared.issue_count + len(warnings) > 64,
+        )
+    )
+    return CallToolResult(
+        content=[TextContent(type="text", text=result.root.summary)],
+        structuredContent=result.model_dump(mode="json", by_alias=True),
+    )
+
+
+def _prepared_selection_result(
+    candidates: list[tuple[str, PreparedNetworkResource, PlanningInputIdentity]],
+) -> CallToolResult:
+    summaries = [
+        PreparedCandidateSummary(
+            prepared_input_relative_path=path,
+            input_identity=identity,
+            role_counts=prepared.role_counts,
+        )
+        for path, prepared, identity in sorted(candidates, key=lambda item: item[0])
+    ]
+    result = DataInspectionToolResult(
+        root=DataInspectionPreparedSelectionRequired(
+            outcome="prepared_selection_required",
+            schemaVersion="workspace_source_profile.v2",
+            summary="Multiple fresh prepared inputs match the requested roles; choose one.",
+            next_action="request_user_input",
+            retryable=False,
+            candidates=summaries[:64],
+            candidate_count=len(summaries),
+            candidates_truncated=len(summaries) > 64,
+        )
+    )
+    return CallToolResult(
+        content=[TextContent(type="text", text=result.root.summary)],
         structuredContent=result.model_dump(mode="json", by_alias=True),
     )
 
@@ -633,7 +785,7 @@ def prepare_network_input(
     if isinstance(inspected, DataInspectionSelectionRequired):
         raise ProviderContractError("inspection_selection_required")
     try:
-        content_sha256, source_count = source_inspection_identity(
+        inspection_snapshot = source_inspection_snapshot(
             _workspace(ctx), inspected_relative_paths
         )
     except ValueError as error:
@@ -641,9 +793,9 @@ def prepare_network_input(
             return _source_changed_result()
         raise
     if (
-        inspection_identity.schema_version != "workspace_source_inspection.v1"
-        or inspection_identity.content_sha256 != content_sha256
-        or inspection_identity.source_count != source_count
+        inspection_identity.schema_version != "workspace_source_inspection.v2"
+        or inspection_identity.content_sha256 != inspection_snapshot.content_sha256
+        or inspection_identity.source_count != inspection_snapshot.source_count
     ):
         return _source_changed_result()
     country = country_code.strip().upper()
@@ -657,6 +809,11 @@ def prepare_network_input(
     if administrative_catalog_relative_path is not None:
         if administrative_catalog_relative_path not in inspected_set:
             raise ProviderContractError("administrative_catalog_not_in_inspected_paths")
+        if any(
+            selection.relative_path == administrative_catalog_relative_path
+            for selection in source_selections
+        ):
+            raise ProviderContractError("administrative_catalog_source_overlap")
     resolved: list[_ResolvedSelection] = []
     requirements: list[DataSourceRequirement] = []
     for selection in source_selections:
@@ -725,51 +882,119 @@ def prepare_network_input(
             )
         )
     try:
-        fresh_sha, fresh_count = source_inspection_identity(
+        fresh_snapshot = source_inspection_snapshot(
             _workspace(ctx), inspected_relative_paths
         )
     except ValueError as error:
         if _is_source_lifecycle_error(error):
             return _source_changed_result()
         raise
-    if fresh_sha != content_sha256 or fresh_count != source_count:
+    if (
+        fresh_snapshot.content_sha256 != inspection_snapshot.content_sha256
+        or fresh_snapshot.source_count != inspection_snapshot.source_count
+    ):
         return _source_changed_result()
     state, batch = normalize_confirmed_rows(normalized_sources)
     if state == "needs_input":
         return _needs_input_result(_batch_requirements(normalized_sources, batch))
-    resolved_sources = [item.decision for item in resolved]
+    try:
+        raw_hashes: dict[str, str] = {}
+        prepared_selections: list[PreparedSourceSelection] = []
+        for item in resolved:
+            if item.selection.relative_path not in raw_hashes:
+                raw_hashes[item.selection.relative_path] = fresh_snapshot.file_sha256[
+                    item.selection.relative_path
+                ]
+            canonical_mappings = sorted(
+                item.decision.mappings,
+                key=lambda mapping: (
+                    mapping.target_field,
+                    mapping.source_field,
+                    mapping.transform.value,
+                    str(mapping.factor),
+                ),
+            )
+            prepared_selections.append(
+                PreparedSourceSelection(
+                    relative_path=item.selection.relative_path,
+                    unit_ref=item.selection.unit_ref,
+                    role=item.decision.role,
+                    mappings=canonical_mappings,
+                    raw_content_sha256=raw_hashes[item.selection.relative_path],
+                )
+            )
+        administrative_provenance = (
+            PreparedAdministrativeCatalog(
+                relative_path=administrative_catalog_relative_path,
+                content_sha256=fresh_snapshot.file_sha256[administrative_catalog_relative_path],
+            )
+            if administrative_catalog_relative_path is not None
+            else None
+        )
+    except ValueError as error:
+        if _is_source_lifecycle_error(error):
+            return _source_changed_result()
+        raise
+    prepared_selections = sorted(
+        prepared_selections,
+        key=lambda item: (item.relative_path, item.unit_ref, item.role.value),
+    )
+    role_counts = PreparationRoleCounts(
+        demand=len(batch.demand_cities),
+        existing_warehouse=sum(item.is_existing for item in batch.warehouses),
+        candidate_warehouse=sum(not item.is_existing for item in batch.warehouses),
+        current_assignment=len(batch.current_assignments),
+        route_quote=len(batch.route_quotes),
+        provided_route_fact=len(batch.provided_route_facts),
+    )
     payload = PreparedNetworkResource(
         country_code=country,
         state=state,
-        confirmed_sources=resolved_sources,
-        **batch.model_dump(mode="json"),
+        source_selections=prepared_selections,
+        administrative_catalog=administrative_provenance,
+        selected_source_identity=derive_selected_source_identity(
+            country, prepared_selections, administrative_provenance
+        ),
+        issue_count=len(batch.issues),
+        issues_truncated=len(batch.issues) > 64,
+        roles=sorted({item.role for item in prepared_selections}, key=lambda role: role.value),
+        role_counts=role_counts,
+        **{
+            **batch.model_dump(mode="json"),
+            "issues": batch.issues[:64],
+        },
     )
     if administrative_catalog_relative_path is not None:
         try:
-            payload, geography_summary = _enrich_prepared_geography(
+            geography = _enrich_prepared_geography(
                 payload,
                 administrative_catalog_relative_path,
                 ctx,
                 overrides,
-                parent_input_identity=None,
+                expected_administrative_sha256=payload.administrative_catalog.content_sha256
+                if payload.administrative_catalog is not None
+                else None,
             )
         except (ValueError, KeyError) as error:
+            if str(error) == "source_changed":
+                return _source_changed_result()
             return _needs_input_result(
                 [_administrative_requirement(administrative_catalog_relative_path, error)]
             )
-        if payload.state == "needs_input":
+        if geography.prepared is None:
             return _needs_input_result(
                 _geography_requirements(
                     normalized_sources,
-                    _batch_from_payload(payload),
+                    _batch_from_payload_with_issues(payload, geography.issues),
                     administrative_catalog_relative_path,
                 )
             )
+        payload = geography.prepared
         return _write_prepared_input(
             payload,
             output_relative_path,
             ctx,
-            f"Normalized {len(resolved)} selected source units and {geography_summary}",
+            f"Normalized {len(resolved)} selected source units and {geography.summary}",
         )
     return _write_prepared_input(
         payload,
@@ -782,8 +1007,15 @@ def prepare_network_input(
 @dataclass(frozen=True)
 class _ResolvedSelection:
     selection: SourceSelection
-    decision: ConfirmedSourceDecision
+    decision: SourceSelection
     unit: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _GeographyEnrichment:
+    prepared: PreparedNetworkResource | None
+    summary: str
+    issues: list[DataQualityIssue]
 
 
 def _resolve_source_selection(
@@ -809,11 +1041,7 @@ def _resolve_source_selection(
         )
         if missing:
             raise ProviderContractError("source_selection_required_mapping_missing")
-        decision = ConfirmedSourceDecision(
-            relative_path=selection.relative_path,
-            role=selection.role,
-            mappings=selection.mappings,
-        )
+        decision = selection
         return _ResolvedSelection(selection=selection, decision=decision, unit=unit)
 
     suggestions = [
@@ -838,8 +1066,9 @@ def _resolve_source_selection(
                     factor=transform.get("factor"),
                 )
             )
-        decision = ConfirmedSourceDecision(
+        decision = SourceSelection(
             relative_path=selection.relative_path,
+            unit_ref=selection.unit_ref,
             role=selection.role,
             mappings=mappings,
         )
@@ -1024,6 +1253,17 @@ def _batch_from_payload(payload: PreparedNetworkResource) -> NormalizedInputBatc
     )
 
 
+def _batch_from_payload_with_issues(
+    payload: PreparedNetworkResource, issues: list[DataQualityIssue]
+) -> NormalizedInputBatch:
+    return NormalizedInputBatch.model_validate(
+        {
+            **_batch_from_payload(payload).model_dump(mode="json"),
+            "issues": issues,
+        }
+    )
+
+
 def _dedupe_requirements(
     requirements: list[DataSourceRequirement],
 ) -> list[DataSourceRequirement]:
@@ -1048,8 +1288,9 @@ def _enrich_prepared_geography(
     administrative_catalog_relative_path: str,
     ctx: Context,
     overrides: list[GeographyOverride] | None,
-    parent_input_identity: Any,
-) -> tuple[PreparedNetworkResource, str]:
+    *,
+    expected_administrative_sha256: str | None = None,
+) -> _GeographyEnrichment:
     country_code = payload.country_code
     batch = NormalizedInputBatch.model_validate(
         payload.model_dump(
@@ -1063,7 +1304,19 @@ def _enrich_prepared_geography(
             }
         )
     )
-    catalog_document = read_json_document(_workspace(ctx), administrative_catalog_relative_path)
+    try:
+        catalog_document, catalog_sha256 = read_json_document_with_sha256(
+            _workspace(ctx), administrative_catalog_relative_path
+        )
+    except ValueError:
+        if expected_administrative_sha256 is not None:
+            raise ValueError("source_changed") from None
+        raise
+    if (
+        expected_administrative_sha256 is not None
+        and catalog_sha256 != expected_administrative_sha256
+    ):
+        raise ValueError("source_changed")
     admin_level = catalog_document.get("admin_level")
     if not isinstance(admin_level, str) or not admin_level.strip():
         raise ValueError("administrative_catalog_level_missing")
@@ -1084,37 +1337,54 @@ def _enrich_prepared_geography(
         catalog,
         overrides=override_map,
     )
-    prepared = batch.model_copy(
-        update={
-            "demand_cities": demands,
-            "warehouses": warehouses,
-            "issues": [*batch.issues, *issues],
-        }
-    )
+    combined_issues = [*batch.issues, *issues]
     missing_coordinates = sum(
         item.longitude is None or item.latitude is None
-        for item in [*prepared.demand_cities, *prepared.warehouses]
+        for item in [*demands, *warehouses]
     )
     state = (
         "needs_input"
-        if any(issue.severity == "error" for issue in prepared.issues)
+        if any(issue.severity == "error" for issue in combined_issues)
         else "needs_geography"
         if missing_coordinates
         else "ready"
     )
-    return (
-        PreparedNetworkResource(
-            country_code=country_code,
-            state=state,
-            confirmed_sources=payload.confirmed_sources,
-            parent_input_identity=parent_input_identity,
-            **prepared.model_dump(mode="json"),
-        ),
+    summary = (
         f"enriched geography from the catalog's {admin_level.strip()} level; "
-        f"{len(prepared.demand_cities)} demand cities and "
-        f"{len(prepared.warehouses)} warehouses; missing-coordinate records "
-        f"{missing_coordinates}; state is {state}",
+        f"{len(demands)} demand cities and {len(warehouses)} warehouses; "
+        f"missing-coordinate records {missing_coordinates}; state is {state}"
     )
+    if state == "needs_input":
+        return _GeographyEnrichment(None, summary, combined_issues)
+    prepared_batch = batch.model_copy(
+        update={
+            "demand_cities": demands,
+            "warehouses": warehouses,
+            "issues": combined_issues,
+        }
+    )
+    admin_provenance = PreparedAdministrativeCatalog(
+        relative_path=administrative_catalog_relative_path,
+        content_sha256=catalog_sha256,
+    )
+    prepared_payload = PreparedNetworkResource(
+        country_code=payload.country_code,
+        state=state,
+        source_selections=payload.source_selections,
+        administrative_catalog=admin_provenance,
+        selected_source_identity=derive_selected_source_identity(
+            payload.country_code, payload.source_selections, admin_provenance
+        ),
+        roles=payload.roles,
+        role_counts=payload.role_counts,
+        issue_count=len(combined_issues),
+        issues_truncated=len(combined_issues) > 64,
+        **{
+            **prepared_batch.model_dump(mode="json"),
+            "issues": combined_issues[:64],
+        },
+    )
+    return _GeographyEnrichment(prepared_payload, summary, combined_issues)
 
 
 @mcp.tool(structured_output=True, annotations=WORKSPACE_PREPARATION_TOOL)
@@ -1135,30 +1405,59 @@ def prepare_network_geography(
     overrides: list[GeographyOverride] | None = None,
 ) -> DataPreparationToolResult:
     """Create a new prepared Workspace input enriched by one exact boundary catalog."""
-    payload, parent_identity = load_prepared_network_input(
+    payload, _input_identity = load_prepared_network_input(
         _workspace(ctx), prepared_input_relative_path
     )
-    prepared, summary = _enrich_prepared_geography(
+    fresh, _reason = validate_prepared_freshness(
+        _workspace(ctx),
         payload,
-        administrative_catalog_relative_path,
-        ctx,
-        overrides,
-        parent_input_identity=parent_identity,
+        required_roles=payload.roles,
+        country_code=payload.country_code,
+        allow_needs_geography=True,
+        check_administrative_catalog=False,
     )
-    if prepared.state == "needs_input":
+    if not fresh:
+        return _source_changed_result()
+    if any(
+        selection.relative_path == administrative_catalog_relative_path
+        for selection in payload.source_selections
+    ):
+        raise ProviderContractError("administrative_catalog_source_overlap")
+    try:
+        geography = _enrich_prepared_geography(
+            payload,
+            administrative_catalog_relative_path,
+            ctx,
+            overrides,
+        )
+    except (ValueError, KeyError) as error:
         return _needs_input_result(
-            [
-                _administrative_requirement(
-                    administrative_catalog_relative_path,
-                    ValueError("geography_validation_failed"),
-                )
-            ]
+            [_administrative_requirement(administrative_catalog_relative_path, error)]
+        )
+    if geography.prepared is None:
+        pseudo_sources = [
+            ConfirmedSourceRows(
+                role=selection.role,
+                rows=[],
+                mappings=[],
+                relative_path=selection.relative_path,
+                unit_ref=selection.unit_ref,
+                selection_key=f"prepared:{index}",
+            )
+            for index, selection in enumerate(payload.source_selections)
+        ]
+        return _needs_input_result(
+            _geography_requirements(
+                pseudo_sources,
+                _batch_from_payload_with_issues(payload, geography.issues),
+                administrative_catalog_relative_path,
+            )
         )
     return _write_prepared_input(
-        prepared,
+        geography.prepared,
         output_relative_path,
         ctx,
-        f"Prepared network geography and {summary}.",
+        f"Prepared network geography and {geography.summary}.",
     )
 
 

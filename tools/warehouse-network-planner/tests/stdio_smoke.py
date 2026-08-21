@@ -85,7 +85,11 @@ async def smoke() -> None:
                 profiled = await asyncio.wait_for(
                     session.call_tool(
                         "inspect_workspace_sources",
-                        {"relative_paths": ["network.csv", "warehouse.csv"]},
+                        {
+                            "relative_paths": ["network.csv", "warehouse.csv"],
+                            "required_roles": ["demand", "existing_warehouse"],
+                            "country_code": "ID",
+                        },
                         meta=meta,
                     ),
                     timeout=10,
@@ -98,7 +102,7 @@ async def smoke() -> None:
                 assert inspection["source_profile"]["sources"][0]["units"][0][
                     "mapping_suggestions"
                 ]
-                assert inspection["inspection_identity"]["schemaVersion"] == "workspace_source_inspection.v1"
+                assert inspection["inspection_identity"]["schemaVersion"] == "workspace_source_inspection.v2"
                 prepared = await asyncio.wait_for(
                     session.call_tool(
                         "prepare_network_input",
@@ -137,7 +141,11 @@ async def smoke() -> None:
                 blocked_inspection = await asyncio.wait_for(
                     session.call_tool(
                         "inspect_workspace_sources",
-                        {"relative_paths": ["warehouses-missing-type.csv"]},
+                        {
+                            "relative_paths": ["warehouses-missing-type.csv"],
+                            "required_roles": ["existing_warehouse"],
+                            "country_code": "ID",
+                        },
                         meta=meta,
                     ),
                     timeout=10,

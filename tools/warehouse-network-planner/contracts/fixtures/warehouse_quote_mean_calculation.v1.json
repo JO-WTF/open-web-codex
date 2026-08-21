@@ -2,7 +2,7 @@
   "schema_version": "warehouse_quote_mean_calculation.v1",
   "prepared_input_relative_path": "outputs/warehouse-network/prepared/prepared-network.json",
   "input_identity": {
-    "schema_version": "prepared_network_input.v1",
+    "schema_version": "prepared_network_input.v2",
     "content_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
   },
   "total_quote_count": 580,

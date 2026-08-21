@@ -10,8 +10,8 @@
           "type": "string"
         },
         "schema_version": {
-          "const": "prepared_network_input.v1",
-          "default": "prepared_network_input.v1",
+          "const": "prepared_network_input.v2",
+          "default": "prepared_network_input.v2",
           "title": "Schema Version",
           "type": "string"
         }
