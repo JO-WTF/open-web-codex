@@ -15,8 +15,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
-    InMemoryProviderService, ProviderOperations, ProviderService, ProviderServiceError,
-    ProviderTransport,
+    update_provider_models, InMemoryProviderService, ProviderOperations, ProviderService,
+    ProviderServiceError, ProviderTransport,
 };
 
 #[derive(Debug, Error)]
@@ -171,6 +171,7 @@ impl SecuredProviderService {
         .bind(profile.id)
         .fetch_all(&self.db)
         .await?;
+        let restored_provider_configuration = !rows.is_empty();
         let environments = self
             .secrets
             .list_provider_environment(profile.organization_id, profile.id)
@@ -203,17 +204,8 @@ impl SecuredProviderService {
                 .await?;
             let models: Vec<ProviderModelSummary> = serde_json::from_value(row.get("models"))
                 .map_err(|error| ProviderServiceError::InvalidResponse(error.to_string()))?;
-            for model in models {
-                self.runtime
-                    .update_model(
-                        &provider_id,
-                        &model.model_id,
-                        UpdateProviderModelRequest {
-                            context_window: model.context_window.unwrap_or(128_000),
-                            supports_search_tool: Some(model.supports_search_tool),
-                        },
-                    )
-                    .await?;
+            if !models.is_empty() {
+                self.runtime.replace_models(&provider_id, models).await?;
             }
             if row.get::<bool, _>("is_selected") {
                 selected_provider = Some(provider_id);
@@ -227,6 +219,11 @@ impl SecuredProviderService {
             }
         }
         self.runtime.ensure_default_reasoning_effort().await?;
+        if restored_provider_configuration {
+            self.registry
+                .schedule_runtime_refresh(&self.runtime_key)
+                .await?;
+        }
         Ok(())
     }
 
@@ -656,48 +653,13 @@ impl AuthorizedProviderOperations for SecuredProviderService {
         let persisted_models = self.persisted_models(profile.id, provider_id).await?;
         let context_window = request.context_window;
         let supports_search_tool = request.supports_search_tool;
-        let mut catalog = self
-            .runtime
-            .update_model(provider_id, model_id, request)
-            .await?;
-        let has_runtime_models = catalog
-            .data
-            .iter()
-            .find(|provider| provider.id == provider_id)
-            .is_some_and(|provider| !provider.models.is_empty());
-        if has_runtime_models {
-            Self::merge_persisted_model_capabilities(&mut catalog, provider_id, &persisted_models);
-        }
-        if let Some(provider) = catalog
-            .data
-            .iter_mut()
-            .find(|provider| provider.id == provider_id)
-        {
-            if provider.models.is_empty() && !persisted_models.is_empty() {
-                provider.models = persisted_models.clone();
-            }
-            if let Some(model) = provider
-                .models
-                .iter_mut()
-                .find(|model| model.model_id == model_id)
-            {
-                model.context_window = Some(context_window);
-                if let Some(supports_search_tool) = supports_search_tool {
-                    model.supports_search_tool = supports_search_tool;
-                }
-            } else {
-                provider.models.push(ProviderModelSummary {
-                    model_id: model_id.to_string(),
-                    model_name: Some(model_id.to_string()),
-                    max_token_len: None,
-                    max_output_tokens: None,
-                    show_in_picker: true,
-                    context_window: Some(context_window),
-                    supports_search_tool: supports_search_tool.unwrap_or(false),
-                });
-            }
-            provider.model_count = provider.models.len();
-        }
+        let models = update_provider_models(
+            &persisted_models,
+            model_id,
+            context_window,
+            supports_search_tool,
+        );
+        let catalog = self.runtime.replace_models(provider_id, models).await?;
         self.persist_catalog_provider(
             profile.id,
             &catalog,

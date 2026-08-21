@@ -6,7 +6,7 @@
 
 pub mod secured;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -107,6 +107,11 @@ pub trait ProviderOperations: Send + Sync {
     ) -> Result<ProviderCatalog, ProviderServiceError>;
     async fn delete(&self, id: &str) -> Result<ProviderCatalog, ProviderServiceError>;
     async fn refresh_models(&self, id: &str) -> Result<ProviderCatalog, ProviderServiceError>;
+    async fn replace_models(
+        &self,
+        provider_id: &str,
+        models: Vec<ProviderModelSummary>,
+    ) -> Result<ProviderCatalog, ProviderServiceError>;
     async fn update_model(
         &self,
         provider_id: &str,
@@ -344,18 +349,67 @@ impl ProviderService {
                 "built-in model metadata cannot be edited".to_string(),
             ));
         }
-        let models = upsert_provider_model_context(
+        let models = update_provider_models(
             &provider.models,
             model_id,
             request.context_window,
             request.supports_search_tool,
         );
+        self.write_model_catalog(provider_id, models).await
+    }
+
+    pub async fn replace_models(
+        &self,
+        provider_id: &str,
+        models: Vec<ProviderModelSummary>,
+    ) -> Result<ProviderCatalog, ProviderServiceError> {
+        let catalog = self.require_provider(provider_id).await?;
+        let provider = catalog
+            .data
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .expect("required Provider exists");
+        if provider.kind == ProviderKind::BuiltIn || !provider.can_edit {
+            return Err(ProviderServiceError::Forbidden(
+                "built-in model metadata cannot be edited".to_string(),
+            ));
+        }
+        self.write_model_catalog(provider_id, models).await
+    }
+
+    async fn write_model_catalog(
+        &self,
+        provider_id: &str,
+        models: Vec<ProviderModelSummary>,
+    ) -> Result<ProviderCatalog, ProviderServiceError> {
+        if models.is_empty() {
+            return Err(ProviderServiceError::InvalidInput(
+                "Provider model catalog cannot be empty".to_string(),
+            ));
+        }
+        let mut model_ids = BTreeSet::new();
+        let persisted_models = models
+            .iter()
+            .map(|model| {
+                if !model_ids.insert(model.model_id.as_str()) {
+                    return None;
+                }
+                provider_model_config_from_catalog(model)
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or(ProviderServiceError::ProviderCatalogFailure(
+                ProviderCatalogFailure::IncompatibleSchema,
+            ))?;
         self.write_config(vec![config_edit(
             format!("{}.models", provider_path(provider_id)?),
-            json!(models),
+            json!(persisted_models),
         )])
         .await?;
-        self.list().await
+        let mut catalog = self.list().await?;
+        let provider_index = require_catalog_provider(&catalog, provider_id)?;
+        catalog.data[provider_index].model_count = models.len();
+        catalog.data[provider_index].models = models;
+        Ok(catalog)
     }
 
     /// Apply the Platform default only to Profiles without an explicit
@@ -461,6 +515,14 @@ impl ProviderOperations for ProviderService {
 
     async fn refresh_models(&self, id: &str) -> Result<ProviderCatalog, ProviderServiceError> {
         ProviderService::refresh_models(self, id).await
+    }
+
+    async fn replace_models(
+        &self,
+        provider_id: &str,
+        models: Vec<ProviderModelSummary>,
+    ) -> Result<ProviderCatalog, ProviderServiceError> {
+        ProviderService::replace_models(self, provider_id, models).await
     }
 
     async fn update_model(
@@ -677,6 +739,39 @@ impl ProviderOperations for InMemoryProviderService {
                 ProviderCatalogFailure::EmptyCatalog,
             ));
         }
+        Ok(catalog.clone())
+    }
+
+    async fn replace_models(
+        &self,
+        provider_id: &str,
+        models: Vec<ProviderModelSummary>,
+    ) -> Result<ProviderCatalog, ProviderServiceError> {
+        let mut catalog = self.catalog.write().await;
+        let provider_index = require_catalog_provider(&catalog, provider_id)?;
+        if catalog.data[provider_index].kind == ProviderKind::BuiltIn
+            || !catalog.data[provider_index].can_edit
+        {
+            return Err(ProviderServiceError::Forbidden(
+                "built-in model metadata cannot be edited".to_string(),
+            ));
+        }
+        if models.is_empty() {
+            return Err(ProviderServiceError::InvalidInput(
+                "Provider model catalog cannot be empty".to_string(),
+            ));
+        }
+        let mut model_ids = BTreeSet::new();
+        if models.iter().any(|model| {
+            !model_ids.insert(model.model_id.as_str())
+                || provider_model_config_from_catalog(model).is_none()
+        }) {
+            return Err(ProviderServiceError::ProviderCatalogFailure(
+                ProviderCatalogFailure::IncompatibleSchema,
+            ));
+        }
+        catalog.data[provider_index].model_count = models.len();
+        catalog.data[provider_index].models = models;
         Ok(catalog.clone())
     }
 
@@ -940,58 +1035,37 @@ fn provider_model_config_from_catalog(model: &ProviderModelSummary) -> Option<Va
     Some(Value::Object(persisted))
 }
 
-fn upsert_provider_model_context(
+fn update_provider_models(
     raw_models: &[ProviderModelSummary],
     model_id: &str,
     context_window: i64,
     supports_search_tool: Option<bool>,
-) -> Vec<Value> {
+) -> Vec<ProviderModelSummary> {
     let mut found = false;
     let mut models = raw_models
         .iter()
         .map(|model| {
-            let next_context = if model.model_id == model_id {
+            let mut model = model.clone();
+            if model.model_id == model_id {
                 found = true;
-                Some(context_window)
-            } else {
-                model.context_window
-            };
-            let next_supports_search_tool = if model.model_id == model_id {
-                supports_search_tool.unwrap_or(model.supports_search_tool)
-            } else {
-                model.supports_search_tool
-            };
-            let mut persisted = Map::new();
-            persisted.insert("model_id".to_string(), json!(model.model_id));
-            persisted.insert(
-                "model_name".to_string(),
-                json!(model.model_name.as_deref().unwrap_or(&model.model_id)),
-            );
-            persisted.insert("show_in_picker".to_string(), json!(model.show_in_picker));
-            persisted.insert(
-                "supports_search_tool".to_string(),
-                json!(next_supports_search_tool),
-            );
-            if let Some(value) = model.max_token_len {
-                persisted.insert("max_token_len".to_string(), json!(value));
+                model.context_window = Some(context_window);
+                if let Some(supports_search_tool) = supports_search_tool {
+                    model.supports_search_tool = supports_search_tool;
+                }
             }
-            if let Some(value) = model.max_output_tokens {
-                persisted.insert("max_output_tokens".to_string(), json!(value));
-            }
-            if let Some(value) = next_context {
-                persisted.insert("context_window".to_string(), json!(value));
-            }
-            Value::Object(persisted)
+            model
         })
         .collect::<Vec<_>>();
     if !found {
-        models.push(json!({
-            "model_id": model_id,
-            "model_name": model_id,
-            "show_in_picker": true,
-            "context_window": context_window,
-            "supports_search_tool": supports_search_tool.unwrap_or(false),
-        }));
+        models.push(ProviderModelSummary {
+            model_id: model_id.to_string(),
+            model_name: Some(model_id.to_string()),
+            max_token_len: None,
+            max_output_tokens: None,
+            show_in_picker: true,
+            context_window: Some(context_window),
+            supports_search_tool: supports_search_tool.unwrap_or(false),
+        });
     }
     models
 }
@@ -1003,9 +1077,9 @@ mod tests {
 
     use super::{
         parse_model_provider_models_list, provider_model_config_from_catalog, provider_path,
-        upsert_provider_model_context, validate_base_url, validate_credentials,
-        InMemoryProviderService, ProviderOperations, ProviderService, ProviderServiceError,
-        ProviderTransport, DEFAULT_REASONING_EFFORT,
+        update_provider_models, validate_base_url, validate_credentials, InMemoryProviderService,
+        ProviderOperations, ProviderService, ProviderServiceError, ProviderTransport,
+        DEFAULT_REASONING_EFFORT,
     };
     use async_trait::async_trait;
     use open_web_codex_platform_contracts::{
@@ -1265,23 +1339,82 @@ mod tests {
 
     #[test]
     fn model_context_update_preserves_other_runtime_metadata() {
-        let existing = vec![ProviderModelSummary {
-            model_id: "deepseek-v4-flash".to_string(),
-            model_name: Some("DeepSeek V4 Flash".to_string()),
-            max_token_len: Some(64_000),
-            max_output_tokens: Some(8_192),
-            show_in_picker: true,
-            context_window: Some(64_000),
-            supports_search_tool: false,
-        }];
-        let models =
-            upsert_provider_model_context(&existing, "deepseek-v4-flash", 128_000, Some(true));
+        let existing = vec![
+            ProviderModelSummary {
+                model_id: "deepseek-v4-flash".to_string(),
+                model_name: Some("DeepSeek V4 Flash".to_string()),
+                max_token_len: Some(64_000),
+                max_output_tokens: Some(8_192),
+                show_in_picker: true,
+                context_window: Some(64_000),
+                supports_search_tool: false,
+            },
+            ProviderModelSummary {
+                model_id: "deepseek-v4-pro".to_string(),
+                model_name: Some("DeepSeek V4 Pro".to_string()),
+                max_token_len: None,
+                max_output_tokens: None,
+                show_in_picker: true,
+                context_window: Some(128_000),
+                supports_search_tool: false,
+            },
+        ];
+        let models = update_provider_models(&existing, "deepseek-v4-flash", 128_000, Some(true));
 
-        assert_eq!(models[0]["model_name"], "DeepSeek V4 Flash");
-        assert_eq!(models[0]["max_token_len"], 64_000);
-        assert_eq!(models[0]["max_output_tokens"], 8_192);
-        assert_eq!(models[0]["context_window"], 128_000);
-        assert_eq!(models[0]["supports_search_tool"], true);
+        assert_eq!(models[0].model_name.as_deref(), Some("DeepSeek V4 Flash"));
+        assert_eq!(models[0].max_token_len, Some(64_000));
+        assert_eq!(models[0].max_output_tokens, Some(8_192));
+        assert_eq!(models[0].context_window, Some(128_000));
+        assert!(models[0].supports_search_tool);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[1], existing[1]);
+    }
+
+    #[tokio::test]
+    async fn replace_models_writes_the_complete_catalog_atomically() {
+        let initial = catalog("deepseek", json!([provider("deepseek", true, json!([]))]));
+        let transport = MockTransport::new(vec![
+            json!({ "result": initial.clone() }),
+            json!({ "result": { "status": "ok" } }),
+            json!({ "result": initial }),
+        ]);
+        let service = ProviderService::new(transport.clone());
+        let models = vec![
+            ProviderModelSummary {
+                model_id: "deepseek-v4-flash".to_string(),
+                model_name: Some("deepseek-v4-flash".to_string()),
+                max_token_len: None,
+                max_output_tokens: None,
+                show_in_picker: true,
+                context_window: Some(128_000),
+                supports_search_tool: true,
+            },
+            ProviderModelSummary {
+                model_id: "deepseek-v4-pro".to_string(),
+                model_name: Some("deepseek-v4-pro".to_string()),
+                max_token_len: None,
+                max_output_tokens: None,
+                show_in_picker: true,
+                context_window: Some(128_000),
+                supports_search_tool: false,
+            },
+        ];
+
+        let result = service
+            .replace_models("deepseek", models.clone())
+            .await
+            .expect("replace complete model catalog");
+
+        let calls = transport.calls.lock().await;
+        assert_eq!(calls.len(), 3);
+        let edit = &calls[1].1["edits"][0];
+        assert_eq!(edit["keyPath"], "model_providers.\"deepseek\".models");
+        assert_eq!(edit["value"].as_array().map(Vec::len), Some(2));
+        assert_eq!(edit["value"][0]["model_id"], "deepseek-v4-flash");
+        assert_eq!(edit["value"][0]["supports_search_tool"], true);
+        assert_eq!(edit["value"][1]["model_id"], "deepseek-v4-pro");
+        assert_eq!(edit["value"][1]["supports_search_tool"], false);
+        assert_eq!(result.data[0].models, models);
     }
 
     #[tokio::test]
