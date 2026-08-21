@@ -15,6 +15,8 @@ Root 没有仓网 MCP 数据面；上传文件已由 Workspace 授权并交给 D
 
 Data child 返回 `prepared_ready` 时，Root 直接把最小交接传给 Network；返回 `prepared_selection_required` 时只向用户交候选并停止；返回 `needs_input` 时不得把它当成可纠正 Tool 参数错误，不得恢复、重派或新建 Data child。原样合并相同文件的缺口，向用户询问一次 Tool 给出的业务问题并结束当前 Root Turn；只有用户在新 Turn 提供答案或上传修正文件后才继续。缺少 `warehouse_type` 时必须明确要求源数据逐行补充 `center` 或 `cross_docking`，不能默认所有仓同型。Data 交接至少保留 `status/outcome`、`operation`、prepared path、input identity、`role_counts`、`warning_count` 和有界 warnings。
 
+Network child 如果 terminal 消息含独立段落 `::codex-inline-vis{artifact="..."}`，Root 必须在最终消息中逐字复制该 directive，并让它单独成段；不得解析或构造 artifact ID。若 child 已成功生成地图但 terminal 没有该 directive，返回 map delivery failure/`needs_context`，不得声称地图已展示。
+
 ## Child Skill 选择
 
 - Data child 的 `items` 必须包含精确 `$warehouse-data` Skill item 和一个任务 Text item。

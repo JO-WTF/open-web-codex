@@ -19,7 +19,11 @@ import {
   singleAgentTaskPrompt,
   toolCapabilityTaskPrompt,
 } from "./scenarios.mjs";
-import { facilityChangeMatches, validateBusinessEvidence } from "./multi-agent.mjs";
+import {
+  facilityChangeMatches,
+  hasStandaloneMapEmbedInFinalRootMessage,
+  validateBusinessEvidence,
+} from "./multi-agent.mjs";
 import {
   hasNoChildCollaboration,
   isMinimumFeasibleSolution,
@@ -877,6 +881,7 @@ async function runSelfTests() {
     roles: new Set(["data_agent", "network_agent"]),
     facilityChangeValid: true,
     mapProducerCompleted: true,
+    rootFinalMapEmbed: true,
     generatedWorkspaceFiles: ["outputs/warehouse-network/prepared/input.json"],
   });
   assert.equal(validMultiEvidence.valid, true);
@@ -900,9 +905,67 @@ async function runSelfTests() {
     roles: new Set(["data_agent", "network_agent"]),
     facilityChangeValid: true,
     mapProducerCompleted: true,
+    rootFinalMapEmbed: true,
     generatedWorkspaceFiles: ["outputs/warehouse-network/prepared/input.json"],
   });
   assert.equal(legacyBaselineValidation.code, "multi_agent_typed_baseline_invalid");
+  const missingMapEmbedValidation = validateBusinessEvidence({
+    dataHandoff: validMultiEvidence.valid
+      ? {
+          outcome: "ready",
+          operation: "created",
+          prepared_input_relative_path: "outputs/warehouse-network/prepared/input.json",
+          input_identity: { content_sha256: "a".repeat(64) },
+          role_counts: { demand: 1, existing_warehouse: 1 },
+          warnings: [],
+          warning_count: 0,
+          warnings_truncated: false,
+          candidate_warehouse_count: 12,
+        }
+      : undefined,
+    baseline: currentBaseline,
+    baselineCoverage: currentCoverage,
+    roles: new Set(["data_agent", "network_agent"]),
+    facilityChangeValid: true,
+    mapProducerCompleted: true,
+    rootFinalMapEmbed: false,
+    generatedWorkspaceFiles: ["outputs/warehouse-network/prepared/input.json"],
+  });
+  assert.equal(missingMapEmbedValidation.code, "map_embed_not_forwarded");
+  assert.equal(
+    hasStandaloneMapEmbedInFinalRootMessage(
+      [
+        {
+          thread_id: "root",
+          payload: { itemType: "agentMessage", data: { text: "map child" } },
+        },
+        {
+          thread_id: "root",
+          payload: {
+            itemType: "agentMessage",
+            data: { text: "done\n\n::codex-inline-vis{artifact=\"map-1\"}" },
+          },
+        },
+      ],
+      "root",
+    ),
+    true,
+  );
+  assert.equal(
+    hasStandaloneMapEmbedInFinalRootMessage(
+      [
+        {
+          thread_id: "root",
+          payload: {
+            itemType: "agentMessage",
+            data: { text: "地图已生成 ::codex-inline-vis{artifact=\"map-1\"}" },
+          },
+        },
+      ],
+      "root",
+    ),
+    false,
+  );
   let paginationCalls = [];
   const pagedProjection = await readEventProjection({
     taskId: "self-pagination",
@@ -2147,6 +2210,10 @@ async function runGate(provider) {
         event.event_type === "codex.item.completed" &&
         eventData(event)?.status === "completed",
     );
+    const rootFinalMapEmbed = hasStandaloneMapEmbedInFinalRootMessage(
+      allEvents,
+      record.run.codex_thread_id,
+    );
     const workspaceFiles = await api(
       "/workspaces/" + encodeURIComponent(record.workspace.id) + "/files",
     );
@@ -2163,6 +2230,7 @@ async function runGate(provider) {
       mapProducerCompleted:
         mapProducerEvent?.event_type === "codex.item.completed" &&
         eventData(mapProducerEvent)?.status === "completed",
+      rootFinalMapEmbed,
       generatedWorkspaceFiles,
     });
     if (!businessValidation.valid) {
@@ -2183,6 +2251,7 @@ async function runGate(provider) {
       map_producer_thread_id: mapProducerEvent.thread_id,
       map_producer_turn_id: mapProducerEvent.turn_id,
       map_producer_status: mapProducerEvent.payload?.data?.status,
+      root_final_map_embed: rootFinalMapEmbed,
       round_count: rounds.length,
       native_tool_names: nativeNames,
     };

@@ -1723,6 +1723,9 @@ mod tests {
         assert!(SUPERVISOR_SKILL.contains(
             "权限拒绝、身份不一致、取消、超时、外部失败、能力不可用或 Tool 已执行的终态失败必须如实报告并停止当前请求"
         ));
+        assert!(SUPERVISOR_SKILL.contains("::codex-inline-vis{artifact=\"...\"}"));
+        assert!(SUPERVISOR_SKILL.contains("逐字复制该 directive"));
+        assert!(SUPERVISOR_SKILL.contains("不得声称地图已展示"));
         assert!(PLANNING_SKILL.contains("infeasible"));
     }
 
@@ -1767,6 +1770,10 @@ mod tests {
         assert!(DATA_SKILL.contains("`ready`：交接"));
         assert!(DATA_SKILL.contains("`needs_input`：原样交 Supervisor"));
         assert!(DATA_SKILL.contains("`source_changed`：只允许一次重新 inspect"));
+        assert!(DATA_SKILL.contains("时效/SLA/达标率目标"));
+        assert!(DATA_SKILL.contains("`route_quote`"));
+        assert!(SINGLE_AGENT_DATA_SKILL.contains("时效/SLA/达标率目标"));
+        assert!(SINGLE_AGENT_DATA_SKILL.contains("`route_quote`"));
     }
 
     #[test]

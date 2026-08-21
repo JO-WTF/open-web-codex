@@ -474,6 +474,30 @@ function findMapEmbed(body) {
   return match ? match[0] : "";
 }
 
+function rootFinalMessageHasStandaloneMapEmbed(events, rootThreadId) {
+  const rootMessages = events
+    .filter((event) => {
+      if (event.thread_id !== rootThreadId) return false;
+      const data = event.payload?.data ?? {};
+      const type = itemType(event);
+      return type === "agentMessage" || data.type === "message";
+    })
+    .map((event) => {
+      const data = event.payload?.data ?? {};
+      return typeof data.text === "string"
+        ? data.text
+        : typeof data.message === "string"
+          ? data.message
+          : typeof data.content === "string"
+            ? data.content
+            : "";
+    });
+  const finalMessage = rootMessages.at(-1) ?? "";
+  return finalMessage
+    .split(/\r?\n/)
+    .some((line) => /^::codex-inline-vis\{artifact="[^"]+"\}$/.test(line.trim()));
+}
+
 function hasCall(text, callId) {
   return text.includes(callId);
 }
@@ -918,7 +942,7 @@ class DeterministicModelServer {
       return message(
         "network:done",
         "network_agent completed route and coverage delivery: 12h service coverage is ready. " +
-          (embed || "::codex-inline-vis{artifact=\"deterministic-map\"}"),
+          "\n\n" + (embed || "::codex-inline-vis{artifact=\"deterministic-map\"}"),
       );
     }
 
@@ -1010,7 +1034,7 @@ class DeterministicModelServer {
     return message(
       "root:done",
       "已完成真实 multi-agent 仓网规划。12h 时效达标率已计算，地图已生成。" +
-        (embed || "::codex-inline-vis{artifact=\"deterministic-map\"}"),
+        "\n\n" + (embed || "::codex-inline-vis{artifact=\"deterministic-map\"}"),
     );
   }
 }
@@ -1617,10 +1641,12 @@ async function runCase(index) {
       preparedFiles.includes(preparedOutputPath),
       "prepared Workspace file was not persisted",
     );
-    assert(
-      eventText.includes("::codex-inline-vis{artifact="),
-      "final assistant message did not cite the delivered map",
-    );
+    if (!rootFinalMessageHasStandaloneMapEmbed(events, response.thread_id)) {
+      throw new NativeRuntimeBlocker("root_map_embed_not_forwarded", {
+        root_thread_id: response.thread_id,
+        map_producer_projected: true,
+      });
+    }
     const agents = await api("/runs/" + record.run.id + "/agents");
     assert(agents.length >= 3, "Runtime agent projection did not include root and two children");
     const roleByThread = new Map(

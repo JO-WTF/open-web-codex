@@ -50,6 +50,30 @@ export function facilityChangeMatches({
   };
 }
 
+export function hasStandaloneMapEmbedInFinalRootMessage(events, rootThreadId) {
+  const rootMessages = events
+    .filter((event) => {
+      if (event?.thread_id !== rootThreadId) return false;
+      const data = event?.payload?.data ?? {};
+      const itemType = event?.payload?.itemType ?? data.type;
+      return itemType === "agentMessage" || data.type === "message";
+    })
+    .map((event) => {
+      const data = event?.payload?.data ?? {};
+      return typeof data.text === "string"
+        ? data.text
+        : typeof data.message === "string"
+          ? data.message
+          : typeof data.content === "string"
+            ? data.content
+            : "";
+    });
+  const finalMessage = rootMessages.at(-1) ?? "";
+  return finalMessage
+    .split(/\r?\n/)
+    .some((line) => /^::codex-inline-vis\{artifact="[^"]+"\}$/.test(line.trim()));
+}
+
 export function validateBusinessEvidence({
   dataHandoff,
   baseline,
@@ -58,6 +82,7 @@ export function validateBusinessEvidence({
   facilityChangeValid,
   facilityChangeDetails,
   mapProducerCompleted,
+  rootFinalMapEmbed,
   generatedWorkspaceFiles,
 }) {
   const warningCount = dataHandoff?.warning_count;
@@ -110,6 +135,9 @@ export function validateBusinessEvidence({
     mapProducerCompleted !== true
   ) {
     return { code: "copilot_chain_incomplete", details: { reason: "map_producer_item_not_projected" } };
+  }
+  if (rootFinalMapEmbed !== true) {
+    return { code: "map_embed_not_forwarded", details: { reason: "root_final_message_missing_standalone_embed" } };
   }
   if (
     !Array.isArray(generatedWorkspaceFiles) ||

@@ -13,7 +13,7 @@ metadata:
 
 - 普通基线：`demand` + `existing_warehouse`。
 - 真实现状口径：再加 `current_assignment`。
-- 路线或成本证据：再加 `route_quote`。
+- 任何时效/SLA/达标率目标（例如 12h）或成本分析：再加 `route_quote`。
 - 单仓变化、候选地图或选址：再加 `candidate_warehouse`。
 - 国家只有在用户请求和已有上下文都无法确定时才询问；不从尚未 inspect 的来源、文件名、语言或当前样例猜国家。
 
