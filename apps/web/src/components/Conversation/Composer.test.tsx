@@ -636,7 +636,6 @@ describe("Web Composer provider credentials", () => {
         envKey: "",
         apiKey: "test-direct-key",
         wireApi: "responses",
-        supportsFunctionTools: false,
         select: true,
       });
     });
@@ -645,7 +644,7 @@ describe("Web Composer provider credentials", () => {
     });
   });
 
-  it("defaults new Chat Providers to function tools and preserves manual changes across wire switches", async () => {
+  it("enables function tools implicitly for Chat without rendering a second capability switch", async () => {
     const onWriteProvider = vi.fn(async () => undefined);
     render(
       <Composer
@@ -674,28 +673,23 @@ describe("Web Composer provider credentials", () => {
       target: { value: "none" },
     });
     fireEvent.change(editor.getByLabelText("Wire API"), { target: { value: "chat" } });
-    expect((editor.getByLabelText("Function tools") as HTMLInputElement).checked).toBe(true);
+    expect(editor.queryByLabelText("Function tools")).toBeNull();
+    expect(editor.getByText("Function tools are enabled automatically for Chat providers."))
+      .toBeTruthy();
 
     fireEvent.change(editor.getByLabelText("Wire API"), { target: { value: "responses" } });
     expect(editor.queryByLabelText("Function tools")).toBeNull();
+    expect(editor.queryByText("Function tools are enabled automatically for Chat providers."))
+      .toBeNull();
     fireEvent.change(editor.getByLabelText("Wire API"), { target: { value: "chat" } });
-    const functionTools = editor.getByLabelText("Function tools") as HTMLInputElement;
-    expect(functionTools.checked).toBe(true);
-
-    fireEvent.click(functionTools);
-    expect(functionTools.checked).toBe(false);
-    fireEvent.change(editor.getByLabelText("Wire API"), { target: { value: "responses" } });
-    fireEvent.change(editor.getByLabelText("Wire API"), { target: { value: "chat" } });
-    expect((editor.getByLabelText("Function tools") as HTMLInputElement).checked).toBe(false);
     fireEvent.click(editor.getByRole("button", { name: "Save provider" }));
 
     await waitFor(() => expect(onWriteProvider).toHaveBeenCalledWith(expect.objectContaining({
-      supportsFunctionTools: false,
       wireApi: "chat",
     })));
   });
 
-  it("initializes an existing Provider exactly and keeps function tools separate from Tool search", () => {
+  it("keeps the automatic Chat capability separate from the model Tool search switch", () => {
     render(
       <Composer
         draft=""
@@ -732,12 +726,14 @@ describe("Web Composer provider credentials", () => {
     expect((editor.getByLabelText("Wire API") as HTMLSelectElement).value).toBe("responses");
     expect(editor.queryByLabelText("Function tools")).toBeNull();
     fireEvent.change(editor.getByLabelText("Wire API"), { target: { value: "chat" } });
-    expect((editor.getByLabelText("Function tools") as HTMLInputElement).checked).toBe(false);
+    expect(editor.queryByLabelText("Function tools")).toBeNull();
+    expect(editor.getByText("Function tools are enabled automatically for Chat providers."))
+      .toBeTruthy();
     expect((screen.getByLabelText("Tool search for deepseek-v4-flash") as HTMLInputElement).checked)
       .toBe(true);
   });
 
-  it("copies the Provider function-tool declaration into a new Provider", () => {
+  it("copies a Chat Provider without exposing a function-tool choice", () => {
     render(
       <Composer
         draft=""
@@ -765,8 +761,11 @@ describe("Web Composer provider credentials", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "DeepSeek" }));
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
-    expect((within(screen.getByRole("dialog", { name: "Add provider" }))
-      .getByLabelText("Function tools") as HTMLInputElement).checked).toBe(true);
+    const editor = within(screen.getByRole("dialog", { name: "Add provider" }));
+    expect((editor.getByLabelText("Wire API") as HTMLSelectElement).value).toBe("chat");
+    expect(editor.queryByLabelText("Function tools")).toBeNull();
+    expect(editor.getByText("Function tools are enabled automatically for Chat providers."))
+      .toBeTruthy();
   });
 
   it("keeps the selected-map revision attachment without a generic processed-result picker", () => {

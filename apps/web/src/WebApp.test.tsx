@@ -584,7 +584,6 @@ describe("WebApp workspace-first messaging", () => {
       envKey: "",
       apiKey: "",
       wireApi: "responses",
-      supportsFunctionTools: false,
       select: true,
     }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add provider" })).toBeNull());

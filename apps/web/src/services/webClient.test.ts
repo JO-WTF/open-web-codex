@@ -578,12 +578,16 @@ describe("WebApp direct Server client", () => {
         baseUrl: "https://api.deepseek.com",
         wireApi: "chat",
         credentials: { mode: "none" },
+        supportsFunctionTools: true,
         select: true,
       },
     }]);
   });
 
-  it.each([true, false])("forwards an explicit function-tool capability: %s", async (supportsFunctionTools) => {
+  it.each([
+    ["chat", true],
+    ["responses", false],
+  ])("derives function-tool capability from Wire API %s", async (wireApi, expected) => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       expect(init?.method).toBe("PUT");
       return json({ currentProviderId: "deepseek", data: [] });
@@ -596,13 +600,12 @@ describe("WebApp direct Server client", () => {
       id: "deepseek",
       name: "DeepSeek",
       baseUrl: "https://api.deepseek.com",
-      wireApi: "chat",
+      wireApi,
       credentialMode: "none",
-      supportsFunctionTools,
     });
 
     const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
-    expect(body.supportsFunctionTools).toBe(supportsFunctionTools);
+    expect(body.supportsFunctionTools).toBe(expected);
   });
 
   it("archives the selected Thread through the typed Server Run route", async () => {

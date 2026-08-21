@@ -78,7 +78,6 @@ type ProviderDraft = {
   envKey: string;
   apiKey: string;
   wireApi: string;
-  supportsFunctionTools: boolean;
 };
 
 const EMPTY_PROVIDER_DRAFT: ProviderDraft = {
@@ -89,7 +88,6 @@ const EMPTY_PROVIDER_DRAFT: ProviderDraft = {
   envKey: "",
   apiKey: "",
   wireApi: "responses",
-  supportsFunctionTools: false,
 };
 
 const DEFAULT_MODEL_CONTEXT_WINDOW = 128_000;
@@ -120,7 +118,6 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<ModelProviderSummary | "new" | null>(null);
   const [providerDraft, setProviderDraft] = useState<ProviderDraft>(EMPTY_PROVIDER_DRAFT);
-  const [functionToolsTouched, setFunctionToolsTouched] = useState(false);
   const [contextDrafts, setContextDrafts] = useState<Record<string, string>>({});
   const [contextSaveState, setContextSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [openProviderGroup, setOpenProviderGroup] = useState<ProviderGroupKey | null>("custom");
@@ -160,7 +157,6 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
   const openProviderForm = (provider?: ModelProviderSummary) => {
     if (!provider) setCatalogOpen(false);
     setEditingProvider(provider ?? "new");
-    setFunctionToolsTouched(provider ? true : false);
     setProviderDraft(provider ? {
       id: provider.id,
       name: provider.name,
@@ -169,7 +165,6 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
       envKey: provider.envKey ?? "",
       apiKey: "",
       wireApi: provider.wireApi ?? "responses",
-      supportsFunctionTools: provider.supportsFunctionTools,
     } : EMPTY_PROVIDER_DRAFT);
   };
 
@@ -423,40 +418,20 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
       <label>
         Wire API
         <select
+          aria-label="Wire API"
           value={providerDraft.wireApi}
           onChange={(event) => setProviderDraft((draft) => ({
             ...draft,
             wireApi: event.target.value,
-            supportsFunctionTools: editingProvider === "new"
-              && event.target.value === "chat"
-              && draft.wireApi !== "chat"
-              && !functionToolsTouched
-              ? true
-              : draft.supportsFunctionTools,
           }))}
         >
           <option value="responses">Responses</option>
           <option value="chat">Chat</option>
         </select>
+        {providerDraft.wireApi === "chat" ? (
+          <small>Function tools are enabled automatically for Chat providers.</small>
+        ) : null}
       </label>
-      {providerDraft.wireApi === "chat" ? (
-        <label>
-          Function tools
-          <input
-            type="checkbox"
-            aria-label="Function tools"
-            checked={providerDraft.supportsFunctionTools}
-            onChange={(event) => {
-              setFunctionToolsTouched(true);
-              setProviderDraft((draft) => ({
-                ...draft,
-                supportsFunctionTools: event.target.checked,
-              }));
-            }}
-          />
-          <small>Allow Codex to send function-tool calls to this Provider.</small>
-        </label>
-      ) : null}
       <div className="web-provider-form-actions">
         <button type="button" onClick={() => setEditingProvider(null)}>Cancel</button>
         <button
@@ -631,7 +606,6 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
                                     onClick={() => {
                                       setCatalogOpen(false);
                                       setEditingProvider("new");
-                                      setFunctionToolsTouched(true);
                                       setProviderDraft({
                                         id: `${provider.id}-copy`,
                                         name: `${provider.name} Copy`,
@@ -640,7 +614,6 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
                                         envKey: provider.envKey ?? "",
                                         apiKey: "",
                                         wireApi: provider.wireApi ?? "responses",
-                                        supportsFunctionTools: provider.supportsFunctionTools,
                                       });
                                     }}
                                   >Copy</button>

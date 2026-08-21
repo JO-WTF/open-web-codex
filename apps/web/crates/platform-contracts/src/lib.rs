@@ -1844,8 +1844,8 @@ pub struct UpsertProviderRequest {
     pub base_url: String,
     pub wire_api: String,
     pub credentials: ProviderCredentialInput,
-    /// Explicit Runtime capability for function-tool calls. Omitted means
-    /// leave an existing value unchanged; new Providers remain disabled.
+    /// Browser-projected capability echo. Provider Service derives the
+    /// effective value from `wire_api`: Chat is enabled, Responses is disabled.
     #[serde(default)]
     pub supports_function_tools: Option<bool>,
     #[serde(default)]

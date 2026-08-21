@@ -167,6 +167,7 @@ impl ProviderService {
                 "wire API must be 'chat' or 'responses'".to_string(),
             ));
         }
+        let supports_function_tools = request.wire_api == "chat";
         validate_credentials(&request.credentials, existing.is_some())?;
 
         let provider_path = provider_path(id)?;
@@ -176,12 +177,10 @@ impl ProviderService {
             provider.insert("name".to_string(), json!(name));
             provider.insert("base_url".to_string(), json!(base_url));
             provider.insert("wire_api".to_string(), json!(request.wire_api));
-            if let Some(supports_function_tools) = request.supports_function_tools {
-                provider.insert(
-                    "supports_function_tools".to_string(),
-                    json!(supports_function_tools),
-                );
-            }
+            provider.insert(
+                "supports_function_tools".to_string(),
+                json!(supports_function_tools),
+            );
             apply_new_credentials(&request.credentials, &mut provider);
             edits.push(config_edit(provider_path.clone(), Value::Object(provider)));
         } else {
@@ -194,12 +193,10 @@ impl ProviderService {
                 format!("{provider_path}.wire_api"),
                 json!(request.wire_api),
             ));
-            if let Some(supports_function_tools) = request.supports_function_tools {
-                edits.push(config_edit(
-                    format!("{provider_path}.supports_function_tools"),
-                    json!(supports_function_tools),
-                ));
-            }
+            edits.push(config_edit(
+                format!("{provider_path}.supports_function_tools"),
+                json!(supports_function_tools),
+            ));
             append_existing_credential_edits(&request.credentials, &provider_path, &mut edits);
         }
         if existing.is_none() || request.select {
@@ -564,6 +561,7 @@ impl ProviderOperations for InMemoryProviderService {
                 "wire API must be 'chat' or 'responses'".to_string(),
             ));
         }
+        let supports_function_tools = request.wire_api == "chat";
 
         let mut catalog = self.catalog.write().await;
         let existing_index = catalog.data.iter().position(|provider| provider.id == id);
@@ -587,9 +585,7 @@ impl ProviderOperations for InMemoryProviderService {
             provider.base_url = Some(base_url);
             provider.wire_api = request.wire_api;
             provider.env_key = env_key;
-            if let Some(supports_function_tools) = request.supports_function_tools {
-                provider.supports_function_tools = supports_function_tools;
-            }
+            provider.supports_function_tools = supports_function_tools;
         } else {
             catalog.data.push(ProviderSummary {
                 id: id.to_string(),
@@ -597,7 +593,7 @@ impl ProviderOperations for InMemoryProviderService {
                 base_url: Some(base_url),
                 env_key,
                 wire_api: request.wire_api,
-                supports_function_tools: request.supports_function_tools.unwrap_or(false),
+                supports_function_tools,
                 kind: ProviderKind::Custom,
                 is_current: false,
                 model_count: 0,
@@ -1071,7 +1067,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn in_memory_provider_function_tools_defaults_and_preserves_explicit_values() {
+    async fn in_memory_provider_function_tools_follow_wire_api() {
         let service = InMemoryProviderService::default();
         let initial = service.list().await.expect("list default Providers");
         assert!(
@@ -1091,7 +1087,7 @@ mod tests {
                     base_url: "https://custom.example/v1".to_string(),
                     wire_api: "chat".to_string(),
                     credentials: ProviderCredentialInput::NoCredential,
-                    supports_function_tools: Some(true),
+                    supports_function_tools: Some(false),
                     select: false,
                 },
             )
@@ -1106,12 +1102,35 @@ mod tests {
                 .supports_function_tools
         );
 
-        let preserved = service
+        let responses = service
             .upsert(
                 "custom",
                 UpsertProviderRequest {
                     name: "Custom updated".to_string(),
                     base_url: "https://custom.example/v2".to_string(),
+                    wire_api: "responses".to_string(),
+                    credentials: ProviderCredentialInput::Preserve,
+                    supports_function_tools: Some(true),
+                    select: false,
+                },
+            )
+            .await
+            .expect("switch Provider to Responses");
+        assert!(
+            !responses
+                .data
+                .iter()
+                .find(|provider| provider.id == "custom")
+                .expect("Responses Provider")
+                .supports_function_tools
+        );
+
+        let chat = service
+            .upsert(
+                "custom",
+                UpsertProviderRequest {
+                    name: "Custom Chat".to_string(),
+                    base_url: "https://custom.example/v3".to_string(),
                     wire_api: "chat".to_string(),
                     credentials: ProviderCredentialInput::Preserve,
                     supports_function_tools: None,
@@ -1119,36 +1138,12 @@ mod tests {
                 },
             )
             .await
-            .expect("edit Provider while preserving capability");
+            .expect("switch Provider to Chat");
         assert!(
-            preserved
-                .data
+            chat.data
                 .iter()
                 .find(|provider| provider.id == "custom")
-                .expect("preserved Provider")
-                .supports_function_tools
-        );
-
-        let disabled = service
-            .upsert(
-                "custom",
-                UpsertProviderRequest {
-                    name: "Custom disabled".to_string(),
-                    base_url: "https://custom.example/v3".to_string(),
-                    wire_api: "chat".to_string(),
-                    credentials: ProviderCredentialInput::Preserve,
-                    supports_function_tools: Some(false),
-                    select: false,
-                },
-            )
-            .await
-            .expect("explicitly disable capability");
-        assert!(
-            !disabled
-                .data
-                .iter()
-                .find(|provider| provider.id == "custom")
-                .expect("disabled Provider")
+                .expect("Chat Provider")
                 .supports_function_tools
         );
     }
@@ -1319,7 +1314,7 @@ mod tests {
                     credentials: ProviderCredentialInput::Direct {
                         api_key: "direct-secret".to_string(),
                     },
-                    supports_function_tools: Some(true),
+                    supports_function_tools: Some(false),
                     select: true,
                 },
             )
