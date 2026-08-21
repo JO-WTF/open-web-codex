@@ -5,8 +5,8 @@ from pydantic import ValidationError
 from supply_chain_planner.data.mapping import (
     FieldObservation,
     SourceRole,
+    assess_role_mappings,
     suggest_role_mappings,
-    suggest_role_requirements,
 )
 from supply_chain_planner.shared.models import (
     ConfirmedSourceDecision,
@@ -45,7 +45,7 @@ def test_confirmed_mapping_rejects_unknown_duplicate_and_missing_targets() -> No
 
 
 def test_partial_warehouse_mapping_reports_missing_warehouse_type() -> None:
-    requirements = suggest_role_requirements(
+    assessments = assess_role_mappings(
         [
             FieldObservation(name=field, sample_values=("true",) if field == "is_existing" else ())
             for field in (
@@ -58,20 +58,20 @@ def test_partial_warehouse_mapping_reports_missing_warehouse_type() -> None:
         ]
     )
 
-    assert [(item.role, item.missing_required_fields) for item in requirements] == [
-        (SourceRole.EXISTING_WAREHOUSE, ("warehouse_type",))
+    assert [(item.role, item.state, item.missing_required_fields) for item in assessments] == [
+        (SourceRole.EXISTING_WAREHOUSE, "partial", ("warehouse_type",))
     ]
 
 
 def test_complete_demand_does_not_report_weak_warehouse_gaps() -> None:
-    requirements = suggest_role_requirements(
+    assessments = assess_role_mappings(
         [
             FieldObservation(name=field)
             for field in ("city_id", "city_name", "demand_quantity")
         ]
     )
 
-    assert requirements == []
+    assert [(item.role, item.state) for item in assessments] == [(SourceRole.DEMAND, "complete")]
 
 def test_pure_warehouse_fields_require_existing_or_candidate_confirmation() -> None:
     proposals = suggest_role_mappings(

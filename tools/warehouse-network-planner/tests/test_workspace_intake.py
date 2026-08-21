@@ -29,8 +29,9 @@ def test_workspace_discovery_returns_bounded_relative_descriptors(tmp_path: Path
     assert [source["relative_path"] for source in sources] == [
         "demand.csv",
         "nested/facilities.json",
+        "outputs/warehouse-network/prepared/prepared.json",
     ]
-    assert sources == [
+    assert sources[:2] == [
         {
             "relative_path": "demand.csv",
             "format": "csv",
@@ -42,6 +43,8 @@ def test_workspace_discovery_returns_bounded_relative_descriptors(tmp_path: Path
             "size": (tmp_path / "nested" / "facilities.json").stat().st_size,
         },
     ]
+    assert sources[2]["kind"] == "prepared_candidate"
+    assert sources[2]["candidate"] is True
 
 
 def test_workspace_discovery_rejects_legacy_excel_formats(tmp_path: Path) -> None:
@@ -78,6 +81,17 @@ def test_exact_workspace_source_validation_rejects_escape_symlink_and_size(
     monkeypatch.setattr(workspace_intake, "MAX_BYTES", 4)
     with pytest.raises(ValueError, match="source_size_limit"):
         inspect(tmp_path, "valid.csv")
+
+
+def test_prepared_candidate_discovery_rejects_symlinked_candidates(tmp_path: Path) -> None:
+    prepared = tmp_path / "outputs/warehouse-network/prepared"
+    prepared.mkdir(parents=True)
+    outside = tmp_path.parent / f"{tmp_path.name}-prepared.json"
+    outside.write_text("{}", encoding="utf-8")
+    (prepared / "linked.json").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="workspace_source_symlink_rejected"):
+        discover(tmp_path)
 
 
 def test_source_structure_limits_reject_instead_of_truncating(tmp_path: Path, monkeypatch) -> None:
@@ -173,3 +187,36 @@ def test_xlsx_profile_preserves_multiple_sheets_and_bounded_rows(tmp_path: Path)
     assert warehouse_sheet["preview"]["total_count_exact"] is True
     assert warehouse_sheet["record_count"] == 1
     assert warehouse_sheet["record_count_exact"] is True
+
+
+def test_json_profile_exposes_every_nested_array_as_an_exact_source_unit(tmp_path: Path) -> None:
+    (tmp_path / "nested.json").write_text(
+        json.dumps(
+            {
+                "payload": {
+                    "cities": [{"city_code": "ID-1", "city_name": "Balikpapan"}],
+                    "meta": ["one", "two"],
+                    "records": [{"tags": ["a", "b"]}],
+                },
+                "warehouseRows": [{"warehouse_id": "WH-1"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    structure = inspect(tmp_path, "nested.json")["structure"]
+    arrays = {array["unit_ref"]: array for array in structure["arrays"]}
+
+    assert set(arrays) == {
+        "$.payload.cities",
+        "$.payload.meta",
+        "$.payload.records",
+        "$.payload.records[*].tags",
+        "$.warehouseRows",
+    }
+    cities = arrays["$.payload.cities"]
+    assert cities["path"] == "$.payload.cities"
+    assert cities["length"] == 1
+    assert cities["preview"]["preview_sample_count"] == 1
+    assert cities["preview"]["total_count"] == 1
+    assert {field["name"] for field in cities["fields"]} == {"city_code", "city_name"}

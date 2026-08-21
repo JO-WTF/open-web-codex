@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import re
 from pathlib import Path
@@ -22,6 +23,7 @@ from open_web_codex_provider import (
     ProviderContractError,
 )
 from pydantic import Field
+from supply_chain_planner.data import workspace_intake as _workspace_intake
 from supply_chain_planner.data.geography import enrich_network_geography
 from supply_chain_planner.data.geography import (
     load_administrative_catalog as _load_administrative_catalog,
@@ -30,9 +32,10 @@ from supply_chain_planner.data.mapping import (
     REQUIRED_FIELDS,
     FieldObservation,
     SourceRole,
+    SuggestedRoleAssessment,
     TransformSpec,
+    assess_role_mappings,
     suggest_role_mappings,
-    suggest_role_requirements,
 )
 from supply_chain_planner.data.normalization import (
     ConfirmedFieldMapping,
@@ -53,10 +56,13 @@ from supply_chain_planner.shared.models import (
     ConfirmedFieldDecision,
     ConfirmedSourceDecision,
     ConfirmedSourceInputDecision,
+    DataInspectionInspected,
+    DataInspectionSelectionRequired,
     DataInspectionToolResult,
     DataPreparationToolResult,
     DataSourceRequirement,
     GeographyOverride,
+    InspectionLimitCounts,
     PreparedNetworkResource,
     SourceInspectionIdentity,
 )
@@ -67,7 +73,6 @@ from supply_chain_planner.shared.workspace_outputs import (
     prepare_workspace_output_path,
 )
 
-MAX_SOURCE_CATALOG_ENTRIES = 500
 SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
 
 READ_ONLY_LOCAL_TOOL = ToolAnnotations(
@@ -98,9 +103,8 @@ mcp = FastMCP(
         "head preview has separate "
         "preview_sample_count, total_count, and total_count_exact fields; preview rows are examples "
         "only and never the full source. Never use the preview sample count as the source row count. "
-        "Inspection reports missing business fields as a typed needs_input result with "
-        "retryable=false. Ask the user once and stop the current Turn; never retry preparation "
-        "against unchanged sources. "
+        "Inspection reports independent source-unit role assessments; partial or ambiguous units "
+        "do not block inspection. Only the selected sources are validated during preparation. "
         "The initial normalization tool rereads "
         "the complete explicitly confirmed source files and preserves every confirmed candidate "
         "warehouse in a user-visible prepared_network_input.v1 Workspace JSON file. Source facts "
@@ -232,30 +236,37 @@ def inspect_workspace_sources(
     Preview rows are examples for schema inspection only. They are never a
     complete source snapshot and must not be used as the source row count.
     """
-    profile = _inspect_workspace_sources(relative_paths, ctx)
-    requirements = _profile_requirements(profile)
+    inspected = _inspect_workspace_sources(relative_paths, ctx)
+    if isinstance(inspected, DataInspectionSelectionRequired):
+        summary = inspected.summary
+        result = DataInspectionToolResult(root=inspected)
+        return CallToolResult(
+            content=[TextContent(type="text", text=summary)],
+            structuredContent=result.model_dump(mode="json", by_alias=True),
+        )
+    profile = inspected
     content_sha256, source_count = source_inspection_identity(_workspace(ctx), relative_paths)
     identity = SourceInspectionIdentity(
         content_sha256=content_sha256,
         source_count=source_count,
     )
-    if requirements:
-        summary = (
-            f"Inspected {source_count} authorized Workspace sources; "
-            f"{len(requirements)} source requirement(s) need user input. "
-            "Do not call prepare_network_input until they are resolved."
-        )
-    else:
-        summary = f"Inspected {source_count} authorized Workspace sources."
+    summary = (
+        f"Inspected {source_count} authorized Workspace sources into "
+        f"{sum(len(source.get('units', [])) for source in profile.get('sources', []))} "
+        "source units. Select the units required for the planning goal; partial or "
+        "ambiguous role assessments are not global blockers."
+    )
     result = DataInspectionToolResult(
-        summary=summary,
-        state="needs_input" if requirements else "ready",
-        next_action="request_user_input" if requirements else "confirm_sources",
-        retryable=False,
-        requirements=requirements,
-        source_profile=profile,
-        inspection_identity=identity,
-        inspected_relative_paths=sorted(relative_paths),
+        root=DataInspectionInspected(
+            outcome="inspected",
+            schemaVersion="workspace_source_profile.v2",
+            summary=summary,
+            next_action="confirm_sources",
+            retryable=False,
+            source_profile=profile,
+            inspection_identity=identity,
+            inspected_relative_paths=sorted(relative_paths),
+        )
     )
     return CallToolResult(
         content=[TextContent(type="text", text=summary)],
@@ -266,101 +277,225 @@ def inspect_workspace_sources(
 def _inspect_workspace_sources(
     relative_paths: list[str],
     ctx: Context,
-) -> dict[str, Any]:
-    if not relative_paths or len(relative_paths) > MAX_SOURCE_CATALOG_ENTRIES:
-        raise ValueError("relative_paths must contain 1-500 Workspace-relative paths")
+) -> dict[str, Any] | DataInspectionSelectionRequired:
+    if not relative_paths:
+        raise ValueError("relative_paths must contain at least one Workspace-relative path")
+    if len(relative_paths) > _workspace_intake.MAX_INSPECTION_FILES:
+        return _selection_required_result(
+            summary="Select fewer Workspace source files before inspecting them.",
+            observed=InspectionLimitCounts(
+                files=min(len(relative_paths), 500), units=0, bytes=0
+            ),
+        )
     if len(set(relative_paths)) != len(relative_paths):
         raise ValueError("relative_paths must not contain duplicates")
-    sources = [inspect(_workspace(ctx), relative_path) for relative_path in relative_paths]
-    for source in sources:
-        suggestions, requirements = _mapping_analysis(
-            str(source["relative_path"]), source["structure"]
-        )
-        source["mapping_suggestions"] = suggestions
-        source["mapping_requirements"] = [
-            requirement.model_dump(mode="json") for requirement in requirements
-        ]
-    return _bound_agent_previews(
+    sources: list[dict[str, Any]] = []
+    unit_count = 0
+    for relative_path in relative_paths:
+        source = inspect(_workspace(ctx), relative_path)
+        structure = source.pop("structure")
+        units = _mapping_analysis(str(source["relative_path"]), structure)
+        source["units"] = units
+        unit_count += len(units)
+        if unit_count > _workspace_intake.MAX_INSPECTION_UNITS:
+            return _selection_required_result(
+                summary="Select files with fewer source units before inspecting them.",
+                observed=InspectionLimitCounts(
+                    files=len(sources) + 1, units=unit_count, bytes=0
+                ),
+            )
+        sources.append(source)
+    profile = _bound_agent_previews(
         {
-            "schemaVersion": "source_profile.v1",
+            "schemaVersion": "workspace_source_profile.v2",
             "sources": sources,
+            "source_count": len(sources),
+            "unit_count": unit_count,
         }
     )
+    profile_bytes = len(json.dumps(profile, ensure_ascii=False, separators=(",", ":")).encode())
+    if profile_bytes > _workspace_intake.MAX_INSPECTION_BYTES:
+        return _selection_required_result(
+            summary="Select fewer Workspace sources; the bounded inspection profile is too large.",
+            observed=InspectionLimitCounts(
+                files=len(sources), units=unit_count, bytes=profile_bytes
+            ),
+        )
+    return profile
+
+
+def _selection_required_result(
+    *, summary: str, observed: InspectionLimitCounts
+) -> DataInspectionSelectionRequired:
+    return DataInspectionSelectionRequired(
+        outcome="selection_required",
+        schemaVersion="workspace_source_profile.v2",
+        summary=summary,
+        code="inspection_selection_required",
+        next_action="select_fewer_sources",
+        retryable=False,
+        observed=observed,
+        limit=InspectionLimitCounts(
+            files=_workspace_intake.MAX_INSPECTION_FILES,
+            units=_workspace_intake.MAX_INSPECTION_UNITS,
+            bytes=_workspace_intake.MAX_INSPECTION_BYTES,
+        ),
+    )
+
+
+def _unit_definitions(structure: dict[str, Any]) -> list[dict[str, Any]]:
+    kind = structure.get("kind")
+    if kind == "table":
+        return [{"unit_ref": "table", **structure}]
+    if kind == "workbook":
+        return [
+            {"unit_ref": sheet.get("unit_ref", f"sheet:{sheet.get('sheet', '')}"), **sheet}
+            for sheet in structure.get("sheets", [])
+        ]
+    if kind == "json":
+        return [
+            {"unit_ref": array.get("unit_ref", array.get("path", "$")), **array}
+            for array in structure.get("arrays", [])
+        ]
+    return []
+
+
+def _unit_observations(unit: dict[str, Any]) -> list[FieldObservation]:
+    fields = unit.get("fields")
+    if isinstance(fields, list):
+        observations: list[FieldObservation] = []
+        for field in fields:
+            if not isinstance(field, dict) or not str(field.get("name", "")).strip():
+                continue
+            values = field.get("representative_values", [])
+            observations.append(
+                FieldObservation(
+                    name=str(field["name"]).strip(),
+                    sample_values=tuple(str(value)[:256] for value in values[:3]),
+                )
+            )
+        if observations:
+            return observations
+
+    observations = []
+    columns = unit.get("columns", [])
+    rows = unit.get("preview", {}).get("rows", [])
+    for index, column in enumerate(columns):
+        name = str(column).strip()
+        if not name:
+            continue
+        samples = tuple(
+            str(row[index])[:256]
+            for row in rows[:3]
+            if isinstance(row, list) and index < len(row) and row[index] not in (None, "")
+        )
+        observations.append(FieldObservation(name=name, sample_values=samples))
+    return observations
+
+
+def _mapping_suggestion_payload(suggestion: Any) -> dict[str, Any]:
+    return {
+        "role": suggestion.role.value,
+        "confidence": suggestion.confidence,
+        "ambiguous": suggestion.ambiguous,
+        "field_mappings": [
+            {
+                "target_field": mapping.target_field,
+                "source_fields": list(mapping.source_fields),
+                "transform": mapping.transform.model_dump(mode="json"),
+                "score": mapping.score,
+                "reason_code": mapping.reason_code,
+            }
+            for mapping in suggestion.field_mappings
+        ],
+    }
+
+
+def _role_assessment_payload(assessment: SuggestedRoleAssessment) -> dict[str, Any]:
+    return {
+        "role": assessment.role.value,
+        "state": assessment.state,
+        "confidence": assessment.confidence,
+        "ambiguous": assessment.ambiguous,
+        "matched_required_fields": list(assessment.matched_required_fields),
+        "missing_required_fields": list(assessment.missing_required_fields),
+        "field_mappings": [
+            {
+                "target_field": mapping.target_field,
+                "source_fields": list(mapping.source_fields),
+                "transform": mapping.transform.model_dump(mode="json"),
+                "score": mapping.score,
+                "reason_code": mapping.reason_code,
+            }
+            for mapping in assessment.field_mappings
+        ],
+    }
+
+
+def _administrative_assessment(structure: dict[str, Any]) -> dict[str, Any] | None:
+    if structure.get("kind") != "json":
+        return None
+    keys = {
+        key
+        for values in structure.get("object_keys", {}).values()
+        for key in values
+    }
+    if "admin_level" not in keys:
+        return None
+    return {
+        "role": SourceRole.ADMINISTRATIVE_CATALOG.value,
+        "state": "complete",
+        "confidence": 1.0,
+        "ambiguous": False,
+        "matched_required_fields": [],
+        "missing_required_fields": [],
+        "field_mappings": [],
+    }
 
 
 def _mapping_analysis(
     relative_path: str,
     structure: dict[str, Any],
-) -> tuple[list[dict[str, Any]], list[DataSourceRequirement]]:
-    observations: list[FieldObservation] = []
-
-    def add(columns: list[Any], rows: list[Any]) -> None:
-        for index, column in enumerate(columns):
-            name = str(column).strip()
-            if not name:
-                continue
-            samples = tuple(
-                str(row[index])[:256]
-                for row in rows[:3]
-                if isinstance(row, list) and index < len(row) and row[index] not in (None, "")
-            )
-            observations.append(FieldObservation(name=name, sample_values=samples))
-
-    kind = structure.get("kind")
-    if kind == "table":
-        add(structure.get("columns", []), structure.get("preview", {}).get("rows", []))
-    elif kind == "workbook":
-        for sheet in structure.get("sheets", []):
-            add(sheet.get("columns", []), sheet.get("preview", {}).get("rows", []))
-    elif kind == "json":
-        for fields in structure.get("object_keys", {}).values():
-            for name in fields:
-                observations.append(FieldObservation(name=str(name)))
-        for array in structure.get("arrays", []):
-            values: dict[str, list[str]] = {}
-            for item in array.get("preview", {}).get("rows", []):
-                for name, field in item.get("fields", {}).items():
-                    sample = field.get("sample") if isinstance(field, dict) else None
-                    if sample not in (None, ""):
-                        values.setdefault(str(name), []).append(str(sample)[:256])
-            observations.extend(
-                FieldObservation(name=name, sample_values=tuple(samples[:3]))
-                for name, samples in values.items()
-            )
-    suggestions = [
-        {
-            "role": suggestion.role.value,
-            "confidence": suggestion.confidence,
-            "ambiguous": suggestion.ambiguous,
-            "field_mappings": [
-                {
-                    "target_field": mapping.target_field,
-                    "source_fields": list(mapping.source_fields),
-                    "transform": mapping.transform.model_dump(mode="json"),
-                    "score": mapping.score,
-                    "reason_code": mapping.reason_code,
-                }
-                for mapping in suggestion.field_mappings
-            ],
+) -> list[dict[str, Any]]:
+    del relative_path
+    units: list[dict[str, Any]] = []
+    unit_definitions = _unit_definitions(structure)
+    administrative = _administrative_assessment(structure)
+    for index, unit in enumerate(unit_definitions):
+        observations = _unit_observations(unit)
+        suggestions = [
+            _mapping_suggestion_payload(item) for item in suggest_role_mappings(observations)
+        ]
+        assessments = [
+            _role_assessment_payload(item) for item in assess_role_mappings(observations)
+        ]
+        if administrative is not None and index == 0:
+            assessments.append(administrative)
+        locator = {
+            key: unit[key]
+            for key in ("sheet", "path", "array_prefix")
+            if unit.get(key) is not None
         }
-        for suggestion in suggest_role_mappings(observations)
-    ]
-    grouped_requirements: dict[tuple[str, ...], list[SourceRole]] = {}
-    for requirement in suggest_role_requirements(observations):
-        grouped_requirements.setdefault(requirement.missing_required_fields, []).append(
-            requirement.role
-        )
-    requirements = [
-        DataSourceRequirement(
-            code="required_fields_missing",
-            relative_path=relative_path,
-            candidate_roles=sorted(roles, key=lambda item: item.value),
-            missing_required_fields=list(missing_fields),
-            question=_missing_fields_question(relative_path, missing_fields),
-        )
-        for missing_fields, roles in sorted(grouped_requirements.items())
-    ]
-    return suggestions, requirements
+        unit_kind = {
+            "table": "table",
+            "workbook": "sheet",
+            "json": "json_array",
+        }.get(structure.get("kind"), structure.get("kind"))
+        unit_profile = {
+            "unit_ref": str(unit.get("unit_ref", "table")),
+            "kind": unit_kind,
+            "locator": locator,
+            "fields": unit.get("fields", []),
+            "preview": unit.get("preview", {}),
+            "record_count": unit.get("record_count", unit.get("length", 0)),
+            "record_count_exact": unit.get(
+                "record_count_exact", unit.get("length_exact", True)
+            ),
+            "role_assessments": assessments,
+            "mapping_suggestions": suggestions,
+        }
+        units.append(unit_profile)
+    return units
 
 
 def _missing_fields_question(relative_path: str, missing_fields: tuple[str, ...]) -> str:
@@ -371,16 +506,6 @@ def _missing_fields_question(relative_path: str, missing_fields: tuple[str, ...]
         )
     fields = ", ".join(missing_fields)
     return f"文件 {relative_path} 缺少必需字段：{fields}。请补充源数据后再继续。"
-
-
-def _profile_requirements(profile: dict[str, Any]) -> list[DataSourceRequirement]:
-    requirements: list[DataSourceRequirement] = []
-    for source in profile.get("sources", []):
-        requirements.extend(
-            DataSourceRequirement.model_validate(requirement)
-            for requirement in source.get("mapping_requirements", [])
-        )
-    return requirements
 
 
 def _bound_agent_previews(profile: dict[str, Any]) -> dict[str, Any]:
@@ -450,6 +575,8 @@ def prepare_network_input(
     inspection_identity = SourceInspectionIdentity.model_validate(inspection_identity)
     confirmed_sources = [_source_input_decision(decision) for decision in confirmed_sources]
     profile = _inspect_workspace_sources(inspected_relative_paths, ctx)
+    if isinstance(profile, DataInspectionSelectionRequired):
+        raise ProviderContractError("inspection_selection_required")
     content_sha256, source_count = source_inspection_identity(
         _workspace(ctx), inspected_relative_paths
     )
@@ -566,18 +693,23 @@ def _confirmed_source_requirement(
             question=_missing_fields_question(decision.relative_path, missing_fields),
         )
 
-    suggestions = [
-        suggestion
-        for suggestion in source.get("mapping_suggestions", [])
-        if suggestion.get("role") == decision.role.value
-    ]
+    suggestions = _source_unit_evidence(source, decision.role, "mapping_suggestions")
     if len(suggestions) == 1 and suggestions[0].get("ambiguous") is False:
         return None
 
-    for raw_requirement in source.get("mapping_requirements", []):
-        requirement = DataSourceRequirement.model_validate(raw_requirement)
-        if decision.role in requirement.candidate_roles:
-            return requirement
+    assessments = _source_unit_evidence(source, decision.role, "role_assessments")
+    for assessment in assessments:
+        missing_fields = tuple(
+            sorted(str(field) for field in assessment.get("missing_required_fields", []))
+        )
+        if assessment.get("state") == "partial" and missing_fields:
+            return DataSourceRequirement(
+                code="required_fields_missing",
+                relative_path=decision.relative_path,
+                candidate_roles=[decision.role],
+                missing_required_fields=list(missing_fields),
+                question=_missing_fields_question(decision.relative_path, missing_fields),
+            )
 
     if suggestions:
         return DataSourceRequirement(
@@ -602,15 +734,24 @@ def _confirmed_source_requirement(
     )
 
 
+def _source_unit_evidence(
+    source: dict[str, Any], role: SourceRole, key: str
+) -> list[dict[str, Any]]:
+    """Read evidence only from individual units; never merge sheets or arrays."""
+
+    evidence: list[dict[str, Any]] = []
+    for unit in source.get("units", []):
+        for item in unit.get(key, []):
+            if item.get("role") == role.value:
+                evidence.append({"unit_ref": unit.get("unit_ref"), **item})
+    return evidence
+
+
 def _resolve_confirmed_source_decision(
     decision: ConfirmedSourceInputDecision,
     source: dict[str, Any],
 ) -> ConfirmedSourceDecision:
-    suggestions = [
-        suggestion
-        for suggestion in source.get("mapping_suggestions", [])
-        if suggestion.get("role") == decision.role.value
-    ]
+    suggestions = _source_unit_evidence(source, decision.role, "mapping_suggestions")
     if decision.mappings:
         if len(suggestions) == 1 and suggestions[0].get("ambiguous") is False:
             raise ValueError(

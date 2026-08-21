@@ -15,6 +15,7 @@ import json
 import re
 import stat
 import zipfile
+from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
 from xml.etree import ElementTree
@@ -32,6 +33,9 @@ MAX_JSON_STRING = 64 * 1024
 MAX_XLSX_SHEETS = 32
 MAX_XLSX_COLUMNS = 256
 MAX_NORMALIZE_ROWS = 1_000_000
+MAX_INSPECTION_FILES = 64
+MAX_INSPECTION_UNITS = 128
+MAX_INSPECTION_BYTES = 512 * 1024
 EXCLUDED_DIRS = {
     ".git",
     "node_modules",
@@ -46,11 +50,27 @@ EXCLUDED_DIRS = {
 SUPPORTED_SUFFIXES = {".xlsx", ".csv", ".json"}
 DEMO_MANIFEST_SCHEMA = "demo_workspace_sources.v1"
 GENERATED_OUTPUT_ROOT = PurePosixPath("outputs/warehouse-network")
+PREPARED_OUTPUT_ROOT = GENERATED_OUTPUT_ROOT / "prepared"
 
 
 def _is_generated_output(relative: Path) -> bool:
     parts = relative.parts
     return len(parts) >= 2 and parts[:2] == GENERATED_OUTPUT_ROOT.parts
+
+
+def _is_prepared_candidate(relative: Path) -> bool:
+    """Return whether a path is a direct prepared-input candidate.
+
+    Generated output is intentionally excluded from normal source discovery.
+    Prepared inputs are the one explicitly supported generated surface because
+    a later planning turn may reuse them after validating their provenance.
+    """
+
+    return (
+        len(relative.parts) == len(PREPARED_OUTPUT_ROOT.parts) + 1
+        and relative.parts[: len(PREPARED_OUTPUT_ROOT.parts)] == PREPARED_OUTPUT_ROOT.parts
+        and relative.suffix.lower() == ".json"
+    )
 
 
 def _iter_files(root: Path) -> list[Path]:
@@ -122,6 +142,31 @@ def source_descriptor(root: Path, relative_path: str) -> dict[str, Any]:
     }
 
 
+def _prepared_candidate_descriptors(root: Path) -> list[dict[str, Any]]:
+    prepared_root = root / Path(*PREPARED_OUTPUT_ROOT.parts)
+    if prepared_root.is_symlink():
+        raise ValueError("prepared_output_directory_invalid")
+    if not prepared_root.exists():
+        return []
+    if not prepared_root.is_dir():
+        raise ValueError("prepared_output_directory_invalid")
+    descriptors: list[dict[str, Any]] = []
+    for path in sorted(prepared_root.iterdir(), key=lambda item: item.name):
+        relative = path.relative_to(root)
+        if not _is_prepared_candidate(relative):
+            continue
+        if path.is_symlink():
+            if path.suffix.lower() == ".json":
+                raise ValueError("workspace_source_symlink_rejected")
+            continue
+        if not path.is_file() or path.suffix.lower() != ".json":
+            continue
+        descriptor = source_descriptor(root, relative.as_posix())
+        descriptor.update({"kind": "prepared_candidate", "candidate": True})
+        descriptors.append(descriptor)
+    return descriptors
+
+
 def discover(root: Path) -> list[dict[str, Any]]:
     legacy = [
         path
@@ -137,9 +182,12 @@ def discover(root: Path) -> list[dict[str, Any]]:
             "as .xlsx, .csv or .json"
         )
     files = _iter_files(root)
-    if len(files) > MAX_FILES:
+    candidates = _prepared_candidate_descriptors(root)
+    if len(files) + len(candidates) > MAX_FILES:
         raise ValueError("workspace_source_limit_exceeded: more than 500 supported files")
-    return [source_descriptor(root, path.relative_to(root).as_posix()) for path in files]
+    descriptors = [source_descriptor(root, path.relative_to(root).as_posix()) for path in files]
+    descriptors.extend(candidates)
+    return sorted(descriptors, key=lambda item: item["relative_path"])
 
 
 def workspace_source_metadata(root: Path) -> dict[str, Any]:
@@ -245,7 +293,9 @@ def inspect_csv(path: Path) -> dict[str, Any]:
     if not sample:
         return {
             "kind": "table",
+            "unit_ref": "table",
             "columns": [],
+            "fields": [],
             "preview": _preview_payload([], total_count=0, total_count_exact=True),
             "record_count": 0,
             "record_count_exact": True,
@@ -267,8 +317,10 @@ def inspect_csv(path: Path) -> dict[str, Any]:
         raise ValueError("source_row_limit_exceeded")
     return {
         "kind": "table",
+        "unit_ref": "table",
         "delimiter": delimiter,
         "columns": header,
+        "fields": _field_profiles(header, preview_rows, text=True),
         "preview": _preview_payload(
             preview_rows,
             total_count=record_count,
@@ -294,6 +346,68 @@ def _preview_payload(
         "complete": False,
         "rows": rows,
     }
+
+
+def _sample_type(value: Any, *, text: bool = False) -> str:
+    if value is None or value == "":
+        return "null"
+    if text:
+        candidate = str(value).strip()
+        if not candidate:
+            return "null"
+        if candidate.lower() in {"true", "false", "yes", "no", "y", "n"}:
+            return "boolean"
+        try:
+            decimal_value = Decimal(candidate.replace(",", ""))
+        except (InvalidOperation, ValueError):
+            return "string"
+        return "integer" if decimal_value == decimal_value.to_integral_value() else "number"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    return type(value).__name__
+
+
+def _bounded_representative(value: Any) -> Any:
+    if isinstance(value, str):
+        return value[:256]
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return str(value)[:256]
+
+
+def _field_profiles(
+    columns: list[Any], rows: list[list[Any]], *, text: bool = False
+) -> list[dict[str, Any]]:
+    profiles: list[dict[str, Any]] = []
+    for index, column in enumerate(columns):
+        name = str(column or "").strip()
+        if not name:
+            continue
+        values = [
+            row[index]
+            for row in rows
+            if isinstance(row, list) and index < len(row) and row[index] not in (None, "")
+        ]
+        profiles.append(
+            {
+                "name": name,
+                "sample_types": sorted({_sample_type(value, text=text) for value in values}),
+                "representative_values": [
+                    _bounded_representative(value) for value in values[:3]
+                ],
+            }
+        )
+    return profiles
 
 
 def _count_csv_records(path: Path, delimiter: str) -> int:
@@ -329,10 +443,14 @@ def inspect_json(path: Path) -> dict[str, Any]:
                 raise ValueError("json_string_limit_exceeded")
             if event == "start_array":
                 array_key = prefix or "$"
+                array_path = _json_array_path(array_key)
                 arrays[array_key] = {
-                    "path": "$" if array_key == "$" else f"$.{array_key.replace('.item', '')}",
+                    "path": array_path,
+                    "unit_ref": array_path,
+                    "array_prefix": "" if array_key == "$" else array_key,
                     "length": 0,
                     "length_exact": True,
+                    "fields": [],
                     "preview": _preview_payload([]),
                 }
             if event == "map_key":
@@ -348,12 +466,20 @@ def inspect_json(path: Path) -> dict[str, Any]:
     # memory or sent to the model.
     for array_prefix, array in arrays.items():
         item_prefix = "item" if array_prefix == "$" else f"{array_prefix}.item"
+        field_types: dict[str, set[str]] = {}
+        field_values: dict[str, list[Any]] = {}
         with path.open("rb") as stream:
             try:
                 for index, item in enumerate(ijson.items(stream, item_prefix)):
                     if index >= MAX_NORMALIZE_ROWS:
                         raise ValueError("source_row_limit_exceeded")
                     array["length"] = index + 1
+                    if isinstance(item, dict):
+                        for key, value in item.items():
+                            name = str(key)[:256]
+                            field_types.setdefault(name, set()).add(_sample_type(value))
+                            if value not in (None, "") and len(field_values.setdefault(name, [])) < 3:
+                                field_values[name].append(_bounded_representative(value))
                     if index < 3:
                         if isinstance(item, dict):
                             array["preview"]["rows"].append(
@@ -381,6 +507,14 @@ def inspect_json(path: Path) -> dict[str, Any]:
                 raise ValueError("invalid_json") from error
         array["preview"]["total_count"] = array["length"]
         array["preview"]["total_count_exact"] = array["length_exact"]
+        array["fields"] = [
+            {
+                "name": name,
+                "sample_types": sorted(field_types[name]),
+                "representative_values": field_values.get(name, []),
+            }
+            for name in sorted(field_types)
+        ]
     return {
         "kind": "json",
         "tree": {"kind": root_kind},
@@ -402,6 +536,20 @@ def _bounded_json_sample(value: Any) -> Any:
             str(key)[:128]: _bounded_json_sample(item) for key, item in list(value.items())[:16]
         }
     return str(value)[:256]
+
+
+def _json_array_path(prefix: str) -> str:
+    """Convert ijson's prefix into a stable path retaining nested item axes."""
+
+    if prefix in {"", "$"}:
+        return "$"
+    path = "$"
+    for token in prefix.split("."):
+        if token == "item":
+            path += "[*]"
+        elif token:
+            path += f".{token}"
+    return path
 
 
 def inspect_xlsx(path: Path) -> dict[str, Any]:
@@ -464,7 +612,9 @@ def inspect_xlsx(path: Path) -> dict[str, Any]:
                 summaries.append(
                     {
                         "sheet": worksheet.title,
+                        "unit_ref": f"sheet:{worksheet.title}",
                         "columns": [str(value or "").strip() for value in header],
+                        "fields": _field_profiles(header, preview_rows),
                         "preview": _preview_payload(
                             preview_rows,
                             total_count=record_count,

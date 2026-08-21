@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -121,6 +122,74 @@ REQUIRED_FIELDS: dict[SourceRole, frozenset[str]] = {
     ),
 }
 
+# A role must have a domain-specific anchor before a partial assessment is
+# useful.  Generic city columns occur in administrative, population and other
+# supporting files and are not evidence of demand on their own.
+ROLE_ANCHORS: dict[SourceRole, frozenset[str]] = {
+    SourceRole.DEMAND: frozenset(
+        {"demand_quantity", "demand_units", "quantity", "demand"}
+    ),
+    SourceRole.EXISTING_WAREHOUSE: frozenset(
+        {
+            "warehouse_id",
+            "facility_id",
+            "site_id",
+            "warehouse_name",
+            "facility_name",
+            "site_name",
+            "warehouse_type",
+            "facility_type",
+            "site_type",
+            "is_existing",
+            "existing",
+            "is_fixed",
+            "fixed",
+        }
+    ),
+    SourceRole.CANDIDATE_WAREHOUSE: frozenset(
+        {
+            "warehouse_id",
+            "facility_id",
+            "site_id",
+            "warehouse_name",
+            "facility_name",
+            "site_name",
+            "warehouse_type",
+            "facility_type",
+            "site_type",
+            "is_existing",
+            "existing",
+            "is_fixed",
+            "fixed",
+        }
+    ),
+    SourceRole.CURRENT_ASSIGNMENT: frozenset(
+        {
+            "demand_city_id",
+            "customer_city_id",
+            "serving_warehouse_id",
+            "assigned_warehouse_id",
+            "warehouse_id",
+            "upstream_center_id",
+            "center_id",
+        }
+    ),
+    SourceRole.ROUTE_QUOTE: frozenset(
+        {
+            "origin_id",
+            "origin_city_id",
+            "ori_city_id",
+            "destination_id",
+            "destination_city_id",
+            "dest_city_id",
+            "price_per_vehicle",
+            "vehicle_price",
+            "price",
+            "cost",
+        }
+    ),
+}
+
 def _normalized(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
 
@@ -172,12 +241,16 @@ class SuggestedRoleMapping:
 
 
 @dataclass(frozen=True)
-class SuggestedRoleRequirement:
-    """One likely source role that is blocked by missing required fields."""
+class SuggestedRoleAssessment:
+    """Bounded role evidence for one independently inspectable source unit."""
 
     role: SourceRole
+    state: Literal["complete", "partial", "ambiguous"]
     confidence: float
+    ambiguous: bool
+    matched_required_fields: tuple[str, ...]
     missing_required_fields: tuple[str, ...]
+    field_mappings: tuple[SuggestedFieldMapping, ...]
 
 
 @dataclass(frozen=True)
@@ -215,39 +288,42 @@ def suggest_role_mappings(fields: Sequence[FieldObservation]) -> list[SuggestedR
     ]
 
 
-def suggest_role_requirements(fields: Sequence[FieldObservation]) -> list[SuggestedRoleRequirement]:
-    """Return only high-confidence partial roles that need user-supplied fields.
+def assess_role_mappings(fields: Sequence[FieldObservation]) -> list[SuggestedRoleAssessment]:
+    """Return complete/partial/ambiguous role evidence without blocking a turn.
 
-    A partial role must match at least two required fields. Only the strongest
-    coverage tier is returned so a demand table does not receive unrelated
-    warehouse or route questions.
+    A partial role is evidence for a later, explicitly selected source, not a
+    global request for user input during inspection.
     """
 
-    all_assessments = _assess_role_mappings(fields)
-    assessments = [
-        assessment
-        for assessment in all_assessments
-        if assessment.missing_required_fields
-        and len(assessment.matched_required_fields) >= 2
-        and len(assessment.matched_required_fields) / len(REQUIRED_FIELDS[assessment.role])
-        >= 0.6
-    ]
-    if not assessments:
-        return []
-    strongest = max(
-        len(item.matched_required_fields) / len(REQUIRED_FIELDS[item.role])
-        for item in assessments
-    )
-    return [
-        SuggestedRoleRequirement(
+    assessments = _assess_role_mappings(fields)
+    complete = [
+        SuggestedRoleMapping(
             role=item.role,
             confidence=item.confidence,
-            missing_required_fields=tuple(sorted(item.missing_required_fields)),
+            ambiguous=item.ambiguous,
+            field_mappings=item.field_mappings,
         )
         for item in assessments
-        if strongest
-        - len(item.matched_required_fields) / len(REQUIRED_FIELDS[item.role])
-        < 0.05
+        if not item.missing_required_fields
+    ]
+    ambiguous_roles = _ambiguous_roles(complete)
+    return [
+        SuggestedRoleAssessment(
+            role=item.role,
+            state=(
+                "partial"
+                if item.missing_required_fields
+                else "ambiguous"
+                if item.role in ambiguous_roles or item.ambiguous
+                else "complete"
+            ),
+            confidence=item.confidence,
+            ambiguous=item.role in ambiguous_roles or item.ambiguous,
+            matched_required_fields=tuple(sorted(item.matched_required_fields)),
+            missing_required_fields=tuple(sorted(item.missing_required_fields)),
+            field_mappings=item.field_mappings,
+        )
+        for item in assessments
     ]
 
 
@@ -320,6 +396,26 @@ def _role_is_applicable(
     column_names: set[str],
     existing_values: set[str],
 ) -> bool:
+    if role in ROLE_ANCHORS and not column_names & ROLE_ANCHORS[role]:
+        return False
+    if role == SourceRole.DEMAND and not column_names & {
+        "city_id",
+        "demand_city_id",
+        "city_code",
+        "city_name",
+        "demand_city_name",
+        "city",
+    }:
+        return False
+    if role == SourceRole.ROUTE_QUOTE and not column_names & {
+        "origin_id",
+        "origin_city_id",
+        "ori_city_id",
+        "destination_id",
+        "destination_city_id",
+        "dest_city_id",
+    }:
+        return False
     if role == SourceRole.CURRENT_ASSIGNMENT and column_names & {
         "warehouse_type",
         "warehouse_name",

@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from open_web_codex_provider import ResourceRef as _ResourceRef
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 from supply_chain_planner.data.mapping import (
     REQUIRED_FIELDS,
     TARGET_ALIASES,
@@ -160,25 +160,49 @@ class DataSourceRequirement(StrictModel):
         return self
 
 
-class DataInspectionToolResult(StrictModel):
-    """Bounded inline inspection result; it is not a Resource."""
+class InspectionLimitCounts(StrictModel):
+    """Bounded observed and allowed inspection dimensions."""
 
+    files: int = Field(ge=0, le=500)
+    units: int = Field(ge=0, le=500)
+    bytes: int = Field(ge=0, le=100 * 1024 * 1024)
+
+
+class DataInspectionInspected(StrictModel):
+    """Successful v2 source-unit inspection."""
+
+    outcome: Literal["inspected"]
+    schema_version: Literal["workspace_source_profile.v2"] = Field(alias="schemaVersion")
     summary: str
-    state: Literal["ready", "needs_input"]
-    next_action: Literal["confirm_sources", "request_user_input"]
+    next_action: Literal["confirm_sources"]
     retryable: Literal[False]
-    requirements: list[DataSourceRequirement] = Field(max_length=500)
     source_profile: dict[str, Any]
     inspection_identity: SourceInspectionIdentity
-    inspected_relative_paths: list[str] = Field(min_length=1, max_length=500)
+    inspected_relative_paths: list[str] = Field(min_length=1, max_length=64)
 
-    @model_validator(mode="after")
-    def validate_inspection_state(self) -> DataInspectionToolResult:
-        expected_state = "needs_input" if self.requirements else "ready"
-        expected_action = "request_user_input" if self.requirements else "confirm_sources"
-        if self.state != expected_state or self.next_action != expected_action:
-            raise ValueError("inspection_state_invalid")
-        return self
+
+class DataInspectionSelectionRequired(StrictModel):
+    """Typed bounded request to reduce inspection scope before retrying."""
+
+    outcome: Literal["selection_required"]
+    schema_version: Literal["workspace_source_profile.v2"] = Field(alias="schemaVersion")
+    summary: str
+    code: Literal["inspection_selection_required"]
+    next_action: Literal["select_fewer_sources"]
+    retryable: Literal[False]
+    observed: InspectionLimitCounts
+    limit: InspectionLimitCounts
+
+
+class DataInspectionToolResult(
+    RootModel[
+        Annotated[
+            DataInspectionInspected | DataInspectionSelectionRequired,
+            Field(discriminator="outcome"),
+        ]
+    ]
+):
+    """Discriminated v2 inspection contract; no global business blockers."""
 
 
 class CandidateWarehouseSummary(StrictModel):

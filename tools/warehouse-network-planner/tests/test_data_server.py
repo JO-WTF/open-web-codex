@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from open_web_codex_provider import ProviderContractError, ResourceStore
+from openpyxl import Workbook
 from supply_chain_planner.data import server as data_server
 from supply_chain_planner.data.mapping import SourceRole
 from supply_chain_planner.shared.models import (
@@ -83,17 +85,39 @@ def test_data_server_exposes_workspace_preparation_not_cross_agent_data_resource
     assert "resource_ref" not in prepare.outputSchema["properties"]
 
     inspect_tool = tools["inspect_workspace_sources"]
-    assert set(inspect_tool.outputSchema["required"]) == {
+    inspection_schema = inspect_tool.outputSchema
+    assert inspection_schema["discriminator"] == {
+        "propertyName": "outcome",
+        "mapping": {
+            "inspected": "#/$defs/DataInspectionInspected",
+            "selection_required": "#/$defs/DataInspectionSelectionRequired",
+        },
+    }
+    assert len(inspection_schema["oneOf"]) == 2
+    branch_required = [
+        set(inspection_schema["$defs"][ref["$ref"].split("/")[-1]]["required"])
+        for ref in inspection_schema["oneOf"]
+    ]
+    assert {
+        "outcome",
+        "schemaVersion",
         "summary",
-        "state",
         "next_action",
         "retryable",
-        "requirements",
         "source_profile",
         "inspection_identity",
         "inspected_relative_paths",
-    }
-    assert "resource_ref" not in inspect_tool.outputSchema["properties"]
+    } in branch_required
+    assert {
+        "outcome",
+        "schemaVersion",
+        "summary",
+        "code",
+        "next_action",
+        "retryable",
+        "observed",
+        "limit",
+    } in branch_required
 
     geography = tools["prepare_network_geography"]
     assert set(geography.inputSchema["required"]) == {
@@ -130,21 +154,28 @@ def test_missing_warehouse_type_is_typed_non_retryable_user_input(
     assert inspected.structuredContent is not None
     inspection = inspected.structuredContent
 
-    assert inspection["state"] == "needs_input"
-    assert inspection["next_action"] == "request_user_input"
+    assert inspection["outcome"] == "inspected"
+    assert inspection["schemaVersion"] == "workspace_source_profile.v2"
+    assert inspection["next_action"] == "confirm_sources"
     assert inspection["retryable"] is False
-    assert inspection["requirements"] == [
-        {
-            "code": "required_fields_missing",
-            "relative_path": "warehouses.csv",
-            "candidate_roles": ["existing_warehouse"],
-            "missing_required_fields": ["warehouse_type"],
-            "question": (
-                "文件 warehouses.csv 缺少仓型字段 warehouse_type。"
-                "请在源数据中补充该列，每行使用 center 或 cross_docking，然后再继续。"
-            ),
-        }
+    warehouse_profile = next(
+        source
+        for source in inspection["source_profile"]["sources"]
+        if source["relative_path"] == "warehouses.csv"
+    )
+    assert "role_assessments" not in warehouse_profile
+    assert len(warehouse_profile["units"]) == 1
+    assessment = warehouse_profile["units"][0]["role_assessments"][0]
+    assert assessment["role"] == "existing_warehouse"
+    assert assessment["state"] == "partial"
+    assert assessment["ambiguous"] is False
+    assert assessment["matched_required_fields"] == [
+        "city_id",
+        "city_name",
+        "warehouse_id",
+        "warehouse_name",
     ]
+    assert assessment["missing_required_fields"] == ["warehouse_type"]
 
     output_path = f"{PREPARED_OUTPUT_DIR}/must-not-write.json"
     blocked = data_server.prepare_network_input(
@@ -162,8 +193,17 @@ def test_missing_warehouse_type_is_typed_non_retryable_user_input(
     assert blocked.retryable is False
     assert blocked.prepared_input_relative_path is None
     assert blocked.input_identity is None
-    assert blocked.requirements == [
-        data_server.DataSourceRequirement.model_validate(inspection["requirements"][0])
+    assert [item.model_dump(mode="json") for item in blocked.requirements] == [
+        {
+            "code": "required_fields_missing",
+            "relative_path": "warehouses.csv",
+            "candidate_roles": ["existing_warehouse"],
+            "missing_required_fields": ["warehouse_type"],
+            "question": (
+                "文件 warehouses.csv 缺少仓型字段 warehouse_type。"
+                "请在源数据中补充该列，每行使用 center 或 cross_docking，然后再继续。"
+            ),
+        }
     ]
     assert not (tmp_path / output_path).exists()
 
@@ -191,13 +231,15 @@ def test_source_profile_distinguishes_preview_samples_from_exact_total(
     assert result.structuredContent is not None
     inspection = result.structuredContent
     source = inspection["source_profile"]["sources"][0]
-    preview = source["structure"]["preview"]
+    assert "structure" not in source
+    unit = source["units"][0]
+    preview = unit["preview"]
     inspection_identity = SourceInspectionIdentity.model_validate(
         inspection["inspection_identity"]
     )
     inspected_paths = inspection["inspected_relative_paths"]
 
-    assert source["structure"]["record_count"] == 12
+    assert unit["record_count"] == 12
     assert preview["preview_sample_count"] == 3
     assert preview["total_count"] == 12
     assert preview["total_count_exact"] is True
@@ -239,6 +281,132 @@ def test_source_profile_distinguishes_preview_samples_from_exact_total(
         and warehouse.city_name == "Balikpapan"
         for warehouse in prepared.candidate_warehouses
     )
+
+
+def test_current_mock_sources_have_no_global_false_demand_blockers(tmp_path, monkeypatch) -> None:
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    fixture_root = Path(__file__).parents[3] / "apps/web/scripts/fixtures/warehouse-network/mock_data"
+    for path in fixture_root.iterdir():
+        if path.suffix in {".csv", ".json"} and path.name != "manifest.json":
+            (fixture / path.name).write_bytes(path.read_bytes())
+    _use_store(fixture, monkeypatch)
+
+    result = data_server.inspect_workspace_sources(
+        sorted(path.name for path in fixture.iterdir() if path.suffix in {".csv", ".json"}), object()
+    )
+    assert result.structuredContent is not None
+    inspection = result.structuredContent
+    assert inspection["outcome"] == "inspected"
+    assessments = {
+        source["relative_path"]: [
+            assessment
+            for unit in source["units"]
+            for assessment in unit["role_assessments"]
+        ]
+        for source in inspection["source_profile"]["sources"]
+    }
+    assert all(
+        not (
+            assessment["role"] == "demand"
+            and assessment["state"] == "partial"
+        )
+        for source_assessments in assessments.values()
+        for assessment in source_assessments
+    )
+    assert assessments["existing-warehouses.csv"][0]["role"] == "existing_warehouse"
+    assert assessments["candidate-warehouses.csv"][0]["role"] == "candidate_warehouse"
+
+
+def test_xlsx_and_json_units_are_not_aggregated(tmp_path, monkeypatch) -> None:
+    workbook = Workbook()
+    workbook.active.title = "需求"
+    workbook.active.append(["city_id", "city_name", "demand_quantity"])
+    workbook.active.append(["C-1", "Jakarta", 10])
+    warehouses = workbook.create_sheet("仓库")
+    warehouses.append(["warehouse_id", "warehouse_name", "warehouse_type", "city_id", "city_name"])
+    warehouses.append(["W-1", "Jakarta", "center", "C-1", "Jakarta"])
+    workbook.save(tmp_path / "network.xlsx")
+    (tmp_path / "nested.json").write_text(
+        json.dumps(
+            {
+                "payload": {
+                    "demandRows": [{"city_id": "C-1", "city_name": "Jakarta", "quantity": 10}],
+                    "warehouses": [{"warehouse_id": "W-1", "warehouse_name": "Jakarta"}],
+                    "nested": [{"tags": [{"name": "primary"}]}],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    _use_store(tmp_path, monkeypatch)
+    result = data_server.inspect_workspace_sources(["network.xlsx", "nested.json"], object())
+    assert result.structuredContent is not None
+    sources = {item["relative_path"]: item for item in result.structuredContent["source_profile"]["sources"]}
+    xlsx_units = {unit["unit_ref"]: unit for unit in sources["network.xlsx"]["units"]}
+    assert set(xlsx_units) == {"sheet:需求", "sheet:仓库"}
+    assert {unit["kind"] for unit in xlsx_units.values()} == {"sheet"}
+    assert any(item["role"] == "demand" for item in xlsx_units["sheet:需求"]["role_assessments"])
+    assert any(item["role"] == "existing_warehouse" for item in xlsx_units["sheet:仓库"]["role_assessments"])
+    json_units = {unit["unit_ref"]: unit for unit in sources["nested.json"]["units"]}
+    assert set(json_units) == {
+        "$.payload.demandRows",
+        "$.payload.warehouses",
+        "$.payload.nested",
+        "$.payload.nested[*].tags",
+    }
+    assert all(unit["kind"] == "json_array" for unit in json_units.values())
+    assert json_units["$.payload.nested[*].tags"]["locator"] == {
+        "path": "$.payload.nested[*].tags",
+        "array_prefix": "payload.nested.item.tags",
+    }
+
+
+def test_inspection_limits_are_explicit_selection_errors(tmp_path, monkeypatch) -> None:
+    for name in ("a.csv", "b.csv"):
+        (tmp_path / name).write_text("city_id,city_name\nC-1,Jakarta\n", encoding="utf-8")
+    _use_store(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="at least one Workspace-relative path"):
+        data_server.inspect_workspace_sources([], object())
+
+    monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_FILES", 1)
+    file_limited = data_server.inspect_workspace_sources(["a.csv", "b.csv"], object())
+    assert file_limited.structuredContent is not None
+    assert file_limited.structuredContent["outcome"] == "selection_required"
+    assert set(file_limited.structuredContent) == {
+        "outcome",
+        "schemaVersion",
+        "summary",
+        "code",
+        "next_action",
+        "retryable",
+        "observed",
+        "limit",
+    }
+    assert file_limited.structuredContent["code"] == "inspection_selection_required"
+    assert file_limited.structuredContent["observed"]["files"] == 2
+    assert file_limited.structuredContent["limit"]["files"] == 1
+
+    workbook = Workbook()
+    workbook.active.append(["city_id", "city_name", "demand_quantity"])
+    workbook.create_sheet("second").append(["warehouse_id"])
+    workbook.save(tmp_path / "multi.xlsx")
+    monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_FILES", 64)
+    monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_UNITS", 1)
+    unit_limited = data_server.inspect_workspace_sources(["multi.xlsx"], object())
+    assert unit_limited.structuredContent is not None
+    assert unit_limited.structuredContent["outcome"] == "selection_required"
+    assert unit_limited.structuredContent["observed"]["files"] == 1
+    assert unit_limited.structuredContent["observed"]["units"] == 2
+    assert unit_limited.structuredContent["limit"]["units"] == 1
+
+    monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_UNITS", 128)
+    monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_BYTES", 1)
+    byte_limited = data_server.inspect_workspace_sources(["a.csv"], object())
+    assert byte_limited.structuredContent is not None
+    assert byte_limited.structuredContent["outcome"] == "selection_required"
+    assert byte_limited.structuredContent["observed"]["bytes"] > 1
+    assert byte_limited.structuredContent["limit"]["bytes"] == 1
 
 
 def test_prepare_input_writes_a_complete_auditable_workspace_document(

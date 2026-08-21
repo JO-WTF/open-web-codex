@@ -90,8 +90,11 @@ async def smoke() -> None:
                 assert profiled.isError is not True
                 inspection = profiled.structuredContent
                 assert "resource_ref" not in inspection
+                assert inspection["outcome"] == "inspected"
                 assert inspection["source_profile"]["sources"][0]["relative_path"] == "network.csv"
-                assert inspection["source_profile"]["sources"][0]["mapping_suggestions"]
+                assert inspection["source_profile"]["sources"][0]["units"][0][
+                    "mapping_suggestions"
+                ]
                 assert inspection["inspection_identity"]["schemaVersion"] == "workspace_source_inspection.v1"
                 prepared = await asyncio.wait_for(
                     session.call_tool(
@@ -132,11 +135,15 @@ async def smoke() -> None:
                 )
                 assert blocked_inspection.isError is not True
                 blocked_profile = blocked_inspection.structuredContent
-                assert blocked_profile["state"] == "needs_input"
+                assert blocked_profile["schemaVersion"] == "workspace_source_profile.v2"
+                assert blocked_profile["outcome"] == "inspected"
+                assert blocked_profile["next_action"] == "confirm_sources"
                 assert blocked_profile["retryable"] is False
-                assert blocked_profile["requirements"][0]["missing_required_fields"] == [
-                    "warehouse_type"
-                ]
+                assessment = blocked_profile["source_profile"]["sources"][0]["units"][0][
+                    "role_assessments"
+                ][0]
+                assert assessment["state"] == "partial"
+                assert assessment["missing_required_fields"] == ["warehouse_type"]
                 blocked = await asyncio.wait_for(
                     session.call_tool(
                         "prepare_network_input",
