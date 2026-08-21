@@ -34,12 +34,14 @@ application or repository state.
 
 For Data intake, `inspect_workspace_sources` returns a bounded inline
 `workspace_source_profile.v2`, exact source units, `preview_sample_count`, `total_count`,
-`total_count_exact`, `inspection_identity` and inspected relative paths. A fresh prepared candidate
-is reused only when its exact output path is included in the inspection selection and its selected
-raw provenance is still fresh; otherwise inspection returns the raw profile. `prepare_network_input`
+`total_count_exact`, `inspection_identity` and inspected relative paths. Preview rows are schema
+examples only; `total_count` is the complete unit count. A fresh prepared candidate is reused only
+when its exact output path is included in the inspection selection and its selected raw/admin
+provenance is still fresh; otherwise inspection returns the raw profile. `prepare_network_input`
 rereads the selected complete units and recomputes the identity before writing; a path, byte or
-selected-set change returns `source_changed` without creating output. Data registers no Resource
-or Resource template, so callers must not use `read_mcp_resource` for the inspection result.
+selected-set change returns `source_changed` without creating output. `needs_input` is a terminal
+business handoff, not a retry loop. Data registers no Resource or Resource template, so callers must
+not use `read_mcp_resource` for the inspection result.
 
 Every Network Resource-producing Tool also returns `resource_name` in its structured result.
 Use that exact stable name when citing evidence; never expose or relabel the opaque

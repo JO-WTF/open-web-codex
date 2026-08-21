@@ -33,6 +33,7 @@ ADR 记录已经接受、会长期约束实现且不能仅从当前代码推断�
 | [ADR-022](022-native-copilot-skill-catalog.md) | Copilot Root 常驻小 Skill，任务 Skill 经 Runtime Catalog 渐进发现与读取 |
 | [ADR-023](023-workspace-prepared-inputs-and-domain-geospatial-execution.md) | Workspace 准备输入、可验证计算血缘与领域地理执行；局部替代 ADR-018 的 Data Resource 交接与手工导航导入 |
 | [ADR-024](024-warehouse-copilot-contract-simplification.md) | 仓网双 Copilot 的最小运行合同、精确路线范围与两阶段最小仓数求解；局部替代 ADR-023 的检查 Resource 与 pair 复用条件 |
+| [ADR-025](025-source-unit-prepared-v2-reuse.md) | Source unit 选择、Prepared v2 provenance 与 fresh reuse；局部替代 ADR-023/024 的 Data 检查与准备输入复用段落 |
 
 ## 何时创建 ADR
 

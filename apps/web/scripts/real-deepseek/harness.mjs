@@ -862,8 +862,14 @@ async function runSelfTests() {
   };
   const validMultiEvidence = validateBusinessEvidence({
     dataHandoff: {
+      outcome: "ready",
+      operation: "created",
       prepared_input_relative_path: "outputs/warehouse-network/prepared/input.json",
       input_identity: { content_sha256: "a".repeat(64) },
+      role_counts: { demand: 1, existing_warehouse: 1 },
+      warnings: [],
+      warning_count: 0,
+      warnings_truncated: false,
       candidate_warehouse_count: 12,
     },
     baseline: currentBaseline,
@@ -876,8 +882,14 @@ async function runSelfTests() {
   assert.equal(validMultiEvidence.valid, true);
   const legacyBaselineValidation = validateBusinessEvidence({
     dataHandoff: {
+      outcome: "ready",
+      operation: "created",
       prepared_input_relative_path: "outputs/warehouse-network/prepared/input.json",
       input_identity: { content_sha256: "a".repeat(64) },
+      role_counts: { demand: 1, existing_warehouse: 1 },
+      warnings: [],
+      warning_count: 0,
+      warnings_truncated: false,
       candidate_warehouse_count: 12,
     },
     baseline: {
@@ -2086,9 +2098,12 @@ async function runGate(provider) {
     );
     const dataHandoffEvent = allEvents.find(
       (event) =>
-        /prepare_network_input/.test(String(eventTool(event))) &&
+        /(prepare_network_input|inspect_workspace_sources)/.test(String(eventTool(event))) &&
         event.event_type === "codex.item.completed" &&
-        eventData(event)?.status === "completed",
+        eventData(event)?.status === "completed" &&
+        ["ready", "prepared_ready"].includes(
+          eventData(event)?.result?.structuredContent?.outcome,
+        ),
     );
     const dataHandoff = dataHandoffEvent
       ? eventData(dataHandoffEvent)?.result?.structuredContent

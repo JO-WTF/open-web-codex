@@ -3,10 +3,10 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前事实 |
-| 快照日期 | 2026-08-18 |
-| 代码快照 | 阶段二 Copilot 平台工作树（基于 `9530e5e54b`） |
-| 当前阶段边界 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md)、[ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) 与 [开发计划](development-plan.md) |
-| 接受决策 | ADR-018；ADR-019 局部替代其单包/default 假设 |
+| 快照日期 | 2026-08-21 |
+| 代码快照 | 阶段二 Copilot 平台工作树；仓网 source-unit/prepared v2 合同以 ADR-025 为当前补充 |
+| 当前阶段边界 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md)、[ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md)、[ADR-024](adr/024-warehouse-copilot-contract-simplification.md)、[ADR-025](adr/025-source-unit-prepared-v2-reuse.md) 与 [开发计划](development-plan.md) |
+| 接受决策 | ADR-018；ADR-019 局部替代其单包/default 假设；ADR-024/025 约束当前仓网 Tool 合同 |
 
 本文只描述当前代码怎样组成、事实由谁保存以及已经存在的边界偏离。目标方案不在这里
 冒充现状；验证强度以 [能力基线](capability-baseline.md) 为准。
@@ -143,8 +143,9 @@ Platform 侧过滤 Runtime discovery 或 Tool。
 通信。Data 的四个有界本地 Tool（发现、检查、完整准备、地理补全）统一预批准；Network 以 `prompt` 为默认，
 预批准路线/成本/验证/分析/选址/比较、coverage GeoJSON 等本地 Tool 与最终 Markdown 报告 `publish_network_planning_report`；`map_utils` 预批准 `create_map_card` 与 `revise_map_card`。
 外部导航、距离矩阵和 final Workspace 地图导出继续保留 official approval。Data→Network 输入是 Data Tool
-create-new 的 `prepared_network_input.v1` Workspace 相对路径与 `input_identity`；Network Tool 在同一授权
-Workspace 内自行验证和读取该文件，Role 不枚举、猜测、扫描 raw 数据或重解析其来源。路线、成本和方案
+create-new 的 `prepared_network_input.v2` Workspace 相对路径与 `input_identity`；Network Tool 在同一授权
+Workspace 内自行验证和读取该文件，Role 不枚举、猜测、扫描 raw 数据或重解析其来源。fresh prepared candidate
+只有在 inspect 输入中显式出现且 selected raw/admin provenance 仍 fresh 时复用；未选来源变化不阻塞当前目标。路线、成本和方案
 继续是 provider-owned Resource，并逐一绑定同一输入身份。Platform 不为当前原生协作链建立消息或数据平面。
 同时在 Tool annotations 中声明 read-only、destructive、idempotent 和 open-world 事实，Role
 policy 只裁决该 child 的精确允许面，不修改全局 `approvalPolicy`。prepared transport 不固定 MCP
@@ -229,10 +230,10 @@ revision、operation、dependency、readiness 或 deliverable 状态。
 能力提供不可变 Resource 内容，并以 Profile 私有、canonical Workspace 隔离的物理目录保存
 字节；Data inspection 不发布 Resource。Data4 与 Network 的 active surface 以 inline inspection
 identity、Workspace 路径和 typed Network Resource 各司其职：Data Server 的 inspect 返回有界
-`source_profile`、预览样本数与完整总数、`workspace_source_inspection.v1` identity 及精确
-inspected paths；必填业务字段缺失时，inspect 直接返回 `needs_input`、`retryable=false`、精确文件/候选角色/缺失字段和一次用户问题，prepare 对同一未解决缺口同样返回 no-write typed 终态而不抛可试探的参数错误；`prepare_network_input` 重新检查同一完整 regular files，若路径集合或任一字节变化
-则返回 `source_inspection_changed` 且不写文件，否则以显式确认 mapping 和全部候选仓原子写入
-`outputs/warehouse-network/prepared/` 下的完整 `prepared_network_input.v1`，同时返回候选仓总数和有界目录；`prepare_network_geography` 再从该文件生成新的完整输入。Network
+`workspace_source_profile.v2`、精确 source units、预览样本数与完整总数、`workspace_source_inspection.v2` identity 及精确
+inspected paths；角色评估不是全局业务缺口，只有选中 unit 的业务语义无法确定时才询问。prepare 使用
+`source_selections` 和必要的显式 mapping，若来源在握手期间变化则返回 `source_changed` 且不写文件，否则以
+`prepared_network_input.v2` 原子写入 `outputs/warehouse-network/prepared/`，保存 selected provenance、roles、role_counts 和有界 warnings；`prepare_network_geography` 再从该文件生成新的完整输入。Network
 Tool 只接受这个确切路径，并为矩阵与方案 Resource 绑定输入内容身份；不存在 candidate delta 或
 Data-to-Network ResourceRef 交接。
 CaseRepository、NetworkSnapshot、
@@ -243,9 +244,9 @@ provider SDK 提供可复用实现，但 Resource 字节与生命周期仍由实
 不复制内容，也不因此成为 Resource Broker。
 
 Data4 active surface 不再接受 `source_ref/sourceRef/source_refs/sourceRefs/source/source_file`、
-`mappings/entities` 或 `fields/field_mappings/fieldMappings` aliases。discover 可选，inspect
-只产生 source-profile Resource，`prepare_network_input` 使用显式 confirmed source decisions 并可在缺少
-坐标时返回 `needs_geography`；`prepare_network_geography` 再接收已确认的行政区 catalog 与可选
+`mappings/entities` 或 `fields/field_mappings/fieldMappings` aliases。discover 返回普通 source descriptors
+和可验证的 prepared candidates；inspect 直接返回 inline source profile，`prepare_network_input` 使用 exact
+`source_selections` 并可在缺少坐标时返回 `needs_geography`；`prepare_network_geography` 再接收已确认的行政区 catalog 与可选
 overrides。Network active surface 读取经校验的准备输入路径，provider-owned intermediate 继续使用
 typed MCP Resource；旧 Case/ArtifactRef compatibility tail 已删除。Platform 不建立数据
 revision/binding/fingerprint/cache
@@ -255,7 +256,7 @@ Resource content、摘要语义、版本列表或“最佳/最新”判断。它
 Server 在 Turn 前重验所有字段。
 
 用户输入中的完整路线距离、时长和来源方法由 Data Tool 保存在同一个
-`prepared_network_input.v1` Workspace 文件中；Network provider 按明确仓库范围将其物化为
+`prepared_network_input.v2` Workspace 文件中；Network provider 按明确仓库范围将其物化为
 `route_matrix.v3`，矩阵与验证器共享其 discriminated `warehouse_scope` 与精确 `warehouse_ids`，并对该范围内缺失、重复和范围外
 pair 给出显式验证结果。覆盖口径及未覆盖城市由
 Network Tool 确定性计算，同时区分城市数量和需求量加权指标；这些领域事实不进入 Platform
@@ -323,8 +324,9 @@ Role/任意模型质量矩阵。
 这些都是当前事实，不是应继续兼容的接口，也不是已经完成的阶段一正常链前置。后续按 owner
 处理 Browser legacy、完整 Thread/history/lease、approval replay、event retention 和多用户隔离；
 不再把它们插回已经通过的仓网正常路径。
-阶段一边界由 [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) 与
-[ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) 约束；具体顺序只进入
+阶段一边界由 [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md)、
+[ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) 与仓网当前
+[ADR-025](adr/025-source-unit-prepared-v2-reuse.md) 约束；具体顺序只进入
 [开发计划](development-plan.md)。
 
 ## 9. 证据入口
@@ -332,5 +334,5 @@ Role/任意模型质量矩阵。
 - 当前能力和真实 E2E 范围：[能力基线](capability-baseline.md)
 - 本轮源码与失败链审计：[临时审计](temporary-copilot-platform-refactor-audit-2026-08-08.md)
 - 当前阶段所有权与协同合同：[ADR-018](adr/018-built-in-network-copilot-runtime-closure.md)、
-  [ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md)
+  [ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md)、[ADR-025](adr/025-source-unit-prepared-v2-reuse.md)
 - 当前下一步：[开发计划](development-plan.md)

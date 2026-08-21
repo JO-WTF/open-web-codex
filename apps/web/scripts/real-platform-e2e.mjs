@@ -1301,11 +1301,16 @@ async function runCase(index) {
     const networkRequestText = JSON.stringify(
       modelRequests.find((request) => request.role === "network")?.body ?? {},
     );
-    if (!dataRequestText.includes("# 准备仓网数据")) {
+    const dataSkillContract = {
+      injected: dataRequestText.includes("<name>warehouse-data</name>"),
+      preparedReady: dataRequestText.includes("prepared_ready"),
+      sourceSelections: dataRequestText.includes("source_selections"),
+      sourceChanged: dataRequestText.includes("source_changed"),
+    };
+    if (!Object.values(dataSkillContract).every(Boolean)) {
       throw new NativeRuntimeBlocker("child_skill_body_not_injected", {
         role: "data_agent",
-        catalog_mentions_skill: dataRequestText.includes("warehouse-data"),
-        explicit_mention_preserved: dataRequestText.includes("$warehouse-data"),
+        data_skill_contract: dataSkillContract,
         spawn_input: modelCalls
           .filter((call) => call.role === "root" && call.name === "spawn_agent")
           .map((call) => ({
@@ -1392,22 +1397,23 @@ async function runCase(index) {
           })),
       });
     }
-    const planningHeadingPresent = networkRequestText.includes("# 仓网规划");
-    const planningCostSemanticsPresent = networkRequestText.includes("observed_quote_mean");
-    const planningSearchSemanticsPresent = networkRequestText.includes("minimum_feasible");
-    const mapHeadingPresent = networkRequestText.includes("# 仓网地图与交付");
+    const networkSkillContract = {
+      injected: networkRequestText.includes("<name>warehouse-network-planning</name>"),
+      minimumFeasible: networkRequestText.includes("minimum_feasible"),
+    };
+    const mapSkillContract = {
+      injected: networkRequestText.includes("<name>warehouse-map-delivery</name>"),
+      createNetworkMap: networkRequestText.includes("create_network_map_card"),
+      mapSpec: networkRequestText.includes("map_spec_ref"),
+    };
     if (
-      !planningHeadingPresent ||
-      !planningCostSemanticsPresent ||
-      !planningSearchSemanticsPresent ||
-      !mapHeadingPresent
+      !Object.values(networkSkillContract).every(Boolean) ||
+      !Object.values(mapSkillContract).every(Boolean)
     ) {
       throw new NativeRuntimeBlocker("child_skill_body_not_injected", {
         role: "network_agent",
-        planning_heading_present: planningHeadingPresent,
-        planning_cost_semantics_present: planningCostSemanticsPresent,
-        planning_search_semantics_present: planningSearchSemanticsPresent,
-        map_heading_present: mapHeadingPresent,
+        network_skill_contract: networkSkillContract,
+        map_skill_contract: mapSkillContract,
         request_text_length: networkRequestText.length,
         call_sequence: modelCalls.map((call) => ({
           role: call.role,

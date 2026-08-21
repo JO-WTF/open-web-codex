@@ -60,11 +60,26 @@ export function validateBusinessEvidence({
   mapProducerCompleted,
   generatedWorkspaceFiles,
 }) {
+  const warningCount = dataHandoff?.warning_count;
+  const warnings = dataHandoff?.warnings;
+  const handoffWarningsValid =
+    Number.isInteger(warningCount) &&
+    Array.isArray(warnings) &&
+    warnings.length === Math.min(warningCount, 64) &&
+    dataHandoff?.warnings_truncated === (warningCount > 64);
+  const candidateCountValid =
+    dataHandoff?.outcome === "prepared_ready"
+      ? Number.isInteger(dataHandoff.role_counts?.candidate_warehouse)
+      : Number.isInteger(dataHandoff?.candidate_warehouse_count);
   if (
+    !["ready", "prepared_ready"].includes(dataHandoff?.outcome) ||
+    !["created", "reused"].includes(dataHandoff?.operation) ||
     typeof dataHandoff?.prepared_input_relative_path !== "string" ||
     !dataHandoff.prepared_input_relative_path.startsWith("outputs/warehouse-network/prepared/") ||
     !/^[a-f0-9]{64}$/.test(dataHandoff.input_identity?.content_sha256 ?? "") ||
-    !Number.isInteger(dataHandoff.candidate_warehouse_count)
+    !dataHandoff.role_counts ||
+    !candidateCountValid ||
+    !handoffWarningsValid
   ) {
     return { code: "multi_agent_typed_data_handoff_invalid" };
   }

@@ -3,10 +3,10 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前与下一里程碑的执行计划 |
-| 更新日期 | 2026-08-18 |
+| 更新日期 | 2026-08-21 |
 | 当前阶段 | 阶段二：公开 SDK 与 Web 创作体验 |
 | 当前状态 | 多 Agent 仓网正常业务主链完成；目录发现、Task 显式选包、独立单 Agent 仓网包与根级共享 Tool 已落地 focused gate |
-| 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018 + ADR-019 为当前基线 |
+| 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018/019/024/025 为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
 | 阶段二后续 | Web Studio、Marketplace、生产模型质量与真实产品 E2E；多用户产品流程属于阶段三 |
 
@@ -292,7 +292,7 @@ Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。
    `approvalPolicy` 降为 `never`。prepared transport 不固定 MCP cwd；Runtime 使用 Thread
    已授权的 Workspace 作为 stdio MCP cwd。maps
    credential/resource state 位于 Profile 私有 runtime，业务 Workspace 只能来自 native
-   `sandboxCwd`。Data→Network 只交接完整 `prepared_network_input.v1` 的 Workspace 相对路径和
+   `sandboxCwd`。Data→Network 只交接完整 `prepared_network_input.v2` 的 Workspace 相对路径和
    `input_identity`；Network Tool 在授权 Workspace 内验证和读取该准备输入，不扫描或重解析 raw 数据。
    矩阵、成本和方案继续由同一 Profile+Workspace `supply_chain` Resource owner 保存，并绑定输入身份。工具代码、
    共享 venv、Node 依赖、Mock、测试和缓存均不复制进 Profile。
@@ -530,10 +530,10 @@ producer-time verifier snapshot，恢复不依赖届时 active package registry�
 4. 获取国家行政区 city/province ID/name 与经纬度，为需求城市、已有仓和候选仓补坐标。
 5. 有候选仓文件则使用；没有则询问省级、市级或用户指定范围。首次归一化保留所有已确认候选仓；
    baseline 通过计算范围排除，不删除已处理的候选事实。
-6. Data Tool 以 create-new 语义把完整 `prepared_network_input.v1`（含确认来源、候选仓和质量问题）
-   写入用户可见 `outputs/warehouse-network/prepared/`；该路径、内容身份、精确候选仓总数和有界候选仓目录是唯一 Data→Network 交接。路线/成本/方案等高成本
+6. Data Tool 以 create-new 语义把完整 `prepared_network_input.v2`（含选中 source units、候选仓和质量问题）
+   写入用户可见 `outputs/warehouse-network/prepared/`；该路径、内容身份、roles/role_counts 和有界 warnings 是唯一 Data→Network 交接。路线/成本/方案等高成本
    typed intermediate 继续保存为 MCP Resource。
-7. Data inspect 对缺少必填业务字段返回 `needs_input`、`retryable=false` 和 bounded requirements；同一未解决缺口进入 prepare 时返回 no-write typed 终态。多 Agent 由 Data child 一次交回 Root 询问，单 Agent 直接询问一次；没有新用户输入或修正文件时不得重试。
+7. Data inspect 返回 `workspace_source_profile.v2` 的 exact units；角色评估不是全局缺口。fresh prepared 只有显式候选路径且 provenance fresh 才复用；`needs_input` 一次交回用户，`source_changed` 最多一次重检。
 8. 候选仓、城市、现网仓、实际分配、需求或原始路线事实任一变化都产生新的完整准备输入；不使用
    candidate delta 或原地修改。校验结果不构成授权、可信等级或自动复用许可。
 
@@ -588,7 +588,7 @@ producer-time verifier snapshot，恢复不依赖届时 active package registry�
 
 Data4 的 Stage C active surface 已不再依赖 `source_ref` 及 wire aliases、模型可见
 revision/operation/CAS、ArtifactRef 双重 ref 或隐藏 Task 数据目录；inspect 使用 inline
-`workspace_source_inspection.v1` identity，prepare 重新校验完整 Workspace 文件并写入 prepared
+`workspace_source_inspection.v2` identity，prepare 重新校验完整 Workspace 文件并写入 prepared
 普通文件，不注册 Data Resource。Network decorated active surface 继续使用 strict `ResourceRef`；
 未装饰的 `CaseRepository`、`NetworkSnapshot`、ArtifactRef compatibility tail 已由 Stage E 原子尾删。
 

@@ -1700,10 +1700,22 @@ mod tests {
 
     #[test]
     fn warehouse_map_delivery_skill_preserves_default_map_visual_hierarchy() {
-        assert!(MAP_DELIVERY_SKILL.contains("中心仓深蓝 `#1D4ED8`、半径 `12`"));
-        assert!(MAP_DELIVERY_SKILL.contains("XD 橙色 `#F97316`、半径 `9`"));
-        assert!(MAP_DELIVERY_SKILL.contains("Last mile 与干线必须使用独立图层和图例"));
-        assert!(MAP_DELIVERY_SKILL.contains("中心仓与 XD 必须是独立图层"));
+        for skill in [MAP_DELIVERY_SKILL, SINGLE_AGENT_MAP_DELIVERY_SKILL] {
+            let has_hex_color = skill.as_bytes().windows(7).any(|window| {
+                window[0] == b'#'
+                    && window[1..]
+                        .iter()
+                        .all(|byte| byte.is_ascii_digit() || (b'A'..=b'F').contains(byte))
+            });
+            assert!(!has_hex_color);
+            assert!(!skill.contains("半径"));
+            assert!(skill.contains("用户未指定样式"));
+            assert!(skill.contains("中心仓"));
+            assert!(skill.contains("XD"));
+            assert!(skill.contains("候选仓"));
+            assert!(skill.contains("启用/关闭状态"));
+            assert!(skill.contains("时效结果"));
+        }
     }
 
     #[test]
@@ -1749,30 +1761,26 @@ mod tests {
 
     #[test]
     fn warehouse_data_skill_stops_after_prepared_input_terminal_result() {
-        assert!(DATA_SKILL
-            .contains("`prepare_network_input` 成功是本次 Data 工作的 terminal Tool 结果"));
-        assert!(DATA_SKILL.contains("不要再调用 `read_mcp_resource`、`list_mcp_resources`"));
+        assert!(DATA_SKILL.contains("`prepared_ready`：直接交接"));
+        assert!(DATA_SKILL.contains("`ready`：交接"));
+        assert!(DATA_SKILL.contains("`needs_input`：原样交 Supervisor"));
+        assert!(DATA_SKILL.contains("`source_changed`：只允许一次重新 inspect"));
     }
 
     #[test]
     fn warehouse_data_skills_stop_and_ask_on_typed_missing_input() {
-        assert!(DATA_SKILL.contains("`retryable=false` 明确禁止"));
-        assert!(DATA_SKILL.contains("同一 child Turn 最多发送一次缺口消息"));
-        assert!(SUPERVISOR_SKILL.contains("Data child 返回 `needs_input` 时"));
-        assert!(SUPERVISOR_SKILL.contains("向用户询问一次 Tool 给出的业务问题"));
-        assert!(SINGLE_AGENT_DATA_SKILL.contains("立即使用 Tool 给出的 `question` 向用户询问一次"));
-        assert!(SINGLE_AGENT_DATA_SKILL.contains("同一 Turn 最多询问一次"));
-        assert!(SINGLE_AGENT_ROOT_SKILL.contains("必须询问一次并结束当前 Turn"));
+        assert!(DATA_SKILL.contains("`needs_input`：原样交 Supervisor"));
+        assert!(SUPERVISOR_SKILL.contains("Data child 返回"));
+        assert!(SUPERVISOR_SKILL.contains("`needs_input`"));
+        assert!(SINGLE_AGENT_DATA_SKILL.contains("`needs_input`：原样交接真实 requirements"));
+        assert!(SINGLE_AGENT_ROOT_SKILL.contains("`needs_input` 一次询问后停止"));
     }
 
     #[test]
     fn warehouse_map_delivery_skills_require_an_explicit_map_spec_selection() {
         for skill in [MAP_DELIVERY_SKILL, SINGLE_AGENT_MAP_DELIVERY_SKILL] {
-            assert!(skill.contains("当前 Turn 由 Platform 注入的精确 `map_spec_ref`"));
-            assert!(skill.contains("`resource_schema=\"map_card_spec.v1\"`"));
-            assert!(skill
-                .contains("artifact ID、GeoJSON ref、地图标题、模型文本或“上一张地图”不是 spec"));
-            assert!(skill.contains("`map_card_spec_ref_invalid` 或 `map_card_spec_unavailable` 是当前请求的 typed 终态"));
+            assert!(skill.contains("`map_spec_ref`"));
+            assert!(skill.contains("`needs_context`"));
         }
         assert!(SUPERVISOR_SKILL.contains(
             "只有当前 Turn 含 Platform 注入的显式用户选择 `map_spec_ref` 才派发地图修订 child"
@@ -1783,12 +1791,10 @@ mod tests {
     fn warehouse_map_delivery_skills_use_the_domain_map_builder() {
         for skill in [MAP_DELIVERY_SKILL, SINGLE_AGENT_MAP_DELIVERY_SKILL] {
             assert!(skill.contains("`create_network_map_card`"));
-            assert!(skill.contains("`prepare_network_coverage_map` 生成 coverage GeoJSON"));
-            assert!(skill.contains("不得调用 `publish_workspace_geojson` 代替 coverage GeoJSON"));
-            assert!(skill.contains("`publish_workspace_geojson(require_polygon=true)`"));
-            assert!(skill.contains("不要自行拼 `sources`、`layers` 或猜字段"));
-            assert!(skill.contains("不得在同一交付中再调用 `create_map_card`"));
-            assert!(skill.contains("返回成功是本次地图工作的 terminal Tool 结果"));
+            assert!(skill.contains("`prepare_network_coverage_map`"));
+            assert!(!skill.contains("`create_map_card`"));
+            assert!(skill.contains("不自行拼 sources/layers/GeoJSON"));
+            assert!(skill.contains("Tool 成功返回 embed 后立即交付并停止"));
         }
         assert!(SUPERVISOR_SKILL.contains("`existing_only` 只限制 baseline 的计算范围"));
     }

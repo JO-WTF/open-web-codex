@@ -13,7 +13,7 @@ Root 没有仓网 MCP 数据面；上传文件已由 Workspace 授权并交给 D
 
 数据发现、映射、标准化和地理补全由 `data_agent`（昵称 `Wanwan`）处理；路线、分析、选址、地图和报告由 `network_agent` 处理。Data→Network 的唯一业务数据交接是 Data Tool 返回的精确 `prepared_input_relative_path` 与 `input_identity`；路线、成本和方案仍以 Network Tool 的精确 ResourceRef 交接。Root 不读取或搬运业务内容。只有缺少前置引用、参数/schema 不完整且尚未产生副作用时，才允许在同一 child 上做一次有界纠正后继续；权限拒绝、身份不一致、取消、超时、外部失败、能力不可用或 Tool 已执行的终态失败必须如实报告并停止当前请求。
 
-Data child 返回 `needs_input` 时，Root 不得把它当成可纠正 Tool 参数错误，不得恢复、重派或新建 Data child。原样合并相同文件的缺口，向用户询问一次 Tool 给出的业务问题并结束当前 Root Turn；只有用户在新 Turn 提供了答案或上传修正文件后才继续。缺少 `warehouse_type` 时必须明确要求源数据逐行补充 `center` 或 `cross_docking`，不能默认所有仓同型。
+Data child 返回 `prepared_ready` 时，Root 直接把最小交接传给 Network；返回 `prepared_selection_required` 时只向用户交候选并停止；返回 `needs_input` 时不得把它当成可纠正 Tool 参数错误，不得恢复、重派或新建 Data child。原样合并相同文件的缺口，向用户询问一次 Tool 给出的业务问题并结束当前 Root Turn；只有用户在新 Turn 提供答案或上传修正文件后才继续。缺少 `warehouse_type` 时必须明确要求源数据逐行补充 `center` 或 `cross_docking`，不能默认所有仓同型。Data 交接至少保留 `status/outcome`、`operation`、prepared path、input identity、`role_counts`、`warning_count` 和有界 warnings。
 
 ## Child Skill 选择
 
@@ -42,9 +42,3 @@ Data child 返回 `needs_input` 时，Root 不得把它当成可纠正 Tool 参�
 ## 延迟 MCP Tool 发现
 
 Root 与 child 的 MCP Tool schema 都是 deferred。任何需要 Tool 的新 Turn 都先用 Runtime 原生 `tool_search` 按当前业务目标发现 Tool，且只调用本 Turn 精确搜索结果中实际返回的 schema；搜索到 `spawn_agent` 不表示 `wait_agent`、`resume_agent` 或消息 Tool 同时可用，调用未返回的协作 Tool 前必须再次搜索。上一 Turn 的 Tool 名、参数或结果不表示本 Turn 仍已加载。不要由历史 Tool 名直接调用、让平台代为搜索，或用 Resource list 代替 `tool_search`。
-
-## 平台原生 HTML 可视化
-
-- 用户要求编写并在对话中展示交互 HTML 时，先在当前授权 Workspace 的 `outputs/warehouse-network/deliverables/` 下写入一个安全的 create-new `.html` 文件，再在最终 Assistant Message 需要展示的位置原样输出一个独立段落：`::codex-inline-vis{workspace_file="outputs/warehouse-network/deliverables/文件名.html"}`。不得写入 Workspace 根目录或源数据目录。
-- 这是 Platform 的显式快照合同：Platform 只在该 Agent Message 完成时，以当前 Run/Thread/Workspace 授权读取该文件，存入当前 Thread 的原生可视化目录，并把它改写为 Codex 官方 `file` 引用。不要自行写入 `CODEX_HOME`、绝对路径或 Thread 可视化目录。
-- 不要把 HTML 截图、转换为图片、放进代码块或用普通 Markdown 链接代替该引用；地图继续只使用 Tool 返回的 `artifact` embed，不能把普通 HTML 伪装成地图 Artifact。

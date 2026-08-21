@@ -104,6 +104,8 @@ ADR-008 与 ADR-011 保存旧教程/仓网原型的历史决定，其具体 Work
 基线是 [ADR-018：Codex 原生机制驱动的内置仓网 Copilot](adr/018-built-in-network-copilot-runtime-closure.md)
 与局部替代单包/default 假设的
 [ADR-019：Task 显式选择独立 Copilot 包，Tool 使用根级共享注册表](adr/019-task-selected-copilot-packages-and-shared-tools.md)。
+仓网当前最小 Tool/Skill 数据握手、prepared v2 和 fresh reuse 由
+[ADR-025：Source Unit 选择与 Prepared v2 新鲜复用](adr/025-source-unit-prepared-v2-reuse.md) 补充。
 
 ## 事实与冲突处理
 

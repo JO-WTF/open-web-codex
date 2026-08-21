@@ -40,7 +40,7 @@ render_network_comparison_map
 publish_network_planning_report
 ```
 
-Data Tool 先以 `workspace_source_profile.v2` inline `source_profile`、`inspection_identity` 和 `inspected_relative_paths` 返回有界检查结果，再重新检查完整文件并以 create-new 语义写入用户可见的 `outputs/warehouse-network/prepared/` Workspace JSON；Data/Network Agent 只交接精确相对路径和内容身份。Data 不注册 Resource template，也不要求读取 source profile Resource。导航请求只写入 `outputs/warehouse-network/requests/`，单 Agent 经 Skill 授权的有界全量统计脚本与结果只写入 `outputs/warehouse-network/calculations/`，最终地图/报告文件只写入 `outputs/warehouse-network/deliverables/`，所有输入源保持原位。路线、成本、方案与比较等 Network 计算结果写入 Resource Store，并都绑定同一输入身份。Agent 不传原始文件、整张矩阵或完整工具结果。缺失数据、矩阵不完整、求解器不可用和超时都是显式状态；不会自动加载 Mock、填零或切换旧实现。
+Data Tool 先以 `workspace_source_profile.v2` inline `source_profile`、exact source units、`inspection_identity` 和 `inspected_relative_paths` 返回有界检查结果，再重新检查完整文件并以 create-new 语义写入用户可见的 `outputs/warehouse-network/prepared/` Workspace JSON；Data/Network Agent 只交接精确相对路径、内容身份、roles/role_counts 和有界 warnings。`prepared_ready` 直接交接，`prepared_selection_required` 只请求一次选择，`source_changed` 最多重检一次。Data 不注册 Resource template，也不要求读取 source profile Resource。导航请求只写入 `outputs/warehouse-network/requests/`，单 Agent 经 Skill 授权的有界全量统计脚本与结果只写入 `outputs/warehouse-network/calculations/`，最终地图/报告文件只写入 `outputs/warehouse-network/deliverables/`，所有输入源保持原位。路线、成本、方案与比较等 Network 计算结果写入 Resource Store，并都绑定同一输入身份。Agent 不传原始文件、整张矩阵或完整工具结果。缺失数据、矩阵不完整、求解器不可用和超时都是显式状态；不会自动加载 Mock、填零或切换旧实现。
 
 Data Tool 会把用户输入中完整的起点、终点、距离、时长与来源方法保存在
 `prepared_network_input.v2`；Network Tool 可以按分析范围把这些事实物化为

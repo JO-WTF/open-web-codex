@@ -21,7 +21,7 @@ flowchart LR
 | Network Agent | 说明本次问题需要需求城市、已有仓库、路线参数和时效目标 |
 | Data Agent | 检查 CSV/JSON/XLSX、生成字段映射、补充行政区和坐标 |
 | `supply_chain` | Data/Network logical provider；发现来源、确认映射、构建矩阵、计算覆盖率并发布报告 |
-| typed handoff | Data Agent 只返回有界的 inline `source_profile.v1`、检查身份，以及准备文件的精确 Workspace 相对路径；Network 计算结果才使用严格 ResourceRef |
+| typed handoff | Data Agent 只返回有界的 inline `workspace_source_profile.v2`、exact source units、检查身份，以及准备文件的精确 Workspace 相对路径；Network 计算结果才使用严格 ResourceRef |
 | Artifact | 只保存用户最终需要查看和下载的报告，不承担 Agent 间数据交换 |
 
 本篇只用 `haversine distance × 绕路系数`。它是规划估算，不是导航承诺。导航接口要在后续得到明确许可后批量调用，不能逐个客户调用。
@@ -45,7 +45,7 @@ flowchart LR
 
 1. 打开 Web 的 **Workspace → Files**，选择一个有权使用的 Workspace。
 2. 点击 **Add data**，上传 `demand-cities.csv`、`existing-warehouses.csv` 和 `administrative-areas.json`。只接受 CSV、JSON、XLSX；不要上传 `geoboundaries-idn-adm2.geojson` 原始大文件，边界核验结果已经保存在行政区数据和校验报告中。
-3. 在 **Supervisor / Enterprise Network Planning Copilot** 中选择 `6.0.0`。如果列表没有该版本，说明服务未应用当前 seed migration，不要改用旧 Supervisor。
+3. 在 **Warehouse Network Copilot** 中选择当前 `warehouse-network-copilot` package。若 package 不可用，报告 typed unavailable，不改用旧 Supervisor。
 4. 创建 Thread，发送：
 
    ```text
@@ -59,10 +59,10 @@ flowchart LR
 
 Root Thread 先发布 typed 数据需求。Data Agent 与 Network Agent 共用同一授权 Workspace，但不把完整数据搬进对话：
 
-1. 发现并一次检查用户确认的 Workspace 来源，inline 返回有界 `source_profile.v1`、`preview_sample_count`、`total_count`、`total_count_exact`、`inspection_identity` 和检查过的相对路径；这一步不发布 Resource。
+1. 发现并一次检查用户确认的 Workspace 来源，inline 返回有界 `workspace_source_profile.v2`、exact source units、`preview_sample_count`、`total_count`、`total_count_exact`、`inspection_identity` 和检查过的相对路径；preview 只是字段样本，total 才是完整记录数，这一步不发布 Resource。
 2. 提出显式字段映射，说明每个源字段如何映射到需求城市、已有仓库和行政区字段。
 3. 如果字段名或城市名有歧义，显示用户输入卡片。`ambiguous` 不能由模型猜测。
-4. `prepare_network_input` 重新校验完整源文件和检查身份，以 create-new 方式写入 `outputs/warehouse-network/prepared/` 下的 `prepared_network_input.v1`；Data Agent 只交接精确相对路径、内容身份和有界质量摘要。
+4. `prepare_network_input` 重新校验完整 source units 和检查身份，以 create-new 方式写入 `outputs/warehouse-network/prepared/` 下的 `prepared_network_input.v2`；Data Agent 只交接精确相对路径、内容身份、roles/role_counts 和有界质量摘要。未选来源的缺字段不阻塞本次目标；fresh prepared candidate 只有显式选中且 provenance fresh 才自动复用。
 
 Network Agent 再请求缺失参数。第一次看到输入卡片时选择：
 
@@ -79,7 +79,7 @@ Network Agent 再请求缺失参数。第一次看到输入卡片时选择：
 
 检查以下事实，而不是只看模型的一段总结：
 
-- `prepared_network_input.v1` 为 `ready`，位于 `outputs/warehouse-network/prepared/`，且摘要显示 50 个需求城市和 11 个已有仓。
+- `prepared_network_input.v2` 为 `ready`，位于 `outputs/warehouse-network/prepared/`，且摘要显示 50 个需求城市和 11 个已有仓。
 - `route_matrix.v3` 为 `ready`，方法是 `haversine`，路线数等于 11 × 50 = 550。
 - 路线组件保存绕路系数和平均速度；没有 `navigation` 结果。
 - `network_baseline.v2` 为 `ready`，并由 final Tool 创建 `network_planning_report_markdown.v2` Workspace 交付物；baseline 评估仍使用独立 baseline report bundle 口径，比较报告使用 generic before/after 口径。
@@ -90,8 +90,8 @@ Network Agent 再请求缺失参数。第一次看到输入卡片时选择：
 
 | 现象 | 含义和处理 |
 | --- | --- |
-| 找不到需求城市 | 文件没有城市标识或需求量；补充 `city_id/city_name/demand_quantity` |
-| 找不到已有仓库 | 文件没有 `warehouse_id/name/type/city_id/city_name`；补充仓库列表 |
+| 找不到需求城市 | 选中 source unit 没有可唯一解释的城市标识或需求量；先确认字段映射，只有确实缺业务值时才补文件 |
+| 找不到已有仓库 | 选中 source unit 无法唯一解释仓库标识或仓型；中文、缩写或随机表头可以提交显式 mapping，不因表头名称不同而询问 |
 | 坐标缺失 | Data Agent 应先用行政区目录补充；匹配不明确时由用户选择，不要填 0 |
 | 要求导航许可 | 本篇参数选择错了；选择球面距离，或明确承担批量导航费用 |
 | 显示没有当前覆盖 | 这是预期结果，不是运行失败；本篇只计算已有仓范围内的优化基线 |
@@ -99,6 +99,6 @@ Network Agent 再请求缺失参数。第一次看到输入卡片时选择：
 
 ## 换成自己的数据
 
-只需要替换需求城市和已有仓库文件，并在映射卡片中确认字段。需求城市至少需要：`city_id`、`city_name`、`demand_quantity`；已有仓库至少需要：`warehouse_id`、`warehouse_name`、`warehouse_type`、`city_id`、`city_name`。如果文件没有经纬度，Data Agent 可以使用已授权的行政区目录补充，但必须保留匹配来源和结果状态。
+只需要替换需求城市和已有仓库文件，并在映射卡片中确认字段。字段名称可以是中文、英文缩写或业务自定义名称；Data Agent 会基于 exact unit 的字段和样本类型映射到城市标识、名称、需求量、仓库标识、名称、仓型和城市字段。只有选中数据确实缺业务值、单位/仓型规则未知或记录冲突时才需要补充或确认。如果文件没有经纬度，Data Agent 可以使用已授权的行政区目录补充，但必须保留匹配来源和结果状态。
 
 下一篇将加入报价、center/cross-docking 两级关系和全网运输成本。

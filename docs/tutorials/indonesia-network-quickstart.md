@@ -1,13 +1,13 @@
 # 印尼仓网教程快速开始
 
-这条路径只做一次最小真实运行：在 Web 中使用明确标记的教程数据，选择 `enterprise-supervisor-copilot@6.0.0`，让 Data Agent 和 Network Agent 协作完成球面距离时效分析。
+这条路径只做一次最小真实运行：在 Web 中使用明确标记的教程数据，选择当前 `warehouse-network-copilot`，让 Data Agent 和 Network Agent 协作完成球面距离时效分析。
 
 ## 1. 检查环境
 
 - 服务运行在真实 Runtime 模式；不要用 shell `source` 代替 MCP 调用。
 - Workspace 可写且已授权。
 - 一个 logical `supply_chain` MCP provider 可见。
-- Supervisor 只绑定 Data Agent `6.0.0` 和 Network Agent `6.0.0`；没有 Visualization Agent 绑定。
+- 当前 Copilot 只由 Supervisor、Data Agent 和 Network Agent 组成；地图交付由声明的 Map Tool 完成，没有额外 Visualization Agent。
 
 ## 2. 准备文件
 
@@ -29,7 +29,7 @@ administrative-areas.json
 
 ## 3. 创建并运行 Thread
 
-在 **New Enterprise Supervisor Copilot** 或 Supervisor Studio 中选择 6.0.0，创建 Thread，发送：
+在 Web 中选择 **Warehouse Network Copilot**，创建 Thread，发送：
 
 ```text
 规划印度尼西亚的仓网。先检查我提供的需求城市和已有仓库，使用球面距离 × 绕路系数估算距离和时效，不计算成本，不调用导航接口。给出 6、12、18 小时需求覆盖率，并说明输入缺口和假设。
@@ -56,8 +56,8 @@ Network Agent 会要求绕路系数、平均速度和每日驾驶时长。用输
 成功运行时，Data/Network 链至少产生以下 typed 结果：
 
 ```text
-inline source_profile.v1 + workspace_source_inspection.v1
-outputs/warehouse-network/prepared/*.json（prepared_network_input.v1）
+inline workspace_source_profile.v2 + workspace_source_inspection.v2
+outputs/warehouse-network/prepared/*.json（prepared_network_input.v2）
 route_matrix.v3
 network_baseline.v2
 network_planning_report_markdown.v2（单独 baseline 评估）
