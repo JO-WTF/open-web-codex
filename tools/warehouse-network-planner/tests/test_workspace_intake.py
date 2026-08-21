@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from openpyxl import Workbook
 from supply_chain_planner.data import workspace_intake
-from supply_chain_planner.data.workspace_intake import discover, inspect, read_rows
+from supply_chain_planner.data.workspace_intake import discover, inspect, read_unit_rows
 
 
 def test_workspace_discovery_returns_bounded_relative_descriptors(tmp_path: Path) -> None:
@@ -147,14 +147,19 @@ def test_csv_and_json_profiles_are_structural_samples_with_exact_counts(tmp_path
     assert json_array["preview"]["complete"] is False
 
 
-def test_read_rows_supports_explicit_rows_array(tmp_path: Path) -> None:
+def test_read_unit_rows_supports_explicit_json_array_locator(tmp_path: Path) -> None:
     (tmp_path / "administrative-areas.json").write_text(
         json.dumps({"rows": [{"city_id": "IDN-CITY-001", "city_name": "Jakarta"}]}),
         encoding="utf-8",
     )
     source = discover(tmp_path)[0]
 
-    assert read_rows(tmp_path, source["relative_path"]) == [
+    assert read_unit_rows(
+        tmp_path,
+        source["relative_path"],
+        "$.rows",
+        locator={"array_prefix": "rows"},
+    ) == [
         {"city_id": "IDN-CITY-001", "city_name": "Jakarta"}
     ]
 

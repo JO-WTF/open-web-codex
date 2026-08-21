@@ -114,13 +114,13 @@ def _write_sources(workspace: Path) -> list[str]:
     return list(sources)
 
 
-def _confirmed_sources() -> list[dict[str, object]]:
+def _source_selections() -> list[dict[str, object]]:
     return [
-        {"relative_path": "demand.json", "role": "demand"},
-        {"relative_path": "existing.json", "role": "existing_warehouse"},
-        {"relative_path": "candidates.json", "role": "candidate_warehouse"},
-        {"relative_path": "assignments.json", "role": "current_assignment"},
-        {"relative_path": "quotes.json", "role": "route_quote"},
+        {"relative_path": "demand.json", "unit_ref": "$", "role": "demand"},
+        {"relative_path": "existing.json", "unit_ref": "$", "role": "existing_warehouse"},
+        {"relative_path": "candidates.json", "unit_ref": "$", "role": "candidate_warehouse"},
+        {"relative_path": "assignments.json", "unit_ref": "$", "role": "current_assignment"},
+        {"relative_path": "quotes.json", "unit_ref": "$", "role": "route_quote"},
     ]
 
 
@@ -166,7 +166,7 @@ async def _prepare_normalized_resource(
                     "inspected_relative_paths": profile.structuredContent[
                         "inspected_relative_paths"
                     ],
-                    "confirmed_sources": _confirmed_sources(),
+                    "source_selections": _source_selections(),
                     "country_code": "ID",
                     "output_relative_path": "outputs/warehouse-network/prepared/domain.json",
                 },

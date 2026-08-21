@@ -35,6 +35,9 @@ class ConfirmedSourceRows:
     role: SourceRole | str
     rows: Sequence[Mapping[str, object]]
     mappings: Sequence[ConfirmedFieldMapping]
+    relative_path: str = ""
+    unit_ref: str = ""
+    selection_key: str = ""
 
 
 class RowNormalizationError(ValueError):
@@ -47,6 +50,7 @@ class RowNormalizationError(ValueError):
 class NetworkInputValidator:
     def validate(self, batch: NormalizedInputBatch) -> list[DataQualityIssue]:
         issues = list(batch.issues)
+        repeated_errors: dict[tuple[str, str], int] = {}
         demand_ids = [row.city_id for row in batch.demand_cities]
         warehouse_ids = [row.warehouse_id for row in batch.warehouses]
         if not demand_ids:
@@ -68,18 +72,12 @@ class NetworkInputValidator:
             )
         for row in batch.current_assignments:
             if row.demand_city_id not in demand_set:
-                issues.append(
-                    self._error(
-                        "assignment_demand_unknown",
-                        f"当前覆盖中的需求城市 {row.demand_city_id} 不在需求列表中。",
-                    )
+                repeated_errors[("assignment_demand_unknown", "demand_city_id")] = (
+                    repeated_errors.get(("assignment_demand_unknown", "demand_city_id"), 0) + 1
                 )
             if row.serving_warehouse_id not in existing_warehouse_set:
-                issues.append(
-                    self._error(
-                        "assignment_warehouse_unknown",
-                        f"当前覆盖中的仓库 {row.serving_warehouse_id} 不在已有仓列表中。",
-                    )
+                repeated_errors[("assignment_warehouse_unknown", "serving_warehouse_id")] = (
+                    repeated_errors.get(("assignment_warehouse_unknown", "serving_warehouse_id"), 0) + 1
                 )
         center_ids = {
             row.warehouse_id
@@ -92,12 +90,8 @@ class NetworkInputValidator:
                 and row.upstream_center_id is not None
                 and row.upstream_center_id not in center_ids
             ):
-                issues.append(
-                    self._error(
-                        "warehouse_upstream_center_unknown",
-                        f"前置仓 {row.warehouse_id} 指定的中心仓 "
-                        f"{row.upstream_center_id} 不在仓库列表中。",
-                    )
+                repeated_errors[("warehouse_upstream_center_unknown", "upstream_center_id")] = (
+                    repeated_errors.get(("warehouse_upstream_center_unknown", "upstream_center_id"), 0) + 1
                 )
         quote_keys = [
             (row.origin_id, row.destination_id, row.layer) for row in batch.route_quotes
@@ -120,11 +114,29 @@ class NetworkInputValidator:
                     business_message="没有发现当前覆盖方案；当前分析将使用优化基线。",
                 )
             )
+        issues.extend(self._repeated_errors(repeated_errors))
         return issues
 
     @staticmethod
     def _error(code: str, message: str) -> DataQualityIssue:
         return DataQualityIssue(code=code, severity="error", business_message=message)
+
+    @staticmethod
+    def _repeated_errors(counts: dict[tuple[str, str], int]) -> list[DataQualityIssue]:
+        messages = {
+            "assignment_demand_unknown": "当前覆盖中有需求城市不在需求列表中。",
+            "assignment_warehouse_unknown": "当前覆盖中有服务仓不在已有仓列表中。",
+            "warehouse_upstream_center_unknown": "当前覆盖中有前置仓引用了不存在的中心仓。",
+        }
+        return [
+            DataQualityIssue(
+                code=code,
+                severity="error",
+                business_message=f"{messages[code]} 问题记录数：{count}。",
+                field_name=field_name,
+            )
+            for (code, field_name), count in counts.items()
+        ]
 
 
 def normalize_confirmed_rows(
@@ -139,6 +151,8 @@ def normalize_confirmed_rows(
     quotes: list[RouteQuoteRecord] = []
     provided_route_facts: list[ProvidedRouteFactRecord] = []
     issues: list[DataQualityIssue] = []
+    duplicate_counts: dict[tuple[str, str, str, str], int] = {}
+    row_error_counts: dict[tuple[str, str, str, str], int] = {}
     for source in sources:
         try:
             role = SourceRole(source.role)
@@ -148,7 +162,8 @@ def normalize_confirmed_rows(
                     code="normalization_role_unknown",
                     severity="error",
                     business_message="输入包含无法识别的数据角色。",
-                    field_name=str(source.role)[:256],
+                    source_id=_source_id(source),
+                    field_name="role",
                 )
             )
             continue
@@ -158,44 +173,86 @@ def normalize_confirmed_rows(
                     code="normalization_role_unsupported",
                     severity="error",
                     business_message="行政区目录应由地理准备工具处理，不能作为仓网记录标准化。",
+                    source_id=_source_id(source),
                     field_name=role.value,
                 )
             )
             continue
+        local_demands: list[DemandCityRecord] = []
+        local_warehouses: list[WarehouseRecord] = []
+        local_assignments: list[CurrentAssignmentRecord] = []
+        local_quotes: list[RouteQuoteRecord] = []
+        local_facts: list[ProvidedRouteFactRecord] = []
         for row_index, row in enumerate(source.rows, start=1):
             try:
                 values = _map_confirmed_row(row, source.mappings, transforms)
                 _append_normalized_record(
                     role,
                     values,
-                    demands,
-                    warehouses,
-                    assignments,
-                    quotes,
-                    provided_route_facts,
+                    local_demands,
+                    local_warehouses,
+                    local_assignments,
+                    local_quotes,
+                    local_facts,
                 )
             except RowNormalizationError as error:
-                issues.append(
-                    DataQualityIssue(
-                        code=error.code,
-                        severity="error",
-                        business_message=(
-                            f"{role.value} 数据第 {row_index} 行缺少必需字段或格式不正确。"
-                        ),
-                        field_name=error.field_name,
-                    )
+                error_key = (
+                    source.selection_key,
+                    error.code,
+                    error.field_name or "record",
+                    role.value,
                 )
+                row_error_counts[error_key] = row_error_counts.get(error_key, 0) + 1
             except (KeyError, ValueError, ValidationError) as error:
-                issues.append(
-                    DataQualityIssue(
-                        code=f"{role.value}_row_invalid",
-                        severity="error",
-                        business_message=(
-                            f"{role.value} 数据第 {row_index} 行缺少必需字段或格式不正确。"
-                        ),
-                        field_name=str(error)[:256],
-                    )
+                error_key = (
+                    source.selection_key,
+                    f"{role.value}_row_invalid",
+                    _validation_field(error),
+                    role.value,
                 )
+                row_error_counts[error_key] = row_error_counts.get(error_key, 0) + 1
+        _merge_records(
+            demands,
+            local_demands,
+            lambda record: record.city_id,
+            "demand_city",
+            source,
+            duplicate_counts,
+        )
+        _merge_records(
+            warehouses,
+            local_warehouses,
+            lambda record: record.warehouse_id,
+            "warehouse",
+            source,
+            duplicate_counts,
+        )
+        _merge_records(
+            assignments,
+            local_assignments,
+            lambda record: record.demand_city_id,
+            "current_assignment",
+            source,
+            duplicate_counts,
+        )
+        _merge_records(
+            quotes,
+            local_quotes,
+            lambda record: (record.origin_id, record.destination_id, record.layer),
+            "route_quote",
+            source,
+            duplicate_counts,
+        )
+        _merge_records(
+            provided_route_facts,
+            local_facts,
+            lambda record: (record.origin_id, record.destination_id, record.layer),
+            "provided_route_fact",
+            source,
+            duplicate_counts,
+        )
+    issues.extend(_row_error_issues(row_error_counts, sources))
+    issues.extend(_duplicate_issues(duplicate_counts))
     batch = NormalizedInputBatch(
         demand_cities=demands,
         warehouses=warehouses,
@@ -215,6 +272,92 @@ def normalize_confirmed_rows(
     return "ready", validated
 
 
+def _source_id(source: ConfirmedSourceRows) -> str | None:
+    return source.selection_key[:64] or None
+
+
+def _validation_field(error: Exception) -> str:
+    if isinstance(error, ValidationError):
+        first = error.errors()[0] if error.errors() else {}
+        location = first.get("loc", ())
+        return str(location[0])[:256] if location else "record"
+    return "record"
+
+
+def _row_error_issues(
+    counts: dict[tuple[str, str, str, str], int],
+    sources: Sequence[ConfirmedSourceRows],
+) -> list[DataQualityIssue]:
+    source_ids = {source.selection_key: source for source in sources}
+    return [
+        DataQualityIssue(
+            code=code,
+            severity="error",
+            business_message=f"{role} 数据存在缺少必需字段或格式不正确的记录。问题记录数：{count}。",
+            source_id=source_key[:64] or None,
+            field_name=field_name,
+        )
+        for (source_key, code, field_name, role), count in counts.items()
+        if not source_key or source_key in source_ids
+    ]
+
+
+def _merge_records(
+    target: list[object],
+    incoming: Sequence[object],
+    key_fn,
+    label: str,
+    source: ConfirmedSourceRows,
+    duplicate_counts: dict[tuple[str, str, str, str], int],
+) -> None:
+    existing = {key_fn(record): record for record in target}
+    for record in incoming:
+        key = key_fn(record)
+        prior = existing.get(key)
+        if prior is None:
+            target.append(record)
+            existing[key] = record
+            continue
+        if prior == record:
+            duplicate_key = (
+                f"{label}_duplicate_identical",
+                source.selection_key or source.relative_path,
+                source.unit_ref,
+                "warning",
+            )
+            duplicate_counts[duplicate_key] = duplicate_counts.get(duplicate_key, 0) + 1
+        else:
+            duplicate_key = (
+                f"{label}_duplicate_conflict",
+                source.selection_key or source.relative_path,
+                source.unit_ref,
+                "error",
+            )
+            duplicate_counts[duplicate_key] = duplicate_counts.get(duplicate_key, 0) + 1
+
+
+def _duplicate_issues(
+    duplicate_counts: dict[tuple[str, str, str, str], int]
+) -> list[DataQualityIssue]:
+    issues: list[DataQualityIssue] = []
+    for (code, source_key, unit_ref, severity), count in duplicate_counts.items():
+        message = (
+            "选中的来源包含完全相同的重复记录，已稳定保留首次记录。"
+            if severity == "warning"
+            else "选中的来源包含相同业务标识但内容冲突的记录。"
+        )
+        issues.append(
+            DataQualityIssue(
+                code=code,
+                severity=severity,
+                business_message=f"{message} 重复记录数：{count}。",
+                source_id=source_key[:64] or None,
+                field_name=unit_ref[:256] or None,
+            )
+        )
+    return issues
+
+
 def _map_confirmed_row(
     row: Mapping[str, object],
     mappings: Sequence[ConfirmedFieldMapping],
@@ -223,6 +366,8 @@ def _map_confirmed_row(
     values: dict[str, object] = {}
     for mapping in mappings:
         value = row.get(mapping.source_field)
+        if isinstance(value, Mapping) and value.get("__formula__") is True:
+            raise RowNormalizationError("formula_value_not_materialized", mapping.target_field)
         if value in (None, "") and "[]." in mapping.source_field:
             value = row.get(mapping.source_field.rsplit("[].", 1)[-1])
         if value in (None, ""):

@@ -50,6 +50,11 @@ async def smoke() -> None:
             "city_id,city_name,demand_quantity,latitude,longitude\ncity-1,Jakarta,10,-6.2,106.8\n",
             encoding="utf-8",
         )
+        (workspace / "warehouse.csv").write_text(
+            "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,latitude,longitude,is_existing\n"
+            "wh-1,Jakarta Center,center,city-1,Jakarta,-6.2,106.8,true\n",
+            encoding="utf-8",
+        )
         data_parameters = StdioServerParameters(
             command=sys.executable,
             args=["-m", "supply_chain_planner.data.server"],
@@ -77,12 +82,10 @@ async def smoke() -> None:
                     session.call_tool("discover_workspace_sources", {}, meta=meta), timeout=10
                 )
                 assert discovered.isError is not True
-                source = discovered.structuredContent["sources"][0]
-                relative_path = source["relative_path"]
                 profiled = await asyncio.wait_for(
                     session.call_tool(
                         "inspect_workspace_sources",
-                        {"relative_paths": [relative_path]},
+                        {"relative_paths": ["network.csv", "warehouse.csv"]},
                         meta=meta,
                     ),
                     timeout=10,
@@ -102,11 +105,17 @@ async def smoke() -> None:
                         {
                             "inspection_identity": inspection["inspection_identity"],
                             "inspected_relative_paths": inspection["inspected_relative_paths"],
-                            "confirmed_sources": [
+                            "source_selections": [
                                 {
                                     "relative_path": "network.csv",
+                                    "unit_ref": "table",
                                     "role": "demand",
-                                }
+                                },
+                                {
+                                    "relative_path": "warehouse.csv",
+                                    "unit_ref": "table",
+                                    "role": "existing_warehouse",
+                                },
                             ],
                             "country_code": "ID",
                             "output_relative_path": "outputs/warehouse-network/prepared/smoke.json",
@@ -152,9 +161,10 @@ async def smoke() -> None:
                             "inspected_relative_paths": blocked_profile[
                                 "inspected_relative_paths"
                             ],
-                            "confirmed_sources": [
+                            "source_selections": [
                                 {
                                     "relative_path": "warehouses-missing-type.csv",
+                                    "unit_ref": "table",
                                     "role": "existing_warehouse",
                                 }
                             ],
@@ -171,7 +181,7 @@ async def smoke() -> None:
                 assert blocked.structuredContent["outcome"] == "needs_input"
                 assert blocked.structuredContent["next_action"] == "request_user_input"
                 assert blocked.structuredContent["retryable"] is False
-                assert blocked.structuredContent["prepared_input_relative_path"] is None
+                assert "prepared_input_relative_path" not in blocked.structuredContent
                 assert not (workspace / "outputs/warehouse-network/prepared/blocked.json").exists()
         planning_parameters = StdioServerParameters(
             command=sys.executable,

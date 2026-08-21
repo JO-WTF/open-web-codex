@@ -71,38 +71,55 @@ class ConfirmedFieldDecision(StrictModel):
     factor: Decimal | None = None
 
 
-class ConfirmedSourceInputDecision(StrictModel):
-    """One caller decision before required-field completeness is resolved."""
+class SourceSelection(StrictModel):
+    """One exact inspected source unit selected for one business role."""
 
     relative_path: str = Field(min_length=1, max_length=1024)
+    unit_ref: str = Field(min_length=1, max_length=512)
     role: SourceRole
     mappings: list[ConfirmedFieldDecision] = Field(default_factory=list, max_length=64)
 
     @model_validator(mode="after")
-    def validate_role_mapping_shape(self) -> ConfirmedSourceInputDecision:
+    def validate_role_mapping_shape(self) -> SourceSelection:
         if self.role == SourceRole.ADMINISTRATIVE_CATALOG:
             raise ValueError("administrative catalog is prepared by the geography tool")
-        if not self.mappings:
-            return self
         allowed = set(TARGET_ALIASES[self.role])
         targets = [mapping.target_field for mapping in self.mappings]
         sources = [mapping.source_field for mapping in self.mappings]
         unknown = sorted(set(targets) - allowed)
         if unknown:
             raise ValueError(
-                "confirmed target fields are not allowed for "
+                "source selection target fields are not allowed for "
                 f"{self.role.value}: {', '.join(unknown)}; allowed: "
                 f"{', '.join(sorted(allowed))}"
             )
         if len(set(targets)) != len(targets):
-            raise ValueError("confirmed target fields must be unique")
+            raise ValueError("source selection target fields must be unique")
         if len(set(sources)) != len(sources):
-            raise ValueError("confirmed source fields must be unique")
+            raise ValueError("source selection source fields must be unique")
+        for mapping in self.mappings:
+            constant_transform = mapping.transform in {
+                TransformKind.DIVIDE_CONSTANT,
+                TransformKind.MULTIPLY_CONSTANT,
+            }
+            if constant_transform and (mapping.factor is None or mapping.factor <= 0):
+                raise ValueError("source selection transform factor must be positive")
+            if not constant_transform and mapping.factor is not None:
+                raise ValueError("source selection transform factor is only valid for constants")
+            if mapping.transform in {
+                TransformKind.ADMINISTRATIVE_LOOKUP,
+                TransformKind.COORDINATE_LOOKUP,
+            }:
+                raise ValueError("source selection transform requires a geography tool")
         return self
 
 
-class ConfirmedSourceDecision(ConfirmedSourceInputDecision):
-    """Complete mapping persisted in one prepared network input."""
+class ConfirmedSourceDecision(StrictModel):
+    """Internal v1 prepared-file mapping until prepared v2 provenance lands."""
+
+    relative_path: str = Field(min_length=1, max_length=1024)
+    role: SourceRole
+    mappings: list[ConfirmedFieldDecision] = Field(default_factory=list, max_length=64)
 
     @model_validator(mode="after")
     def validate_required_role_mapping(self) -> ConfirmedSourceDecision:
@@ -143,10 +160,15 @@ class DataSourceRequirement(StrictModel):
         "required_fields_missing",
         "source_role_confirmation_required",
         "field_mapping_confirmation_required",
+        "source_data_invalid",
+        "source_duplicate_conflict",
+        "business_rule_unknown",
     ]
     relative_path: str = Field(min_length=1, max_length=1024)
+    unit_ref: str = Field(min_length=1, max_length=512)
     candidate_roles: list[SourceRole] = Field(min_length=1, max_length=5)
     missing_required_fields: list[str] = Field(max_length=16)
+    field_name: str | None = Field(default=None, max_length=256)
     question: str = Field(min_length=1, max_length=400)
 
     @model_validator(mode="after")
@@ -211,17 +233,28 @@ class CandidateWarehouseSummary(StrictModel):
     city_name: str = Field(min_length=1, max_length=256)
 
 
-class DataPreparationToolResult(StrictModel):
-    """The only Data-to-Network handoff: one exact Workspace input file."""
+class PreparationRoleCounts(StrictModel):
+    demand: int = Field(ge=0)
+    existing_warehouse: int = Field(ge=0)
+    candidate_warehouse: int = Field(ge=0)
+    current_assignment: int = Field(ge=0)
+    route_quote: int = Field(ge=0)
+    provided_route_fact: int = Field(ge=0)
 
-    outcome: Literal["prepared", "needs_input"]
+
+class DataPreparationReady(StrictModel):
+    outcome: Literal["ready"]
+    operation: Literal["created"]
     summary: str
-    next_action: Literal["handoff", "prepare_geography", "request_user_input"]
+    next_action: Literal["handoff", "prepare_geography"]
     retryable: Literal[False]
-    requirements: list[DataSourceRequirement] = Field(max_length=500)
-    prepared_input_relative_path: str | None = Field(max_length=1024)
-    input_identity: PlanningInputIdentity | None
-    state: Literal["ready", "needs_input", "needs_geography"]
+    prepared_input_relative_path: str = Field(min_length=1, max_length=1024)
+    input_identity: PlanningInputIdentity
+    state: Literal["ready", "needs_geography"]
+    role_counts: PreparationRoleCounts
+    warnings: list[str] = Field(max_length=64)
+    warning_count: int = Field(ge=0)
+    warnings_truncated: bool
     issue_count: int = Field(ge=0)
     issues: list[DataQualityIssue] = Field(max_length=64)
     issues_truncated: bool
@@ -230,31 +263,58 @@ class DataPreparationToolResult(StrictModel):
     candidate_warehouses_truncated: bool
 
     @model_validator(mode="after")
-    def validate_preparation_outcome(self) -> DataPreparationToolResult:
-        if self.outcome == "needs_input":
-            if (
-                self.state != "needs_input"
-                or self.next_action != "request_user_input"
-                or not self.requirements
-                or self.prepared_input_relative_path is not None
-                or self.input_identity is not None
-            ):
-                raise ValueError("blocked_preparation_outcome_invalid")
-            return self
-        if (
-            self.prepared_input_relative_path is None
-            or self.input_identity is None
-            or self.requirements
+    def validate_bounded_counts(self) -> DataPreparationReady:
+        if len(self.warnings) != min(self.warning_count, 64):
+            raise ValueError("warning_count_bounded_length_mismatch")
+        if self.warnings_truncated != (self.warning_count > 64):
+            raise ValueError("warning_count_truncation_mismatch")
+        if len(self.issues) != min(self.issue_count, 64):
+            raise ValueError("issue_count_bounded_length_mismatch")
+        if self.issues_truncated != (self.issue_count > 64):
+            raise ValueError("issue_count_truncation_mismatch")
+        if len(self.candidate_warehouses) != min(self.candidate_warehouse_count, 64):
+            raise ValueError("candidate_count_bounded_length_mismatch")
+        if self.candidate_warehouses_truncated != (
+            self.candidate_warehouse_count > 64
         ):
-            raise ValueError("prepared_outcome_invalid")
-        expected_action = {
-            "ready": "handoff",
-            "needs_input": "request_user_input",
-            "needs_geography": "prepare_geography",
-        }[self.state]
-        if self.next_action != expected_action:
-            raise ValueError("prepared_next_action_invalid")
+            raise ValueError("candidate_count_truncation_mismatch")
         return self
+
+
+class DataPreparationNeedsInput(StrictModel):
+    outcome: Literal["needs_input"]
+    summary: str
+    next_action: Literal["request_user_input"]
+    retryable: Literal[False]
+    requirements: list[DataSourceRequirement] = Field(min_length=1, max_length=64)
+    requirement_count: int = Field(ge=1)
+    requirements_truncated: bool
+
+    @model_validator(mode="after")
+    def validate_requirement_count(self) -> DataPreparationNeedsInput:
+        if len(self.requirements) != min(self.requirement_count, 64):
+            raise ValueError("requirement_count_bounded_length_mismatch")
+        if self.requirements_truncated != (self.requirement_count > 64):
+            raise ValueError("requirement_count_truncation_mismatch")
+        return self
+
+
+class DataPreparationSourceChanged(StrictModel):
+    outcome: Literal["source_changed"]
+    summary: str
+    next_action: Literal["reinspect"]
+    retryable: Literal[False]
+
+
+class DataPreparationToolResult(
+    RootModel[
+        Annotated[
+            DataPreparationReady | DataPreparationNeedsInput | DataPreparationSourceChanged,
+            Field(discriminator="outcome"),
+        ]
+    ]
+):
+    """Discriminated Data-to-Network preparation result."""
 
 
 class RouteMatrixPreparationToolResult(StrictModel):

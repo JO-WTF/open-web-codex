@@ -8,12 +8,17 @@ from types import SimpleNamespace
 import pytest
 from open_web_codex_provider import ProviderContractError, ResourceStore
 from openpyxl import Workbook
+from pydantic import ValidationError
 from supply_chain_planner.data import server as data_server
 from supply_chain_planner.data.mapping import SourceRole
 from supply_chain_planner.shared.models import (
-    ConfirmedSourceDecision,
+    DataPreparationNeedsInput,
+    DataPreparationReady,
     DataPreparationToolResult,
+    DataSourceRequirement,
+    PreparationRoleCounts,
     SourceInspectionIdentity,
+    SourceSelection,
 )
 from supply_chain_planner.shared.resources import SupplyChainResources
 
@@ -34,11 +39,12 @@ def _context(workspace) -> SimpleNamespace:
     return SimpleNamespace(request_context=SimpleNamespace(meta=meta))
 
 
-def _decisions() -> list[ConfirmedSourceDecision]:
+def _decisions() -> list[SourceSelection]:
     return [
-        ConfirmedSourceDecision(relative_path="demand.csv", role=SourceRole.DEMAND),
-        ConfirmedSourceDecision(
+        SourceSelection(relative_path="demand.csv", unit_ref="table", role=SourceRole.DEMAND),
+        SourceSelection(
             relative_path="warehouses.csv",
+            unit_ref="table",
             role=SourceRole.EXISTING_WAREHOUSE,
         ),
     ]
@@ -62,27 +68,40 @@ def test_data_server_exposes_workspace_preparation_not_cross_agent_data_resource
     assert set(prepare.inputSchema["required"]) == {
         "inspection_identity",
         "inspected_relative_paths",
-        "confirmed_sources",
+        "source_selections",
         "country_code",
         "output_relative_path",
     }
-    assert set(prepare.outputSchema["required"]) == {
+    assert "confirmed_sources" not in prepare.inputSchema["properties"]
+    assert prepare.inputSchema["properties"]["source_selections"]["minItems"] == 1
+    assert prepare.inputSchema["properties"]["source_selections"]["maxItems"] == 640
+    assert prepare.outputSchema["discriminator"]["propertyName"] == "outcome"
+    assert set(prepare.outputSchema["discriminator"]["mapping"]) == {
+        "ready",
+        "needs_input",
+        "source_changed",
+    }
+    assert "prepared" not in prepare.outputSchema["discriminator"]["mapping"]
+    needs_input_schema = prepare.outputSchema["$defs"]["DataPreparationNeedsInput"]
+    assert "prepared_input_relative_path" not in needs_input_schema["properties"]
+    assert "input_identity" not in needs_input_schema["properties"]
+    assert {"requirement_count", "requirements_truncated"} <= set(
+        needs_input_schema["properties"]
+    )
+    ready_schema = prepare.outputSchema["$defs"]["DataPreparationReady"]
+    assert {"warning_count", "warnings_truncated"} <= set(ready_schema["properties"])
+    source_changed_schema = prepare.outputSchema["$defs"]["DataPreparationSourceChanged"]
+    assert set(source_changed_schema["required"]) == {
         "outcome",
         "summary",
         "next_action",
         "retryable",
-        "requirements",
-        "prepared_input_relative_path",
-        "input_identity",
-        "state",
-        "issue_count",
-        "issues",
-        "issues_truncated",
-        "candidate_warehouse_count",
-        "candidate_warehouses",
-        "candidate_warehouses_truncated",
     }
-    assert "resource_ref" not in prepare.outputSchema["properties"]
+    assert all(
+        "resource_ref" not in definition.get("properties", {})
+        for definition in prepare.outputSchema["$defs"].values()
+        if isinstance(definition, dict)
+    )
 
     inspect_tool = tools["inspect_workspace_sources"]
     inspection_schema = inspect_tool.outputSchema
@@ -187,25 +206,109 @@ def test_missing_warehouse_type_is_typed_non_retryable_user_input(
         ctx,
     )
 
-    assert blocked.outcome == "needs_input"
-    assert blocked.state == "needs_input"
-    assert blocked.next_action == "request_user_input"
-    assert blocked.retryable is False
-    assert blocked.prepared_input_relative_path is None
-    assert blocked.input_identity is None
-    assert [item.model_dump(mode="json") for item in blocked.requirements] == [
+    blocked_payload = blocked.model_dump(mode="json", by_alias=True)
+    assert blocked_payload["outcome"] == "needs_input"
+    assert blocked_payload["next_action"] == "request_user_input"
+    assert blocked_payload["retryable"] is False
+    assert "prepared_input_relative_path" not in blocked_payload
+    assert "input_identity" not in blocked_payload
+    assert blocked_payload["requirements"] == [
         {
             "code": "required_fields_missing",
             "relative_path": "warehouses.csv",
+            "unit_ref": "table",
             "candidate_roles": ["existing_warehouse"],
             "missing_required_fields": ["warehouse_type"],
+            "field_name": None,
             "question": (
-                "文件 warehouses.csv 缺少仓型字段 warehouse_type。"
-                "请在源数据中补充该列，每行使用 center 或 cross_docking，然后再继续。"
+                "文件 warehouses.csv 的单元 table 缺少仓型字段 warehouse_type。"
+                "请补充该列，每行使用 center 或 cross_docking，然后再继续。"
             ),
         }
     ]
     assert not (tmp_path / output_path).exists()
+
+
+def test_needs_input_summary_and_requirements_are_bounded_with_total_count() -> None:
+    requirements = [
+        DataSourceRequirement(
+            code="source_data_invalid",
+            relative_path="source.csv",
+            unit_ref=f"table-{index}",
+            candidate_roles=[SourceRole.DEMAND],
+            missing_required_fields=[],
+            question=f"问题 {index}",
+        )
+        for index in range(70)
+    ]
+    payload = data_server._needs_input_result(requirements).model_dump(mode="json", by_alias=True)
+    assert payload["requirement_count"] == 70
+    assert payload["requirements_truncated"] is True
+    assert len(payload["requirements"]) == 64
+    assert len(payload["summary"]) < 500
+
+
+def test_preparation_bounded_count_contract_rejects_underfilled_or_wrong_flags() -> None:
+    requirement = {
+        "code": "source_data_invalid",
+        "relative_path": "source.csv",
+        "unit_ref": "table",
+        "candidate_roles": ["demand"],
+        "missing_required_fields": [],
+        "field_name": None,
+        "question": "修正选中来源。",
+    }
+    needs_input = {
+        "outcome": "needs_input",
+        "summary": "发现问题。",
+        "next_action": "request_user_input",
+        "retryable": False,
+        "requirements": [requirement],
+        "requirement_count": 1,
+        "requirements_truncated": False,
+    }
+    for count, items, truncated in ((2, [requirement], False), (10, [requirement] * 9, True), (1, [requirement], True)):
+        with pytest.raises(ValidationError):
+            DataPreparationNeedsInput.model_validate(
+                {**needs_input, "requirements": items, "requirement_count": count, "requirements_truncated": truncated}
+            )
+
+    ready = {
+        "outcome": "ready",
+        "operation": "created",
+        "summary": "完成。",
+        "next_action": "handoff",
+        "retryable": False,
+        "prepared_input_relative_path": "outputs/warehouse-network/prepared/x.json",
+        "input_identity": {"content_sha256": "0" * 64},
+        "state": "ready",
+        "role_counts": PreparationRoleCounts(
+            demand=0,
+            existing_warehouse=0,
+            candidate_warehouse=0,
+            current_assignment=0,
+            route_quote=0,
+            provided_route_fact=0,
+        ).model_dump(mode="json"),
+        "warnings": [],
+        "warning_count": 0,
+        "warnings_truncated": False,
+        "issue_count": 0,
+        "issues": [],
+        "issues_truncated": False,
+        "candidate_warehouse_count": 0,
+        "candidate_warehouses": [],
+        "candidate_warehouses_truncated": False,
+    }
+    for field, value in (
+        ("warning_count", 1),
+        ("issue_count", 1),
+        ("candidate_warehouse_count", 1),
+    ):
+        with pytest.raises(ValidationError):
+            DataPreparationReady.model_validate({**ready, field: value})
+    with pytest.raises(ValidationError):
+        DataPreparationReady.model_validate({**ready, "warnings_truncated": True})
 
 
 def test_source_profile_distinguishes_preview_samples_from_exact_total(
@@ -251,9 +354,10 @@ def test_source_profile_distinguishes_preview_samples_from_exact_total(
             inspection_identity,
             inspected_paths,
             [
-                ConfirmedSourceDecision(
-                    relative_path="candidate.csv",
-                    role=SourceRole.CANDIDATE_WAREHOUSE,
+                    SourceSelection(
+                        relative_path="candidate.csv",
+                        unit_ref="table",
+                        role=SourceRole.CANDIDATE_WAREHOUSE,
                 )
             ],
             "ID",
@@ -265,8 +369,9 @@ def test_source_profile_distinguishes_preview_samples_from_exact_total(
         inspection_identity,
         inspected_paths,
         [
-            ConfirmedSourceDecision(
+            SourceSelection(
                 relative_path="candidate.csv",
+                unit_ref="table",
                 role=SourceRole.CANDIDATE_WAREHOUSE,
             )
         ],
@@ -274,13 +379,9 @@ def test_source_profile_distinguishes_preview_samples_from_exact_total(
         f"{PREPARED_OUTPUT_DIR}/candidate-catalog.json",
         _context(tmp_path),
     )
-    assert prepared.candidate_warehouse_count == 12
-    assert prepared.candidate_warehouses_truncated is False
-    assert any(
-        warehouse.warehouse_id == "WH-CANDIDATE-BALIKPAPAN"
-        and warehouse.city_name == "Balikpapan"
-        for warehouse in prepared.candidate_warehouses
-    )
+    prepared_payload = prepared.model_dump(mode="json", by_alias=True)
+    assert prepared_payload["outcome"] == "needs_input"
+    assert any(item["code"] == "source_data_invalid" for item in prepared_payload["requirements"])
 
 
 def test_current_mock_sources_have_no_global_false_demand_blockers(tmp_path, monkeypatch) -> None:
@@ -318,14 +419,74 @@ def test_current_mock_sources_have_no_global_false_demand_blockers(tmp_path, mon
     assert assessments["candidate-warehouses.csv"][0]["role"] == "candidate_warehouse"
 
 
+def test_current_mock_sources_prepare_from_full_units_and_keep_preview_tail_rows(
+    tmp_path, monkeypatch
+) -> None:
+    fixture_root = Path(__file__).parents[3] / "apps/web/scripts/fixtures/warehouse-network/mock_data"
+    selected_names = {
+        "administrative-areas.json",
+        "candidate-warehouses.csv",
+        "demand-cities.csv",
+        "existing-warehouses.csv",
+        "route-quotes.csv",
+    }
+    for path in fixture_root.iterdir():
+        if path.name in selected_names:
+            (tmp_path / path.name).write_bytes(path.read_bytes())
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    inspected = data_server.inspect_workspace_sources(sorted(selected_names), ctx)
+    assert inspected.structuredContent is not None
+    profile = inspected.structuredContent
+    selections = [
+        SourceSelection(relative_path="demand-cities.csv", unit_ref="table", role=SourceRole.DEMAND),
+        SourceSelection(
+            relative_path="existing-warehouses.csv",
+            unit_ref="table",
+            role=SourceRole.EXISTING_WAREHOUSE,
+        ),
+        SourceSelection(
+            relative_path="candidate-warehouses.csv",
+            unit_ref="table",
+            role=SourceRole.CANDIDATE_WAREHOUSE,
+        ),
+        SourceSelection(relative_path="route-quotes.csv", unit_ref="table", role=SourceRole.ROUTE_QUOTE),
+    ]
+    result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(profile["inspection_identity"]),
+        profile["inspected_relative_paths"],
+        selections,
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/mock-full.json",
+        ctx,
+        administrative_catalog_relative_path="administrative-areas.json",
+    )
+    payload = result.model_dump(mode="json", by_alias=True)
+    assert payload["outcome"] == "ready"
+    assert payload["role_counts"] == {
+        "demand": 50,
+        "existing_warehouse": 11,
+        "candidate_warehouse": 12,
+        "current_assignment": 0,
+        "route_quote": 580,
+        "provided_route_fact": 580,
+    }
+    prepared = json.loads(
+        (tmp_path / payload["prepared_input_relative_path"]).read_text(encoding="utf-8")
+    )
+    assert len(prepared["demand_cities"]) == 50
+    assert len(prepared["warehouses"]) == 23
+    assert any(item["city_name"] == "Balikpapan" for item in prepared["warehouses"])
+
+
 def test_xlsx_and_json_units_are_not_aggregated(tmp_path, monkeypatch) -> None:
     workbook = Workbook()
     workbook.active.title = "需求"
     workbook.active.append(["city_id", "city_name", "demand_quantity"])
     workbook.active.append(["C-1", "Jakarta", 10])
     warehouses = workbook.create_sheet("仓库")
-    warehouses.append(["warehouse_id", "warehouse_name", "warehouse_type", "city_id", "city_name"])
-    warehouses.append(["W-1", "Jakarta", "center", "C-1", "Jakarta"])
+    warehouses.append(["warehouse_id", "warehouse_name", "warehouse_type", "city_id", "city_name", "is_existing"])
+    warehouses.append(["W-1", "Jakarta", "center", "C-1", "Jakarta", True])
     workbook.save(tmp_path / "network.xlsx")
     (tmp_path / "nested.json").write_text(
         json.dumps(
@@ -360,6 +521,551 @@ def test_xlsx_and_json_units_are_not_aggregated(tmp_path, monkeypatch) -> None:
         "path": "$.payload.nested[*].tags",
         "array_prefix": "payload.nested.item.tags",
     }
+    xlsx_inspected = data_server.inspect_workspace_sources(["network.xlsx"], object())
+    assert xlsx_inspected.structuredContent is not None
+    xlsx_profile = xlsx_inspected.structuredContent
+    xlsx_result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(xlsx_profile["inspection_identity"]),
+        xlsx_profile["inspected_relative_paths"],
+        [
+            SourceSelection(relative_path="network.xlsx", unit_ref="sheet:需求", role=SourceRole.DEMAND),
+            SourceSelection(
+                relative_path="network.xlsx", unit_ref="sheet:仓库", role=SourceRole.EXISTING_WAREHOUSE
+            ),
+        ],
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/sheets.json",
+        _context(tmp_path),
+    )
+    assert xlsx_result.model_dump(mode="json", by_alias=True)["outcome"] == "ready"
+
+
+def test_explicit_mapping_handles_chinese_and_random_headers_without_name_inference(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "random.csv").write_text(
+        "甲,乙,丙,丁,戊,己,庚\n"
+        "C-1,Jakarta,10,-6.2,106.8,,\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "opaque.csv").write_text(
+        "a1,a2,a3,a4,a5,a6\n"
+        "WH-1,Jakarta Center,center,C-1,Jakarta,true\n",
+        encoding="utf-8",
+    )
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    inspected = data_server.inspect_workspace_sources(["random.csv", "opaque.csv"], ctx)
+    assert inspected.structuredContent is not None
+    profile = inspected.structuredContent
+    selections = [
+        SourceSelection(
+            relative_path="random.csv",
+            unit_ref="table",
+            role=SourceRole.DEMAND,
+            mappings=[
+                {"source_field": "甲", "target_field": "city_id", "transform": "trim"},
+                {"source_field": "乙", "target_field": "city_name", "transform": "trim"},
+                {"source_field": "丙", "target_field": "demand_quantity", "transform": "parse_integer"},
+                {"source_field": "丁", "target_field": "latitude", "transform": "parse_decimal"},
+                {"source_field": "戊", "target_field": "longitude", "transform": "parse_decimal"},
+            ],
+        ),
+        SourceSelection(
+            relative_path="opaque.csv",
+            unit_ref="table",
+            role=SourceRole.EXISTING_WAREHOUSE,
+            mappings=[
+                {"source_field": "a1", "target_field": "warehouse_id", "transform": "trim"},
+                {"source_field": "a2", "target_field": "warehouse_name", "transform": "trim"},
+                {"source_field": "a3", "target_field": "warehouse_type", "transform": "normalize_warehouse_type"},
+                {"source_field": "a4", "target_field": "city_id", "transform": "trim"},
+                {"source_field": "a5", "target_field": "city_name", "transform": "trim"},
+                {"source_field": "a6", "target_field": "is_existing", "transform": "parse_boolean"},
+            ],
+        ),
+    ]
+    result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(profile["inspection_identity"]),
+        profile["inspected_relative_paths"],
+        selections,
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/opaque-mapped.json",
+        ctx,
+    )
+    payload = result.model_dump(mode="json", by_alias=True)
+    assert payload["outcome"] == "ready"
+    assert payload["role_counts"]["demand"] == 1
+    assert payload["role_counts"]["existing_warehouse"] == 1
+
+
+def test_one_csv_unit_can_supply_multiple_selected_roles_without_duplicate_reads(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "combined.csv").write_text(
+        "city_id,city_name,demand_quantity,warehouse_id,warehouse_name,warehouse_type,is_existing\n"
+        "C-1,Jakarta,10,W-1,Jakarta Center,center,true\n",
+        encoding="utf-8",
+    )
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    inspected = data_server.inspect_workspace_sources(["combined.csv"], ctx)
+    assert inspected.structuredContent is not None
+    profile = inspected.structuredContent
+    result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(profile["inspection_identity"]),
+        profile["inspected_relative_paths"],
+        [
+            SourceSelection(
+                relative_path="combined.csv",
+                unit_ref="table",
+                role=SourceRole.DEMAND,
+                mappings=[
+                    {"source_field": "city_id", "target_field": "city_id", "transform": "trim"},
+                    {"source_field": "city_name", "target_field": "city_name", "transform": "trim"},
+                    {"source_field": "demand_quantity", "target_field": "demand_quantity", "transform": "parse_integer"},
+                ],
+            ),
+            SourceSelection(
+                relative_path="combined.csv",
+                unit_ref="table",
+                role=SourceRole.EXISTING_WAREHOUSE,
+                mappings=[
+                    {"source_field": "warehouse_id", "target_field": "warehouse_id", "transform": "trim"},
+                    {"source_field": "warehouse_name", "target_field": "warehouse_name", "transform": "trim"},
+                    {"source_field": "warehouse_type", "target_field": "warehouse_type", "transform": "normalize_warehouse_type"},
+                    {"source_field": "city_id", "target_field": "city_id", "transform": "trim"},
+                    {"source_field": "city_name", "target_field": "city_name", "transform": "trim"},
+                ],
+            ),
+        ],
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/combined.json",
+        ctx,
+    )
+    payload = result.model_dump(mode="json", by_alias=True)
+    assert payload["outcome"] == "ready"
+    assert payload["role_counts"]["demand"] == 1
+    assert payload["role_counts"]["existing_warehouse"] == 1
+
+
+def test_nested_json_array_unit_is_read_exactly_and_unselected_array_is_ignored(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "nested.json").write_text(
+        json.dumps(
+            {
+                "payload": {
+                    "demand": [{"x": "C-1", "y": "Jakarta", "q": 10}],
+                    "unselected": [{"x": "BAD", "y": "Ignore", "q": "invalid"}],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "warehouse.csv").write_text(
+        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,is_existing\n"
+        "WH-1,Jakarta Center,center,C-1,Jakarta,true\n",
+        encoding="utf-8",
+    )
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    inspected = data_server.inspect_workspace_sources(["nested.json", "warehouse.csv"], ctx)
+    assert inspected.structuredContent is not None
+    profile = inspected.structuredContent
+    selections = [
+        SourceSelection(
+            relative_path="nested.json",
+            unit_ref="$.payload.demand",
+            role=SourceRole.DEMAND,
+            mappings=[
+                {"source_field": "x", "target_field": "city_id", "transform": "trim"},
+                {"source_field": "y", "target_field": "city_name", "transform": "trim"},
+                {"source_field": "q", "target_field": "demand_quantity", "transform": "parse_integer"},
+            ],
+        ),
+        SourceSelection(
+            relative_path="warehouse.csv", unit_ref="table", role=SourceRole.EXISTING_WAREHOUSE
+        ),
+    ]
+    result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(profile["inspection_identity"]),
+        profile["inspected_relative_paths"],
+        selections,
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/nested.json.input.json",
+        ctx,
+    )
+    payload = result.model_dump(mode="json", by_alias=True)
+    assert payload["outcome"] == "ready"
+    prepared = json.loads((tmp_path / payload["prepared_input_relative_path"]).read_text())
+    assert [item["city_id"] for item in prepared["demand_cities"]] == ["C-1"]
+
+
+def test_selected_full_data_invalid_value_outside_preview_is_needs_input_no_write(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "demand.csv").write_text(
+        "city_id,city_name,demand_quantity\nC-1,Jakarta,10\n", encoding="utf-8"
+    )
+    rows = [
+        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,is_existing\n",
+        "W-1,Jakarta,center,C-1,Jakarta,true\n",
+        "W-2,Jakarta 2,center,C-1,Jakarta,true\n",
+        "W-3,Jakarta 3,center,C-1,Jakarta,true\n",
+        "W-4,Jakarta 4,not-a-type,C-1,Jakarta,true\n",
+    ]
+    (tmp_path / "warehouse.csv").write_text("".join(rows), encoding="utf-8")
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    profile = data_server.inspect_workspace_sources(["demand.csv", "warehouse.csv"], ctx)
+    assert profile.structuredContent is not None
+    inspection = profile.structuredContent
+    result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(inspection["inspection_identity"]),
+        inspection["inspected_relative_paths"],
+        [
+            SourceSelection(relative_path="demand.csv", unit_ref="table", role=SourceRole.DEMAND),
+            SourceSelection(
+                relative_path="warehouse.csv", unit_ref="table", role=SourceRole.EXISTING_WAREHOUSE
+            ),
+        ],
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/invalid-tail.json",
+        ctx,
+    )
+    payload = result.model_dump(mode="json", by_alias=True)
+    assert payload["outcome"] == "needs_input"
+    assert any(item["code"] == "source_data_invalid" for item in payload["requirements"])
+    assert not (tmp_path / f"{PREPARED_OUTPUT_DIR}/invalid-tail.json").exists()
+
+
+def test_source_changed_covers_missing_selected_file_without_writing(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "demand.csv").write_text(
+        "city_id,city_name,demand_quantity\nC-1,Jakarta,10\n", encoding="utf-8"
+    )
+    (tmp_path / "warehouse.csv").write_text(
+        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name\n"
+        "W-1,Jakarta,center,C-1,Jakarta\n",
+        encoding="utf-8",
+    )
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    profile = data_server.inspect_workspace_sources(["demand.csv", "warehouse.csv"], ctx)
+    assert profile.structuredContent is not None
+    inspection = profile.structuredContent
+    (tmp_path / "warehouse.csv").unlink()
+    result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(inspection["inspection_identity"]),
+        inspection["inspected_relative_paths"],
+        [
+            SourceSelection(relative_path="demand.csv", unit_ref="table", role=SourceRole.DEMAND),
+            SourceSelection(
+                relative_path="warehouse.csv", unit_ref="table", role=SourceRole.EXISTING_WAREHOUSE
+            ),
+        ],
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/missing-source.json",
+        ctx,
+    )
+    assert result.model_dump(mode="json", by_alias=True)["outcome"] == "source_changed"
+    assert not (tmp_path / f"{PREPARED_OUTPUT_DIR}/missing-source.json").exists()
+
+
+def test_invalid_source_unit_field_and_required_mapping_are_contract_errors(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "demand.csv").write_text(
+        "city_id,city_name,demand_quantity\nC-1,Jakarta,10\n", encoding="utf-8"
+    )
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    profile = data_server.inspect_workspace_sources(["demand.csv"], ctx)
+    assert profile.structuredContent is not None
+    inspection = profile.structuredContent
+    identity = SourceInspectionIdentity.model_validate(inspection["inspection_identity"])
+    paths = inspection["inspected_relative_paths"]
+    base = dict(
+        inspection_identity=identity,
+        inspected_relative_paths=paths,
+        country_code="ID",
+        output_relative_path=f"{PREPARED_OUTPUT_DIR}/invalid.json",
+        ctx=ctx,
+    )
+    with pytest.raises(ProviderContractError, match="source_unit_ref_invalid"):
+        data_server.prepare_network_input(
+            **base,
+            source_selections=[
+                SourceSelection(relative_path="demand.csv", unit_ref="$.missing", role=SourceRole.DEMAND)
+            ],
+        )
+    with pytest.raises(ProviderContractError, match="source_selection_field_invalid"):
+        data_server.prepare_network_input(
+            **base,
+            source_selections=[
+                SourceSelection(
+                    relative_path="demand.csv",
+                    unit_ref="table",
+                    role=SourceRole.DEMAND,
+                    mappings=[
+                        {"source_field": "not_a_field", "target_field": "city_id", "transform": "trim"},
+                        {"source_field": "city_name", "target_field": "city_name", "transform": "trim"},
+                        {"source_field": "demand_quantity", "target_field": "demand_quantity", "transform": "parse_integer"},
+                    ],
+                )
+            ],
+        )
+    with pytest.raises(ProviderContractError, match="source_selection_required_mapping_missing"):
+        data_server.prepare_network_input(
+            **base,
+            source_selections=[
+                SourceSelection(
+                    relative_path="demand.csv",
+                    unit_ref="table",
+                    role=SourceRole.DEMAND,
+                    mappings=[
+                        {"source_field": "city_id", "target_field": "city_id", "transform": "trim"},
+                        {"source_field": "city_name", "target_field": "city_name", "transform": "trim"},
+                    ],
+                )
+            ],
+        )
+
+
+def test_xlsx_selected_sheet_formula_is_a_full_data_blocker(tmp_path, monkeypatch) -> None:
+    workbook = Workbook()
+    demand = workbook.active
+    demand.title = "demand"
+    demand.append(["city_id", "city_name", "demand_quantity"])
+    demand.append(["C-1", "Jakarta", 10])
+    warehouse = workbook.create_sheet("warehouse")
+    warehouse.append(["warehouse_id", "warehouse_name", "warehouse_type", "city_id", "city_name", "is_existing"])
+    warehouse.append(["W-1", "Jakarta", "=\"center\"", "C-1", "Jakarta", True])
+    workbook.save(tmp_path / "formula.xlsx")
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    profile = data_server.inspect_workspace_sources(["formula.xlsx"], ctx)
+    assert profile.structuredContent is not None
+    inspection = profile.structuredContent
+    result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(inspection["inspection_identity"]),
+        inspection["inspected_relative_paths"],
+        [
+            SourceSelection(relative_path="formula.xlsx", unit_ref="sheet:demand", role=SourceRole.DEMAND),
+            SourceSelection(
+                relative_path="formula.xlsx", unit_ref="sheet:warehouse", role=SourceRole.EXISTING_WAREHOUSE
+            ),
+        ],
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/formula.json",
+        ctx,
+    )
+    payload = result.model_dump(mode="json", by_alias=True)
+    assert payload["outcome"] == "needs_input"
+    assert any(
+        item.get("field_name") == "warehouse_type" for item in payload["requirements"]
+    )
+    assert not (tmp_path / f"{PREPARED_OUTPUT_DIR}/formula.json").exists()
+
+
+def test_same_role_units_merge_exact_duplicates_and_block_conflicts_no_write(
+    tmp_path, monkeypatch
+) -> None:
+    demand_header = "city_id,city_name,demand_quantity,longitude,latitude\n"
+    demand_row = "C-1,Jakarta,10,106.8,-6.2\n"
+    (tmp_path / "demand-a.csv").write_text(demand_header + demand_row, encoding="utf-8")
+    (tmp_path / "demand-b.csv").write_text(demand_header + demand_row, encoding="utf-8")
+    (tmp_path / "warehouse.csv").write_text(
+        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,is_existing,longitude,latitude\n"
+        "W-1,Jakarta,center,C-1,Jakarta,true,106.8,-6.2\n",
+        encoding="utf-8",
+    )
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    profile = data_server.inspect_workspace_sources(
+        ["demand-a.csv", "demand-b.csv", "warehouse.csv"], ctx
+    ).structuredContent
+    selections = [
+        SourceSelection(relative_path="demand-a.csv", unit_ref="table", role=SourceRole.DEMAND),
+        SourceSelection(relative_path="demand-b.csv", unit_ref="table", role=SourceRole.DEMAND),
+        SourceSelection(relative_path="warehouse.csv", unit_ref="table", role=SourceRole.EXISTING_WAREHOUSE),
+    ]
+    result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(profile["inspection_identity"]),
+        profile["inspected_relative_paths"],
+        selections,
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/duplicate.json",
+        ctx,
+    )
+    payload = result.model_dump(mode="json", by_alias=True)
+    assert payload["outcome"] == "ready"
+    assert any("重复记录数：1" in warning for warning in payload["warnings"])
+
+    (tmp_path / "demand-b.csv").write_text(
+        demand_header + "C-1,Surabaya,10,106.8,-6.2\n", encoding="utf-8"
+    )
+    conflict_profile = data_server.inspect_workspace_sources(
+        ["demand-a.csv", "demand-b.csv", "warehouse.csv"], ctx
+    ).structuredContent
+    conflict = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(conflict_profile["inspection_identity"]),
+        conflict_profile["inspected_relative_paths"],
+        selections,
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/conflict.json",
+        ctx,
+    )
+    conflict_payload = conflict.model_dump(mode="json", by_alias=True)
+    assert conflict_payload["outcome"] == "needs_input"
+    assert any(
+        item["code"] == "source_duplicate_conflict"
+        and item["relative_path"] == "demand-b.csv"
+        for item in conflict_payload["requirements"]
+    )
+    assert not (tmp_path / f"{PREPARED_OUTPUT_DIR}/conflict.json").exists()
+
+
+def test_geography_error_is_attributed_to_warehouse_unit_not_first_demand_unit(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "demand.csv").write_text(
+        "city_id,city_name,demand_quantity\nC-1,Jakarta,10\n", encoding="utf-8"
+    )
+    (tmp_path / "warehouse.csv").write_text(
+        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,is_existing\n"
+        "W-1,Unknown,center,C-2,Unknown,true\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "admin.json").write_text(
+        json.dumps(
+            {
+                "country_code": "ID",
+                "admin_level": "city",
+                "rows": [
+                    {
+                        "city_id": "C-1",
+                        "city_name": "Jakarta",
+                        "longitude": 106.8,
+                        "latitude": -6.2,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    profile = data_server.inspect_workspace_sources(
+        ["demand.csv", "warehouse.csv", "admin.json"], ctx
+    ).structuredContent
+    result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(profile["inspection_identity"]),
+        profile["inspected_relative_paths"],
+        [
+            SourceSelection(relative_path="demand.csv", unit_ref="table", role=SourceRole.DEMAND),
+            SourceSelection(relative_path="warehouse.csv", unit_ref="table", role=SourceRole.EXISTING_WAREHOUSE),
+        ],
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/geo-error.json",
+        ctx,
+        administrative_catalog_relative_path="admin.json",
+    )
+    payload = result.model_dump(mode="json", by_alias=True)
+    assert payload["outcome"] == "needs_input"
+    assert all(item["relative_path"] == "warehouse.csv" for item in payload["requirements"])
+    assert all(item["candidate_roles"] == ["existing_warehouse"] for item in payload["requirements"])
+    assert not (tmp_path / f"{PREPARED_OUTPUT_DIR}/geo-error.json").exists()
+
+
+def test_candidate_geography_error_is_attributed_to_candidate_unit(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "demand.csv").write_text(
+        "city_id,city_name,demand_quantity\nC-1,Jakarta,10\n", encoding="utf-8"
+    )
+    (tmp_path / "candidate.csv").write_text(
+        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,is_existing\n"
+        "W-CAND,Unknown,center,C-2,Unknown,false\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "admin.json").write_text(
+        json.dumps(
+            {
+                "country_code": "ID",
+                "admin_level": "city",
+                "rows": [
+                    {
+                        "city_id": "C-1",
+                        "city_name": "Jakarta",
+                        "longitude": 106.8,
+                        "latitude": -6.2,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    profile = data_server.inspect_workspace_sources(
+        ["demand.csv", "candidate.csv", "admin.json"], ctx
+    ).structuredContent
+    result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(profile["inspection_identity"]),
+        profile["inspected_relative_paths"],
+        [
+            SourceSelection(relative_path="demand.csv", unit_ref="table", role=SourceRole.DEMAND),
+            SourceSelection(relative_path="candidate.csv", unit_ref="table", role=SourceRole.CANDIDATE_WAREHOUSE),
+        ],
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/candidate-geo-error.json",
+        ctx,
+        administrative_catalog_relative_path="admin.json",
+    )
+    payload = result.model_dump(mode="json", by_alias=True)
+    assert payload["outcome"] == "needs_input"
+    assert all(item["relative_path"] == "candidate.csv" for item in payload["requirements"])
+    assert all(item["candidate_roles"] == ["candidate_warehouse"] for item in payload["requirements"])
+    assert not (tmp_path / f"{PREPARED_OUTPUT_DIR}/candidate-geo-error.json").exists()
+
+
+def test_administrative_catalog_exception_is_attributed_to_admin_document(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "demand.csv").write_text(
+        "city_id,city_name,demand_quantity\nC-1,Jakarta,10\n", encoding="utf-8"
+    )
+    (tmp_path / "warehouse.csv").write_text(
+        "warehouse_id,warehouse_name,warehouse_type,city_id,city_name,is_existing\n"
+        "W-1,Jakarta,center,C-1,Jakarta,true\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "bad-admin.json").write_text(json.dumps({"rows": []}), encoding="utf-8")
+    _use_store(tmp_path, monkeypatch)
+    ctx = _context(tmp_path)
+    profile = data_server.inspect_workspace_sources(
+        ["demand.csv", "warehouse.csv", "bad-admin.json"], ctx
+    ).structuredContent
+    result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(profile["inspection_identity"]),
+        profile["inspected_relative_paths"],
+        [
+            SourceSelection(relative_path="demand.csv", unit_ref="table", role=SourceRole.DEMAND),
+            SourceSelection(relative_path="warehouse.csv", unit_ref="table", role=SourceRole.EXISTING_WAREHOUSE),
+        ],
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/bad-admin.json",
+        ctx,
+        administrative_catalog_relative_path="bad-admin.json",
+    )
+    payload = result.model_dump(mode="json", by_alias=True)
+    assert payload["outcome"] == "needs_input"
+    assert payload["requirements"][0]["relative_path"] == "bad-admin.json"
+    assert payload["requirements"][0]["candidate_roles"] == ["administrative_catalog"]
+    assert not (tmp_path / f"{PREPARED_OUTPUT_DIR}/bad-admin.json").exists()
 
 
 def test_inspection_limits_are_explicit_selection_errors(tmp_path, monkeypatch) -> None:
@@ -471,25 +1177,28 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
         ctx,
     )
     assert isinstance(result, DataPreparationToolResult)
-    assert result.state == "needs_geography"
-    assert result.prepared_input_relative_path == f"{PREPARED_OUTPUT_DIR}/prepared-input.json"
-    payload = json.loads((tmp_path / result.prepared_input_relative_path).read_text())
+    result_payload = result.model_dump(mode="json", by_alias=True)
+    assert result_payload["outcome"] == "ready"
+    assert result_payload["state"] == "needs_geography"
+    assert result_payload["prepared_input_relative_path"] == f"{PREPARED_OUTPUT_DIR}/prepared-input.json"
+    payload = json.loads((tmp_path / result_payload["prepared_input_relative_path"]).read_text())
     assert payload["schemaVersion"] == "prepared_network_input.v1"
     assert all(source["mappings"] for source in payload["confirmed_sources"])
     assert payload["issues"]
-    assert result.input_identity.content_sha256
+    assert result_payload["input_identity"]["content_sha256"]
 
     geography = data_server.prepare_network_geography(
-        result.prepared_input_relative_path,
+        result_payload["prepared_input_relative_path"],
         "admin.json",
         f"{PREPARED_OUTPUT_DIR}/prepared-input-geography.json",
         ctx,
     )
-    assert geography.state == "ready"
-    enriched = json.loads((tmp_path / geography.prepared_input_relative_path).read_text())
+    geography_payload = geography.model_dump(mode="json", by_alias=True)
+    assert geography_payload["state"] == "ready"
+    enriched = json.loads((tmp_path / geography_payload["prepared_input_relative_path"]).read_text())
     assert enriched["demand_cities"][0]["longitude"] == 106.8
-    assert enriched["parent_input_identity"] == result.input_identity.model_dump(mode="json")
-    assert geography.input_identity != result.input_identity
+    assert enriched["parent_input_identity"] == result_payload["input_identity"]
+    assert geography_payload["input_identity"] != result_payload["input_identity"]
 
     atomic = data_server.prepare_network_input(
         inspection_identity,
@@ -500,14 +1209,16 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
         ctx,
         administrative_catalog_relative_path="admin.json",
     )
-    assert atomic.state == "ready"
-    atomic_payload = json.loads((tmp_path / atomic.prepared_input_relative_path).read_text())
+    atomic_payload_result = atomic.model_dump(mode="json", by_alias=True)
+    assert atomic_payload_result["state"] == "ready"
+    atomic_payload = json.loads((tmp_path / atomic_payload_result["prepared_input_relative_path"]).read_text())
     assert atomic_payload["demand_cities"][0]["longitude"] == 106.8
     assert atomic_payload["parent_input_identity"] is None
 
-    manual_demand = ConfirmedSourceDecision.model_validate(
+    manual_demand = SourceSelection.model_validate(
         {
             "relative_path": "demand.csv",
+            "unit_ref": "table",
             "role": "demand",
             "mappings": [
                 {
@@ -523,19 +1234,16 @@ def test_prepare_input_writes_a_complete_auditable_workspace_document(
             ],
         }
     )
-    with pytest.raises(
-        ValueError,
-        match="confirmed_mappings_not_allowed_for_unambiguous_source",
-    ):
-        data_server.prepare_network_input(
-            inspection_identity,
-            inspected_paths,
-            [manual_demand, _decisions()[1]],
-            "ID",
-            f"{PREPARED_OUTPUT_DIR}/prepared-input-manual.json",
-            ctx,
-            administrative_catalog_relative_path="admin.json",
-        )
+    explicit_result = data_server.prepare_network_input(
+        inspection_identity,
+        inspected_paths,
+        [manual_demand, _decisions()[1]],
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/prepared-input-manual.json",
+        ctx,
+        administrative_catalog_relative_path="admin.json",
+    )
+    assert explicit_result.model_dump(mode="json", by_alias=True)["outcome"] == "ready"
 
     with pytest.raises(ProviderContractError, match="workspace_file_invalid"):
         data_server.prepare_network_input(
@@ -566,8 +1274,9 @@ def test_candidate_changes_require_a_complete_new_workspace_preparation(
         inspection["inspection_identity"]
     )
     inspected_paths = inspection["inspected_relative_paths"]
-    candidate = ConfirmedSourceDecision(
+    candidate = SourceSelection(
         relative_path="candidate.csv",
+        unit_ref="table",
         role=SourceRole.CANDIDATE_WAREHOUSE,
     )
 
@@ -579,10 +1288,9 @@ def test_candidate_changes_require_a_complete_new_workspace_preparation(
         f"{PREPARED_OUTPUT_DIR}/candidate-only-preparation.json",
         ctx,
     )
-    assert result.prepared_input_relative_path == (
-        f"{PREPARED_OUTPUT_DIR}/candidate-only-preparation.json"
-    )
-    assert result.state == "needs_input"
+    result_payload = result.model_dump(mode="json", by_alias=True)
+    assert result_payload["outcome"] == "needs_input"
+    assert "prepared_input_relative_path" not in result_payload
     assert not hasattr(data_server, "normalize_candidate_delta")
     assert not hasattr(data_server, "derive_normalized_network_input")
 
@@ -604,31 +1312,29 @@ def test_inspection_identity_is_order_independent_and_rejects_changed_inputs(
     (tmp_path / "b.csv").write_text(
         "city_id,city_name\nCITY-2,Balikpapan changed\n", encoding="utf-8"
     )
-    with pytest.raises(ProviderContractError, match="source_inspection_changed") as byte_error:
-        data_server.prepare_network_input(
-            SourceInspectionIdentity.model_validate(first_identity),
-            ["a.csv", "b.csv"],
-            [],
-            "ID",
-            f"{PREPARED_OUTPUT_DIR}/must-not-write.json",
-            ctx,
-        )
-    assert byte_error.value.code == "source_inspection_changed"
+    byte_result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(first_identity),
+        ["a.csv", "b.csv"],
+        [SourceSelection(relative_path="a.csv", unit_ref="table", role=SourceRole.DEMAND)],
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/must-not-write.json",
+        ctx,
+    )
+    assert byte_result.model_dump(mode="json", by_alias=True)["outcome"] == "source_changed"
     assert not (tmp_path / f"{PREPARED_OUTPUT_DIR}/must-not-write.json").exists()
 
     (tmp_path / "c.csv").write_text(
         "city_id,city_name\nCITY-3,Surabaya\n", encoding="utf-8"
     )
-    with pytest.raises(ProviderContractError, match="source_inspection_changed") as path_set_error:
-        data_server.prepare_network_input(
-            SourceInspectionIdentity.model_validate(first_identity),
-            ["a.csv", "b.csv", "c.csv"],
-            [],
-            "ID",
-            f"{PREPARED_OUTPUT_DIR}/must-not-write-path-set.json",
-            ctx,
-        )
-    assert path_set_error.value.code == "source_inspection_changed"
+    path_set_result = data_server.prepare_network_input(
+        SourceInspectionIdentity.model_validate(first_identity),
+        ["a.csv", "b.csv", "c.csv"],
+        [SourceSelection(relative_path="a.csv", unit_ref="table", role=SourceRole.DEMAND)],
+        "ID",
+        f"{PREPARED_OUTPUT_DIR}/must-not-write-path-set.json",
+        ctx,
+    )
+    assert path_set_result.model_dump(mode="json", by_alias=True)["outcome"] == "source_changed"
     assert not (tmp_path / f"{PREPARED_OUTPUT_DIR}/must-not-write-path-set.json").exists()
 
 

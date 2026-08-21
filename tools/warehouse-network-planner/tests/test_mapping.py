@@ -10,13 +10,14 @@ from supply_chain_planner.data.mapping import (
 )
 from supply_chain_planner.shared.models import (
     ConfirmedSourceDecision,
-    ConfirmedSourceInputDecision,
+    SourceSelection,
 )
 
 
 def test_confirmed_mapping_rejects_unknown_duplicate_and_missing_targets() -> None:
     base = {
         "relative_path": "demand.csv",
+        "unit_ref": "table",
         "role": "demand",
         "mappings": [
             {
@@ -33,12 +34,20 @@ def test_confirmed_mapping_rejects_unknown_duplicate_and_missing_targets() -> No
             "not allowed",
         ),
         ([*base["mappings"], base["mappings"][0]], "must be unique"),
-        (base["mappings"][:-1], "missing required fields"),
     ):
         with pytest.raises(ValidationError, match=message):
-            ConfirmedSourceDecision.model_validate({**base, "mappings": mappings})
+            SourceSelection.model_validate({**base, "mappings": mappings})
 
-    incomplete = ConfirmedSourceInputDecision.model_validate(
+    with pytest.raises(ValidationError, match="missing required fields"):
+        ConfirmedSourceDecision.model_validate(
+            {
+                key: value
+                for key, value in {**base, "mappings": base["mappings"][:-1]}.items()
+                if key != "unit_ref"
+            }
+        )
+
+    incomplete = SourceSelection.model_validate(
         {**base, "mappings": base["mappings"][:-1]}
     )
     assert [mapping.target_field for mapping in incomplete.mappings] == ["city_id", "city_name"]
@@ -109,3 +118,34 @@ def test_pure_mapping_marks_multiple_aliases_ambiguous() -> None:
 
     assert demand.ambiguous is True
     assert city_mapping.source_fields == ("city_id", "city_code")
+
+
+def test_source_selection_rejects_nonpositive_or_external_transform_factors() -> None:
+    base = {
+        "relative_path": "quotes.csv",
+        "unit_ref": "table",
+        "role": "route_quote",
+        "mappings": [
+            {
+                "source_field": "price",
+                "target_field": "price_per_vehicle",
+                "transform": "divide_constant",
+                "factor": -2,
+            },
+        ],
+    }
+    with pytest.raises(ValidationError, match="factor must be positive"):
+        SourceSelection.model_validate(base)
+    with pytest.raises(ValidationError, match="geography tool"):
+        SourceSelection.model_validate(
+            {
+                **base,
+                "mappings": [
+                    {
+                        "source_field": "price",
+                        "target_field": "price_per_vehicle",
+                        "transform": "administrative_lookup",
+                    }
+                ],
+            }
+        )

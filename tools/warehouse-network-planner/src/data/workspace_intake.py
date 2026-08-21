@@ -15,6 +15,7 @@ import json
 import re
 import stat
 import zipfile
+from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
@@ -643,73 +644,115 @@ def _xlsx_shared_strings(archive: zipfile.ZipFile) -> list[str]:
     return ["".join(node.itertext())[:MAX_JSON_STRING] for node in root]
 
 
-def read_rows(root: Path, relative_path: str) -> list[dict[str, Any]]:
-    """Read bounded records from one validated Workspace-relative path."""
+def read_unit_rows(
+    root: Path,
+    relative_path: str,
+    unit_ref: str,
+    *,
+    locator: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Read every record from one exact inspection-owned source unit."""
+
     path = _validated_source_path(root, relative_path)
     suffix = path.suffix.lower()
     if suffix == ".csv":
-        sample = decode_text(_read_prefix(path, 256 * 1024)).splitlines()[:20]
-        try:
-            delimiter = csv.Sniffer().sniff("\n".join(sample[:10]), delimiters=",;\t|").delimiter
-        except csv.Error:
-            delimiter = ","
-        with path.open("rb") as binary:
-            text_stream = io.TextIOWrapper(
-                binary, encoding=detect_encoding(_read_prefix(path, 64 * 1024)), errors="strict"
-            )
-            rows = csv.DictReader(text_stream, delimiter=delimiter)
-            bounded = [
-                {str(key).strip(): value for key, value in row.items() if key is not None}
-                for row in itertools.islice(rows, MAX_NORMALIZE_ROWS + 1)
-            ]
-            if len(bounded) > MAX_NORMALIZE_ROWS:
-                raise ValueError("source_row_limit_exceeded")
-            return bounded
+        if unit_ref != "table":
+            raise ValueError("source_unit_not_found")
+        return _read_csv_rows(path)
+    if suffix == ".xlsx":
+        sheet_name = locator.get("sheet")
+        if not isinstance(sheet_name, str) or not sheet_name:
+            raise ValueError("source_unit_not_found")
+        return _read_xlsx_sheet_rows(path, sheet_name)
     if suffix == ".json":
-        records: list[dict[str, Any]] = []
-        with path.open("rb") as stream:
-            for prefix in ("item", "rows.item", "orders.item", "records.item", "data.item"):
-                stream.seek(0)
-                try:
-                    for value in ijson.items(stream, prefix):
-                        if isinstance(value, dict):
-                            records.append(value)
-                            if len(records) > MAX_NORMALIZE_ROWS:
-                                raise ValueError("source_row_limit_exceeded")
-                    if records:
-                        break
-                except ijson.common.IncompleteJSONError as error:
-                    raise ValueError("invalid_json") from error
-        return records
-    workbook = load_workbook(path, read_only=True, data_only=True, keep_links=False)
-    records: list[dict[str, Any]] = []
+        array_prefix = locator.get("array_prefix")
+        if not isinstance(array_prefix, str):
+            raise ValueError("source_unit_not_found")
+        return _read_json_array_rows(path, array_prefix)
+    raise ValueError("source_unit_not_found")
+
+
+def _read_csv_rows(path: Path) -> list[dict[str, Any]]:
+    sample = decode_text(_read_prefix(path, 256 * 1024)).splitlines()[:20]
     try:
-        if len(workbook.worksheets) > MAX_XLSX_SHEETS:
-            raise ValueError("xlsx_sheet_limit_exceeded")
-        for worksheet in workbook.worksheets:
-            rows = worksheet.iter_rows(values_only=True)
-            header = next(rows, None)
-            if not header:
+        delimiter = csv.Sniffer().sniff("\n".join(sample[:10]), delimiters=",;\t|").delimiter
+    except csv.Error:
+        delimiter = ","
+    with path.open("rb") as binary:
+        text_stream = io.TextIOWrapper(
+            binary, encoding=detect_encoding(_read_prefix(path, 64 * 1024)), errors="strict"
+        )
+        rows = csv.DictReader(text_stream, delimiter=delimiter)
+        headers = [str(header).strip() for header in rows.fieldnames or []]
+        if len(headers) != len(set(headers)):
+            raise ValueError("source_unit_duplicate_columns")
+        bounded = [
+            {str(key).strip(): value for key, value in row.items() if key is not None}
+            for row in itertools.islice(rows, MAX_NORMALIZE_ROWS + 1)
+        ]
+        if len(bounded) > MAX_NORMALIZE_ROWS:
+            raise ValueError("source_row_limit_exceeded")
+        return bounded
+
+
+def _read_xlsx_sheet_rows(path: Path, sheet_name: str) -> list[dict[str, Any]]:
+    workbook = load_workbook(path, read_only=True, data_only=False, keep_links=False)
+    try:
+        worksheet = next(
+            (item for item in workbook.worksheets if item.title == sheet_name), None
+        )
+        if worksheet is None:
+            raise ValueError("source_unit_not_found")
+        rows = worksheet.iter_rows(values_only=False)
+        header_cells = next(rows, None)
+        header = [cell.value for cell in header_cells] if header_cells else None
+        if not header:
+            return []
+        if len(header) > MAX_XLSX_COLUMNS:
+            raise ValueError("source_column_limit_exceeded")
+        columns = [str(value or "").strip() for value in header]
+        if len([column for column in columns if column]) != len(set(column for column in columns if column)):
+            raise ValueError("source_unit_duplicate_columns")
+        records: list[dict[str, Any]] = []
+        for cells in rows:
+            values = [
+                {
+                    "__formula__": True,
+                    "display": str(cell.value)[:MAX_JSON_STRING],
+                }
+                if cell.data_type == "f" or (isinstance(cell.value, str) and cell.value.startswith("="))
+                else cell.value
+                for cell in cells
+            ]
+            if not any(value not in (None, "") for value in values):
                 continue
-            if len(header) > MAX_XLSX_COLUMNS:
-                raise ValueError("source_column_limit_exceeded")
-            columns = [str(value or "").strip() for value in header]
-            for values in rows:
-                if not any(value not in (None, "") for value in values):
-                    continue
-                record = {
+            records.append(
+                {
                     column: values[index] if index < len(values) else ""
                     for index, column in enumerate(columns)
                     if column
                 }
-                qualified = {
-                    f"{worksheet.title}::{column}": value for column, value in record.items()
-                }
-                records.append({**qualified, **record, "__sheet_name": worksheet.title})
-                if len(records) > MAX_NORMALIZE_ROWS:
-                    raise ValueError("source_row_limit_exceeded")
+            )
+            if len(records) > MAX_NORMALIZE_ROWS:
+                raise ValueError("source_row_limit_exceeded")
+        return records
     finally:
         workbook.close()
+
+
+def _read_json_array_rows(path: Path, array_prefix: str) -> list[dict[str, Any]]:
+    item_prefix = "item" if not array_prefix else f"{array_prefix}.item"
+    records: list[dict[str, Any]] = []
+    with path.open("rb") as stream:
+        try:
+            for value in ijson.items(stream, item_prefix):
+                if not isinstance(value, dict):
+                    raise ValueError("source_unit_item_not_object")
+                records.append(value)
+                if len(records) > MAX_NORMALIZE_ROWS:
+                    raise ValueError("source_row_limit_exceeded")
+        except ijson.common.IncompleteJSONError as error:
+            raise ValueError("invalid_json") from error
     return records
 
 

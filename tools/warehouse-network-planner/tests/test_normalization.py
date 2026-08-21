@@ -67,7 +67,14 @@ def test_pure_normalization_accepts_verified_rows_without_case_or_io() -> None:
     assert [item.warehouse_id for item in batch.warehouses] == ["WH-1"]
     assert batch.warehouses[0].is_existing is True
     assert batch.warehouses[0].is_fixed is None
-    assert set(ConfirmedSourceRows.__dataclass_fields__) == {"role", "rows", "mappings"}
+    assert set(ConfirmedSourceRows.__dataclass_fields__) == {
+        "role",
+        "rows",
+        "mappings",
+        "relative_path",
+        "unit_ref",
+        "selection_key",
+    }
 
     without_coordinates = [
         ConfirmedSourceRows(
@@ -237,3 +244,114 @@ def test_incomplete_provided_route_fact_rejects_the_entire_route_row() -> None:
     assert batch.route_quotes == []
     assert batch.provided_route_facts == []
     assert "provided_route_fact_incomplete" in {issue.code for issue in batch.issues}
+
+
+def test_same_role_duplicate_records_are_bounded_and_deterministic() -> None:
+    mapping = [
+        _mapping("city_id", TransformKind.NORMALIZE_IDENTIFIER),
+        _mapping("city_name", TransformKind.TRIM),
+        _mapping("demand_quantity", TransformKind.PARSE_INTEGER),
+        _mapping("longitude", TransformKind.PARSE_DECIMAL),
+        _mapping("latitude", TransformKind.PARSE_DECIMAL),
+    ]
+    def source(key: str) -> ConfirmedSourceRows:
+        return ConfirmedSourceRows(
+            role=SourceRole.DEMAND,
+            rows=[
+                {
+                    "city_id": "C-1",
+                    "city_name": "Jakarta",
+                    "demand_quantity": "10",
+                    "longitude": "106.8",
+                    "latitude": "-6.2",
+                }
+            ],
+            mappings=mapping,
+            relative_path=f"{key}.csv",
+            unit_ref="table",
+            selection_key=key,
+        )
+    warehouse = ConfirmedSourceRows(
+        role=SourceRole.EXISTING_WAREHOUSE,
+        rows=[
+            {
+                "warehouse_id": "W-1",
+                "warehouse_name": "Jakarta",
+                "warehouse_type": "center",
+                "city_id": "C-1",
+                "city_name": "Jakarta",
+                "longitude": "106.8",
+                "latitude": "-6.2",
+            }
+        ],
+        mappings=[
+            _mapping("warehouse_id", TransformKind.NORMALIZE_IDENTIFIER),
+            _mapping("warehouse_name", TransformKind.TRIM),
+            _mapping("warehouse_type", TransformKind.NORMALIZE_WAREHOUSE_TYPE),
+            _mapping("city_id", TransformKind.NORMALIZE_IDENTIFIER),
+            _mapping("city_name", TransformKind.TRIM),
+            _mapping("longitude", TransformKind.PARSE_DECIMAL),
+            _mapping("latitude", TransformKind.PARSE_DECIMAL),
+        ],
+        relative_path="warehouse.csv",
+        unit_ref="table",
+        selection_key="warehouse",
+    )
+    state, batch = normalize_confirmed_rows([source("first"), source("second"), warehouse])
+    assert state == "ready"
+    duplicate_issues = [issue for issue in batch.issues if issue.code == "demand_city_duplicate_identical"]
+    assert len(duplicate_issues) == 1
+    assert "重复记录数：1" in duplicate_issues[0].business_message
+
+    conflict = source("conflict")
+    conflict.rows[0]["city_name"] = "Surabaya"
+    state, batch = normalize_confirmed_rows([source("first"), conflict, warehouse])
+    assert state == "needs_input"
+    assert len([issue for issue in batch.issues if issue.code == "demand_city_duplicate_conflict"]) == 1
+
+
+def test_network_validator_aggregates_repeated_unknown_assignment_errors() -> None:
+    demand = ConfirmedSourceRows(
+        role=SourceRole.DEMAND,
+        rows=[{"city_id": "C-1", "city_name": "Jakarta", "demand_quantity": "10"}],
+        mappings=[
+            _mapping("city_id", TransformKind.NORMALIZE_IDENTIFIER),
+            _mapping("city_name", TransformKind.TRIM),
+            _mapping("demand_quantity", TransformKind.PARSE_INTEGER),
+        ],
+    )
+    warehouse = ConfirmedSourceRows(
+        role=SourceRole.EXISTING_WAREHOUSE,
+        rows=[
+            {
+                "warehouse_id": "W-1",
+                "warehouse_name": "Jakarta",
+                "warehouse_type": "center",
+                "city_id": "C-1",
+                "city_name": "Jakarta",
+            }
+        ],
+        mappings=[
+            _mapping("warehouse_id", TransformKind.NORMALIZE_IDENTIFIER),
+            _mapping("warehouse_name", TransformKind.TRIM),
+            _mapping("warehouse_type", TransformKind.NORMALIZE_WAREHOUSE_TYPE),
+            _mapping("city_id", TransformKind.NORMALIZE_IDENTIFIER),
+            _mapping("city_name", TransformKind.TRIM),
+        ],
+    )
+    assignments = ConfirmedSourceRows(
+        role=SourceRole.CURRENT_ASSIGNMENT,
+        rows=[
+            {"demand_city_id": f"UNKNOWN-{index}", "serving_warehouse_id": "W-1"}
+            for index in range(100)
+        ],
+        mappings=[
+            _mapping("demand_city_id", TransformKind.NORMALIZE_IDENTIFIER),
+            _mapping("serving_warehouse_id", TransformKind.NORMALIZE_IDENTIFIER),
+        ],
+    )
+    state, batch = normalize_confirmed_rows([demand, warehouse, assignments])
+    assert state == "needs_input"
+    errors = [issue for issue in batch.issues if issue.code == "assignment_demand_unknown"]
+    assert len(errors) == 1
+    assert "问题记录数：100" in errors[0].business_message

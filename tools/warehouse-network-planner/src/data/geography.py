@@ -114,13 +114,13 @@ def enrich_network_geography(
     if not isinstance(catalog_rows, list):
         raise ValueError("administrative_catalog_rows_missing")
     selected_overrides = overrides or {}
-    issues: list[DataQualityIssue] = []
+    issue_counts: dict[tuple[str, str], tuple[int, str, str]] = {}
     enriched_demands = [
         _enrich_demand_city(
             record,
             catalog,
             selected_overrides.get(("demand", record.city_id)),
-            issues,
+            issue_counts,
         )
         for record in demand_cities
     ]
@@ -129,7 +129,7 @@ def enrich_network_geography(
             record,
             catalog,
             selected_overrides.get(("warehouse", record.warehouse_id)),
-            issues,
+            issue_counts,
         )
         for record in warehouses
     ]
@@ -138,14 +138,14 @@ def enrich_network_geography(
         if candidate_level is not None
         else []
     )
-    return enriched_demands, enriched_warehouses, candidates, issues
+    return enriched_demands, enriched_warehouses, candidates, _materialize_issues(issue_counts)
 
 
 def _enrich_demand_city(
     record: DemandCityRecord,
     catalog: dict[str, Any],
     override_city_id: str | None,
-    issues: list[DataQualityIssue],
+    issue_counts: dict[tuple[str, str], tuple[int, str, str]],
 ) -> DemandCityRecord:
     match = _resolve_record_place(
         record.city_id,
@@ -154,7 +154,7 @@ def _enrich_demand_city(
         catalog,
         "demand",
         record.city_id,
-        issues,
+        issue_counts,
     )
     if match is None:
         return record
@@ -175,16 +175,16 @@ def _enrich_warehouse(
     record: WarehouseRecord,
     catalog: dict[str, Any],
     override_city_id: str | None,
-    issues: list[DataQualityIssue],
+    issue_counts: dict[tuple[str, str], tuple[int, str, str]],
 ) -> WarehouseRecord:
     match = _resolve_record_place(
         record.city_id,
         record.city_name,
         override_city_id,
         catalog,
-        "warehouse",
+        "existing_warehouse" if record.is_existing else "candidate_warehouse",
         record.warehouse_id,
-        issues,
+        issue_counts,
     )
     if match is None:
         return record
@@ -206,9 +206,9 @@ def _resolve_record_place(
     city_name: str,
     override_city_id: str | None,
     catalog: dict[str, Any],
-    entity: Literal["demand", "warehouse"],
+    entity: Literal["demand", "existing_warehouse", "candidate_warehouse"],
     entity_id: str,
-    issues: list[DataQualityIssue],
+    issue_counts: dict[tuple[str, str], tuple[int, str, str]],
 ) -> dict[str, Any] | None:
     if override_city_id is not None:
         exact = next(
@@ -220,13 +220,11 @@ def _resolve_record_place(
             None,
         )
         if exact is None:
-            issues.append(
-                DataQualityIssue(
-                    code="geography_override_city_unknown",
-                    severity="error",
-                    business_message="显式选择的城市不在当前行政区目录中。",
-                    field_name=f"{entity}:{entity_id}",
-                )
+            _record_issue(
+                issue_counts,
+                "geography_override_city_unknown",
+                "行政区目录中的显式 override 城市不存在。",
+                "administrative_catalog:override",
             )
         return exact
     if city_id:
@@ -239,13 +237,11 @@ def _resolve_record_place(
             None,
         )
         if exact is None:
-            issues.append(
-                DataQualityIssue(
-                    code="geography_city_id_unknown",
-                    severity="error",
-                    business_message="记录中的城市标识不在当前行政区目录中。",
-                    field_name=f"{entity}:{entity_id}",
-                )
+            _record_issue(
+                issue_counts,
+                "geography_city_id_unknown",
+                "记录中的城市标识不在当前行政区目录中。",
+                f"{entity}:{entity_id}",
             )
         return exact
     resolution = resolve_place_names(
@@ -255,15 +251,47 @@ def _resolve_record_place(
     if resolution["ready"] and len(resolution["resolved"]) == 1:
         return resolution["resolved"][0]
     code = "geography_city_ambiguous" if resolution["ambiguous"] else "geography_city_missing"
-    issues.append(
-        DataQualityIssue(
-            code=code,
-            severity="error",
-            business_message="城市无法唯一匹配当前行政区目录。",
-            field_name=f"{entity}:{entity_id}",
-        )
+    _record_issue(
+        issue_counts,
+        code,
+        "城市无法唯一匹配当前行政区目录。",
+        f"{entity}:{entity_id}",
     )
     return None
+
+
+def _record_issue(
+    issue_counts: dict[tuple[str, str], tuple[int, str, str]],
+    code: str,
+    message: str,
+    field_name: str,
+) -> None:
+    entity_role = field_name.split(":", 1)[0]
+    key = (code, entity_role)
+    prior = issue_counts.get(key)
+    if prior is None:
+        issue_counts[key] = (1, message, field_name)
+    else:
+        issue_counts[key] = (prior[0] + 1, prior[1], prior[2])
+
+
+def _materialize_issues(
+    issue_counts: dict[tuple[str, str], tuple[int, str, str]]
+) -> list[DataQualityIssue]:
+    issues: list[DataQualityIssue] = []
+    for (code, entity_role), (count, message, first_field) in issue_counts.items():
+        field_name = first_field
+        if count > 1 and entity_role in {"demand", "existing_warehouse", "candidate_warehouse"}:
+            field_name = f"{entity_role}:multiple"
+        issues.append(
+            DataQualityIssue(
+                code=code,
+                severity="error",
+                business_message=f"{message} 问题记录数：{count}。" if count > 1 else message,
+                field_name=field_name,
+            )
+        )
+    return issues
 
 
 def validate_points_within_boundaries(
