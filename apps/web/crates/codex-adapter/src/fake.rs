@@ -372,6 +372,7 @@ impl CodexAdapter for FakeCodexAdapter {
     async fn read_mcp_resource(
         &self,
         workspace: &AuthorizedWorkspace,
+        _copilot_package_id: Option<&str>,
         thread_id: &str,
         server: &str,
         uri: &str,

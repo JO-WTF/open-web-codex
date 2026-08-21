@@ -243,6 +243,7 @@ pub trait CodexAdapter: Send + Sync {
     async fn read_mcp_resource(
         &self,
         workspace: &AuthorizedWorkspace,
+        copilot_package_id: Option<&str>,
         thread_id: &str,
         server: &str,
         uri: &str,

@@ -47,31 +47,35 @@ fn thread_start_params(
         "historyMode": "paginated",
     });
     if let Some(execution) = execution {
-        let mut config = execution.runtime_config.clone();
-        let object = config.as_object_mut().ok_or_else(|| {
-            AdapterError::Internal(format!(
-                "Copilot package '{}' Runtime config is not an object",
-                execution.id
-            ))
-        })?;
-        object.insert("skills.include_instructions".to_string(), json!(true));
-        object.insert(
-            "skills.config".to_string(),
-            execution
-                .skill_config
-                .iter()
-                .map(|entry| {
-                    json!({
-                        "name": entry.name.as_str(),
-                        "enabled": entry.enabled,
-                    })
-                })
-                .collect::<Vec<_>>()
-                .into(),
-        );
-        params["config"] = config;
+        params["config"] = root_execution_runtime_config(execution)?;
     }
     Ok(params)
+}
+
+fn root_execution_runtime_config(execution: &RootExecutionConfig) -> Result<Value, AdapterError> {
+    let mut config = execution.runtime_config.clone();
+    let object = config.as_object_mut().ok_or_else(|| {
+        AdapterError::Internal(format!(
+            "Copilot package '{}' Runtime config is not an object",
+            execution.id
+        ))
+    })?;
+    object.insert("skills.include_instructions".to_string(), json!(true));
+    object.insert(
+        "skills.config".to_string(),
+        execution
+            .skill_config
+            .iter()
+            .map(|entry| {
+                json!({
+                    "name": entry.name.as_str(),
+                    "enabled": entry.enabled,
+                })
+            })
+            .collect::<Vec<_>>()
+            .into(),
+    );
+    Ok(config)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +143,23 @@ fn thread_fork_params(thread_id: &str, target_root: &str) -> Value {
         "cwd": target_root,
         "approvalPolicy": "on-request",
     })
+}
+
+fn thread_resume_params(
+    thread_id: &str,
+    workspace_root: &str,
+    execution: Option<&RootExecutionConfig>,
+) -> Result<Value, AdapterError> {
+    let mut params = json!({
+        "threadId": thread_id,
+        "cwd": workspace_root,
+        "approvalPolicy": "on-request",
+        "excludeTurns": true,
+    });
+    if let Some(execution) = execution {
+        params["config"] = root_execution_runtime_config(execution)?;
+    }
+    Ok(params)
 }
 
 fn agent_core_batch_write_params(
@@ -327,21 +348,20 @@ impl RealCodexAdapter {
         Ok(root.to_string_lossy().to_string())
     }
 
-    fn thread_resume_params(&self, thread_id: &str, workspace_root: &str) -> Value {
-        json!({
-            "threadId": thread_id,
-            "cwd": workspace_root,
-            "approvalPolicy": "on-request",
-            "excludeTurns": true,
-        })
-    }
-
-    fn mcp_resource_resume_params(thread_id: &str, workspace_root: &str) -> Value {
-        json!({
+    fn mcp_resource_resume_params(
+        thread_id: &str,
+        workspace_root: &str,
+        execution: Option<&RootExecutionConfig>,
+    ) -> Result<Value, AdapterError> {
+        let mut params = json!({
             "threadId": thread_id,
             "cwd": workspace_root,
             "excludeTurns": true,
-        })
+        });
+        if let Some(execution) = execution {
+            params["config"] = root_execution_runtime_config(execution)?;
+        }
+        Ok(params)
     }
 
     async fn prepare_runtime(&self) -> Result<OwnedMutexGuard<Option<uuid::Uuid>>, AdapterError> {
@@ -394,6 +414,16 @@ impl RealCodexAdapter {
         workspace: &AuthorizedWorkspace,
         thread_id: &str,
     ) -> Result<(String, OwnedMutexGuard<Option<uuid::Uuid>>), AdapterError> {
+        self.ensure_thread_bound_with_execution(workspace, thread_id, None)
+            .await
+    }
+
+    async fn ensure_thread_bound_with_execution(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+        execution: Option<&RootExecutionConfig>,
+    ) -> Result<(String, OwnedMutexGuard<Option<uuid::Uuid>>), AdapterError> {
         if thread_id.trim().is_empty() {
             return Err(AdapterError::Internal("Thread id is required".to_string()));
         }
@@ -412,7 +442,7 @@ impl RealCodexAdapter {
             .host
             .request(
                 "thread/resume",
-                self.thread_resume_params(thread_id, &workspace_root),
+                thread_resume_params(thread_id, &workspace_root, execution)?,
             )
             .await?;
         let paginated = resumed
@@ -952,11 +982,19 @@ impl CodexAdapter for RealCodexAdapter {
     async fn read_mcp_resource(
         &self,
         workspace: &AuthorizedWorkspace,
+        copilot_package_id: Option<&str>,
         thread_id: &str,
         server: &str,
         uri: &str,
     ) -> Result<Value, AdapterError> {
-        let (workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
+        let execution = self.root_execution(copilot_package_id)?;
+        let (workspace_root, _runtime) = self
+            .ensure_thread_bound_with_execution(
+                workspace,
+                thread_id,
+                execution.map(|value| &value.config),
+            )
+            .await?;
         if server.trim().is_empty() || uri.trim().is_empty() {
             return Err(AdapterError::Internal(
                 "MCP Resource server and URI are required".to_string(),
@@ -971,7 +1009,11 @@ impl CodexAdapter for RealCodexAdapter {
         self.host
             .request(
                 "thread/resume",
-                Self::mcp_resource_resume_params(thread_id, &workspace_root),
+                Self::mcp_resource_resume_params(
+                    thread_id,
+                    &workspace_root,
+                    execution.map(|value| &value.config),
+                )?,
             )
             .await?;
         self.host
@@ -2109,8 +2151,8 @@ mod tests {
         codex_bubblewrap_is_unavailable, codex_sandbox_disabled_by_environment,
         is_authorized_workspace_root, login_completion, message_parent_thread_id,
         message_thread_id, parse_runtime_thread_identity, resolve_root_skill_selections,
-        thread_spawn_parent_thread_id, thread_start_params, turn_sandbox_policy, RealCodexAdapter,
-        RootExecutionConfig, ThreadSkillConfig,
+        thread_resume_params, thread_spawn_parent_thread_id, thread_start_params,
+        turn_sandbox_policy, RealCodexAdapter, RootExecutionConfig, ThreadSkillConfig,
     };
     use crate::{AdapterError, RuntimeThreadIdentity, RuntimeThreadIdentitySidecar};
     use serde_json::{json, Value};
@@ -2504,13 +2546,38 @@ mod tests {
     }
 
     #[test]
-    fn mcp_resource_resume_rejoins_without_overriding_thread_policy() {
-        let value = RealCodexAdapter::mcp_resource_resume_params("thread-1", "/runner/workspace");
+    fn mcp_resource_resume_rejoins_with_selected_copilot_config_without_thread_policy() {
+        let execution = RootExecutionConfig {
+            id: "warehouse-network-copilot".to_string(),
+            skill_config: Vec::new(),
+            runtime_config: json!({
+                "agents.network_agent.runtime_mcp_projection": true,
+            }),
+        };
+        let value = RealCodexAdapter::mcp_resource_resume_params(
+            "thread-1",
+            "/runner/workspace",
+            Some(&execution),
+        )
+        .expect("resume params");
 
         assert_eq!(value["threadId"], "thread-1");
         assert_eq!(value["cwd"], "/runner/workspace");
         assert_eq!(value["excludeTurns"], true);
+        assert_eq!(
+            value["config"]["agents.network_agent.runtime_mcp_projection"],
+            true
+        );
+        assert_eq!(value["config"]["skills.include_instructions"], true);
         assert!(value.get("approvalPolicy").is_none());
+
+        let first_resume = thread_resume_params("thread-1", "/runner/workspace", Some(&execution))
+            .expect("first cold resume params");
+        assert_eq!(
+            first_resume["config"]["agents.network_agent.runtime_mcp_projection"],
+            true
+        );
+        assert_eq!(first_resume["approvalPolicy"], "on-request");
     }
 
     #[test]

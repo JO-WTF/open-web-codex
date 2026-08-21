@@ -67,6 +67,7 @@ pub async fn read_inline_map_source(
     let response = adapter
         .read_mcp_resource(
             &context.workspace,
+            context.copilot_package_id.as_deref(),
             &source.thread_id,
             &source.server,
             &source.uri,
@@ -344,6 +345,7 @@ struct ThreadContext {
     task_id: Uuid,
     workspace_id: Uuid,
     thread_id: String,
+    copilot_package_id: Option<String>,
     workspace: AuthorizedWorkspace,
 }
 
@@ -354,6 +356,7 @@ async fn authorized_thread(
 ) -> Result<ThreadContext, ApiError> {
     let row = sqlx::query(
         "SELECT run.task_id, run.workspace_id, run.codex_thread_id, run.requested_by, \
+                task.copilot_package_id, \
                 workspace.root_path, workspace.state \
          FROM runs run \
          JOIN tasks task ON task.id = run.task_id \
@@ -387,6 +390,7 @@ async fn authorized_thread(
         task_id: row.get("task_id"),
         workspace_id,
         thread_id,
+        copilot_package_id: row.get("copilot_package_id"),
         workspace: AuthorizedWorkspace {
             id: workspace_id.to_string(),
             root: row.get::<String, _>("root_path").into(),
@@ -404,8 +408,8 @@ async fn authorized_agent_thread(
         return Err(not_found());
     }
     let row = sqlx::query(
-        "SELECT run.task_id, run.workspace_id, run.requested_by, workspace.root_path,
-                workspace.state, agent.thread_id
+        "SELECT run.task_id, run.workspace_id, run.requested_by, task.copilot_package_id,
+                workspace.root_path, workspace.state, agent.thread_id
          FROM runs run
          JOIN tasks task ON task.id = run.task_id
            AND task.organization_id = run.organization_id
@@ -442,6 +446,7 @@ async fn authorized_agent_thread(
         task_id: row.get("task_id"),
         workspace_id,
         thread_id: row.get("thread_id"),
+        copilot_package_id: row.get("copilot_package_id"),
         workspace: AuthorizedWorkspace {
             id: workspace_id.to_string(),
             root: row.get::<String, _>("root_path").into(),
