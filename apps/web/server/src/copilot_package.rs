@@ -1757,6 +1757,8 @@ mod tests {
             assert!(role.contains("return `capability_unavailable` and stop"));
             assert!(role.contains(expected_skill));
         }
+        assert!(NETWORK_ROLE.contains("One `tool_search` authorizes only Tools returned"));
+        assert!(SINGLE_AGENT_ROOT_ROLE.contains("One `tool_search` authorizes only Tools returned"));
     }
 
     #[test]

@@ -26,6 +26,16 @@ class SourceRole(StrEnum):
     ADMINISTRATIVE_CATALOG = "administrative_catalog"
 
 
+class PlanningSourceRole(StrEnum):
+    """Roles that can define a planning inspection scope; admin is separate."""
+
+    DEMAND = "demand"
+    EXISTING_WAREHOUSE = "existing_warehouse"
+    CANDIDATE_WAREHOUSE = "candidate_warehouse"
+    CURRENT_ASSIGNMENT = "current_assignment"
+    ROUTE_QUOTE = "route_quote"
+
+
 class TransformKind(StrEnum):
     IDENTITY = "identity"
     TRIM = "trim"

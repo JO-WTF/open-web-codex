@@ -15,8 +15,10 @@ metadata:
 - 用户要求真实现状时需要 current assignment；没有它只能说明是优化现有仓足迹。
 - 已有仓默认保留。关闭已有仓必须得到用户明确许可；新增仓、候选仓和服务目标必须来自用户目标或 Tool 结果。
 - 优先使用已确认的路线事实。缺路线事实时，只有用户确认绕路系数、平均速度或导航费用后才继续。
+- 12h baseline 或地图若没有 exact `route_matrix` ref，先用 prepared 中的 provided facts 调用 `prepare_route_matrix`，拿到路线 ref 后再做 `evaluate_network_baseline`；地图交给 Map Delivery Skill。
 - 用户只给服务目标而未给仓数时，调用一次 `minimum_feasible`；用户明确给仓数时使用 `exact`。不要由 Agent 循环尝试不同仓数。
 - 报价均值只能由 Planner 对完整 prepared input 计算。只有用户明确要求脚本证据时，才执行受任务 Skill 授权的 evidence 计算；模型不得从 preview 推导均值。
+- 下一 Tool 的 deferred schema 若未出现在当前 request，先重新 `tool_search`，再调用该 Tool。
 
 ## 交接
 

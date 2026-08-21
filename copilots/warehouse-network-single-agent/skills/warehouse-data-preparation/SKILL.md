@@ -20,7 +20,7 @@ metadata:
 ## 判断
 
 1. 先 `discover_workspace_sources`。若发现可能覆盖本次目标的 prepared candidate，把 discover 返回的精确候选路径与 raw paths 一起交给 inspect，让 Tool 判定 fresh reuse；不自行构造路径或读取候选文件。
-2. 用目标角色和国家调用 `inspect_workspace_sources`。`inspected` 时按 exact unit 选择来源；唯一完整且非歧义的 alias 只作为快速路径。中文、英文缩写或随机表头只要语义和类型明确，就提交显式 mapping。
+2. 用目标角色和国家调用 `inspect_workspace_sources`；已确认的行政区 catalog 也放入 `relative_paths` 绑定本次 identity，但不放 `required_roles` 或 `source_selections`，prepare 只通过 `administrative_catalog_relative_path` 传入。`inspected` 时按 exact unit 选择来源；唯一完整且非歧义的 alias 只作为快速路径。中文、英文缩写或随机表头只要语义和类型明确，就提交显式 mapping。
 3. 只有以下情况询问一次：业务语义多义、未知单位/仓型/币种规则、选中记录缺业务值或冲突。格式名称不同、预览之外存在记录、未选来源缺字段，都不是询问理由。
 
 ## 终态与交接

@@ -6,7 +6,7 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 
-from supply_chain_planner.data.mapping import REQUIRED_FIELDS, SourceRole
+from supply_chain_planner.data.mapping import REQUIRED_FIELDS, PlanningSourceRole
 from supply_chain_planner.data.workspace_intake import (
     inspect,
     read_json_document_with_sha256,
@@ -98,7 +98,7 @@ def validate_prepared_freshness(
     workspace_root: Path,
     prepared: PreparedNetworkResource,
     *,
-    required_roles: list[SourceRole],
+    required_roles: list[PlanningSourceRole],
     country_code: str,
     allow_needs_geography: bool = False,
     check_administrative_catalog: bool = True,
@@ -111,8 +111,8 @@ def validate_prepared_freshness(
         return False, "state_not_ready"
     if prepared.country_code != country_code.upper():
         return False, "country_mismatch"
-    selected_roles = {item.role for item in prepared.source_selections}
-    if not set(required_roles) <= selected_roles:
+    selected_roles = {item.role.value for item in prepared.source_selections}
+    if not {role.value for role in required_roles} <= selected_roles:
         return False, "required_roles_missing"
     if prepared.selected_source_identity != derive_selected_source_identity(
         prepared.country_code,

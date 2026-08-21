@@ -32,6 +32,7 @@ from supply_chain_planner.data.geography import (
 from supply_chain_planner.data.mapping import (
     REQUIRED_FIELDS,
     FieldObservation,
+    PlanningSourceRole,
     SourceRole,
     SuggestedRoleAssessment,
     TransformSpec,
@@ -284,7 +285,7 @@ def discover_workspace_sources(ctx: Context) -> dict[str, Any]:
 @mcp.tool(structured_output=True, annotations=READ_ONLY_LOCAL_TOOL)
 def inspect_workspace_sources(
     relative_paths: list[str],
-    required_roles: Annotated[list[SourceRole], Field(min_length=1, max_length=5)],
+    required_roles: Annotated[list[PlanningSourceRole], Field(min_length=1, max_length=5)],
     country_code: Annotated[str, Field(pattern=r"^[A-Za-z]{2}$")],
     ctx: Context,
 ) -> Annotated[CallToolResult, DataInspectionToolResult]:
@@ -364,9 +365,9 @@ def inspect_workspace_sources(
     )
 
 
-def _canonical_required_roles(required_roles: list[SourceRole]) -> list[SourceRole]:
-    if any(role == SourceRole.ADMINISTRATIVE_CATALOG for role in required_roles):
-        raise ValueError("required_roles_must_not_include_administrative_catalog")
+def _canonical_required_roles(
+    required_roles: list[PlanningSourceRole],
+) -> list[PlanningSourceRole]:
     if len(required_roles) != len(set(required_roles)):
         raise ValueError("required_roles_must_be_unique")
     return sorted(required_roles, key=lambda role: role.value)
@@ -383,7 +384,7 @@ def _is_prepared_candidate_path(relative_path: str) -> bool:
 def _fresh_prepared_candidates(
     root: Path,
     candidate_paths: list[str],
-    required_roles: list[SourceRole],
+    required_roles: list[PlanningSourceRole],
     country_code: str,
 ) -> tuple[list[tuple[str, PreparedNetworkResource, PlanningInputIdentity]], list[str]]:
     fresh: list[tuple[str, PreparedNetworkResource, PlanningInputIdentity]] = []

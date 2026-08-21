@@ -106,6 +106,18 @@ def test_data_server_exposes_workspace_preparation_not_cross_agent_data_resource
     )
 
     inspect_tool = tools["inspect_workspace_sources"]
+    required_role_schema = inspect_tool.inputSchema["properties"]["required_roles"]
+    planning_role_definition = inspect_tool.inputSchema["$defs"][
+        required_role_schema["items"]["$ref"].split("/")[-1]
+    ]
+    assert set(planning_role_definition["enum"]) == {
+        "demand",
+        "existing_warehouse",
+        "candidate_warehouse",
+        "current_assignment",
+        "route_quote",
+    }
+    assert "administrative_catalog" not in planning_role_definition["enum"]
     inspection_schema = inspect_tool.outputSchema
     assert inspection_schema["discriminator"]["propertyName"] == "outcome"
     assert set(inspection_schema["discriminator"]["mapping"]) == {
