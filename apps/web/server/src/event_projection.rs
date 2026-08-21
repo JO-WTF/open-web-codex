@@ -2820,6 +2820,7 @@ enum PublicRuntimeErrorKind {
     Policy,
     Sandbox,
     Internal,
+    ProviderFunctionToolsUnsupported,
     Unknown,
 }
 
@@ -2843,6 +2844,11 @@ impl PublicRuntimeErrorKind {
                 "The Runtime encountered an internal error.",
                 false,
             ),
+            Self::ProviderFunctionToolsUnsupported => (
+                "provider_function_tools_unsupported",
+                "Function tools are disabled for this Provider. Enable Function tools in Provider settings.",
+                false,
+            ),
             Self::Unknown => ("unknown", "The Runtime reported an error.", false),
         }
     }
@@ -2863,6 +2869,9 @@ fn classify_codex_error_info(key: &str, status: Option<u16>) -> Option<PublicRun
         "sessionBudgetExceeded" | "usageLimitExceeded" => PublicRuntimeErrorKind::UsageLimit,
         "serverOverloaded" => PublicRuntimeErrorKind::Overloaded,
         "cyberPolicy" => PublicRuntimeErrorKind::Policy,
+        "providerFunctionToolsUnsupported" => {
+            PublicRuntimeErrorKind::ProviderFunctionToolsUnsupported
+        }
         "badRequest" => PublicRuntimeErrorKind::BadRequest,
         "sandboxError" => PublicRuntimeErrorKind::Sandbox,
         "threadRollbackFailed" => PublicRuntimeErrorKind::Internal,
@@ -4212,6 +4221,23 @@ mod tests {
                 false,
             ),
             (
+                json!({
+                    "message": "provider details <credential-fragment>",
+                    "codexErrorInfo": "badRequest"
+                }),
+                "bad_request",
+                false,
+            ),
+            (
+                json!({
+                    "message": "Provider body <credential-fragment>",
+                    "additionalDetails": "https://provider.invalid/<credential-fragment>",
+                    "codexErrorInfo": "providerFunctionToolsUnsupported"
+                }),
+                "provider_function_tools_unsupported",
+                false,
+            ),
+            (
                 json!({"message": "unknown <credential-fragment>"}),
                 "unknown",
                 false,
@@ -4226,6 +4252,71 @@ mod tests {
             assert!(!projected.to_string().contains("provider response body"));
             assert!(projected.get("additionalDetails").is_none());
         }
+    }
+
+    #[test]
+    fn projects_provider_function_tools_error_with_exact_safe_message() {
+        let projected = project_public_runtime_error(&json!({
+            "message": "Provider response body <credential-fragment>",
+            "additionalDetails": "https://provider.invalid/<credential-fragment>",
+            "codexErrorInfo": "providerFunctionToolsUnsupported",
+            "provider": "deepseek",
+        }));
+
+        assert_eq!(
+            projected,
+            json!({
+                "code": "provider_function_tools_unsupported",
+                "message": "Function tools are disabled for this Provider. Enable Function tools in Provider settings.",
+                "recoverable": false,
+                "codexErrorInfo": "providerFunctionToolsUnsupported",
+            })
+        );
+        assert!(!projected.to_string().contains("credential-fragment"));
+        assert!(!projected.to_string().contains("provider.invalid"));
+        assert!(!projected.to_string().contains("deepseek"));
+
+        assert_eq!(
+            project_public_runtime_error(&json!({
+                "codexErrorInfo": "provider_function_tools_unsupported"
+            }))["code"],
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn projects_provider_function_tools_error_for_live_and_completed_turns() {
+        let live = br#"data: {"method":"app-server-event","params":{"message":{"method":"error","params":{"threadId":"thread-1","error":{"message":"provider body <credential-fragment>","additionalDetails":"provider body","codexErrorInfo":"providerFunctionToolsUnsupported"}}}}}
+
+"#;
+        let live = project_frame(live).unwrap().unwrap();
+        assert_eq!(
+            live.payload["data"]["error"],
+            json!({
+                "code": "provider_function_tools_unsupported",
+                "message": "Function tools are disabled for this Provider. Enable Function tools in Provider settings.",
+                "recoverable": false,
+                "codexErrorInfo": "providerFunctionToolsUnsupported",
+            })
+        );
+
+        let completed = br#"data: {"method":"app-server-event","params":{"message":{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","error":{"message":"provider body <credential-fragment>","additionalDetails":"provider body","codexErrorInfo":"providerFunctionToolsUnsupported"}}}}}}
+
+"#;
+        let completed = project_frame(completed).unwrap().unwrap();
+        assert_eq!(
+            completed.payload["data"]["turn"]["error"]["code"],
+            "provider_function_tools_unsupported"
+        );
+        assert_eq!(
+            completed.payload["data"]["turn"]["error"]["message"],
+            "Function tools are disabled for this Provider. Enable Function tools in Provider settings."
+        );
+        assert!(!completed
+            .payload
+            .to_string()
+            .contains("credential-fragment"));
+        assert!(!completed.payload.to_string().contains("provider body"));
     }
 
     #[test]

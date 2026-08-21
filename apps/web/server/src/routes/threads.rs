@@ -1152,6 +1152,29 @@ mod tests {
     }
 
     #[test]
+    fn projects_provider_function_tools_history_error_without_provider_text() {
+        let projected = project_turn(&json!({
+            "id": "turn-1",
+            "status": "failed",
+            "error": {
+                "message": "provider response <credential-fragment>",
+                "additionalDetails": "https://provider.invalid/<credential-fragment>",
+                "codexErrorInfo": "providerFunctionToolsUnsupported"
+            }
+        }))
+        .expect("valid failed Turn projection");
+        let value = serde_json::to_value(projected).expect("serializable projection");
+
+        assert_eq!(
+            value["error"]["message"],
+            "Function tools are disabled for this Provider. Enable Function tools in Provider settings."
+        );
+        assert_eq!(value["error"]["additionalDetails"], serde_json::Value::Null);
+        assert!(!value.to_string().contains("credential-fragment"));
+        assert!(!value.to_string().contains("provider.invalid"));
+    }
+
+    #[test]
     fn omits_explicit_null_turn_errors() {
         let projected = project_turn(&json!({
             "id": "turn-1",
