@@ -761,11 +761,16 @@ export class CodexMonitorWebClient {
         : credentialMode === "none"
           ? { mode: "none" }
           : { mode: "preserve" };
+    const supportsFunctionTools = input.supportsFunctionTools;
+    if (supportsFunctionTools !== undefined && typeof supportsFunctionTools !== "boolean") {
+      throw new Error("supportsFunctionTools must be a boolean");
+    }
     return await this.platform.upsertProvider(id, {
       name: String(input.name ?? ""),
       baseUrl: String(input.baseUrl ?? ""),
       wireApi: typeof input.wireApi === "string" ? input.wireApi : "responses",
       credentials,
+      ...(supportsFunctionTools === undefined ? {} : { supportsFunctionTools }),
       select: input.select === true,
     });
   }

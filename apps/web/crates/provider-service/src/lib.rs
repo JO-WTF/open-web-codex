@@ -515,6 +515,7 @@ impl Default for InMemoryProviderService {
                         base_url: None,
                         env_key: Some("OPENAI_API_KEY".to_string()),
                         wire_api: "responses".to_string(),
+                        supports_function_tools: true,
                         kind: ProviderKind::BuiltIn,
                         is_current: false,
                         model_count: 1,
@@ -529,6 +530,7 @@ impl Default for InMemoryProviderService {
                         base_url: Some("http://127.0.0.1:9999/v1".to_string()),
                         env_key: None,
                         wire_api: "responses".to_string(),
+                        supports_function_tools: false,
                         kind: ProviderKind::Custom,
                         is_current: true,
                         model_count: 1,
@@ -585,6 +587,9 @@ impl ProviderOperations for InMemoryProviderService {
             provider.base_url = Some(base_url);
             provider.wire_api = request.wire_api;
             provider.env_key = env_key;
+            if let Some(supports_function_tools) = request.supports_function_tools {
+                provider.supports_function_tools = supports_function_tools;
+            }
         } else {
             catalog.data.push(ProviderSummary {
                 id: id.to_string(),
@@ -592,6 +597,7 @@ impl ProviderOperations for InMemoryProviderService {
                 base_url: Some(base_url),
                 env_key,
                 wire_api: request.wire_api,
+                supports_function_tools: request.supports_function_tools.unwrap_or(false),
                 kind: ProviderKind::Custom,
                 is_current: false,
                 model_count: 0,
@@ -1001,8 +1007,9 @@ mod tests {
 
     use super::{
         parse_model_provider_models_list, provider_model_config_from_catalog, provider_path,
-        upsert_provider_model_context, validate_base_url, validate_credentials, ProviderService,
-        ProviderServiceError, ProviderTransport, DEFAULT_REASONING_EFFORT,
+        upsert_provider_model_context, validate_base_url, validate_credentials,
+        InMemoryProviderService, ProviderOperations, ProviderService, ProviderServiceError,
+        ProviderTransport, DEFAULT_REASONING_EFFORT,
     };
     use async_trait::async_trait;
     use open_web_codex_platform_contracts::{
@@ -1052,6 +1059,7 @@ mod tests {
             "baseUrl": format!("https://{id}.example/v1"),
             "envKey": null,
             "wireApi": "chat",
+            "supportsFunctionTools": false,
             "kind": "custom",
             "isCurrent": current,
             "modelCount": models.as_array().map_or(0, Vec::len),
@@ -1060,6 +1068,89 @@ mod tests {
             "canFetchModels": true,
             "models": models,
         })
+    }
+
+    #[tokio::test]
+    async fn in_memory_provider_function_tools_defaults_and_preserves_explicit_values() {
+        let service = InMemoryProviderService::default();
+        let initial = service.list().await.expect("list default Providers");
+        assert!(
+            !initial
+                .data
+                .iter()
+                .find(|provider| provider.id == "mock")
+                .expect("mock Provider")
+                .supports_function_tools
+        );
+
+        let created = service
+            .upsert(
+                "custom",
+                UpsertProviderRequest {
+                    name: "Custom".to_string(),
+                    base_url: "https://custom.example/v1".to_string(),
+                    wire_api: "chat".to_string(),
+                    credentials: ProviderCredentialInput::NoCredential,
+                    supports_function_tools: Some(true),
+                    select: false,
+                },
+            )
+            .await
+            .expect("create Provider");
+        assert!(
+            created
+                .data
+                .iter()
+                .find(|provider| provider.id == "custom")
+                .expect("created Provider")
+                .supports_function_tools
+        );
+
+        let preserved = service
+            .upsert(
+                "custom",
+                UpsertProviderRequest {
+                    name: "Custom updated".to_string(),
+                    base_url: "https://custom.example/v2".to_string(),
+                    wire_api: "chat".to_string(),
+                    credentials: ProviderCredentialInput::Preserve,
+                    supports_function_tools: None,
+                    select: false,
+                },
+            )
+            .await
+            .expect("edit Provider while preserving capability");
+        assert!(
+            preserved
+                .data
+                .iter()
+                .find(|provider| provider.id == "custom")
+                .expect("preserved Provider")
+                .supports_function_tools
+        );
+
+        let disabled = service
+            .upsert(
+                "custom",
+                UpsertProviderRequest {
+                    name: "Custom disabled".to_string(),
+                    base_url: "https://custom.example/v3".to_string(),
+                    wire_api: "chat".to_string(),
+                    credentials: ProviderCredentialInput::Preserve,
+                    supports_function_tools: Some(false),
+                    select: false,
+                },
+            )
+            .await
+            .expect("explicitly disable capability");
+        assert!(
+            !disabled
+                .data
+                .iter()
+                .find(|provider| provider.id == "custom")
+                .expect("disabled Provider")
+                .supports_function_tools
+        );
     }
 
     fn provider_catalog_failure_wire(failure: ProviderCatalogFailure) -> &'static str {

@@ -1703,6 +1703,9 @@ pub struct ProviderSummary {
     pub base_url: Option<String>,
     pub env_key: Option<String>,
     pub wire_api: String,
+    /// Explicit configured capability for function-tool calls on this
+    /// Provider. This is a declaration, not a live capability probe.
+    pub supports_function_tools: bool,
     pub kind: ProviderKind,
     pub is_current: bool,
     pub model_count: usize,

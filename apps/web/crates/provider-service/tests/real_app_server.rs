@@ -83,7 +83,7 @@ fn upsert_request(base_url: String, api_key: &str) -> UpsertProviderRequest {
         credentials: ProviderCredentialInput::Direct {
             api_key: api_key.to_string(),
         },
-        supports_function_tools: None,
+        supports_function_tools: Some(true),
         select: true,
     }
 }
@@ -380,6 +380,16 @@ async fn secured_provider_credentials_never_enter_codex_config() {
         .expect("secured Provider remains after Profile restart");
     assert_eq!(restarted_provider.model_count, 1);
     assert_eq!(restarted_provider.models[0].model_id, "provider-one-model");
+    assert!(restarted_provider.supports_function_tools);
+    let persisted_function_tools: bool = sqlx::query_scalar(
+        "SELECT supports_function_tools FROM profile_provider_definitions WHERE profile_id = $1 AND provider_id = $2",
+    )
+    .bind(profile_id)
+    .bind("secured-provider")
+    .fetch_one(&db)
+    .await
+    .expect("persisted function-tool capability");
+    assert!(persisted_function_tools);
 
     service
         .upsert(
@@ -392,7 +402,7 @@ async fn secured_provider_credentials_never_enter_codex_config() {
                 credentials: ProviderCredentialInput::Environment {
                     env_key: external_environment_key.to_string(),
                 },
-                supports_function_tools: None,
+                supports_function_tools: Some(false),
                 select: false,
             },
         )

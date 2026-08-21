@@ -46,6 +46,7 @@ export type ModelProviderSummary = {
   kind: "builtIn" | "local" | "custom";
   isCurrent: boolean;
   modelCount: number;
+  supportsFunctionTools: boolean;
   baseUrl?: string | null;
   envKey?: string | null;
   wireApi?: string;
@@ -77,6 +78,7 @@ type ProviderDraft = {
   envKey: string;
   apiKey: string;
   wireApi: string;
+  supportsFunctionTools: boolean;
 };
 
 const EMPTY_PROVIDER_DRAFT: ProviderDraft = {
@@ -87,6 +89,7 @@ const EMPTY_PROVIDER_DRAFT: ProviderDraft = {
   envKey: "",
   apiKey: "",
   wireApi: "responses",
+  supportsFunctionTools: false,
 };
 
 const DEFAULT_MODEL_CONTEXT_WINDOW = 128_000;
@@ -117,6 +120,7 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [editingProvider, setEditingProvider] = useState<ModelProviderSummary | "new" | null>(null);
   const [providerDraft, setProviderDraft] = useState<ProviderDraft>(EMPTY_PROVIDER_DRAFT);
+  const [functionToolsTouched, setFunctionToolsTouched] = useState(false);
   const [contextDrafts, setContextDrafts] = useState<Record<string, string>>({});
   const [contextSaveState, setContextSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [openProviderGroup, setOpenProviderGroup] = useState<ProviderGroupKey | null>("custom");
@@ -156,6 +160,7 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
   const openProviderForm = (provider?: ModelProviderSummary) => {
     if (!provider) setCatalogOpen(false);
     setEditingProvider(provider ?? "new");
+    setFunctionToolsTouched(provider ? true : false);
     setProviderDraft(provider ? {
       id: provider.id,
       name: provider.name,
@@ -164,6 +169,7 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
       envKey: provider.envKey ?? "",
       apiKey: "",
       wireApi: provider.wireApi ?? "responses",
+      supportsFunctionTools: provider.supportsFunctionTools,
     } : EMPTY_PROVIDER_DRAFT);
   };
 
@@ -421,12 +427,36 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
           onChange={(event) => setProviderDraft((draft) => ({
             ...draft,
             wireApi: event.target.value,
+            supportsFunctionTools: editingProvider === "new"
+              && event.target.value === "chat"
+              && draft.wireApi !== "chat"
+              && !functionToolsTouched
+              ? true
+              : draft.supportsFunctionTools,
           }))}
         >
           <option value="responses">Responses</option>
           <option value="chat">Chat</option>
         </select>
       </label>
+      {providerDraft.wireApi === "chat" ? (
+        <label>
+          Function tools
+          <input
+            type="checkbox"
+            aria-label="Function tools"
+            checked={providerDraft.supportsFunctionTools}
+            onChange={(event) => {
+              setFunctionToolsTouched(true);
+              setProviderDraft((draft) => ({
+                ...draft,
+                supportsFunctionTools: event.target.checked,
+              }));
+            }}
+          />
+          <small>Allow Codex to send function-tool calls to this Provider.</small>
+        </label>
+      ) : null}
       <div className="web-provider-form-actions">
         <button type="button" onClick={() => setEditingProvider(null)}>Cancel</button>
         <button
@@ -595,7 +625,26 @@ export default function Composer({ draft, onDraftChange, onSend, onStop, running
                                     onClick={() => writeProvider({ action: "fetch", id: provider.id })}
                                   >Fetch</button>
                                 ) : null}
-                                {provider.canEdit ? <button type="button" onClick={() => { setCatalogOpen(false); setEditingProvider("new"); setProviderDraft({ id: `${provider.id}-copy`, name: `${provider.name} Copy`, baseUrl: provider.baseUrl ?? "", credentialMode: provider.envKey ? "environment" : "none", envKey: provider.envKey ?? "", apiKey: "", wireApi: provider.wireApi ?? "responses" }); }}>Copy</button> : null}
+                                {provider.canEdit ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setCatalogOpen(false);
+                                      setEditingProvider("new");
+                                      setFunctionToolsTouched(true);
+                                      setProviderDraft({
+                                        id: `${provider.id}-copy`,
+                                        name: `${provider.name} Copy`,
+                                        baseUrl: provider.baseUrl ?? "",
+                                        credentialMode: provider.envKey ? "environment" : "none",
+                                        envKey: provider.envKey ?? "",
+                                        apiKey: "",
+                                        wireApi: provider.wireApi ?? "responses",
+                                        supportsFunctionTools: provider.supportsFunctionTools,
+                                      });
+                                    }}
+                                  >Copy</button>
+                                ) : null}
                                 {provider.canDelete ? <button className="is-danger" type="button" onClick={() => openDeleteProviderDialog(provider)}>Delete</button> : null}
                               </span>
                             </div>

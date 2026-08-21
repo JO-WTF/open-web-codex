@@ -583,6 +583,28 @@ describe("WebApp direct Server client", () => {
     }]);
   });
 
+  it.each([true, false])("forwards an explicit function-tool capability: %s", async (supportsFunctionTools) => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.method).toBe("PUT");
+      return json({ currentProviderId: "deepseek", data: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await client.writeModelProvider({
+      action: "upsert",
+      id: "deepseek",
+      name: "DeepSeek",
+      baseUrl: "https://api.deepseek.com",
+      wireApi: "chat",
+      credentialMode: "none",
+      supportsFunctionTools,
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.supportsFunctionTools).toBe(supportsFunctionTools);
+  });
+
   it("archives the selected Thread through the typed Server Run route", async () => {
     const fetchMock = resourceFetch();
     vi.stubGlobal("fetch", fetchMock);

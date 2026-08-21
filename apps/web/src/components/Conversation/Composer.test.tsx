@@ -26,6 +26,7 @@ describe("Web Composer context usage", () => {
           id: "provider-1",
           name: "Provider",
           kind: "custom",
+          supportsFunctionTools: false,
           isCurrent: true,
           modelCount: 1,
           canFetchModels: true,
@@ -121,6 +122,7 @@ describe("Web Composer context usage", () => {
           id: "deepseek",
           name: "DeepSeek",
           kind: "custom",
+          supportsFunctionTools: false,
           isCurrent: true,
           modelCount: 2,
           canEdit: true,
@@ -173,6 +175,7 @@ describe("Web Composer context usage", () => {
           id: "deepseek",
           name: "DeepSeek",
           kind: "custom",
+          supportsFunctionTools: false,
           isCurrent: true,
           modelCount: 2,
           canEdit: true,
@@ -319,6 +322,7 @@ describe("Web Composer provider credentials", () => {
           id: "openai",
           name: "OpenAI",
           kind: "builtIn",
+          supportsFunctionTools: true,
           isCurrent: false,
           modelCount: 0,
           canEdit: false,
@@ -353,6 +357,7 @@ describe("Web Composer provider credentials", () => {
             id: "openai",
             name: "OpenAI",
             kind: "builtIn",
+            supportsFunctionTools: true,
             isCurrent: true,
             modelCount: 2,
           },
@@ -360,6 +365,7 @@ describe("Web Composer provider credentials", () => {
             id: "deepseek",
             name: "DeepSeek",
             kind: "custom",
+            supportsFunctionTools: false,
             isCurrent: false,
             modelCount: 1,
           },
@@ -367,6 +373,7 @@ describe("Web Composer provider credentials", () => {
             id: "lmstudio",
             name: "gpt-oss",
             kind: "local",
+            supportsFunctionTools: false,
             isCurrent: false,
             modelCount: 0,
           },
@@ -416,6 +423,7 @@ describe("Web Composer provider credentials", () => {
           id: "deepseek",
           name: "DeepSeek",
           kind: "custom",
+          supportsFunctionTools: false,
           isCurrent: true,
           modelCount: 1,
           canDelete: true,
@@ -499,6 +507,7 @@ describe("Web Composer provider credentials", () => {
           id: "deepseek",
           name: "DeepSeek",
           kind: "custom",
+          supportsFunctionTools: false,
           isCurrent: true,
           modelCount: 2,
           canEdit: true,
@@ -559,6 +568,7 @@ describe("Web Composer provider credentials", () => {
           id: "deepseek",
           name: "DeepSeek",
           kind: "custom",
+          supportsFunctionTools: false,
           isCurrent: true,
           modelCount: 1,
           canEdit: true,
@@ -626,12 +636,137 @@ describe("Web Composer provider credentials", () => {
         envKey: "",
         apiKey: "test-direct-key",
         wireApi: "responses",
+        supportsFunctionTools: false,
         select: true,
       });
     });
     await waitFor(() => {
       expect(screen.queryByRole("dialog", { name: "Add provider" })).toBeNull();
     });
+  });
+
+  it("defaults new Chat Providers to function tools and preserves manual changes across wire switches", async () => {
+    const onWriteProvider = vi.fn(async () => undefined);
+    render(
+      <Composer
+        draft=""
+        onDraftChange={vi.fn()}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        running={false}
+        stopping={false}
+        busy={false}
+        disabled={false}
+        tokenUsage={null}
+        onWriteProvider={onWriteProvider}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    const editor = within(screen.getByRole("dialog", { name: "Add provider" }));
+    fireEvent.change(editor.getByLabelText("ID"), { target: { value: "deepseek" } });
+    fireEvent.change(editor.getByLabelText("Name"), { target: { value: "DeepSeek" } });
+    fireEvent.change(editor.getByLabelText("Base URL"), {
+      target: { value: "https://api.deepseek.com" },
+    });
+    fireEvent.change(editor.getByLabelText("Credential source"), {
+      target: { value: "none" },
+    });
+    fireEvent.change(editor.getByLabelText("Wire API"), { target: { value: "chat" } });
+    expect((editor.getByLabelText("Function tools") as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.change(editor.getByLabelText("Wire API"), { target: { value: "responses" } });
+    expect(editor.queryByLabelText("Function tools")).toBeNull();
+    fireEvent.change(editor.getByLabelText("Wire API"), { target: { value: "chat" } });
+    const functionTools = editor.getByLabelText("Function tools") as HTMLInputElement;
+    expect(functionTools.checked).toBe(true);
+
+    fireEvent.click(functionTools);
+    expect(functionTools.checked).toBe(false);
+    fireEvent.change(editor.getByLabelText("Wire API"), { target: { value: "responses" } });
+    fireEvent.change(editor.getByLabelText("Wire API"), { target: { value: "chat" } });
+    expect((editor.getByLabelText("Function tools") as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(editor.getByRole("button", { name: "Save provider" }));
+
+    await waitFor(() => expect(onWriteProvider).toHaveBeenCalledWith(expect.objectContaining({
+      supportsFunctionTools: false,
+      wireApi: "chat",
+    })));
+  });
+
+  it("initializes an existing Provider exactly and keeps function tools separate from Tool search", () => {
+    render(
+      <Composer
+        draft=""
+        onDraftChange={vi.fn()}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        running={false}
+        stopping={false}
+        busy={false}
+        disabled={false}
+        tokenUsage={null}
+        currentProviderId="deepseek"
+        providers={[{
+          id: "deepseek",
+          name: "DeepSeek",
+          kind: "custom",
+          supportsFunctionTools: false,
+          isCurrent: true,
+          modelCount: 1,
+          canEdit: true,
+          models: [{ modelId: "deepseek-v4-flash", supportsSearchTool: true }],
+        }]}
+        models={[{
+          id: "deepseek-v4-flash",
+          model: "deepseek-v4-flash",
+          displayName: "DeepSeek V4 Flash",
+        }]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "DeepSeek" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const editor = within(screen.getByRole("group", { name: "Provider settings" }));
+    expect((editor.getByLabelText("Wire API") as HTMLSelectElement).value).toBe("responses");
+    expect(editor.queryByLabelText("Function tools")).toBeNull();
+    fireEvent.change(editor.getByLabelText("Wire API"), { target: { value: "chat" } });
+    expect((editor.getByLabelText("Function tools") as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText("Tool search for deepseek-v4-flash") as HTMLInputElement).checked)
+      .toBe(true);
+  });
+
+  it("copies the Provider function-tool declaration into a new Provider", () => {
+    render(
+      <Composer
+        draft=""
+        onDraftChange={vi.fn()}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        running={false}
+        stopping={false}
+        busy={false}
+        disabled={false}
+        tokenUsage={null}
+        providers={[{
+          id: "deepseek",
+          name: "DeepSeek",
+          kind: "custom",
+          supportsFunctionTools: true,
+          isCurrent: true,
+          modelCount: 0,
+          wireApi: "chat",
+          canEdit: true,
+        }]}
+        currentProviderId="deepseek"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "DeepSeek" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    expect((within(screen.getByRole("dialog", { name: "Add provider" }))
+      .getByLabelText("Function tools") as HTMLInputElement).checked).toBe(true);
   });
 
   it("keeps the selected-map revision attachment without a generic processed-result picker", () => {

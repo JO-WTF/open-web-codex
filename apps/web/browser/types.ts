@@ -545,6 +545,7 @@ export type Provider = {
   id: string;
   name: string;
   wireApi: string;
+  supportsFunctionTools: boolean;
   kind: "builtIn" | "local" | "custom";
   isCurrent: boolean;
   modelCount: number;

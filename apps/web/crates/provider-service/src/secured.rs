@@ -165,7 +165,7 @@ impl SecuredProviderService {
             return Ok(());
         };
         let rows = sqlx::query(
-            "SELECT provider_id, name, base_url, wire_api, models, is_selected, selected_model_id, credential_env_key \
+            "SELECT provider_id, name, base_url, wire_api, supports_function_tools, models, is_selected, selected_model_id, credential_env_key \
              FROM profile_provider_definitions WHERE profile_id = $1 ORDER BY provider_id",
         )
         .bind(profile.id)
@@ -196,7 +196,7 @@ impl SecuredProviderService {
                             .or(persisted_environment_key)
                             .map(|env_key| ProviderCredentialInput::Environment { env_key })
                             .unwrap_or(ProviderCredentialInput::NoCredential),
-                        supports_function_tools: None,
+                        supports_function_tools: Some(row.get("supports_function_tools")),
                         select: false,
                     },
                 )
@@ -251,13 +251,14 @@ impl SecuredProviderService {
         };
         sqlx::query(
             "INSERT INTO profile_provider_definitions \
-             (profile_id, provider_id, name, base_url, wire_api, models, is_selected, selected_model_id, credential_env_key) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             (profile_id, provider_id, name, base_url, wire_api, supports_function_tools, models, is_selected, selected_model_id, credential_env_key) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT (profile_id, provider_id) DO UPDATE SET \
                name = EXCLUDED.name, base_url = EXCLUDED.base_url, wire_api = EXCLUDED.wire_api, \
-               models = EXCLUDED.models, is_selected = EXCLUDED.is_selected, \
+               supports_function_tools = EXCLUDED.supports_function_tools, models = EXCLUDED.models, \
+               is_selected = EXCLUDED.is_selected, \
                selected_model_id = COALESCE(EXCLUDED.selected_model_id, profile_provider_definitions.selected_model_id), \
-               credential_env_key = CASE WHEN $10 THEN profile_provider_definitions.credential_env_key ELSE EXCLUDED.credential_env_key END, \
+               credential_env_key = CASE WHEN $11 THEN profile_provider_definitions.credential_env_key ELSE EXCLUDED.credential_env_key END, \
                updated_at = now()",
         )
         .bind(profile_id)
@@ -265,6 +266,7 @@ impl SecuredProviderService {
         .bind(&provider.name)
         .bind(provider.base_url.as_deref().unwrap_or_default())
         .bind(&provider.wire_api)
+        .bind(provider.supports_function_tools)
         .bind(models)
         .bind(provider.is_current)
         .bind(selected_model_id)

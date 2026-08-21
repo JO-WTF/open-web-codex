@@ -227,6 +227,9 @@ function parseModelProviderCatalog(value: unknown): {
     if (!value || typeof value !== "object") return [];
     const provider = value as Record<string, unknown>;
     if (typeof provider.id !== "string" || typeof provider.name !== "string") return [];
+    if (typeof provider.supportsFunctionTools !== "boolean") {
+      throw new Error("Invalid Provider model catalog response");
+    }
     const models = Array.isArray(provider.models) ? provider.models.flatMap((value) => {
       if (!value || typeof value !== "object") return [];
       const model = value as Record<string, unknown>;
@@ -247,6 +250,7 @@ function parseModelProviderCatalog(value: unknown): {
       baseUrl: typeof provider.baseUrl === "string" ? provider.baseUrl : null,
       envKey: typeof provider.envKey === "string" ? provider.envKey : null,
       wireApi: typeof provider.wireApi === "string" ? provider.wireApi : "responses",
+      supportsFunctionTools: provider.supportsFunctionTools,
       canEdit: provider.canEdit === true,
       canDelete: provider.canDelete === true,
       canFetchModels: provider.canFetchModels === true,
@@ -309,6 +313,7 @@ function parseFetchedProviderCatalog(
     const provider = candidate as Record<string, unknown>;
     if (typeof provider.id !== "string" || !provider.id.trim()
       || typeof provider.name !== "string" || !provider.name.trim()
+      || typeof provider.supportsFunctionTools !== "boolean"
       || seenProviderIds.has(provider.id)) {
       return null;
     }

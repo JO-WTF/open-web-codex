@@ -86,6 +86,7 @@ describe("WebApp workspace-first messaging", () => {
         id: "deepseek",
         name: "DeepSeek",
         kind: "custom",
+        supportsFunctionTools: false,
         models: [{ modelId: "deepseek-v4-flash", showInPicker: true }],
       }],
     });
@@ -151,6 +152,7 @@ describe("WebApp workspace-first messaging", () => {
         id: "provider-1",
         name: "Provider",
         kind: "custom",
+        supportsFunctionTools: false,
         canFetchModels: true,
         models: [{ modelId: "old-model", showInPicker: true }],
       }],
@@ -162,6 +164,7 @@ describe("WebApp workspace-first messaging", () => {
         id: "provider-1",
         name: "Provider",
         kind: "custom",
+        supportsFunctionTools: false,
         canFetchModels: true,
         models: [{ modelId: "new-model", showInPicker: true }],
       }],
@@ -183,6 +186,39 @@ describe("WebApp workspace-first messaging", () => {
     expect(screen.queryByText("Unable to fetch Provider models. Try again.")).toBeNull();
   });
 
+  it("rejects a Provider catalog that omits the required function-tool declaration", async () => {
+    client.listModelProviders.mockResolvedValue({
+      currentProviderId: "provider-1",
+      data: [{
+        id: "provider-1",
+        name: "Provider",
+        kind: "custom",
+        models: [],
+      }],
+    });
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Codex" }));
+    await screen.findByText("Unable to load Provider settings. Try again.");
+  });
+
+  it("rejects a Provider catalog with a non-boolean function-tool declaration", async () => {
+    client.listModelProviders.mockResolvedValue({
+      currentProviderId: "provider-1",
+      data: [{
+        id: "provider-1",
+        name: "Provider",
+        kind: "custom",
+        supportsFunctionTools: "true",
+        models: [],
+      }],
+    });
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Codex" }));
+    await screen.findByText("Unable to load Provider settings. Try again.");
+  });
+
   it("preserves the catalog and hides raw error text when Fetch fails", async () => {
     client.listModelProviders.mockResolvedValue({
       currentProviderId: "provider-1",
@@ -191,6 +227,7 @@ describe("WebApp workspace-first messaging", () => {
         id: "provider-1",
         name: "Provider",
         kind: "custom",
+        supportsFunctionTools: false,
         canFetchModels: true,
         models: [{ modelId: "old-model", showInPicker: true }],
       }],
@@ -222,6 +259,7 @@ describe("WebApp workspace-first messaging", () => {
         id: "provider-1",
         name: "Provider",
         kind: "custom",
+        supportsFunctionTools: false,
         canFetchModels: true,
         models: [{ modelId: "old-model", showInPicker: true }],
       }],
@@ -235,10 +273,16 @@ describe("WebApp workspace-first messaging", () => {
             id: "provider-1",
             name: "Provider",
             kind: "custom",
+            supportsFunctionTools: false,
             canFetchModels: true,
             models: [{ modelId: "new-model", showInPicker: true }],
           },
-          { id: "broken", name: "Broken", models: "not-an-array" },
+          {
+            id: "broken",
+            name: "Broken",
+            supportsFunctionTools: false,
+            models: "not-an-array",
+          },
         ],
       })
       .mockResolvedValueOnce({
@@ -249,6 +293,7 @@ describe("WebApp workspace-first messaging", () => {
             id: "provider-1",
             name: "Provider",
             kind: "custom",
+            supportsFunctionTools: false,
             canFetchModels: true,
             models: [{ modelId: "new-model", showInPicker: true }],
           },
@@ -256,6 +301,7 @@ describe("WebApp workspace-first messaging", () => {
             id: "provider-1",
             name: "Duplicate",
             kind: "custom",
+            supportsFunctionTools: false,
             models: [{ modelId: "new-model", showInPicker: true }],
           },
         ],
@@ -267,6 +313,7 @@ describe("WebApp workspace-first messaging", () => {
           id: "provider-1",
           name: "Provider",
           kind: "custom",
+          supportsFunctionTools: false,
           canFetchModels: true,
           models: [],
         }],
@@ -278,6 +325,7 @@ describe("WebApp workspace-first messaging", () => {
           id: "provider-1",
           name: "Provider",
           kind: "custom",
+          supportsFunctionTools: false,
           canFetchModels: true,
           models: [{ modelId: "new-model", showInPicker: true }],
         }],
@@ -319,6 +367,7 @@ describe("WebApp workspace-first messaging", () => {
         id: "provider-1",
         name: "Provider",
         kind: "custom",
+        supportsFunctionTools: false,
         canFetchModels: true,
         models: [{ modelId: "old-model", showInPicker: true }],
       }],
@@ -331,6 +380,7 @@ describe("WebApp workspace-first messaging", () => {
           id: "provider-1",
           name: "Provider",
           kind: "custom",
+          supportsFunctionTools: false,
           canFetchModels: true,
           models: [
             { modelId: "new-model", showInPicker: true },
@@ -345,6 +395,7 @@ describe("WebApp workspace-first messaging", () => {
           id: "provider-1",
           name: "Provider",
           kind: "custom",
+          supportsFunctionTools: false,
           canFetchModels: true,
           models: [{ modelId: "new-model", showInPicker: true }],
         }],
@@ -393,6 +444,7 @@ describe("WebApp workspace-first messaging", () => {
         id: "provider-1",
         name: "Provider",
         kind: "custom",
+        supportsFunctionTools: false,
         canFetchModels: true,
         models: [{ modelId: "old-model", showInPicker: true }],
       }],
@@ -404,6 +456,7 @@ describe("WebApp workspace-first messaging", () => {
         id: "provider-1",
         name: "Provider",
         kind: "custom",
+        supportsFunctionTools: false,
         canFetchModels: true,
         models: [{ modelId: "new-model", showInPicker: true }],
       }],
@@ -445,6 +498,7 @@ describe("WebApp workspace-first messaging", () => {
         id: "provider-1",
         name: "Provider",
         kind: "custom",
+        supportsFunctionTools: false,
         canFetchModels: true,
         models: [{ modelId: "old-model", showInPicker: true }],
       }],
@@ -456,6 +510,7 @@ describe("WebApp workspace-first messaging", () => {
         id: "provider-1",
         name: "Provider",
         kind: "custom",
+        supportsFunctionTools: false,
         canFetchModels: true,
         models: [{ modelId: "new-model", showInPicker: true }],
       }],
@@ -486,7 +541,13 @@ describe("WebApp workspace-first messaging", () => {
     client.listWorkspaces.mockResolvedValue([]);
     client.listModelProviders.mockResolvedValue({
       currentProviderId: "openai",
-      data: [{ id: "openai", name: "OpenAI", kind: "builtIn", models: [] }],
+      data: [{
+        id: "openai",
+        name: "OpenAI",
+        kind: "builtIn",
+        supportsFunctionTools: true,
+        models: [],
+      }],
     });
     client.writeModelProvider.mockResolvedValueOnce({
       currentProviderId: "deepseek",
@@ -495,6 +556,7 @@ describe("WebApp workspace-first messaging", () => {
         id: "deepseek",
         name: "DeepSeek",
         kind: "custom",
+        supportsFunctionTools: false,
         models: [{ modelId: "deepseek-v4-flash", showInPicker: true }],
       }],
     });
@@ -522,6 +584,7 @@ describe("WebApp workspace-first messaging", () => {
       envKey: "",
       apiKey: "",
       wireApi: "responses",
+      supportsFunctionTools: false,
       select: true,
     }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add provider" })).toBeNull());
@@ -532,7 +595,13 @@ describe("WebApp workspace-first messaging", () => {
     client.listWorkspaces.mockResolvedValue([]);
     client.listModelProviders.mockResolvedValue({
       currentProviderId: "openai",
-      data: [{ id: "openai", name: "OpenAI", kind: "builtIn", models: [] }],
+      data: [{
+        id: "openai",
+        name: "OpenAI",
+        kind: "builtIn",
+        supportsFunctionTools: true,
+        models: [],
+      }],
     });
     client.writeModelProvider.mockRejectedValueOnce(new Error("credential-canary"));
     render(<WebApp />);
@@ -578,6 +647,7 @@ describe("WebApp workspace-first messaging", () => {
         id: "deepseek",
         name: "DeepSeek",
         kind: "custom",
+        supportsFunctionTools: false,
         models: [{ modelId: "deepseek-v4-flash", showInPicker: true }],
       }],
     });
@@ -935,6 +1005,7 @@ describe("WebApp workspace-first messaging", () => {
           id: "openai",
           name: "OpenAI",
           kind: "builtIn",
+          supportsFunctionTools: true,
           isCurrent: false,
           modelCount: 0,
           models: [],
@@ -943,6 +1014,7 @@ describe("WebApp workspace-first messaging", () => {
           id: "deepseek",
           name: "DeepSeek",
           kind: "custom",
+          supportsFunctionTools: false,
           isCurrent: true,
           modelCount: 1,
           models: [{ modelId: "deepseek-v4-flash", showInPicker: true }],
