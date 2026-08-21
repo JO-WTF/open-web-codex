@@ -181,8 +181,8 @@ semantics on an OpenAI-compatible Chat Completions wire:
   `supports_image_generation` capability;
 - function-tool calls require the Provider's explicit `supports_function_tools`
   capability; configured Providers default to disabled and an incompatible Chat
-  turn returns a typed UnsupportedOperation rather than guessing from a model
-  name, description, wire error, or `wire_api` alone;
+  turn returns `ProviderFunctionToolsUnsupported` rather than guessing from a
+  model name, description, wire error, or `wire_api` alone;
 - remote Thread configuration transports the function-tools flag; missing
   optional values resolve to the safe disabled default. Web Search and image
   generation remain governed by their existing Runtime/provider capability

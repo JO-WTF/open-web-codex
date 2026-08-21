@@ -386,17 +386,6 @@ function findResourceRef(value, schema) {
     ) {
       return value;
     }
-    if (
-      value.resourceSchema === schema &&
-      typeof value.uri === "string" &&
-      typeof value.server === "string"
-    ) {
-      return {
-        server: value.server,
-        uri: value.uri,
-        resource_schema: value.resourceSchema,
-      };
-    }
     for (const child of Object.values(value)) {
       const found = findResourceRef(child, schema);
       if (found) return found;
@@ -1068,16 +1057,16 @@ async function ensureAuthenticated() {
 }
 
 function installationId(status, packageId) {
-  return (status.installations ?? []).find(
-    (entry) => (entry.package_id ?? entry.packageId) === packageId,
+  return status.installations.find(
+    (entry) => entry.packageId === packageId,
   );
 }
 
 async function ensureCopilotActive() {
   let status = await api("/profile/copilots");
-  for (const installation of status.installations ?? []) {
+  for (const installation of status.installations) {
     const active = installation.active;
-    const packageId = installation.package_id ?? installation.packageId;
+    const packageId = installation.packageId;
     if (active && packageId !== copilotPackageId) {
       await api("/profile/copilots/deactivate", {
         method: "POST",
@@ -1087,7 +1076,7 @@ async function ensureCopilotActive() {
   }
   const current = installationId(status, copilotPackageId);
   const currentState = String(current?.state ?? "").toLowerCase();
-  if (current?.active && currentState !== "ready") {
+  if (current?.active && currentState !== "configured") {
     await api("/profile/copilots/deactivate", {
       method: "POST",
       body: { packageId: copilotPackageId },
@@ -1103,7 +1092,7 @@ async function ensureCopilotActive() {
       1_000,
     );
   }
-  if (!current?.active || currentState !== "ready") {
+  if (!current?.active || currentState !== "configured") {
     await api("/profile/copilots/activate", {
       method: "POST",
       body: { packageId: copilotPackageId },
@@ -1113,6 +1102,7 @@ async function ensureCopilotActive() {
   const target = installationId(status, copilotPackageId);
   assert(target);
   assert.equal(target.active, true);
+  assert.equal(target.state, "configured");
   return status;
 }
 
@@ -1131,8 +1121,30 @@ async function configureProvider() {
   const provider = catalog.data.find((entry) => entry.id === providerId);
   assert(provider);
   assert.equal(provider.wireApi, "chat");
-  assert.equal(catalog.currentProviderId ?? catalog.current_provider_id, providerId);
+  assert.equal(provider.supportsFunctionTools, true);
+  assert.equal(catalog.currentProviderId, providerId);
   return provider;
+}
+
+async function configureModelToolSearch() {
+  const configured = await api(
+    "/providers/" +
+      encodeURIComponent(providerId) +
+      "/models/" +
+      encodeURIComponent(model),
+    {
+      method: "PATCH",
+      body: {
+        contextWindow: 128_000,
+        supportsSearchTool: true,
+      },
+    },
+  );
+  const configuredProvider = configured.data.find((entry) => entry.id === providerId);
+  const configuredModel = configuredProvider?.models?.find(
+    (entry) => entry.modelId === model,
+  );
+  assert.equal(configuredModel?.supportsSearchTool, true);
 }
 
 async function enableMultiAgent() {
@@ -1144,7 +1156,7 @@ async function enableMultiAgent() {
       maxDepth: 3,
     },
   });
-  assert.equal(settings.multiAgentEnabled ?? settings.multi_agent_enabled, true);
+  assert.equal(settings.multiAgentEnabled, true);
   return settings;
 }
 
@@ -1181,12 +1193,12 @@ async function cleanupRun(runId) {
         ]);
         const active = agents.filter((agent) =>
           ["starting", "pending", "running", "active", "in_progress", "reconnecting"]
-            .includes(String(agent.status_type ?? agent.statusType ?? "").toLowerCase()),
+            .includes(String(agent.status_type ?? "").toLowerCase()),
         );
         const snapshot = JSON.stringify({
           agents: agents.map((agent) => ({
-            thread_id: agent.thread_id ?? agent.threadId,
-            status_type: agent.status_type ?? agent.statusType,
+            thread_id: agent.thread_id,
+            status_type: agent.status_type,
           })),
           activity_count: activities.length,
         });
@@ -1543,7 +1555,7 @@ async function runCase(index) {
       });
     }
     const refs = await api("/tasks/" + record.task.id + "/resource-refs");
-    const schemas = new Set(refs.map((ref) => ref.resourceSchema ?? ref.resource_schema));
+    const schemas = new Set(refs.map((ref) => ref.resourceSchema));
     for (const schema of [
       "route_matrix.v3",
       "network_baseline.v2",
@@ -1588,8 +1600,8 @@ async function runCase(index) {
     assert(agents.length >= 3, "Runtime agent projection did not include root and two children");
     const roleByThread = new Map(
       agents.map((agent) => [
-        agent.threadId ?? agent.thread_id,
-        agent.agentRole ?? agent.agent_role,
+        agent.thread_id,
+        agent.agent_role,
       ]),
     );
     assert(
@@ -1600,11 +1612,11 @@ async function runCase(index) {
     const executions = await api("/runs/" + record.run.id + "/agent-executions");
     assert(
       executions.some(
-        (execution) => roleByThread.get(execution.threadId ?? execution.thread_id) === "data_agent",
+        (execution) => roleByThread.get(execution.thread_id) === "data_agent",
       ) &&
         executions.some(
           (execution) =>
-            roleByThread.get(execution.threadId ?? execution.thread_id) === "network_agent",
+            roleByThread.get(execution.thread_id) === "network_agent",
         ),
       "Runtime agent execution provenance missing child Roles",
     );
@@ -1613,7 +1625,7 @@ async function runCase(index) {
         const status = await api("/profile/copilots");
         const target = installationId(status, copilotPackageId);
         return target?.state === "configured" &&
-          (target.runtimeDiscoveredSkillIds ?? []).includes("warehouse-supervisor")
+          target.runtimeDiscoveredSkillIds.includes("warehouse-supervisor")
           ? target
           : undefined;
       },
@@ -1623,7 +1635,7 @@ async function runCase(index) {
     );
     assert.equal(runtimeStatus.state, "configured");
     assert(
-      (runtimeStatus.runtimeDiscoveredSkillIds ?? []).includes(
+      runtimeStatus.runtimeDiscoveredSkillIds.includes(
         "warehouse-supervisor",
       ),
     );
@@ -1663,6 +1675,7 @@ async function main() {
     const version = await ensureAuthenticated();
     await ensureCopilotActive();
     await configureProvider();
+    await configureModelToolSearch();
     await enableMultiAgent();
     log("server=" + version + " fixture_files=" + state.manifest.files.length);
     for (const index of [1, 2]) {
