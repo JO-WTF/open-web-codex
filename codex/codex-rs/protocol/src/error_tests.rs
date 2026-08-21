@@ -174,6 +174,15 @@ fn server_overloaded_maps_to_protocol() {
 }
 
 #[test]
+fn provider_function_tools_unsupported_maps_to_protocol() {
+    let err = CodexErr::ProviderFunctionToolsUnsupported;
+    assert_eq!(
+        err.to_codex_protocol_error(),
+        CodexErrorInfo::ProviderFunctionToolsUnsupported
+    );
+}
+
+#[test]
 fn sandbox_denied_uses_aggregated_output_when_stderr_empty() {
     let output = ExecToolCallOutput {
         exit_code: 77,

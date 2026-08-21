@@ -124,6 +124,7 @@
             "misalignmentPolicyViolation",
             "internalServerError",
             "unauthorized",
+            "providerFunctionToolsUnsupported",
             "badRequest",
             "threadRollbackFailed",
             "sandboxError",

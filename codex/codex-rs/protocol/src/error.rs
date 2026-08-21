@@ -159,6 +159,8 @@ pub enum CodexErrorDetails {
     LandlockSandboxExecutableNotProvided,
     #[error("unsupported operation: {0}")]
     UnsupportedOperation(String),
+    #[error("unsupported operation: the configured Provider does not support function tools")]
+    ProviderFunctionToolsUnsupported,
     #[error("{0}")]
     RefreshTokenFailed(RefreshTokenFailedError),
     #[error("Fatal error: {0}")]
@@ -318,6 +320,7 @@ impl CodexErr {
         InternalServerError,
         InternalAgentDied,
         LandlockSandboxExecutableNotProvided,
+        ProviderFunctionToolsUnsupported,
     );
 
     codex_err_tuple_constructors!(
@@ -375,6 +378,7 @@ impl CodexErr {
             | CodexErrorDetails::ToolCollision(_)
             | CodexErrorDetails::RefreshTokenFailed(_)
             | CodexErrorDetails::UnsupportedOperation(_)
+            | CodexErrorDetails::ProviderFunctionToolsUnsupported
             | CodexErrorDetails::Sandbox(_)
             | CodexErrorDetails::LandlockSandboxExecutableNotProvided
             | CodexErrorDetails::RetryLimit(_)
@@ -450,6 +454,9 @@ impl CodexErr {
             CodexErrorDetails::UnsupportedOperation(_)
             | CodexErrorDetails::ThreadNotFound(_)
             | CodexErrorDetails::AgentLimitReached { .. } => CodexErrorInfo::BadRequest,
+            CodexErrorDetails::ProviderFunctionToolsUnsupported => {
+                CodexErrorInfo::ProviderFunctionToolsUnsupported
+            }
             CodexErrorDetails::Sandbox(_) => CodexErrorInfo::SandboxError,
             _ => CodexErrorInfo::Other,
         }

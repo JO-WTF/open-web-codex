@@ -7699,6 +7699,7 @@
               "misalignmentPolicyViolation",
               "internalServerError",
               "unauthorized",
+              "providerFunctionToolsUnsupported",
               "badRequest",
               "threadRollbackFailed",
               "sandboxError",
@@ -14381,6 +14382,9 @@
           "name": {
             "type": "string"
           },
+          "supportsFunctionTools": {
+            "type": "boolean"
+          },
           "wireApi": {
             "type": "string"
           }
@@ -14395,6 +14399,7 @@
           "modelCount",
           "models",
           "name",
+          "supportsFunctionTools",
           "wireApi"
         ],
         "type": "object"

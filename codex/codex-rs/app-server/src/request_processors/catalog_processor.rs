@@ -254,6 +254,7 @@ impl CatalogRequestProcessor {
                     base_url: provider.base_url.clone(),
                     env_key: provider.env_key.clone(),
                     wire_api: provider.wire_api.to_string(),
+                    supports_function_tools: provider.supports_function_tools,
                     kind,
                     is_current: id == &config.model_provider_id,
                     model_count: 0,

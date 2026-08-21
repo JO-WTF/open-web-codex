@@ -94,6 +94,7 @@ pub enum CodexErrorInfo {
     },
     InternalServerError,
     Unauthorized,
+    ProviderFunctionToolsUnsupported,
     BadRequest,
     ThreadRollbackFailed,
     SandboxError,
@@ -138,6 +139,9 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
             }
             CoreCodexErrorInfo::InternalServerError => CodexErrorInfo::InternalServerError,
             CoreCodexErrorInfo::Unauthorized => CodexErrorInfo::Unauthorized,
+            CoreCodexErrorInfo::ProviderFunctionToolsUnsupported => {
+                CodexErrorInfo::ProviderFunctionToolsUnsupported
+            }
             CoreCodexErrorInfo::BadRequest => CodexErrorInfo::BadRequest,
             CoreCodexErrorInfo::ThreadRollbackFailed => CodexErrorInfo::ThreadRollbackFailed,
             CoreCodexErrorInfo::SandboxError => CodexErrorInfo::SandboxError,

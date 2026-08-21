@@ -132,9 +132,7 @@ pub(crate) fn build_tool_router(
     if turn_context.provider.info().wire_api == WireApi::Chat
         && !turn_context.provider.capabilities().function_tools
     {
-        return Err(CodexErr::UnsupportedOperation(
-            "the configured Provider does not support function tools".to_string(),
-        ));
+        return Err(CodexErr::ProviderFunctionToolsUnsupported);
     }
 
     let default_agent_type_description =

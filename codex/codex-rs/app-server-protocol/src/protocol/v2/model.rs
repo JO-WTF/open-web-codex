@@ -85,6 +85,7 @@ pub struct ModelProviderSummary {
     pub base_url: Option<String>,
     pub env_key: Option<String>,
     pub wire_api: String,
+    pub supports_function_tools: bool,
     pub kind: ModelProviderKind,
     pub is_current: bool,
     pub model_count: usize,

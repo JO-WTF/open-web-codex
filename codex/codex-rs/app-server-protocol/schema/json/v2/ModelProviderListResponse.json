@@ -101,6 +101,9 @@
         "name": {
           "type": "string"
         },
+        "supportsFunctionTools": {
+          "type": "boolean"
+        },
         "wireApi": {
           "type": "string"
         }
@@ -115,6 +118,7 @@
         "modelCount",
         "models",
         "name",
+        "supportsFunctionTools",
         "wireApi"
       ],
       "type": "object"

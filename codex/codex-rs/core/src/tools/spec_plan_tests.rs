@@ -1208,8 +1208,7 @@ async fn chat_provider_without_function_tools_returns_typed_unsupported() {
 
     assert!(matches!(
         error.details(),
-        CodexErrorDetails::UnsupportedOperation(message)
-            if message == "the configured Provider does not support function tools"
+        CodexErrorDetails::ProviderFunctionToolsUnsupported
     ));
 }
 

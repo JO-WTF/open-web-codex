@@ -19,6 +19,12 @@ name = "DeepSeek E2E"
 base_url = "https://api.deepseek.com"
 experimental_bearer_token = "must-not-be-returned"
 wire_api = "chat"
+supports_function_tools = true
+
+[model_providers.chat-disabled]
+name = "Chat Disabled"
+base_url = "https://example.invalid"
+wire_api = "chat"
 "#,
     )?;
     let mut app = TestAppServer::builder()
@@ -54,6 +60,7 @@ wire_api = "chat"
     );
     assert_eq!(deepseek.env_key, None);
     assert_eq!(deepseek.wire_api, "chat");
+    assert!(deepseek.supports_function_tools);
     assert_eq!(deepseek.kind, ModelProviderKind::Custom);
     assert!(deepseek.is_current);
     assert!(deepseek.can_edit);
@@ -62,6 +69,13 @@ wire_api = "chat"
     assert!(deepseek.models.is_empty());
     assert_eq!(deepseek.model_count, 0);
     assert!(!serde_json::to_string(&response)?.contains("must-not-be-returned"));
+
+    let disabled = response
+        .data
+        .iter()
+        .find(|provider| provider.id == "chat-disabled")
+        .expect("disabled custom Provider is listed");
+    assert!(!disabled.supports_function_tools);
 
     let openai = response
         .data

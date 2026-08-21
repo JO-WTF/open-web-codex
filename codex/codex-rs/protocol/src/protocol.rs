@@ -1785,6 +1785,7 @@ pub enum CodexErrorInfo {
     },
     InternalServerError,
     Unauthorized,
+    ProviderFunctionToolsUnsupported,
     BadRequest,
     SandboxError,
     /// The response SSE stream disconnected in the middle of a turnbefore completion.
@@ -1819,6 +1820,7 @@ impl CodexErrorInfo {
             | Self::ResponseStreamConnectionFailed { .. }
             | Self::InternalServerError
             | Self::Unauthorized
+            | Self::ProviderFunctionToolsUnsupported
             | Self::BadRequest
             | Self::SandboxError
             | Self::ResponseStreamDisconnected { .. }

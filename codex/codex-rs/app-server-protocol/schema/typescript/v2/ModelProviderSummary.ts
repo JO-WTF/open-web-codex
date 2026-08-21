@@ -4,4 +4,4 @@
 import type { ModelProviderKind } from "./ModelProviderKind";
 import type { ModelProviderModelSummary } from "./ModelProviderModelSummary";
 
-export type ModelProviderSummary = { id: string, name: string, baseUrl: string | null, envKey: string | null, wireApi: string, kind: ModelProviderKind, isCurrent: boolean, modelCount: number, canEdit: boolean, canDelete: boolean, canFetchModels: boolean, models: Array<ModelProviderModelSummary>, };
+export type ModelProviderSummary = { id: string, name: string, baseUrl: string | null, envKey: string | null, wireApi: string, supportsFunctionTools: boolean, kind: ModelProviderKind, isCurrent: boolean, modelCount: number, canEdit: boolean, canDelete: boolean, canFetchModels: boolean, models: Array<ModelProviderModelSummary>, };
