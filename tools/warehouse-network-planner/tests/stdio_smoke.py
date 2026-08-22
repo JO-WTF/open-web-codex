@@ -213,7 +213,6 @@ async def smoke() -> None:
                     "assess_facility_change",
                     "solve_p_median",
                     "compare_network_scenarios",
-                    "render_network_comparison_map",
                     "publish_network_planning_report",
                 }
                 assert expected_tools <= names, sorted(expected_tools - names)

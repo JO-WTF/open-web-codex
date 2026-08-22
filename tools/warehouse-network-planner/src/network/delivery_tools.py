@@ -24,10 +24,9 @@ from pydantic import (
 )
 from supply_chain_planner.delivery.map_service import (
     NetworkComparisonGeoJson,
-    NetworkComparisonMapBundle,
     NetworkCoverageGeoJson,
     NetworkDistributionGeoJson,
-    build_network_comparison_map_bundle,
+    build_network_comparison_geojson,
     build_network_coverage_geojson,
     build_network_distribution_geojson,
 )
@@ -195,39 +194,6 @@ def _load_final_delivery_inputs(
     return prepared, normalized, before_view, after_view, plan_comparison.comparison
 
 
-def _write_final_delivery_json_bundle(
-    bundle: NetworkComparisonMapBundle,
-    output_relative_path: str,
-    ctx: Context,
-    summary: str,
-) -> CallToolResult:
-    output_relative_path = prepare_workspace_output_path(
-        _runtime().require_workspace(ctx),
-        output_relative_path,
-        WorkspaceOutputKind.DELIVERY_JSON,
-    )
-    created = _runtime().create_workspace_model(
-        ctx,
-        output_relative_path,
-        bundle,
-        max_bytes=MAX_WORKSPACE_FILE_BYTES,
-    )
-    structured = NetworkFinalArtifactToolResult(
-        summary=summary,
-        artifact=NetworkFinalArtifactDescriptor(
-            schema=bundle.schema_version,
-            displayName="Warehouse network comparison data",
-            mimeType="application/json",
-            workspaceRelativePath=created.relative_path,
-            byteSize=created.byte_size,
-        ),
-    )
-    return CallToolResult(
-        content=[TextContent(type="text", text=summary)],
-        structuredContent=structured.model_dump(mode="json", by_alias=True),
-    )
-
-
 def _write_final_delivery_markdown(
     markdown: str,
     output_relative_path: str,
@@ -341,18 +307,16 @@ def prepare_network_comparison_map(
     ctx: Context,
 ) -> CallToolResult:
     """Publish raw before-versus-after GeoJSON for a separately authored map."""
-    prepared, normalized, before, after, comparison = _load_final_delivery_inputs(
+    _prepared, normalized, before, after, comparison = _load_final_delivery_inputs(
         plan_comparison_ref,
         ctx,
     )
-    bundle = build_network_comparison_map_bundle(
+    geojson = build_network_comparison_geojson(
         normalized,
         before,
         after,
         comparison,
-        country_code=prepared.country_code,
     )
-    geojson = NetworkComparisonGeoJson(features=bundle.geojson.features)
     summary = (
         f"Prepared an interactive comparison map with {len(geojson.features)} "
         "features from the validated before and after results."
@@ -417,40 +381,6 @@ def prepare_network_coverage_map(
         }
     )
     return result
-
-
-def render_network_comparison_map(
-    plan_comparison_ref: NetworkPlanComparisonResourceRef,
-    output_relative_path: Annotated[
-        str,
-        Field(
-            min_length=1,
-            max_length=1024,
-            description=(
-                "Create-new JSON path directly under outputs/warehouse-network/deliverables/."
-            ),
-        ),
-    ],
-    ctx: Context,
-) -> CallToolResult:
-    """Create a self-contained generic before-versus-after map JSON file."""
-    prepared, normalized, before, after, comparison = _load_final_delivery_inputs(
-        plan_comparison_ref,
-        ctx,
-    )
-    bundle = build_network_comparison_map_bundle(
-        normalized,
-        before,
-        after,
-        comparison,
-        country_code=prepared.country_code,
-    )
-    return _write_final_delivery_json_bundle(
-        bundle,
-        output_relative_path,
-        ctx,
-        "Created the self-contained warehouse network comparison map.",
-    )
 
 
 def publish_network_planning_report(
@@ -525,7 +455,5 @@ def register_tools(mcp, *, phase: str = "all") -> None:
         mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)(prepare_network_comparison_map)
     if phase in ("all", "final"):
         mcp.tool(structured_output=True, annotations=CONTENT_ADDRESSED_RESOURCE_TOOL)(prepare_network_coverage_map)
-    if phase in ("all", "final"):
-        mcp.tool(structured_output=True, annotations=FINAL_WORKSPACE_DELIVERY_TOOL)(render_network_comparison_map)
     if phase in ("all", "final"):
         mcp.tool(structured_output=True, annotations=FINAL_WORKSPACE_DELIVERY_TOOL)(publish_network_planning_report)

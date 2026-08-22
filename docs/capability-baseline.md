@@ -483,8 +483,8 @@ exact integration：
 - clean Profile 的官方 `skills/list(forceReload=true)` 在 user scope 精确发现三项仓网 Skill，
   repo scope 为空；Standard Root 的官方 MCP status 没有四个仓网 server；
 - Root 通过原生 collaboration namespace spawn Data/Network。Data 只启用 warehouse-data，
-  只看到 supply-chain Data/Demo 的 `8+1` 项工具；Network 只启用 warehouse-network，只看到
-  Network/Map 的 `14+5` 项工具。两者都由真实 child model request 与官方
+  只看到 supply-chain Data 的 4 项工具；Network 只启用 warehouse-network，只看到
+  Network/Map 的 `12+9` 项工具。两者都由真实 child model request 与官方
   `mcpServerStatus/list` 观察，不由 Host 文件自报；
 - Root 两次 native wait/mailbox 与对同一 Data child 的 follow-up 正常，Root/Data/Network
   全部到达原生 terminal。对既有 Data child 请求官方 MCP reload 后，在 follow-up safe

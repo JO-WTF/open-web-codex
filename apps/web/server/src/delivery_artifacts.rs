@@ -338,16 +338,16 @@ mod tests {
     fn accepts_only_exact_final_tool_contracts() {
         let item = json!({
             "server": "supply_chain",
-            "tool": "render_network_comparison_map",
+            "tool": "publish_network_planning_report",
             "status": "completed",
             "error": null,
             "result": {"structuredContent": {
-                "summary": "Created map.",
+                "summary": "Created report.",
                 "artifact": {
-                    "schema": "network_comparison_map_bundle.v2",
-                    "displayName": "Warehouse network: before vs after comparison",
-                    "mimeType": "application/json",
-                    "workspaceRelativePath": "outputs/network-map.json",
+                    "schema": "network_planning_report_markdown.v2",
+                    "displayName": "Warehouse network planning report",
+                    "mimeType": "text/markdown",
+                    "workspaceRelativePath": "outputs/report.md",
                     "byteSize": 128
                 }
             }}
@@ -355,10 +355,7 @@ mod tests {
         let candidate = final_artifact_candidate(item.as_object().unwrap())
             .unwrap()
             .unwrap();
-        assert_eq!(
-            candidate.workspace_relative_path,
-            "outputs/network-map.json"
-        );
+        assert_eq!(candidate.workspace_relative_path, "outputs/report.md");
 
         let mut intermediate = item.clone();
         intermediate["tool"] = json!("compare_network_scenarios");
@@ -515,10 +512,6 @@ mod tests {
             "../../../../tools/warehouse-network-planner/contracts/fixtures/\
 network_planning_report_markdown.v2.md"
         );
-        let map_fixture = include_bytes!(
-            "../../../../tools/warehouse-network-planner/contracts/fixtures/\
-network_comparison_map_bundle.v2.json"
-        );
         validate_materialized_bundle("network_planning_report_markdown.v2", report_fixture)
             .expect("complete provider report fixture must validate");
         validate_materialized_bundle(
@@ -526,9 +519,6 @@ network_comparison_map_bundle.v2.json"
             "# 当前仓网评估简报\n\n<!-- network_planning_report_markdown.v2 -->\n\n## 时效覆盖\n\n- 覆盖城市数：45/50。\n".as_bytes(),
         )
         .expect("provider-owned Chinese assessment with natural ratio must validate");
-        validate_materialized_bundle("network_comparison_map_bundle.v2", map_fixture)
-            .expect("complete provider map fixture must validate");
-
         for bytes in [
             b"# \n\n<!-- network_planning_report_markdown.v2 -->\n".as_slice(),
             b"# Warehouse network planning report\n\nMissing marker\n".as_slice(),

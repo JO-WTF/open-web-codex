@@ -175,22 +175,7 @@ impl ContentVerifier {
 
 #[cfg(test)]
 pub(crate) fn warehouse_test_registry() -> DeliveryRegistry {
-    let schema = serde_json::from_str(include_str!(
-        "../../../../tools/warehouse-network-planner/contracts/schemas/network_comparison_map_bundle.v2.schema.json"
-    ))
-    .expect("warehouse map delivery schema");
     DeliveryRegistry::new(vec![
-        DeliveryContract {
-            id: "network-comparison-map".into(),
-            server: "supply_chain".into(),
-            tool: "render_network_comparison_map".into(),
-            kind: DeliveryKind::WorkspaceArtifact {
-                verifier: ContentVerifier::JsonSchema { document: schema },
-            },
-            schema: "network_comparison_map_bundle.v2".into(),
-            mime_type: "application/json".into(),
-            display_name: "Warehouse network: before vs after comparison".into(),
-        },
         DeliveryContract {
             id: "network-planning-report".into(),
             server: "supply_chain".into(),

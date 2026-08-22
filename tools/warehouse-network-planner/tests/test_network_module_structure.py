@@ -18,7 +18,6 @@ EXPECTED_TOOLS = [
     "solve_p_median",
     "prepare_network_comparison_map",
     "prepare_network_coverage_map",
-    "render_network_comparison_map",
     "publish_network_planning_report",
 ]
 

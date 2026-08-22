@@ -14,8 +14,8 @@ from _network_fixtures import (
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 from supply_chain_planner.delivery.map_service import (
-    NetworkComparisonMapBundle,
-    build_network_comparison_map_bundle,
+    NetworkComparisonGeoJson,
+    build_network_comparison_geojson,
 )
 from supply_chain_planner.delivery.report_service import (
     NETWORK_PLANNING_MARKDOWN_MARKER,
@@ -206,12 +206,11 @@ def test_sample2_builds_complete_self_contained_map_and_report(
     sample2_delivery: Sample2Delivery,
 ) -> None:
     inputs = sample2_delivery
-    map_bundle = build_network_comparison_map_bundle(
+    map_bundle = build_network_comparison_geojson(
         inputs.normalized,
         inputs.before,
         inputs.after,
-        inputs.comparison,
-        country_code="ID",
+        inputs.comparison
     )
     report_bundle = build_network_planning_report_bundle(
         inputs.normalized,
@@ -221,7 +220,7 @@ def test_sample2_builds_complete_self_contained_map_and_report(
         country_code="ID",
     )
 
-    feature_kinds = Counter(feature.properties.kind for feature in map_bundle.geojson.features)
+    feature_kinds = Counter(feature.properties.kind for feature in map_bundle.features)
     expected_linehaul = sum(
         1
         for warehouse in inputs.normalized.warehouses
@@ -239,12 +238,9 @@ def test_sample2_builds_complete_self_contained_map_and_report(
         "last_mile_assignment": 100,
         "linehaul_connection": expected_linehaul,
     }
-    assert map_bundle.summary.feature_count == len(map_bundle.geojson.features)
-    assert len({feature.id for feature in map_bundle.geojson.features}) == len(
-        map_bundle.geojson.features
+    assert len({feature.id for feature in map_bundle.features}) == len(
+        map_bundle.features
     )
-    assert len(map_bundle.summary.added_warehouse_ids) == 2
-    assert map_bundle.summary.removed_warehouse_ids == []
     assert inputs.baseline.label == "actual_current"
     assert len(inputs.normalized.current_assignments) == 50
     assert set(inputs.baseline.active_warehouse_ids) == {
@@ -260,7 +256,7 @@ def test_sample2_builds_complete_self_contained_map_and_report(
     assert zero_demand_active
     warehouse_properties = {
         feature.properties.warehouse_id: feature.properties
-        for feature in map_bundle.geojson.features
+        for feature in map_bundle.features
         if feature.properties.kind == "warehouse"
     }
     assert all(
@@ -268,7 +264,7 @@ def test_sample2_builds_complete_self_contained_map_and_report(
     )
     demand_properties = [
         feature.properties
-        for feature in map_bundle.geojson.features
+        for feature in map_bundle.features
         if feature.properties.kind == "demand"
     ]
     assert all(item.before_duration_hours is not None for item in demand_properties)
@@ -317,7 +313,7 @@ def test_sample2_builds_complete_self_contained_map_and_report(
         "title",
     ):
         assert f'"{presentation_key}"' not in serialized_map
-    assert NetworkComparisonMapBundle.model_validate(map_payload) == map_bundle
+    assert NetworkComparisonGeoJson.model_validate(map_payload) == map_bundle
     assert NetworkPlanningReportBundle.model_validate(report_payload) == report_bundle
     _assert_no_external_delivery_identity(map_payload)
     _assert_no_external_delivery_identity(report_payload)
@@ -358,12 +354,11 @@ def test_comparison_delivery_accepts_any_comparable_result_pair(
         set(before.active_warehouse_ids),
         set(after.active_warehouse_ids),
     )
-    map_bundle = build_network_comparison_map_bundle(
+    map_bundle = build_network_comparison_geojson(
         inputs.normalized,
         before,
         after,
-        comparison,
-        country_code="ID",
+        comparison
     )
     report_bundle = build_network_planning_report_bundle(
         inputs.normalized,
@@ -374,10 +369,8 @@ def test_comparison_delivery_accepts_any_comparable_result_pair(
     )
     map_payload = map_bundle.model_dump(mode="json")
     report_payload = report_bundle.model_dump(mode="json")
-    assert map_bundle.schema_version == "network_comparison_map_bundle.v2"
+    assert map_bundle.schema_version == "network_comparison_geojson.v2"
     assert report_bundle.schema_version == "network_planning_report_bundle.v2"
-    assert map_payload["summary"]["before_label"] == before.label
-    assert map_payload["summary"]["after_label"] == after.label
     assert "baseline_active" not in str(map_payload)
     assert "facility_active" not in str(map_payload)
     assert report_payload["before"]["label"] == before.label
@@ -396,12 +389,11 @@ def test_comparison_delivery_rejects_result_identity_mismatch(
         }
     )
     with pytest.raises(ValueError, match="delivery_result_input_identity_mismatch"):
-        build_network_comparison_map_bundle(
+        build_network_comparison_geojson(
             inputs.normalized,
             inputs.before,
             mismatched,
-            inputs.comparison,
-            country_code="ID",
+            inputs.comparison
         )
 
 
@@ -444,13 +436,6 @@ def test_delivery_schema_fixtures_match_models_and_validate_complete_indonesia_b
 ) -> None:
     inputs = sample2_delivery
     bundles = {
-        "network_comparison_map_bundle.v2": build_network_comparison_map_bundle(
-            inputs.normalized,
-            inputs.before,
-            inputs.after,
-            inputs.comparison,
-            country_code="ID",
-        ),
         "network_planning_report_bundle.v2": build_network_planning_report_bundle(
             inputs.normalized,
             inputs.before,
@@ -478,12 +463,11 @@ def test_delivery_models_reject_unknown_nested_fields(
 ) -> None:
     inputs = sample2_delivery
     bundles = [
-        build_network_comparison_map_bundle(
+        build_network_comparison_geojson(
             inputs.normalized,
             inputs.before,
             inputs.after,
             inputs.comparison,
-            country_code="ID",
         ).model_dump(mode="json"),
         build_network_planning_report_bundle(
             inputs.normalized,
@@ -493,10 +477,10 @@ def test_delivery_models_reject_unknown_nested_fields(
             country_code="ID",
         ).model_dump(mode="json"),
     ]
-    bundles[0]["summary"]["unexpected"] = True
+    bundles[0]["features"][0]["unexpected"] = True
     bundles[1]["entities"]["demand_cities"][0]["unexpected"] = True
     with pytest.raises(ValidationError):
-        NetworkComparisonMapBundle.model_validate(bundles[0])
+        NetworkComparisonGeoJson.model_validate(bundles[0])
     with pytest.raises(ValidationError):
         NetworkPlanningReportBundle.model_validate(bundles[1])
 
@@ -543,14 +527,13 @@ def test_delivery_bundles_are_deterministic_for_equivalent_input_order(
         }
     )
 
-    expected_map = build_network_comparison_map_bundle(
+    expected_map = build_network_comparison_geojson(
         inputs.normalized,
         inputs.before,
         inputs.after,
         inputs.comparison,
-        country_code="ID",
     )
-    reordered_map = build_network_comparison_map_bundle(
+    reordered_map = build_network_comparison_geojson(
         reversed_normalized,
         inputs.before.model_copy(
             update={
@@ -567,7 +550,6 @@ def test_delivery_bundles_are_deterministic_for_equivalent_input_order(
             }
         ),
         reversed_comparison,
-        country_code="ID",
     )
     expected_report = build_network_planning_report_bundle(
         inputs.normalized,
@@ -670,12 +652,11 @@ def test_map_rejects_missing_coordinates_without_blocking_json_report(
         ValueError,
         match=f"delivery_map_coordinates_required:warehouse:{first.warehouse_id}",
     ):
-        build_network_comparison_map_bundle(
+        build_network_comparison_geojson(
             normalized,
             inputs.before,
             inputs.after,
-            inputs.comparison,
-            country_code="ID",
+            inputs.comparison
         )
 
     report = build_network_planning_report_bundle(

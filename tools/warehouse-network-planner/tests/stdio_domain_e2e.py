@@ -235,7 +235,6 @@ async def _run_network_s3_then_s2(
                 "assess_facility_change",
                 "solve_p_median",
                 "compare_network_scenarios",
-                "render_network_comparison_map",
                 "publish_network_planning_report",
             }
             prepared = json.loads((workspace / prepared_path).read_text(encoding="utf-8"))
@@ -385,7 +384,6 @@ async def _run_network_s3_then_s2(
                 {
                     "solve_p_median",
                     "prepare_network_comparison_map",
-                    "render_network_comparison_map",
                     "publish_network_planning_report",
                 }
             )
@@ -465,18 +463,6 @@ async def _run_network_s3_then_s2(
             )
             assert "layers" not in inline_map
             assert "extensions" not in inline_map
-            s2_trace.append("render_network_comparison_map")
-            map_result = await _call(
-                session,
-                "render_network_comparison_map",
-                {
-                    **final_refs,
-                    "output_relative_path": (
-                        "outputs/warehouse-network/deliverables/sample2-map.json"
-                    ),
-                },
-                workspace,
-            )
             s2_trace.append("publish_network_planning_report")
             report_result = await _call(
                 session,
@@ -492,21 +478,12 @@ async def _run_network_s3_then_s2(
                 },
                 workspace,
             )
-            assert map_result.structuredContent["artifact"]["schema"] == (
-                "network_comparison_map_bundle.v2"
-            )
             assert report_result.structuredContent["artifact"]["schema"] == (
                 "network_planning_report_markdown.v2"
-            )
-            map_payload = json.loads(
-                (
-                    workspace / "outputs/warehouse-network/deliverables/sample2-map.json"
-                ).read_text(encoding="utf-8")
             )
             report_markdown = (
                 workspace / "outputs/warehouse-network/deliverables/sample2-report.md"
             ).read_text(encoding="utf-8")
-            assert map_payload["summary"]["feature_count"] == 187
             assert "# 仓网规划结果简报" in report_markdown
             assert "## 时效覆盖" in report_markdown
             assert "结构化计算结果" in report_markdown
@@ -534,10 +511,9 @@ async def smoke() -> None:
             prepared_path,
         )
         assert s3_trace[-1:] == ["assess_facility_change"]
-        assert s2_trace[-4:] == [
+        assert s2_trace[-3:] == [
             "compare_network_scenarios",
             "prepare_network_comparison_map",
-            "render_network_comparison_map",
             "publish_network_planning_report",
         ]
 

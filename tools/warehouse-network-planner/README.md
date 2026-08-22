@@ -15,7 +15,7 @@
 | `supply_chain_data` | 发现和检查授权 Workspace 的 CSV/JSON/XLSX，发布来源画像、映射、标准化输入和行政区结果 |
 | `supply_chain` | 构建路线/成本矩阵，计算覆盖、成本、场景、p-median、服务约束选址、比较地图和报告 |
 
-`network/server.py` 只负责创建 FastMCP、按固定顺序注册一个 Resource template 与 13 个公开 Tool、
+`network/server.py` 只负责创建 FastMCP、按固定顺序注册一个 Resource template 与 12 个公开 Tool、
 解析 transport 和初始化 Runtime。Network Tool 的 owner 分别位于 `tool_runtime.py`、`route_tools.py`、
 `cost_tools.py`、`analysis_tools.py`、`facility_tools.py` 与 `delivery_tools.py`；它们共享同一个
 Workspace/Profile-scoped ResourceStore accessor，不各自创建 MCP 或业务缓存。
@@ -36,7 +36,6 @@ assess_facility_change
 solve_p_median
 compare_network_scenarios
 prepare_network_comparison_map
-render_network_comparison_map
 publish_network_planning_report
 ```
 

@@ -104,8 +104,5 @@ approval_mode = "approve"
 [plugins.map_utils.mcp_servers.map_utils.tools.create_network_map_card]
 approval_mode = "approve"
 
-[plugins.map_utils.mcp_servers.map_utils.tools.publish_workspace_geojson]
-approval_mode = "approve"
-
 [plugins.map_utils.mcp_servers.map_utils.tools.revise_map_card]
 approval_mode = "approve"

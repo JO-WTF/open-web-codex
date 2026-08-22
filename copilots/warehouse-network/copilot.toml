@@ -44,16 +44,6 @@ id = "map_utils"
 package = "warehouse-network-maps"
 
 [[deliveries]]
-id = "network-comparison-map"
-server = "supply_chain"
-tool = "render_network_comparison_map"
-kind = "workspace_artifact"
-schema = "network_comparison_map_bundle.v2"
-mime_type = "application/json"
-display_name = "Warehouse network: before vs after comparison"
-content_verifier = { kind = "json_schema", tool = "supply_chain", schema_path = "contracts/schemas/network_comparison_map_bundle.v2.schema.json" }
-
-[[deliveries]]
 id = "network-planning-report"
 server = "supply_chain"
 tool = "publish_network_planning_report"

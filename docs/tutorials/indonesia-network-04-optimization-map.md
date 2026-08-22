@@ -39,7 +39,7 @@
 - Data Agent：映射候选仓，补充坐标，调用边界校验，并更新 Case 的标准化输入。
 - Network Agent：调用 `plan_route_matrix`、`plan_cost_matrix`，检查矩阵完整性。
 - Network Agent：调用 `solve_p_median` 或 `solve_service_constrained_location`。求解使用 OR-Tools、固定随机种子、单线程和时间上限。
-- Network Agent：调用 `render_network_comparison_map` 从 Case 比较基线与选址结果，再调用 `publish_network_planning_report`。
+- Network Agent：调用 `prepare_network_comparison_map` 准备基线与选址结果的对比 GeoJSON，再由地图卡片工具展示；用户明确要求时才调用 `publish_network_planning_report`。
 - Supervisor：只汇总方案和假设，不读取候选文件，也不替 Network Agent 选仓。
 
 求解器返回 `timeout` 时，结果只能叫“当前可行解”，不能叫“最优解”；返回 `unavailable` 时不得切换到模型手算或旧算法。

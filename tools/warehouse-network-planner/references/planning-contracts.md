@@ -22,8 +22,8 @@ Network calculations derived from that exact prepared identity are immutable MCP
   facility-location before/after results.
 - `facility_location_solution.v4`: target, selected candidates, two-stage solver stages,
   assumptions and its assignment reference.
-- `network_comparison_map_bundle.v2` and `network_planning_report_markdown.v2`: the
-  final Workspace map and Markdown delivery contracts.
+- `network_planning_report_markdown.v2`: the final Workspace report delivery contract.
+  Comparison map data remains provider-owned GeoJSON for the map-card Tool.
 
 Copy each returned Network `resource_ref` unchanged. GeoJSON map-data tools return the narrower
 `data_ref`; copy that object unchanged into the Maps Tool. Both use server `supply_chain` and an
@@ -72,9 +72,8 @@ Tool may register its explicit Workspace-relative delivery descriptor:
 1. the Artifact receives an independent ID and Task read grant;
 2. Run, Thread, Turn and Item IDs are recorded only as producer provenance;
 3. content is materialized from the authorized Workspace create-new file;
-4. the exact delivery contract, MIME type and size are checked: map exports use the
-   provider-owned JSON bundle contract, while report briefs use bounded, browser-safe
-   `text/markdown`;
+4. the exact report delivery contract, MIME type and size are checked for bounded,
+   browser-safe `text/markdown`;
 5. browser DTOs expose the Artifact identity and authorized content URL, not the
    internal MCP Resource URI.
 

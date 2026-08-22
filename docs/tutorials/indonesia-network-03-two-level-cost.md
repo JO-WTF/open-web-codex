@@ -46,7 +46,7 @@ demand_city_id,serving_warehouse_id,upstream_center_id
 3. 有覆盖文件时，工具返回实际覆盖；没有时，工具只返回已有仓优化基线并附带提示。
 4. 用户指定方案后，调用 `evaluate_facility_scenario`，默认 objective 是 `min_cost`，但必须在结果中写明这个选择。
 5. 用户指定的服务目标由场景工具一并计算；不应从模型文字中猜出目标小时数。
-6. 需要可视化时，`render_network_comparison_map` 从同一个 Case 读取基线和场景，不把覆盖明细复制进上下文。
+6. 需要可视化时，`prepare_network_comparison_map` 准备前后对比 GeoJSON，再由地图卡片工具展示；不把覆盖明细复制进上下文。
 
 ## 真实检查
 

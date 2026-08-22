@@ -23,7 +23,6 @@ from supply_chain_planner.network.optimization_models import (
     AssignmentRow,
     BaselineResult,
     ComparableNetworkView,
-    CoverageComparison,
 )
 
 
@@ -162,28 +161,6 @@ class NetworkCoverageGeoJson(DeliveryModel):
     features: list[CoverageNetworkMapFeature]
 
 
-class NetworkMapSummary(DeliveryModel):
-    country_code: str = Field(pattern=r"^[A-Z]{2}$")
-    before_label: str
-    after_label: str
-    feature_count: int = Field(ge=0)
-    before_active_warehouse_ids: list[str]
-    after_active_warehouse_ids: list[str]
-    added_warehouse_ids: list[str]
-    removed_warehouse_ids: list[str]
-    before_cost: float | None
-    after_cost: float | None
-    cost_delta: float | None
-    coverage: list[CoverageComparison]
-
-
-class NetworkComparisonMapBundle(DeliveryModel):
-    schema_version: Literal["network_comparison_map_bundle.v2"] = "network_comparison_map_bundle.v2"
-    kind: Literal["network_comparison_map"] = "network_comparison_map"
-    summary: NetworkMapSummary
-    geojson: NetworkMapFeatureCollection
-
-
 def build_network_distribution_geojson(
     normalized: NormalizedInputBatch,
     *,
@@ -261,15 +238,13 @@ def build_network_distribution_geojson(
     return NetworkDistributionGeoJson(features=features)
 
 
-def build_network_comparison_map_bundle(
+def build_network_comparison_geojson(
     normalized: NormalizedInputBatch,
     before: ComparableNetworkView,
     after: ComparableNetworkView,
     comparison: AssignmentComparison,
-    *,
-    country_code: str,
-) -> NetworkComparisonMapBundle:
-    """Build a self-contained map for any exact before/after result pair."""
+) -> NetworkComparisonGeoJson:
+    """Build comparison GeoJSON for any exact before/after result pair."""
 
     validated = validate_delivery_inputs(normalized, before, after, comparison)
     added_ids = set(after.active_warehouse_ids) - set(before.active_warehouse_ids)
@@ -368,23 +343,7 @@ def build_network_comparison_map_bundle(
             validated.warehouse_by_id,
         )
     )
-    return NetworkComparisonMapBundle(
-        summary=NetworkMapSummary(
-            country_code=country_code,
-            before_label=before.label,
-            after_label=after.label,
-            feature_count=len(features),
-            before_active_warehouse_ids=sorted(validated.before_active_ids),
-            after_active_warehouse_ids=sorted(validated.after_active_ids),
-            added_warehouse_ids=sorted(added_ids),
-            removed_warehouse_ids=sorted(removed_ids),
-            before_cost=comparison.before_cost,
-            after_cost=comparison.after_cost,
-            cost_delta=comparison.cost_delta,
-            coverage=sorted(comparison.coverage, key=lambda item: item.target_hours),
-        ),
-        geojson=NetworkMapFeatureCollection(features=features),
-    )
+    return NetworkComparisonGeoJson(features=features)
 
 
 def build_network_coverage_geojson(

@@ -85,7 +85,6 @@ NETWORK_TOOLS = {
     "prepare_network_coverage_map",
     "prepare_network_distribution_map",
     "publish_network_planning_report",
-    "render_network_comparison_map",
     "solve_p_median",
 }
 

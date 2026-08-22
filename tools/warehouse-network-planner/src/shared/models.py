@@ -666,12 +666,9 @@ class FacilityChangeAssessmentToolResult(StrictModel):
 class NetworkFinalArtifactDescriptor(StrictModel):
     """Platform-readable descriptor for one explicit final domain deliverable."""
 
-    artifact_schema: Literal[
-        "network_comparison_map_bundle.v2",
-        "network_planning_report_markdown.v2",
-    ] = Field(alias="schema")
+    artifact_schema: Literal["network_planning_report_markdown.v2"] = Field(alias="schema")
     display_name: str = Field(min_length=1, max_length=256, alias="displayName")
-    mime_type: Literal["application/json", "text/markdown"] = Field(alias="mimeType")
+    mime_type: Literal["text/markdown"] = Field(alias="mimeType")
     workspace_relative_path: str = Field(
         min_length=1,
         max_length=1024,

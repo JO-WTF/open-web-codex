@@ -48,7 +48,7 @@ const DATA_TOOLS: [&str; 4] = [
     "prepare_network_input",
     "prepare_network_geography",
 ];
-const NETWORK_TOOLS: [&str; 13] = [
+const NETWORK_TOOLS: [&str; 12] = [
     "assess_facility_change",
     "compare_network_scenarios",
     "evaluate_network_baseline",
@@ -60,7 +60,6 @@ const NETWORK_TOOLS: [&str; 13] = [
     "prepare_network_coverage_map",
     "prepare_network_distribution_map",
     "publish_network_planning_report",
-    "render_network_comparison_map",
     "solve_p_median",
 ];
 const MAP_TOOLS: [&str; 9] = [

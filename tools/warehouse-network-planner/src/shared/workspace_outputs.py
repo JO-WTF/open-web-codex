@@ -11,7 +11,6 @@ from open_web_codex_provider import ProviderContractError, ensure_workspace_dire
 class WorkspaceOutputKind(StrEnum):
     PREPARED_INPUT = "prepared"
     NAVIGATION_REQUEST = "requests"
-    DELIVERY_JSON = "deliverables-json"
     DELIVERY_MARKDOWN = "deliverables-markdown"
 
 
@@ -19,7 +18,6 @@ _OUTPUT_ROOT = PurePosixPath("outputs/warehouse-network")
 _OUTPUT_CONTRACTS = {
     WorkspaceOutputKind.PREPARED_INPUT: (_OUTPUT_ROOT / "prepared", ".json"),
     WorkspaceOutputKind.NAVIGATION_REQUEST: (_OUTPUT_ROOT / "requests", ".json"),
-    WorkspaceOutputKind.DELIVERY_JSON: (_OUTPUT_ROOT / "deliverables", ".json"),
     WorkspaceOutputKind.DELIVERY_MARKDOWN: (_OUTPUT_ROOT / "deliverables", ".md"),
 }
 

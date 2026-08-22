@@ -317,7 +317,7 @@ stdio probe 启动 Data/Demo/Network/maps 并断言 Role 所需 inventory，两�
 3B.2 已有证据：使用当前 checkout 构建的 Codex、真实 Profile Host、生产 built-in
 composition 与本地 mock Responses provider，clean Profile 的官方 `skills/list` 精确发现三项
 仓网 Skill，Root 不发现仓网 MCP，Data/Network native child 只看到各自 Skill 和精确
-`8+1`/`14+5` MCP tool inventory。Root 每个 Turn 由 adapter 使用官方 typed Skill input 直接注入
+`4`/`12+9` MCP tool inventory。Root 每个 Turn 由 adapter 使用官方 typed Skill input 直接注入
 Supervisor 正文并隐藏通用 Skill 目录；child 继续由 Role 只展示唯一启用 Skill。原生 wait/mailbox、同 Data child follow-up 与所有 terminal
 通过；Profile Skill 修改触发 `skills/changed` 并由 force reload 读取，Profile Role 修改只影响
 下一次 spawn。既有 child 的无 delta MCP reload 在 safe boundary 保持同一 inventory，不伪造
