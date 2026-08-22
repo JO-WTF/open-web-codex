@@ -1,37 +1,75 @@
-# 印尼仓网案例总览
+# 仓网 Copilot 是什么
 
-本案例把一个真实的仓网问题拆成四篇教程。目标不是让模型把所有原始数据读进上下文，而是让用户在 Web 中看到：哪些数据已经准备好、哪个 Agent 正在工作、哪里需要用户决定，以及每个结果由同一 `supply_chain` provider 中哪个 typed Resource 和确定性组件产生。
+仓网 Copilot 是一个帮你做仓网判断的助手。它不会凭空编造城市、仓库、路线或报价；它根据你上传的数据，计算后把结果画在地图上。
 
-## 业务背景
+你可以把它理解为一条简单的工作线：
 
-我们要为印度尼西亚的需求城市规划仓库网络。教程 fixture 使用人口最大的 50 个城市作为需求点，需求量按 `ceil(population / 1000)` 生成；每个需求点都通过 geoBoundaries ADM2 边界检查。已有网络包含 5 个 center 仓和 6 个 cross-docking 仓：Jakarta、Palembang、Medan、Surabaya、Makassar 是中心仓，另外六个城市作为前置仓。候选仓、当前覆盖和报价分别作为后续步骤的可选输入。
+```text
+上传数据 → 看懂数据 → 计算方案 → 给出结论和地图
+```
 
-教程默认不调用导航接口。距离使用 `haversine distance × detour coefficient`，时效使用调整后距离除以平均行驶速度，并按每天 6 小时驾驶换算日级时效。这个口径用于规划筛选，不是车辆级 ETA 承诺。真实客户量很大时，应先聚合到城市或代表点；只有路线规模、缓存、费用和许可都明确后，才接入批量导航矩阵。
+## 它擅长回答什么
 
-## 数据与来源
+| 你的问题 | 它会给你什么 |
+| --- | --- |
+| 现有仓网能否在 12 小时内覆盖需求？ | 达标率、未达标城市和地图 |
+| 增加或关闭一个仓会怎样？ | 前后变化、受影响城市和对比地图 |
+| 要达到 90% 时效目标，至少还需要几个仓？ | 最少新增数量、建议地点和地图 |
+| 报价下的总成本是多少？ | 干线、末端和总成本；缺报价会明确提示 |
 
-fixture 位于 [indonesia-network/base](../../tools/warehouse-network-planner/examples/indonesia-network/base/)，包括：
+## 它怎样处理你的文件
 
-- `demand-cities.csv`：50 个需求城市、人口、需求量、省份和坐标。
-- `existing-warehouses.csv`：11 个已有仓及 center/cross-docking 类型和上游中心仓关系。
-- `administrative-areas.json`：行政区、坐标和边界匹配结果。
-- `route-quotes.csv`：550 条仓到需求城市的末端报价和 30 条中心到前置仓的干线报价。
-- `candidate-warehouses.csv`：可用于后续选址的候选位置。
-- `source-lock.json`、`validation-report.json`、`dataset-manifest.json`：来源、许可、hash 和生成质量门禁。
+它能读取 CSV、Excel 和 JSON。每个 Excel sheet 或 JSON 数组都会单独判断，不会因为一个辅助表缺字段就阻塞整次分析。
 
-这些数据是可重放的教程数据，不是商业事实。生成器和校验报告共同证明城市点在边界内、需求公式正确、仓库数量正确、报价矩阵完整且报价与距离保持正相关。
+表头不需要完全固定。`城市名称`、`服务地`、`Demand Qty` 或业务缩写都可以使用；只要含义足够清楚，系统会自动对应。真的无法确定时，才会请你确认。
 
-## Agent 分工
+它不会：
 
-Root Thread 先发布 typed 数据需求。Network Agent 持有业务参数，Data Agent 只负责按目标选择 source units、检查 CSV、JSON、XLSX，提出显式字段映射，补充行政区和坐标，并在 `outputs/warehouse-network/prepared/` create-new 写入 `prepared_network_input.v2`。Data Agent 交接精确 Workspace 相对路径、内容身份、roles/role_counts 和有界 warnings；Network Agent 再由 Tool 读取该文件，并用严格 ResourceRef 保存路线、成本、覆盖、场景和选址等 provider-owned 计算结果。preview 不等于 total，未选来源缺字段不阻塞当前目标，fresh prepared 只有显式选中且 provenance fresh 才复用，source changed 只允许一次重检。
+- 擅自补造需求量、仓库类型、币种或报价规则；
+- 把预览的几行数据当成全部数据；
+- 改写你上传的原始文件；
+- 因为某个无关文件不完整就否定其他已选数据。
 
-Supervisor 不按固定阶段脚本运行。它根据当前输入和计算缺口决定是否需要另一个 Agent；无依赖任务可以并行，但没有必要输入时不能提前计算。原始表格只由 Data Tool 在授权范围内读取，Agent 之间只传准备文件的精确相对路径、内容身份、严格 ResourceRef 和有限摘要。最终报告才由 final Tool 创建为 Workspace Markdown 交付物。
+准备过的数据在文件没有变化时会继续使用，所以同一个任务里的后续问题通常不需要重新上传或重新解释字段。
 
-## 四篇教程
+## 两种 Copilot 怎么选
 
-1. [数据和球面时效](indonesia-network-01-data.md)：上传需求城市和已有仓库，得到路线矩阵、时效最优覆盖和 6/12/18 小时覆盖率。
-2. [两级仓网成本](indonesia-network-02-service-baseline.md)：加入 center/cross-docking 关系和报价，分别计算干线、末端和全网成本。
-3. [当前覆盖和场景](indonesia-network-03-two-level-cost.md)：加入 `current-coverage.csv`，区分 `actual_current` 与 `optimized_existing_footprint`，再模拟增删和搬迁。
-4. [候选仓、选址和地图](indonesia-network-04-optimization-map.md)：加入候选仓，运行 p-median、时效约束选址，并生成确定性方案比较地图。
+| 选择 | 适合场景 | 你看到的结果 |
+| --- | --- | --- |
+| Warehouse Network · Multi-Agent | 首次完整分析、连续追问、数据较多 | 一个总的业务回答和地图 |
+| Warehouse Network · Single Agent | 快速分析或希望由一个助手从头处理 | 同样的业务回答和地图 |
 
-每篇都可以在 Web 中独立复查。教程只在用户明确写出“使用教程 mock 数据”时把 fixture 作为普通 Workspace 文件写入；本包没有独立 Demo MCP，空 Workspace、缺文件或真实工具失败都不会自动回退到示例数据。
+两者的区别在内部工作安排，不是计算口径。第一次使用时直接选多 Agent 版本即可。
+
+## 怎样提问最清楚
+
+一句话通常就够。最好同时写出：目标时限、想比较的方案、是否需要地图或成本。
+
+好的例子：
+
+```text
+计算 12 小时时效达标率，并在地图上区分达标和未达标城市。
+```
+
+```text
+保持现有仓库不变，评估新增 Balikpapan 越库仓后时效和成本的变化，并绘制对比地图。
+```
+
+```text
+在 12 小时需求量加权达标率不低于 90% 的条件下，找出最少的新增仓，并说明结果是否已经证明为最少。
+```
+
+不必指定计算方法、工具名称、文件目录或让它“先搜索工具”。这些属于系统内部工作，不会帮助业务结果更准确。
+
+## 怎样阅读一份好答案
+
+一份合格的答案会：
+
+1. 先说结论，例如“新增 Balikpapan 后，12 小时需求量加权达标率提高了 5.0 个百分点”；
+2. 说明比较对象和口径，例如“从现有仓网方案到新增仓方案”；
+3. 说明结果不能确认的部分，例如路线或报价不足；
+4. 保留地图，让你看见改善和盲区在哪里。
+
+它不应该用内部代号、接口名或一长串技术词来代替业务解释。看到这样的回答，可以要求它“用业务语言重新说明”。
+
+下一步：[10 分钟跑通完整仓网示例](indonesia-network-quickstart.md)。

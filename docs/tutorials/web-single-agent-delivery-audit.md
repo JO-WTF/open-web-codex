@@ -1,4 +1,11 @@
-# 单 Agent：在 Web 审计配送承诺
+# 已归档：旧版单 Agent 配送审计练习
+
+> 本页记录的是已经移除的 Web 发布、数据版本和手工配置流程，不再是可执行教程，也不能作为
+> 当前实现或新功能的依据。要学习当前仓网 Copilot，请从[仓网 Copilot 新手教程](README.md)开始。
+
+---
+
+# 单 Agent：在 Web 审计配送承诺（历史记录）
 
 本篇只解决一个问题：给定一批配送记录，计算订单按时率、需求加权按时率、迟到单号和
 表现最差的省份。
@@ -280,6 +287,4 @@ Create draft → Validate → Publish
 不能把 Secret 写进 Python、Skill、Prompt 或 Dataset。需要多个独立专业判断或需要
 持久 Artifact 交接时，再引入 Supervisor；不要因为“任务看起来重要”就默认增加 Agent。
 
-下一篇：
-
-[印尼仓网 1：发布并核验大型规划数据](indonesia-network-01-data.md)
+当前仓网使用教程请从[仓网 Copilot 新手教程](README.md)开始；本归档练习没有后续步骤。

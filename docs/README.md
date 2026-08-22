@@ -43,30 +43,30 @@
 这类文档服务一个明确合同。合同成为当前实现后，应同步更新系统架构和能力基线；
 完成过程不继续堆入规格正文。
 
-### 扩展指南与冻结教程
+### 扩展指南、仓网教程与开发者入口
 
 - [领域 Agent 扩展架构](domain-agent-extension-architecture.md)
 - [Skills、MCP 与自定义 UI 扩展](custom-skills-mcp-ui-guide.md)
+- [仓网 Copilot 新手教程](multi-agent-development-tutorial.md)：从上传数据开始，完成
+  12 小时时效、指定新增仓和最少新增仓三类业务分析；教程使用当前的 Workspace、Task、
+  两个独立仓网 Copilot 包和地图交付合同，不要求使用者理解内部协作或工具名称。
+  - [10 分钟跑通完整示例](tutorials/indonesia-network-quickstart.md)
+  - [认识要上传的数据](tutorials/indonesia-network-01-data.md)
+  - [查看 12 小时时效和地图](tutorials/indonesia-network-02-service-baseline.md)
+  - [评估新增 Balikpapan 仓](tutorials/indonesia-network-03-two-level-cost.md)
+  - [找出达到 90% 的最少新增仓](tutorials/indonesia-network-04-optimization-map.md)
+  - [审批与故障恢复](tutorials/approvals-and-recovery.md)
 - [Copilot 开发者快速开始](tutorials/copilot-developer-quickstart.md)：当前
   `copilot init` / `validate` / `prepare` / `dev` / `test` 源码入口；SDK 从显式 runtime manifest
   和 hash lock 准备外置 Tool 环境，`dev` 在隔离 Profile 中验证 Skill 与 MCP Server discovery，
   `test` 用本地确定性 Provider 验证单条原生 Supervisor/Role/MCP 正常链。它们不证明真实生产
   模型质量、生产 Profile 安装、Marketplace 或多用户 readiness。
-- [零基础多 Agent 开发教程（冻结迁移输入）](multi-agent-development-tutorial.md)
-  - [教程标准与四条学习路径](tutorials/README.md)
-  - [10 分钟运行印尼仓网示例](tutorials/indonesia-network-quickstart.md)
-  - [单 Agent：在 Web 审计配送承诺](tutorials/web-single-agent-delivery-audit.md)
-  - [印尼仓网案例总览](tutorials/supply-chain-agent-tutorial.md)
-  - [印尼仓网 1：发布并核验数据](tutorials/indonesia-network-01-data.md)
-  - [印尼仓网 2：只分析单层时效](tutorials/indonesia-network-02-service-baseline.md)
-  - [印尼仓网 3：两级成本与指定候选](tutorials/indonesia-network-03-two-level-cost.md)
-  - [印尼仓网 4：有限候选优化与地图](tutorials/indonesia-network-04-optimization-map.md)
-  - [审批与故障恢复](tutorials/approvals-and-recovery.md)
-  - [开发者补充：Hello Agent MCP stdio](tutorials/hello-agent-quickstart.md)
+- [Hello Agent：第一次真实 Tool 调用](tutorials/hello-agent-quickstart.md)：开发者练习，不是
+  仓网使用前置条件。
 
-扩展指南可以提供模式和示例，但不能重新定义 Profile、Workspace、Artifact、
-Agent Definition、Runtime Role 等核心术语。现有 Web 教程记录旧仓网原型界面与合同，
-在阶段一内置仓网闭环完成并重写前不是可执行的新手入口，不得据此继续实现旧路径。
+扩展指南和教程不能重新定义 Profile、Workspace、Artifact、Agent Definition、Runtime Role
+等核心术语。仓网教程只描述当前已验证的使用流程；历史原型和已移除的发布流程只作为明确
+标注的归档记录或 Git 历史保留，不作为新手操作依据。
 
 ### 当前纵向切片
 

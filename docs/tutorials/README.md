@@ -1,75 +1,79 @@
-# Copilot 教程入口与冻结案例
+# 仓网 Copilot 新手教程
 
-状态：Atom 1 开发者入口可用；旧 Web 案例仍为冻结迁移输入（2026-08-13）。
+这是一套给业务人员的入门教程。你不需要懂算法、代码或 Agent：上传数据，说明你想解决的仓网问题，再查看数字和地图即可。
 
-当前唯一可执行的新手创作入口是
-[Copilot 开发者快速开始](copilot-developer-quickstart.md)，它只覆盖 `copilot init` 和
-`copilot validate` 的源码脚手架与静态组合验证。开发循环、测试编排、Profile 安装、Runtime
-discovery/readiness 和 Web 创作入口尚未实现。
+完成本教程后，你可以回答三类最常见的问题：
 
-以下页面记录旧仓网原型，不是当前可执行的新手入口；其中的 Settings 页面、Workspace
-发布/扫描、capability template 和手工 Release 合同均不得作为新实现依据。Clean Spine
-产品 E2E 完成后，这些旧页面必须从正式 SDK/Copilot Studio 用户入口整体重写。当前证据以
-[能力基线](../capability-baseline.md) 为准，阶段一运行边界以
-[ADR-018](../adr/018-built-in-network-copilot-runtime-closure.md) 为准。
+1. 现有仓网在 12 小时内能服务多少需求？
+2. 新增一个指定仓库会带来多大变化？
+3. 为达到目标时效，至少还要新增几个仓库？
 
-以下保留原教程设计，供迁移时核对业务示例与学习梯度。
+## 从这里开始
 
-## 学习路径
+第一次使用，按这个顺序阅读和操作：
 
-| 路径 | 适合谁 | 从哪里开始 |
-| --- | --- | --- |
-| 开发者创作 | 想创建并静态验证 Copilot 源码 | [Copilot 开发者快速开始](copilot-developer-quickstart.md) |
-| 快速体验 | 只想确认链路能不能跑通 | [印尼仓网快速开始](indonesia-network-quickstart.md) |
-| 理解执行 | 想知道 Agent、Tool、Skill 和 Resource 如何协作 | [单 Agent 配送审计](web-single-agent-delivery-audit.md) |
-| 仓网入门 | 想从最小网络问题逐步增加数据 | 印尼仓网 1 → 2 → 3 |
-| 高级规划 | 需要候选仓、选址约束和地图比较 | 印尼仓网 4 |
+1. [10 分钟跑通完整示例](indonesia-network-quickstart.md)
+2. [认识要上传的数据](indonesia-network-01-data.md)
+3. [查看 12 小时时效和地图](indonesia-network-02-service-baseline.md)
+4. [评估新增 Balikpapan 仓](indonesia-network-03-two-level-cost.md)
+5. [找出达到 90% 时效目标的最少新增仓](indonesia-network-04-optimization-map.md)
 
-## 合格教程的标准
+如果想先了解它会怎样帮你工作，读 [仓网 Copilot 是什么](supply-chain-agent-tutorial.md)。遇到审批、等待或失败，再看 [审批与故障恢复](approvals-and-recovery.md)。
 
-1. **先给结果。** 开头说明用户最后会看到什么、需要哪些输入和哪些参数。
-2. **输入可重复。** 使用仓库内经过校验的 fixture 或用户明确上传的文件；记录来源、单位、hash 和生成规则。
-3. **界面真实。** 只写当前 Web 已存在的按钮、输入卡片、Agent execution 卡片和状态；未实现能力必须明确标为阻塞。
-4. **一次增加一个主要难点。** 每篇写清楚比上一篇增加了什么，不把所有数据和算法一次塞给新手。
-5. **解释原因。** 用业务语言说明为什么需要某个字段、参数、Agent 或 Tool，不要求读者先理解内部实现。
-6. **权限可检查。** 明确每个 Agent 可以读什么 Workspace 数据、使用哪些 MCP 和 Tool、产生哪些 Resource；Prompt 不是权限。
-7. **计算与判断分开。** 距离、时效、成本、优化和地图由确定性 Tool 计算，Agent 负责选择口径、补业务参数和解释结果。
-8. **交付可追溯。** 读者能看到结构化结果、Resource schema、来源摘要和 execution 终态；模型文字本身不算证据。
-9. **失败保持失败。** 缺数据、字段歧义、工具不可用、矩阵不完整和求解超时都要有明确状态，不猜、不填零、不 Mock 回退。
-10. **口径完整。** 写明分母、单位、时间范围、舍入、约束、估算方法和方案标签。
-11. **可扩展。** 说明自己的业务需要替换哪些文件，什么时候需要新增 Tool、MCP、Agent 或输入参数。
-12. **不泄露内部状态。** 不把 Provider key、主机路径、Runtime request ID、Resource URI 或完整原始表格放进教程和浏览器消息。
+## 开始前只要准备三件事
 
-## 对象分工
+1. 创建或选择一个 Workspace。它就是本次分析的文件夹。
+2. 上传你的仓网数据。首次体验可用仓库里的[印尼示例数据](../../apps/web/scripts/fixtures/warehouse-network/mock_data/)。
+3. 新建任务时选择一个仓网 Copilot。
 
-```mermaid
-flowchart LR
-  F[Workspace 文件] --> D[Data Agent]
-  D --> R[持久化 Resource]
-  S[Skill] --> A[Agent 如何使用 Tool]
-  T[MCP Tool] --> A
-  R --> A
-  A --> P[Supervisor 汇总]
+通常选择 **Warehouse Network · Multi-Agent**。它会把“检查数据”和“规划仓网”交给不同的专业步骤处理，适合完整分析和连续追问。
+
+如果只想快速完成一件小任务，也可选择 **Warehouse Network · Single Agent**。两者使用同一套计算规则，交付的数字、报告和地图类型相同；区别只是内部的分工方式。一个任务开始后不需要、也不能在中途切换。
+
+## 你只需要这样提问
+
+把目标、时限和希望看到的结果写清楚即可。例如：
+
+```text
+根据我上传的文件计算 12 小时时效达标率并绘制地图。
 ```
 
-| 对象 | 负责什么 | 不负责什么 |
-| --- | --- | --- |
-| Workspace SourceAsset | 保存用户授权的 CSV、JSON、XLSX | 决定计算目标 |
-| MCP Tool | 执行可重复的检查、计算或发布 | 自己决定业务优先级 |
-| Skill | 说明什么时候调用 Tool、输入输出和失败处理 | 扩大 Agent 权限或保存隐式状态 |
-| Agent | 对数据准备或网络分析职责负责 | 读取未授权文件或复制大表进消息 |
-| Resource | 保存有身份、hash、schema 和来源的结果 | 充当第二个 Thread 或调度器 |
-| Supervisor | 识别缺口、动态协调、汇总结果 | 写死国家、阶段数量和固定调用顺序 |
+后续在同一个任务中继续追问：
 
-## Draft 和 Release
+```text
+评估添加仓库 Balikpapan 之后对时效达标率的影响，并绘制对比地图。
+```
 
-Supervisor Draft 是可连续保存的草稿，用整数 `revision` 和内容 hash 保护并发更新，用户不需要填写语义版本号。发布时平台在事务中分配不可变 Release semver；Thread 使用 Draft 时固定 `revision + content_sha256`，使用 Release 时固定 `release_version + content_sha256`。
+```text
+计算时效达标率为 90% 的前提下最少的新增仓库数量和选址结果，并用地图展示。
+```
 
-## 印尼仓网四篇
+不用告诉它文件路径、列名、计算步骤或内部角色。需要你决定的事情，系统会用输入卡片直接问你。
 
-1. [从 Web 跑通第一份网络分析](indonesia-network-01-data.md)：50 个需求城市、已有仓、球面距离、时效覆盖率。
-2. [加入两级仓网和运输成本](indonesia-network-02-service-baseline.md)：报价、干线、末端和分仓成本。
-3. [当前覆盖、基线和仓网模拟](indonesia-network-03-two-level-cost.md)：实际当前方案、优化基线、增删搬迁。
-4. [候选仓、p-median 和方案地图](indonesia-network-04-optimization-map.md)：候选仓、固定/可选已有仓、服务约束、地图和报告。
+## 看懂结果
 
-四篇都使用球面距离估算。客户数量大时先按城市聚合需求；只有拥有缓存、批量接口和费用许可时才接导航矩阵。
+每次结果先给一句业务结论，再列出关键数字。重点看下面四项：
+
+| 结果 | 它回答什么 |
+| --- | --- |
+| 需求量加权达标率 | 按需求量计算，有多少需求能在目标时限内送达 |
+| 城市达标率 | 按城市数量计算，有多少城市能在目标时限内送达 |
+| 与基准的变化 | 新方案比原方案提高或降低了多少个百分点 |
+| 地图 | 仓库、服务线路以及达标、未达标城市分别在哪里 |
+
+地图里的绿色城市表示达到当前时效目标，红色城市表示未达到，灰色城市表示暂时没有可用分配。地图只展示已经算出的结果，不会自己改写结论。
+
+## 当系统需要你补充信息
+
+它只会在确实无法判断时询问，例如：
+
+- 两列数据都可能是“需求量”，需要你确认；
+- 报价没有写币种或单位；
+- 仓库类型没有说明，且无法从其他数据确定；
+- 需要路线数据，但你尚未提供路线或未选择估算方式。
+
+这不是失败。选择卡片上的合适选项，或填写你确认的业务规则，然后等待原任务继续即可。不要重新新建任务或重复发送同一个问题。
+
+## 需要开发自己的 Copilot？
+
+这套教程面向使用者。开发、验证和本地运行请阅读 [Copilot 开发者快速开始](copilot-developer-quickstart.md)。

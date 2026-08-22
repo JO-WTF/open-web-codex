@@ -8,8 +8,8 @@
 预计用时 15–20 分钟。本篇复用上一教程的任务，不需要新的模型调用，不要求关闭
 安全策略，也不要求执行危险命令。
 
-先完成[企业仓网 Supervisor](supply-chain-agent-tutorial.md)。返回
-[教程总入口](../multi-agent-development-tutorial.md)。
+建议先完成[仓网 Copilot 新手教程](README.md)。返回
+[仓网教程入口](../multi-agent-development-tutorial.md)。
 
 ## 完成后的能力
 
