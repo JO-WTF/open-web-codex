@@ -119,7 +119,7 @@ fixture 作为空 Workspace 的自动回退。
 ## 开发和验证
 
 ```bash
-python3 -m pip install -e tools/copilot-provider-sdk -e tools/copilot-sdk
+python3 -m pip install -e packages/copilot-provider-sdk -e packages/copilot-sdk
 python3 -m copilot_sdk prepare copilots/warehouse-network \
   --output-root "$PWD/.local/open-web-codex/copilot-environment"
 python3 -m pip install -e 'tools/warehouse-network-planner[dev]'

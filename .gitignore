@@ -26,6 +26,8 @@ codex/codex-rs/target/
 codex/target/
 tools/*/.venv/
 tools/*/node_modules/
-tools/copilot-provider-sdk/.codex/
-tools/copilot-provider-sdk/build/
-tools/copilot-provider-sdk/uv.lock
+packages/*/.venv/
+packages/*/node_modules/
+packages/copilot-provider-sdk/.codex/
+packages/copilot-provider-sdk/build/
+packages/copilot-provider-sdk/uv.lock

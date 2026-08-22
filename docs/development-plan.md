@@ -142,7 +142,7 @@ mailbox、Workflow DSL、Run Completion Controller、签名链或 exactly-once�
 | 普通数据文件 | Workspace 文件系统 | 同 Workspace Task 天然可见；没有 Task→文件 binding 或数据生命周期 |
 | typed intermediate 内容与生命周期 | MCP provider | 通过官方 Resource URI/template/read 使用；Platform 不存内容或建通用 Broker |
 | Workspace authority | Platform/Runner | authenticated Workspace capability、canonical containment/no-follow、final file atomic create-new 与 Artifact 授权物化 |
-| 通用 Copilot provider primitives | `tools/copilot-provider-sdk` | 独立提供 `ResourceRef` envelope、expected-schema validation、canonical codec、payload bounds、typed errors、Workspace scope/writer 与 provider-scoped load/publish；Tool 通过 `runtime.toml.platform_packages` 声明，generic provisioner 从单一 SDK registry 注入，不依赖仓网路径 |
+| 通用 Copilot provider primitives | `packages/copilot-provider-sdk` | 独立提供 `ResourceRef` envelope、expected-schema validation、canonical codec、payload bounds、typed errors、Workspace scope/writer 与 provider-scoped load/publish；Tool 通过 `runtime.toml.platform_packages` 声明，generic provisioner 从单一 SDK registry 注入，不依赖仓网路径 |
 | Resource ref 可发现与授权 | Codex official Item + 有界 Platform projection | 只投影 completed Tool Item 的 exact ResourceLink provenance；同 Profile+Workspace 的用户显式选择带 producer event/ordinal 与完整 `{server, uri, resource_schema}`，Server 逐字段复验；不读或保存内容、不猜模型文本 |
 | 文件选择、字段、映射、标准化、复用和合并 | 用户 + Skill + Tool | Platform 不分类、不猜测、不限制业务复用；Resource 是可消费的不可变计算快照，不代表来源真实、业务可信或自动复用许可 |
 | Agent 协同方法 | Supervisor Skill | 不落 Platform workflow 状态机 |
@@ -426,7 +426,7 @@ Terminal/Usage/prompts、Provider 重复 owner、Task creation selection、Run l
 physical-cwd join 必须按 owner 原子收敛，但不得再次插到上述仓网关键路径之前。
 
 阶段二已把领域无关的 ResourceRef/schema/codec/bounds/error/store/runtime/Workspace file
-primitives 从仓网包迁到 `tools/copilot-provider-sdk`。Tool 的 Python 项目 metadata 与
+primitives 从仓网包迁到 `packages/copilot-provider-sdk`。Tool 的 Python 项目 metadata 与
 `runtime.toml.platform_packages` 共同形成声明合同；Copilot SDK 的单一 registry 解析已安装的
 平台 distribution，并由 generic provisioner 注入外置 Tool 环境。仓网不再拥有安装器、通用
 Resource/Workspace 模块或 repo 路径 fallback；MCP provider 继续拥有 Resource 字节和生命周期，

@@ -719,9 +719,9 @@ prepare_copilot_environment() {
   local expected_fingerprint installed_fingerprint=""
   expected_fingerprint="$(
     "$python_cmd" -c \
-      'import hashlib, pathlib, sys; h=hashlib.sha256(); [(h.update(pathlib.Path(p).read_bytes())) for p in sys.argv[1:]]; print(h.hexdigest())' \
-      "$repo_root/tools/copilot-provider-sdk/pyproject.toml" \
-      "$repo_root/tools/copilot-sdk/pyproject.toml"
+      'import hashlib, pathlib, sys; h=hashlib.sha256(); [(h.update(str((source := pathlib.Path(p)).resolve()).encode()), h.update(bytes([0])), h.update(source.read_bytes())) for p in sys.argv[1:]]; print(h.hexdigest())' \
+      "$repo_root/packages/copilot-provider-sdk/pyproject.toml" \
+      "$repo_root/packages/copilot-sdk/pyproject.toml"
   )"
   if [[ -r "$copilot_sdk_source_marker" ]]; then
     IFS= read -r installed_fingerprint <"$copilot_sdk_source_marker" || true
@@ -731,8 +731,8 @@ prepare_copilot_environment() {
       "$python_cmd" -m venv "$copilot_sdk_environment_root"
     fi
     "$copilot_sdk_python" -m pip install --disable-pip-version-check \
-      -e "$repo_root/tools/copilot-provider-sdk" \
-      -e "$repo_root/tools/copilot-sdk"
+      -e "$repo_root/packages/copilot-provider-sdk" \
+      -e "$repo_root/packages/copilot-sdk"
     printf '%s\n' "$expected_fingerprint" >"$copilot_sdk_source_marker"
   fi
   "$copilot_sdk_python" -c \

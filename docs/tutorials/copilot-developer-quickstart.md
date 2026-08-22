@@ -9,7 +9,7 @@
 需要 Python 3.11 或更高版本。在仓库根目录安装当前 checkout：
 
 ```bash
-python3 -m pip install -e tools/copilot-provider-sdk -e tools/copilot-sdk
+python3 -m pip install -e packages/copilot-provider-sdk -e packages/copilot-sdk
 ```
 
 ## 创建源码目录

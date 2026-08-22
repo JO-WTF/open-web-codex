@@ -9,7 +9,7 @@ Copilot SDK 提供一个面向开发者的最小源码入口：创建和静态�
 需要 Python 3.11 或更高版本。在仓库根目录安装当前 checkout：
 
 ```bash
-python3 -m pip install -e tools/copilot-provider-sdk -e tools/copilot-sdk
+python3 -m pip install -e packages/copilot-provider-sdk -e packages/copilot-sdk
 ```
 
 创建一个新的 Copilot 源码目录：

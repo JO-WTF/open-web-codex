@@ -24,7 +24,7 @@ schema 或 marker 的硬编码。
 在仓库根目录验证和准备：
 
 ```bash
-python3 -m pip install -e tools/copilot-provider-sdk -e tools/copilot-sdk
+python3 -m pip install -e packages/copilot-provider-sdk -e packages/copilot-sdk
 python3 -m copilot_sdk validate copilots/warehouse-network --tool-registry-root tools
 python3 -m copilot_sdk prepare copilots/warehouse-network \
   --tool-registry-root tools \

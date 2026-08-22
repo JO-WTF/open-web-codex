@@ -658,7 +658,7 @@ cd tools/warehouse-network-maps
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 
 cd ../..
-PYTHONPATH=tools/copilot-sdk python3 -m copilot_sdk prepare copilots/warehouse-network \
+PYTHONPATH=packages/copilot-sdk python3 -m copilot_sdk prepare copilots/warehouse-network \
   --output-root "$PWD/.local/open-web-codex/copilot-environment"
 ```
 

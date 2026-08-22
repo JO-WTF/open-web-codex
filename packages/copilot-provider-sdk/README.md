@@ -15,7 +15,7 @@ Platform API，也不保存跨 provider 状态。
 在当前仓库开发 SDK 时同时安装两个 distribution：
 
 ```bash
-python3 -m pip install -e tools/copilot-provider-sdk -e tools/copilot-sdk
+python3 -m pip install -e packages/copilot-provider-sdk -e packages/copilot-sdk
 ```
 
 使用它的 Tool 必须在 `pyproject.toml` 声明

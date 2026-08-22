@@ -13,8 +13,9 @@ grep -F -- 'copilot_tool_registry_root="$repo_root/tools"' "$launcher" >/dev/nul
 grep -F -- 'copilot_prepared_root="$data_dir/tool-environments"' "$launcher" >/dev/null
 grep -F -- 'copilot_build_store_root="$data_dir/tool-builds"' "$launcher" >/dev/null
 grep -F -- 'copilot_sdk_environment_root="$data_dir/sdk-environments/copilot"' "$launcher" >/dev/null
-grep -F -- '-e "$repo_root/tools/copilot-provider-sdk"' "$launcher" >/dev/null
-grep -F -- '-e "$repo_root/tools/copilot-sdk"' "$launcher" >/dev/null
+grep -F -- '-e "$repo_root/packages/copilot-provider-sdk"' "$launcher" >/dev/null
+grep -F -- '-e "$repo_root/packages/copilot-sdk"' "$launcher" >/dev/null
+grep -F -- 'source := pathlib.Path(p)).resolve()' "$launcher" >/dev/null
 grep -F -- '"$copilot_sdk_python" -m copilot_sdk prepare "$package_root"' "$launcher" >/dev/null
 grep -F -- '--tool-registry-root "$copilot_tool_registry_root"' "$launcher" >/dev/null
 grep -F -- '--output-root "$environment_root"' "$launcher" >/dev/null
