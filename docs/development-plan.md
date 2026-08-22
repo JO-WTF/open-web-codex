@@ -285,7 +285,7 @@ Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。
    在 Runtime 启动前更新到当前 checked-in 内容，不覆盖其他用户 Skill/Role。Server 绑定经过
 校验的 prepared descriptor；Server 还要求 command/dependency 全部落在明确配置的 shared build store 同一 fingerprint build 内；Runtime 不扫描 process cwd、Workspace 或源码树。缺少 runtime
    声明、lock、prepared transport 或 host adapter 时明确 unavailable。
-3. Root 只暴露原生多 Agent 面，不配置全局仓网 MCP；Data/Network Role 通过原生 Role
+3. Root、Data、Network Role 都显式关闭上游 multi_agent_v2，仓网只使用当前已验证的原生协作合同。Root 只暴露原生多 Agent 面，不配置全局仓网 MCP；Data/Network Role 通过原生 Role
    config 启用各自 Skill、MCP server、deferred Tool discovery 和精确 Tool approval policy。Data4 全部
    有界本地预批准；Network 预批准本地路线/成本/验证/分析/选址/比较与 `publish_network_planning_report`，`map_utils` 预批准
    `create_network_map_card`、`create_map_card` 与 `revise_map_card`；外部地图请求和 final Workspace 地图导出保持 `prompt`，不把全局

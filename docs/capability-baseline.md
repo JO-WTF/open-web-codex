@@ -467,7 +467,7 @@ Profile seed 与显式应用资产 composition：
   不从 cwd、Workspace、`CARGO_MANIFEST_DIR` 或源码树扫描 fallback；
 - Profile 不复制 Tool、venv、Node dependency、Mock、cache 或 test。Copilot Root 只显式加载小型常驻 Skill；
   多 Agent Root 不发现任务 Skill，单 Agent Root 与 child Role 按其显式 scope 通过 Runtime Catalog 渐进发现并按原生选择读取。Role source 持有精确 MCP server scope
-  与 Tool 级 approval policy；server 内 Tool 通过 Runtime deferred discovery 暴露，Server 从 prepared descriptor 投影
+  与 Tool 级 approval policy；三个仓网 Role 都显式关闭上游 multi_agent_v2，只使用当前已验证的原生协作合同。server 内 Tool 通过 Runtime deferred discovery 暴露，Server 从 prepared descriptor 投影
   role-local MCP transport，Root 没有全局仓网
   MCP；Data4 全部是有界本地预批准，Network 预批准本地计算/验证与 `publish_network_planning_report`，maps 预批准
   `create_network_map_card`、`create_map_card` 与 `revise_map_card`，外部地图调用和 final Workspace 地图导出保持 `prompt`。prepared transport

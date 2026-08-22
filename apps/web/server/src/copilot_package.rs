@@ -2203,7 +2203,7 @@ runtime = "tools/maps/runtime.toml"
         assert_eq!(
             root_execution.runtime_config["features.multi_agent_v2"],
             Value::Bool(false),
-            "warehouse Root must use the V1 collaboration contract that supports structured Skill items",
+            "warehouse Root must use the one established collaboration contract",
         );
         let root = assets
             .render_role("warehouse_supervisor_root", &profile)
@@ -2214,6 +2214,11 @@ runtime = "tools/maps/runtime.toml"
                 role["features"]["shell_tool"].as_bool(),
                 Some(false),
                 "warehouse Root and child Roles must disable shell tools through native config",
+            );
+            assert_eq!(
+                role["features"]["multi_agent_v2"].as_bool(),
+                Some(false),
+                "warehouse Root and child Roles must use one established collaboration contract",
             );
         }
         let supply_python = _temp.path().join(

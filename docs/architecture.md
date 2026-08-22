@@ -136,7 +136,7 @@ selection 不依赖 status discovery。
 `plugins`、`remote_plugin`、`apps` 与 `tool_suggest`；不改写持久 Profile 配置，也不在
 Platform 侧过滤 Runtime discovery 或 Tool。
 
-多 Agent 仓网包的 Data/Network Role TOML 只持有
+多 Agent 仓网包的 Root、Data、Network Role TOML 都显式关闭上游 multi_agent_v2，只使用当前已验证的原生协作合同。Data/Network Role TOML 只持有
 `plugins.<tool>.mcp_servers.<server>` 下的精确 allowlist 与 Tool 级审批策略；其 Root 没有全局
 仓网 MCP。独立的单 Agent 仓网包由一个 Root Agent 直接启用同一 Data/Network/Maps Tool policy，
 并以 `features.multi_agent=false` 禁止 child Agent；它显式保留 Runtime 原生 shell，只允许任务 Skill

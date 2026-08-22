@@ -17,6 +17,7 @@ nickname_candidates = ["Euler", "Harbor"]
 
 [features]
 shell_tool = false
+multi_agent_v2 = false
 
 [skills]
 include_instructions = true
