@@ -1,26 +1,30 @@
 ---
 name: warehouse-network-planning
-description: 仅供 network_agent 使用；根据用户目标完成仓网基线、设施变化或选址分析。
+description: 仅供 network_agent 使用；完成仓网基线、单仓变化或多仓选址分析。
 metadata:
   short-description: 仓网规划
 ---
 
 # 仓网规划
 
-只处理 Data 交接的 ready prepared input 和 Planner 返回的精确结果，不读取 raw、preview 或自行重算业务数据。
+只使用 Data 已准备好的数据和规划工具返回的结果，不读取原始文件，不根据预览或模型判断重算业务数据。
 
 ## 业务判断
 
-- 先判断目标：基线、单仓变化，还是达到服务目标的多仓选址。
-- 用户要求真实现状时需要 current assignment；没有它只能说明是优化现有仓足迹。
-- 已有仓默认保留。关闭已有仓必须得到用户明确许可；新增仓、候选仓和服务目标必须来自用户目标或 Tool 结果。
-- 优先使用已确认的路线事实。缺路线事实时，只有用户确认绕路系数、平均速度或导航费用后才继续。
-- 路线或成本 Tool 返回 `needs_input` 时立即停止本 child Turn，向 Root 原样交接 `status=needs_input`、`next_action` 和问题选项；不得调用场景、求解或地图 Tool，也不得把缺失路线导致的无分配解释为零影响。只有 Root 通过原生输入卡片取得选择后才能继续。
-- 12h baseline 或地图若没有 exact `route_matrix` ref，先用 prepared 中的 provided facts 调用 `prepare_route_matrix`，拿到路线 ref 后再做 `evaluate_network_baseline`；地图交给 Map Delivery Skill。
-- 用户只给服务目标而未给仓数时，调用一次 `minimum_feasible`；用户明确给仓数时使用 `exact`。不要由 Agent 循环尝试不同仓数。
-- 报价均值只能由 Planner 对完整 prepared input 计算。只有用户明确要求脚本证据时，才按单 Agent 任务 Skill 的授权生成 evidence；模型不得从 preview 推导均值。
-- 下一 Tool 的 deferred schema 若未出现在当前 request，先重新 `tool_search`，再调用该 Tool。
+- 先确认用户要做基线、单仓变化，还是达到服务目标的多仓选址。
+- 用户要求真实现状时需要当前分配关系；没有该数据，只能评估现有仓范围内的优化分配。
+- 现有仓默认保留。只有用户明确允许时才关闭现有仓。
+- 没有完整路线结果时，先用 `route_method="provided"` 调用 `prepare_route_matrix`，让工具核验已有路线。不得自行填写绕路系数、平均速度或导航费用来绕过数据缺口。
+- 工具返回路线补齐选项时原样交给 Root，等待用户选择。只有用户选择“估算路线”后，才按该选项给出的参数使用 Haversine 估算；选择真实导航或上传路线时按对应流程继续。
+- 得到完整路线结果后，再调用 `evaluate_network_baseline` 计算基线；缺少必要路线时不得把结果解释为“没有变化”。
+- 单仓变化使用 `assess_facility_change`；多仓选址使用 `solve_p_median`，不要自行拆成多套重复计算。
+- 用户只给服务目标、未指定仓数时，使用 `minimum_feasible` 求解一次“达到目标所需的最少新增仓”；用户明确给出仓数时按该仓数求解。不要循环试仓数。
+- 报价均值必须由规划工具基于全部已准备数据计算，不能根据预览样本推导。
 
-## 交接
+## 结果交接
 
-规划 Tool 成功后的 structured result 和精确 ResourceRef 是后续唯一输入；同一目标不重复计算。`needs_input` 交接最多包含三个短问题，每题 2–3 个真实可执行选项，推荐项放在第一位；child 不调用仅限 Root 的 `request_user_input`。地图或报告交付交给对应 Map Delivery Skill，不在本 Skill 重算或拼接数据。`infeasible` 是有界业务结果；权限、身份、取消、超时、能力不可用和输入错误是 typed 终态，应停止并如实报告。
+- 工具首次返回 `needs_input` 时，立即把每个问题的 `id`、标题、问题和选项原样交给 Root，然后停止；不得重调同一工具、改写问题、继续求解或画图。
+- 成功时只交接本次结论、关键数字、已确认事实、必要假设、现有结果无法确认的内容，以及后续地图所需的原始结果引用。
+- 事实与推断分开。不要把地图归属或汇总成本当成某个城市选择某仓的直接原因。
+- 在当前候选和假设下无法达到目标，是有效业务结果；权限、身份、取消、超时或能力不可用则是执行失败，应如实停止。
+- 需要地图或报告时交给地图交付 Skill，不重复计算或拼接数据。

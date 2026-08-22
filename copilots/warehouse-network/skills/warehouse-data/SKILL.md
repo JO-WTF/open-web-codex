@@ -1,36 +1,34 @@
 ---
 name: warehouse-data
-description: 仅供仓网 Supervisor 创建的 data_agent 使用；按业务目标选择来源角色、完成字段判断和数据准备。
+description: 仅供 data_agent 使用；按本次仓网目标选择、判断并准备用户数据。
 metadata:
   short-description: 准备仓网数据
 ---
 
 # 仓网数据准备
 
-只处理用户已授权的仓网数据，不计算路线、成本、覆盖、选址或地图。Tool 负责路径、完整读取、schema、身份、写入和安全边界；本 Skill 只负责业务判断。
+只准备用户已授权的数据，不计算路线、时效、成本、选址或地图。文件读取、校验、身份和写入边界由数据工具负责；本 Skill 只做业务判断。
 
-## 角色选择
+## 选择本次需要的数据
 
-- 普通基线：`demand` + `existing_warehouse`。
-- 真实现状口径：再加 `current_assignment`。
-- 任何时效/SLA/达标率目标（例如 12h）或成本分析：再加 `route_quote`。
-- 单仓变化、候选地图或选址：再加 `candidate_warehouse`。
-- 国家只有在用户请求和已有上下文都无法确定时才询问；不从尚未 inspect 的来源、文件名、语言或当前样例猜国家。
+- 基线分析需要需求与现有仓。
+- 用户要求按真实现状评估时，再加入当前分配关系。
+- 时效、达标率或成本分析，再加入路线或报价。
+- 新增单仓、候选仓展示或选址，再加入候选仓。
+- 国家只有在用户要求和已确认信息都无法确定时才询问，不按文件名或语言猜测。
 
-## 判断
+## 处理方式
 
-1. 先 `discover_workspace_sources`。若发现可能覆盖本次目标的 prepared candidate，把 discover 返回的精确候选路径与 raw paths 一起交给 inspect，让 Tool 判定 fresh reuse；不自行构造路径或读取候选文件。
-2. 用目标角色调用 `inspect_workspace_sources`；国家已由用户/上下文确定时显式传入，否则省略并使用 Tool 返回的 exact `country_code`，只有返回 null 或冲突才询问。已确认的行政区 catalog 也放入 `relative_paths` 绑定本次 identity，但不放 `required_roles` 或 `source_selections`，prepare 只通过 `administrative_catalog_relative_path` 传入。`inspected` 时按 exact unit 选择来源；唯一完整且非歧义的 alias 只作为快速路径。中文、英文缩写或随机表头只要语义和类型明确，就提交显式 mapping。
-3. 只有以下情况询问一次：业务语义多义、未知单位/仓型/币种规则、选中记录缺业务值或冲突。格式名称不同、预览之外存在记录、未选来源缺字段，都不是询问理由。
+1. 依次使用 `discover_workspace_sources` 和 `inspect_workspace_sources`，先发现可用来源以及可复用的已准备数据，再检查与本次目标有关的来源。
+2. CSV 表、Excel sheet 和 JSON 数组分别选择。表头名称不同不是缺数据；只要含义和类型清楚，就提交明确的字段对应关系。
+3. 仅在字段含义有多种解释、单位或币种规则未知、仓型未知、选中记录缺少业务值，或同一标识存在冲突时询问。未选择的文件、预览之外的记录和不同表头都不构成阻塞。
+4. 检查结果为 `prepared_ready` 时直接复用；需要新准备数据时，把确切的表、sheet 或数组及字段对应关系组成 `source_selections`，再调用 `prepare_network_input`。行政区目录只用于地理补全，不把它误判为需求或仓库数据。
 
-## 终态与交接
+## 完成或停止
 
-- `prepared_ready`：直接交接其 `status/outcome`、`operation`、prepared path、input identity、`role_counts`、`warning_count` 和有界 warnings，不调用 prepare。
-- `prepared_selection_required`：把有界候选一次交 Supervisor，请用户选择后停止。
-- `selection_required`：按 Tool 要求缩小来源；仍无法确定时再询问。
-- `inspected`：提交 `source_selections` 和必要的显式 mapping，调用 `prepare_network_input`。
-- `ready`：交接 `status/outcome`、`operation`、prepared path、input identity、`role_counts`、`warning_count` 和有界 warnings。
-- `needs_input`：原样交 Supervisor 真实 requirements，由 Root 向用户询问一次后停止；child 不直接询问、不猜、不循环。
-- `source_changed`：只允许一次重新 inspect；再次变化立即报告并停止。
+- 工具确认已有数据可复用或准备完成时，原样交接其结果、记录数和警告；不要重复准备。
+- 工具要求用户选择来源时，只交接候选项并停止。
+- 返回 `needs_input` 时，只交接本次所选数据的真实缺口，不猜值、不循环尝试。
+- 返回 `source_changed` 时重新检查一次；再次变化就停止并说明来源仍在变化。
 
-候选仓是否纳入由用户目标决定；已确认的候选事实不因 baseline 的 `existing_only` 计算范围被删除。
+候选仓是否参与本次计算由用户目标决定，但已确认的候选仓信息不得因基线只计算现有仓而从准备结果中删除。

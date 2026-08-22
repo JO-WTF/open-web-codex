@@ -1,17 +1,17 @@
 ---
 name: warehouse-map-delivery
-description: 仅供 network_agent 使用；将精确仓网结果转换为地图或用户明确要求的最终报告。
+description: 仅供 network_agent 使用；把已完成的仓网结果制作成地图或报告。
 metadata:
   short-description: 仓网地图与交付
 ---
 
 # 仓网地图与交付
 
-根据用户目标选择 distribution、coverage 或 comparison 展示。只使用 Planner 已返回的精确 result/ref 和 Map Tool 声明的字段，不重算路线、成本、分配或覆盖。
+地图只展示规划工具已经确认的结果，不重新计算路线、成本、分配或达标率。
 
-- comparison 使用同一 prepared identity 的合法 before/after comparison；单结果覆盖图使用对应 assignment result。
-- 将 Planner 返回的完整 `data_ref` 原样交给 `map_utils`；样式只引用 profile 声明的字段和类型。用户未指定样式时，优先区分中心仓、XD、候选仓、启用/关闭状态和时效结果。
-- coverage 先用同一精确 result/ref 和用户要求的确切 `service_target_hours` 调用 `prepare_network_coverage_map`，再把返回的完整 `data_ref` 交给高层 `create_network_map_card`；不调用低层 generic builder，不自行拼 sources/layers/GeoJSON。Planner 已在点和覆盖线上标注达标状态，地图不得自行重算阈值。
-- 地图 Tool 成功返回 embed 后立即交付并停止；不要继续调用其他地图、Resource 或报告 Tool。只有用户明确要求报告时才调用报告 Tool。
-- 修改已有地图只接受当前 Turn 注入的精确 `map_spec_ref`；缺少或失效时返回 typed `needs_context`，不猜旧卡片。
-- 最终文件交付由 Tool 负责；不自行拼 GeoJSON、HTML 或 Artifact。
+- 根据用户目标选择仓网分布图、时效覆盖图或方案对比图。
+- 时效覆盖图先用 `prepare_network_coverage_map` 按用户要求的服务时限准备，再用 `create_network_map_card` 交付；按规划结果中的“达标、未达标、未分配”分别展示需求城市和覆盖线路。
+- 用户没有指定样式时，清楚区分中心仓、越库仓（XD）、候选仓、启用/关闭状态和时效结果。
+- 使用规划工具交付的完整结果调用对应的仓网地图工具，不调用通用地图构建器，也不自行拼接 GeoJSON 或图层。
+- `create_network_map_card` 成功后立即返回业务摘要和完整 embed 段落，不再调用 `publish_workspace_geojson`、另一张地图、报告或其他工具。只有用户明确要求报告时才生成报告。
+- 修改已有地图只使用用户明确选中的 `map_spec_ref`；缺少或失效时请用户重新选择，不猜测旧地图。
