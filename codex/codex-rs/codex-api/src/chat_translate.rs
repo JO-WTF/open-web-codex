@@ -191,11 +191,11 @@ pub fn responses_request_to_chat_completions_request(
         .map(|tools| responses_tools_to_chat_tools(&tools))
         .transpose()?
         .unwrap_or_default();
-    let current_turn_tools = current_turn_discovered_chat_tools(&input, &tools)?;
-    // This is a request-scoped Chat compatibility projection of the current
-    // Turn's completed client ToolSearchOutput. It never mutates canonical
-    // Prompt.tools or the Core ToolRouter registry.
-    tools.extend(current_turn_tools);
+    let history_loaded_tools = history_loaded_chat_tools(&input, &tools)?;
+    // This is a request-scoped Chat compatibility projection of every
+    // completed client ToolSearchOutput in canonical history. It never
+    // mutates canonical Prompt.tools or the Core ToolRouter registry.
+    tools.extend(history_loaded_tools);
     let parallel_tool_calls = parallel_tool_calls
         && !tools
             .iter()
@@ -329,21 +329,10 @@ enum ToolSearchNamespaceTool {
     },
 }
 
-fn current_turn_discovered_chat_tools(
+fn history_loaded_chat_tools(
     input: &[ResponseItem],
     prompt_tools: &[ChatTool],
 ) -> Result<Vec<ChatTool>, ApiError> {
-    let latest_user_message = input
-        .iter()
-        .rev()
-        .find(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"));
-    let Some(current_turn_id) = latest_user_message
-        .and_then(ResponseItem::turn_id)
-        .map(str::to_string)
-    else {
-        return Ok(Vec::new());
-    };
-
     let mut tool_search_call_ids = HashSet::new();
     let mut discovered_candidates = Vec::new();
     for item in input {
@@ -352,7 +341,7 @@ fn current_turn_discovered_chat_tools(
                 call_id: Some(call_id),
                 execution,
                 ..
-            } if execution == "client" && item_belongs_to_current_turn(item, &current_turn_id) => {
+            } if execution == "client" => {
                 tool_search_call_ids.insert(call_id.as_str());
             }
             ResponseItem::ToolSearchOutput {
@@ -363,7 +352,6 @@ fn current_turn_discovered_chat_tools(
                 ..
             } if status == "completed"
                 && execution == "client"
-                && item_belongs_to_current_turn(item, &current_turn_id)
                 && tool_search_call_ids.contains(call_id.as_str()) =>
             {
                 discovered_candidates.extend(loadable_tool_targets(tools)?);
@@ -385,22 +373,17 @@ fn current_turn_discovered_chat_tools(
         )?;
     }
 
-    let mut current_turn_tools = Vec::new();
+    let mut history_loaded_tools = Vec::new();
     for candidate in discovered_candidates {
         let chat_tool = candidate.chat_tool.clone();
         let is_new_target = !targets.contains_key(&candidate.wire_name);
         register_tool_target(&mut targets, candidate)?;
         if is_new_target && let Some(chat_tool) = chat_tool {
-            current_turn_tools.push(chat_tool);
+            history_loaded_tools.push(chat_tool);
         }
     }
 
-    Ok(current_turn_tools)
-}
-
-fn item_belongs_to_current_turn(item: &ResponseItem, current_turn_id: &str) -> bool {
-    item.turn_id()
-        .is_some_and(|item_turn_id| item_turn_id == current_turn_id)
+    Ok(history_loaded_tools)
 }
 
 fn loadable_tool_targets(tools: &[Value]) -> Result<Vec<ToolTargetCandidate>, ApiError> {

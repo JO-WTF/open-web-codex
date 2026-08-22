@@ -201,7 +201,7 @@ fn flattens_function_and_namespace_tools_with_reversible_targets() {
 }
 
 #[test]
-fn translates_current_turn_tool_search_history_into_chat_tools_and_reverse_targets() {
+fn translates_history_loaded_tool_search_into_chat_tools_and_reverse_targets() {
     let mut request = request(Some(vec![serde_json::json!({
         "type": "tool_search",
         "execution": "client",
@@ -289,7 +289,7 @@ fn translates_current_turn_tool_search_history_into_chat_tools_and_reverse_targe
 }
 
 #[test]
-fn keeps_current_turn_deferred_target_after_same_turn_agent_completion_message() {
+fn keeps_history_loaded_deferred_target_after_inter_agent_completion_message() {
     let mut request = request(Some(vec![serde_json::json!({
         "type": "tool_search",
         "execution": "client",
@@ -334,7 +334,7 @@ fn keeps_current_turn_deferred_target_after_same_turn_agent_completion_message()
             internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
         },
         // Inter-Agent completion is represented as a user-role Chat message,
-        // but its typed metadata keeps it inside the current Root Turn.
+        // but its typed metadata keeps it inside the same Root Turn.
         ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -367,7 +367,7 @@ fn keeps_current_turn_deferred_target_after_same_turn_agent_completion_message()
 }
 
 #[test]
-fn clears_deferred_targets_when_latest_user_message_lacks_turn_metadata() {
+fn replays_history_loaded_target_when_latest_user_message_lacks_turn_metadata() {
     let mut request = request(Some(vec![serde_json::json!({
         "type": "tool_search",
         "execution": "client",
@@ -427,12 +427,12 @@ fn clears_deferred_targets_when_latest_user_message_lacks_turn_metadata() {
             .iter()
             .map(|tool| tool.function.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["tool_search"]
+        vec!["tool_search", "multi_agent_v1__spawn_agent"]
     );
 }
 
 #[test]
-fn does_not_replay_a_previous_turns_loaded_tool_schema() {
+fn replays_prior_turn_loaded_tool_schema_for_resume_shaped_history() {
     let mut request = request(Some(vec![serde_json::json!({
         "type": "tool_search",
         "execution": "client",
@@ -480,13 +480,165 @@ fn does_not_replay_a_previous_turns_loaded_tool_schema() {
             .iter()
             .map(|tool| tool.function.name.as_str())
             .collect::<Vec<_>>(),
-        vec!["tool_search"],
-        "a new Turn must search before a deferred Tool schema is callable"
+        vec!["tool_search", "evaluate_network_baseline"],
+        "a resumed Turn keeps completed loaded Tool schemas callable"
+    );
+    assert_eq!(
+        translated.tools[1],
+        ChatTool {
+            r#type: "function".to_string(),
+            function: ChatToolFunction {
+                name: "evaluate_network_baseline".to_string(),
+                description: "Evaluate a network baseline.".to_string(),
+                strict: false,
+                parameters: serde_json::json!({"type": "object", "properties": {}}),
+            },
+            target: ChatToolTarget {
+                name: "evaluate_network_baseline".to_string(),
+                namespace: None,
+            },
+        }
     );
 }
 
 #[test]
-fn rejects_failed_current_turn_tool_search_output_before_target_mapping() {
+fn deduplicates_the_same_history_loaded_tool_across_turns() {
+    let mut request = request(Some(vec![serde_json::json!({
+        "type": "tool_search",
+        "execution": "client",
+        "description": "Search available tools.",
+        "parameters": {"type": "object"}
+    })]));
+    request.instructions.clear();
+    let route_tool = serde_json::json!({
+        "type": "function",
+        "name": "route",
+        "description": "Calculate a route.",
+        "parameters": {"type": "object", "properties": {}}
+    });
+    request.input = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Find route tools.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+        },
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-old".to_string()),
+            status: None,
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "route"}),
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+        },
+        ResponseItem::ToolSearchOutput {
+            id: None,
+            call_id: Some("search-old".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: vec![route_tool.clone()],
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Resume and use route again.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-new")),
+        },
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-new".to_string()),
+            status: None,
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "route"}),
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-new")),
+        },
+        ResponseItem::ToolSearchOutput {
+            id: None,
+            call_id: Some("search-new".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: vec![route_tool],
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-new")),
+        },
+    ];
+
+    let translated = responses_request_to_chat_completions_request(request).unwrap();
+    assert_eq!(
+        translated
+            .tools
+            .iter()
+            .map(|tool| tool.function.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["tool_search", "route"]
+    );
+}
+
+#[test]
+fn does_not_project_empty_history_loaded_tool_search_output() {
+    let mut request = request(Some(vec![serde_json::json!({
+        "type": "tool_search",
+        "execution": "client",
+        "description": "Search available tools.",
+        "parameters": {"type": "object"}
+    })]));
+    request.instructions.clear();
+    request.input = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Search for an unavailable tool.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+        },
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-empty".to_string()),
+            status: None,
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "missing"}),
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+        },
+        ResponseItem::ToolSearchOutput {
+            id: None,
+            call_id: Some("search-empty".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: Vec::new(),
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Continue.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-new")),
+        },
+    ];
+
+    let translated = responses_request_to_chat_completions_request(request).unwrap();
+    assert_eq!(
+        translated
+            .tools
+            .iter()
+            .map(|tool| tool.function.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["tool_search"]
+    );
+}
+
+#[test]
+fn rejects_orphan_history_loaded_tool_search_output_before_target_mapping() {
     let mut request = request(Some(vec![serde_json::json!({
         "type": "tool_search",
         "execution": "client",
@@ -504,18 +656,10 @@ fn rejects_failed_current_turn_tool_search_output_before_target_mapping() {
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         },
-        ResponseItem::ToolSearchCall {
-            id: None,
-            call_id: Some("search-failed".to_string()),
-            status: None,
-            execution: "client".to_string(),
-            arguments: serde_json::json!({"query": "route"}),
-            internal_chat_message_metadata_passthrough: None,
-        },
         ResponseItem::ToolSearchOutput {
             id: None,
-            call_id: Some("search-failed".to_string()),
-            status: "failed".to_string(),
+            call_id: Some("search-orphan".to_string()),
+            status: "completed".to_string(),
             execution: "client".to_string(),
             tools: vec![serde_json::json!({
                 "type": "function",
@@ -528,8 +672,59 @@ fn rejects_failed_current_turn_tool_search_output_before_target_mapping() {
 
     assert!(matches!(
         responses_request_to_chat_completions_request(request),
-        Err(ApiError::InvalidRequest { message }) if message.contains("non-client completed tool_search output")
+        Err(ApiError::InvalidRequest { message })
+            if message.contains("history tool_search result without its preceding tool-call group")
     ));
+}
+
+#[test]
+fn rejects_failed_tool_search_output_before_target_mapping() {
+    for status in ["failed", "cancelled"] {
+        let mut request = request(Some(vec![serde_json::json!({
+            "type": "tool_search",
+            "execution": "client",
+            "description": "Search available tools.",
+            "parameters": {"type": "object"}
+        })]));
+        request.instructions.clear();
+        request.input = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "Use the route tool.".to_string(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            },
+            ResponseItem::ToolSearchCall {
+                id: None,
+                call_id: Some(format!("search-{status}")),
+                status: None,
+                execution: "client".to_string(),
+                arguments: serde_json::json!({"query": "route"}),
+                internal_chat_message_metadata_passthrough: None,
+            },
+            ResponseItem::ToolSearchOutput {
+                id: None,
+                call_id: Some(format!("search-{status}")),
+                status: status.to_string(),
+                execution: "client".to_string(),
+                tools: vec![serde_json::json!({
+                    "type": "function",
+                    "name": "route",
+                    "parameters": {"type": "object"}
+                })],
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ];
+
+        assert!(matches!(
+            responses_request_to_chat_completions_request(request),
+            Err(ApiError::InvalidRequest { message })
+                if message.contains("non-client completed tool_search output")
+        ));
+    }
 }
 
 #[test]
@@ -614,7 +809,7 @@ fn encodes_a_loaded_namespace_from_prompt_once() {
 }
 
 #[test]
-fn rejects_colliding_current_turn_deferred_tool_targets() {
+fn rejects_colliding_history_loaded_deferred_tool_targets() {
     let mut request = request(Some(vec![serde_json::json!({
         "type": "tool_search",
         "execution": "client",
@@ -691,7 +886,7 @@ fn rejects_colliding_current_turn_deferred_tool_targets() {
 }
 
 #[test]
-fn rejects_repeated_current_turn_deferred_tool_with_different_schema() {
+fn rejects_repeated_history_loaded_deferred_tool_with_different_schema() {
     let mut request = request(Some(vec![serde_json::json!({
         "type": "tool_search",
         "execution": "client",
@@ -761,7 +956,7 @@ fn rejects_repeated_current_turn_deferred_tool_with_different_schema() {
 }
 
 #[test]
-fn rejects_current_turn_deferred_tool_schema_conflict_with_prompt_tool() {
+fn rejects_history_loaded_deferred_tool_schema_conflict_with_prompt_tool() {
     let mut request = request(Some(vec![
         serde_json::json!({
             "type": "tool_search",
@@ -818,7 +1013,7 @@ fn rejects_current_turn_deferred_tool_schema_conflict_with_prompt_tool() {
 }
 
 #[test]
-fn rejects_current_turn_deferred_flatten_collision_with_prompt_tool() {
+fn rejects_history_loaded_deferred_flatten_collision_with_prompt_tool() {
     let mut request = request(Some(vec![
         serde_json::json!({
             "type": "tool_search",
