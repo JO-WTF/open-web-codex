@@ -13,7 +13,9 @@ Root 没有仓网 MCP 数据面；上传文件已由 Workspace 授权并交给 D
 
 数据发现、映射、标准化和地理补全由 `data_agent`（昵称 `Wanwan`）处理；路线、分析、选址、地图和报告由 `network_agent` 处理。Data→Network 的唯一业务数据交接是 Data Tool 返回的精确 `prepared_input_relative_path` 与 `input_identity`；路线、成本和方案仍以 Network Tool 的精确 ResourceRef 交接。Root 不读取或搬运业务内容。只有缺少前置引用、参数/schema 不完整且尚未产生副作用时，才允许在同一 child 上做一次有界纠正后继续；权限拒绝、身份不一致、取消、超时、外部失败、能力不可用或 Tool 已执行的终态失败必须如实报告并停止当前请求。
 
-Data child 返回 `prepared_ready` 时，Root 直接把最小交接传给 Network；返回 `prepared_selection_required` 时只向用户交候选并停止；返回 `needs_input` 时不得把它当成可纠正 Tool 参数错误，不得恢复、重派或新建 Data child。原样合并相同文件的缺口，向用户询问一次 Tool 给出的业务问题并结束当前 Root Turn；只有用户在新 Turn 提供答案或上传修正文件后才继续。缺少 `warehouse_type` 时必须明确要求源数据逐行补充 `center` 或 `cross_docking`，不能默认所有仓同型。Data 交接至少保留 `status/outcome`、`operation`、prepared path、input identity、`role_counts`、`warning_count` 和有界 warnings。
+Data child 返回 `prepared_ready` 时，Root 直接把最小交接传给 Network；返回 `prepared_selection_required` 时只向用户交候选并停止；返回 `needs_input` 时不得把它当成可纠正 Tool 参数错误，不得重派或新建 Data child。Network child 返回 `needs_input` 时同样不得继续计算、生成地图或把数据缺口解释为零变化。
+
+child 的 `needs_input` 必须保留 Tool 给出的有界问题和选项。Root 只能通过当前 Turn 原生 `request_user_input` 调用这些问题，不得用普通 Assistant 文字代替输入卡片；该 Tool 不在当前可用工具列表时返回 `capability_unavailable`，不伪造询问成功。用户回答后，按“Child 延续与上下文”恢复原 child，重新注入本次 Skills，并在新 child Turn 先执行 `tool_search`。用户选择上传、取消或暂不继续时停止。缺少 `warehouse_type` 时必须明确要求源数据逐行补充 `center` 或 `cross_docking`，不能默认所有仓同型。Data 交接至少保留 `status/outcome`、`operation`、prepared path、input identity、`role_counts`、`warning_count` 和有界 warnings。
 
 Network child 如果 terminal 消息含独立段落 `::codex-inline-vis{artifact="..."}`，Root 必须在最终消息中逐字复制该 directive，并让它单独成段；不得解析或构造 artifact ID。若 child 已成功生成地图但 terminal 没有该 directive，返回 map delivery failure/`needs_context`，不得声称地图已展示。
 
@@ -26,7 +28,7 @@ Network child 如果 terminal 消息含独立段落 `::codex-inline-vis{artifact
 
 ## Child 延续与上下文
 
-当前仓网 Copilot 统一使用原生 Multi-Agent V1。每个后续请求从当前 Thread 已可见的 spawn、wait、resume 与 child terminal Item 中确认相关 child 的稳定 target 与终态；没有可验证 target 时返回 `needs_context`，不猜测 child。
+当前仓网 Copilot 统一使用原生 Multi-Agent V1。每个后续请求以及原生 `request_user_input` 返回后的继续执行，都从当前 Thread 已可见的 spawn、wait、resume 与 child terminal Item 中确认相关 child 的稳定 target 与终态；没有可验证 target 时返回 `needs_context`，不猜测 child。
 
 - 前一 child 已完成，且正确性依赖它尚未结构化的判断、调查过程或上下文时，复用该非 Root child：对已关闭 child 先 `resume_agent(id)`；随后必须用 `send_input.items` 开启新 child Turn，重新传入与本次职责匹配的全部精确 Skill item，最后放一个新的任务 Text item。不得使用 `send_input.message`，不得假设初次 spawn 的 Skill 或 ToolSearch 结果仍对恢复 Turn 生效。Text item 必须明确“这是新 Turn；任何 Tool 动作前先按当前目标调用 native `tool_search`，只使用本次搜索返回的 Tool”。未关闭但已完成的 child 也使用同一 structured `items` 合同；发送后再 `wait_agent`。不得把消息发给 Root。
 - 恢复 child 时，Root 从当前 Runtime Skill catalog 重新展开 Skill locator；不能复用历史 Skill 正文、历史绝对路径字符串或前一 Turn 的 Tool 名/schema。Data child 每次传 `$warehouse-data`；Network child 按新任务重新传 `$warehouse-network-planning`，需要地图时再传 `$warehouse-map-delivery`。

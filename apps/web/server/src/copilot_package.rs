@@ -1780,9 +1780,11 @@ mod tests {
     fn warehouse_data_skills_stop_and_ask_on_typed_missing_input() {
         assert!(DATA_SKILL.contains("`needs_input`：原样交 Supervisor"));
         assert!(SUPERVISOR_SKILL.contains("Data child 返回"));
-        assert!(SUPERVISOR_SKILL.contains("`needs_input`"));
-        assert!(SINGLE_AGENT_DATA_SKILL.contains("`needs_input`：原样交接真实 requirements"));
-        assert!(SINGLE_AGENT_ROOT_SKILL.contains("`needs_input` 一次询问后停止"));
+        assert!(SUPERVISOR_SKILL.contains("原生 `request_user_input`"));
+        assert!(SUPERVISOR_SKILL.contains("不得用普通 Assistant 文字代替输入卡片"));
+        assert!(SINGLE_AGENT_DATA_SKILL.contains("原生 `request_user_input`"));
+        assert!(SINGLE_AGENT_ROOT_SKILL.contains("原生 `request_user_input`"));
+        assert!(SINGLE_AGENT_ROOT_SKILL.contains("不得用普通 Assistant 文字代替输入卡片"));
     }
 
     #[test]
@@ -1801,6 +1803,8 @@ mod tests {
         for skill in [MAP_DELIVERY_SKILL, SINGLE_AGENT_MAP_DELIVERY_SKILL] {
             assert!(skill.contains("`create_network_map_card`"));
             assert!(skill.contains("`prepare_network_coverage_map`"));
+            assert!(skill.contains("`service_target_hours`"));
+            assert!(skill.contains("地图不得自行重算阈值"));
             assert!(!skill.contains("`create_map_card`"));
             assert!(skill.contains("不自行拼 sources/layers/GeoJSON"));
             assert!(skill.contains("Tool 成功返回 embed 后立即交付并停止"));

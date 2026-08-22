@@ -15,4 +15,4 @@ metadata:
 
 任务 Skill 授权时，用户明确要求脚本计算可以用 shell/Python 读取 exact ready prepared input；脚本和有界结果写入 calculations 目录，不读取 raw、不把行送入上下文、不替代 Planner。正常请求优先让领域 Tool 在 owner 边界内完成聚合。
 
-Data 的 `ready`、`needs_input`、`source_changed` 和 Network 的 typed 终态必须如实交付；`needs_input` 一次询问后停止，连续 source change 立即报告。规划结果、地图 embed 和报告交付遵循对应任务 Skill 的 terminal 规则。
+Data 的 `ready`、`needs_input`、`source_changed` 和 Network 的 typed 终态必须如实处理。遇到 `needs_input` 时只能调用当前 Turn 原生 `request_user_input`，不得用普通 Assistant 文字代替输入卡片；Tool 不可用时返回 `capability_unavailable`。用户回答后按答案继续，选择上传、取消或暂不继续时停止；连续 source change 立即报告。规划结果、地图 embed 和报告交付遵循对应任务 Skill 的 terminal 规则。

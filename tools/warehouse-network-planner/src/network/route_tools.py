@@ -10,6 +10,7 @@ from mcp.server.fastmcp import (
 )
 from mcp.types import (
     CallToolResult,
+    TextContent,
 )
 from open_web_codex_provider import (
     MAX_WORKSPACE_FILE_BYTES,
@@ -43,6 +44,9 @@ from supply_chain_planner.network.matrix_models import (
 )
 from supply_chain_planner.shared.models import (
     NavigationMatrixRequestToolResult,
+    PlanningInputOption,
+    PlanningInputQuestion,
+    RouteMatrixNeedsInput,
     RouteMatrixPreparationToolResult,
 )
 from supply_chain_planner.shared.planning_input import (
@@ -240,6 +244,54 @@ def prepare_route_matrix(
             input_identity=input_identity,
         )
     stats = matrix.stats
+    if stats.missing_pair_count:
+        missing_pairs = sorted(matrix.missing_routes)
+        result = RouteMatrixPreparationToolResult(
+            root=RouteMatrixNeedsInput(
+                state="needs_input",
+                summary=(
+                    f"The {warehouse_scope.kind} route scope is missing "
+                    f"{stats.missing_pair_count} required route pairs. Choose one completion "
+                    "method before network evaluation."
+                ),
+                next_action="request_user_input",
+                retryable=False,
+                warehouse_scope=warehouse_scope,
+                warehouse_ids=matrix.warehouse_ids,
+                missing_pair_count=stats.missing_pair_count,
+                missing_pairs=missing_pairs[:20],
+                missing_pairs_truncated=len(missing_pairs) > 20,
+                questions=[
+                    PlanningInputQuestion(
+                        id="route_completion",
+                        header="路线补齐",
+                        question=(
+                            f"当前分析范围缺少 {stats.missing_pair_count} 对路线，"
+                            "请选择补齐方式。"
+                        ),
+                        options=[
+                            PlanningInputOption(
+                                label="Haversine 估算 (Recommended)",
+                                description="使用绕路系数 1.3、平均速度 40kph，并明确标注为估算。",
+                            ),
+                            PlanningInputOption(
+                                label="真实导航",
+                                description="使用已配置的地图服务计算真实路线，可能产生外部调用费用。",
+                            ),
+                            PlanningInputOption(
+                                label="上传路线",
+                                description="暂停计算，等待上传覆盖当前仓库范围的完整路线事实。",
+                            ),
+                        ],
+                    )
+                ],
+            )
+        )
+        structured = result.model_dump(mode="json", by_alias=True)
+        return CallToolResult(
+            content=[TextContent(type="text", text=structured["summary"])],
+            structuredContent=structured,
+        )
     result = _runtime().publish(
         matrix.schema_version,
         matrix,
@@ -252,6 +304,7 @@ def prepare_route_matrix(
         raise McpResourceContractError("route_matrix_result_missing")
     result.structuredContent["state"] = "ready"
     result.structuredContent["warehouse_ids"] = matrix.warehouse_ids
+    result.structuredContent["missing_pair_count"] = 0
     return result
 
 

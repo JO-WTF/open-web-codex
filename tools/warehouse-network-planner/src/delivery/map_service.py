@@ -102,11 +102,34 @@ MapProperties = (
 )
 
 
+class CoverageDemandMapProperties(DemandMapProperties):
+    service_status: Literal["attained", "missed", "unassigned"]
+
+
+class CoverageAssignmentMapProperties(AssignmentMapProperties):
+    service_status: Literal["attained", "missed", "unassigned"]
+
+
+CoverageMapProperties = (
+    WarehouseMapProperties
+    | CoverageDemandMapProperties
+    | CoverageAssignmentMapProperties
+    | LinehaulMapProperties
+)
+
+
 class NetworkMapFeature(DeliveryModel):
     type: Literal["Feature"] = "Feature"
     id: str
     geometry: PointGeometry | LineStringGeometry
     properties: MapProperties
+
+
+class CoverageNetworkMapFeature(DeliveryModel):
+    type: Literal["Feature"] = "Feature"
+    id: str
+    geometry: PointGeometry | LineStringGeometry
+    properties: CoverageMapProperties
 
 
 class NetworkMapFeatureCollection(DeliveryModel):
@@ -133,9 +156,10 @@ class NetworkComparisonGeoJson(DeliveryModel):
 class NetworkCoverageGeoJson(DeliveryModel):
     """One assignment result and all of its straight-line coverage facts."""
 
-    schema_version: Literal["network_coverage_geojson.v1"] = "network_coverage_geojson.v1"
+    schema_version: Literal["network_coverage_geojson.v2"] = "network_coverage_geojson.v2"
+    service_target_hours: float = Field(gt=0)
     type: Literal["FeatureCollection"] = "FeatureCollection"
-    features: list[NetworkMapFeature]
+    features: list[CoverageNetworkMapFeature]
 
 
 class NetworkMapSummary(DeliveryModel):
@@ -370,6 +394,7 @@ def build_network_coverage_geojson(
     *,
     result_label: str,
     scenario: Literal["before", "after", "scenario"],
+    service_target_hours: float,
 ) -> NetworkCoverageGeoJson:
     """Build presentation-neutral after-result points and coverage lines.
 
@@ -394,11 +419,11 @@ def build_network_coverage_geojson(
             raise ValueError(f"delivery_assignment_demand_mismatch:{city_id}")
         if row.warehouse_id is not None and row.warehouse_id not in active:
             raise ValueError(f"delivery_assignment_warehouse_inactive:{row.warehouse_id}")
-    features: list[NetworkMapFeature] = []
+    features: list[CoverageNetworkMapFeature] = []
     for warehouse_id in sorted(warehouses):
         warehouse = warehouses[warehouse_id]
         features.append(
-            NetworkMapFeature(
+            CoverageNetworkMapFeature(
                 id=_feature_id("warehouse", warehouse_id),
                 geometry=PointGeometry(
                     coordinates=_required_coordinates(
@@ -425,12 +450,12 @@ def build_network_coverage_geojson(
         city = cities[city_id]
         row = rows[city_id]
         features.append(
-            NetworkMapFeature(
+            CoverageNetworkMapFeature(
                 id=_feature_id("demand", city_id),
                 geometry=PointGeometry(
                     coordinates=_required_coordinates("demand", city_id, city.longitude, city.latitude)
                 ),
-                properties=DemandMapProperties(
+                properties=CoverageDemandMapProperties(
                     city_id=city_id,
                     city_name=city.city_name,
                     province_id=city.province_id,
@@ -440,12 +465,33 @@ def build_network_coverage_geojson(
                     distance_km=row.distance_km,
                     duration_hours=row.duration_hours,
                     unit_cost=row.cost,
+                    service_status=_service_status(row, service_target_hours),
                 ),
             )
         )
-    features.extend(_assignment_features(scenario, result_label, rows, warehouses, cities))
-    features.extend(_linehaul_features(scenario, frozenset(active), rows, warehouses))
-    return NetworkCoverageGeoJson(features=features)
+    features.extend(
+        _assignment_features(
+            scenario,
+            result_label,
+            rows,
+            warehouses,
+            cities,
+            service_target_hours=service_target_hours,
+        )
+    )
+    features.extend(
+        _linehaul_features(
+            scenario,
+            frozenset(active),
+            rows,
+            warehouses,
+            coverage=True,
+        )
+    )
+    return NetworkCoverageGeoJson(
+        service_target_hours=service_target_hours,
+        features=features,
+    )
 
 
 def _assignment_features(
@@ -454,8 +500,10 @@ def _assignment_features(
     rows_by_city: Mapping[str, AssignmentRow],
     warehouse_by_id: Mapping[str, WarehouseRecord],
     demand_by_id: Mapping[str, DemandCityRecord],
-) -> list[NetworkMapFeature]:
-    features: list[NetworkMapFeature] = []
+    *,
+    service_target_hours: float | None = None,
+) -> list[NetworkMapFeature | CoverageNetworkMapFeature]:
+    features: list[NetworkMapFeature | CoverageNetworkMapFeature] = []
     for city_id in sorted(rows_by_city):
         row = rows_by_city[city_id]
         if row.warehouse_id is None:
@@ -474,8 +522,14 @@ def _assignment_features(
             city.longitude,
             city.latitude,
         )
+        feature_type = CoverageNetworkMapFeature if service_target_hours is not None else NetworkMapFeature
+        properties_type = (
+            CoverageAssignmentMapProperties
+            if service_target_hours is not None
+            else AssignmentMapProperties
+        )
         features.append(
-            NetworkMapFeature(
+            feature_type(
                 id=_feature_id(
                     scenario,
                     "last_mile",
@@ -485,7 +539,7 @@ def _assignment_features(
                 geometry=LineStringGeometry(
                     coordinates=(origin, destination),
                 ),
-                properties=AssignmentMapProperties(
+                properties=properties_type(
                     scenario=scenario,
                     result_label=result_label,
                     warehouse_id=warehouse.warehouse_id,
@@ -494,10 +548,24 @@ def _assignment_features(
                     distance_km=row.distance_km,
                     duration_hours=row.duration_hours,
                     unit_cost=row.cost,
+                    **(
+                        {"service_status": _service_status(row, service_target_hours)}
+                        if service_target_hours is not None
+                        else {}
+                    ),
                 ),
             )
         )
     return features
+
+
+def _service_status(
+    row: AssignmentRow,
+    service_target_hours: float,
+) -> Literal["attained", "missed", "unassigned"]:
+    if row.warehouse_id is None or row.duration_hours is None:
+        return "unassigned"
+    return "attained" if row.duration_hours <= service_target_hours else "missed"
 
 
 def _linehaul_features(
@@ -505,7 +573,9 @@ def _linehaul_features(
     active_ids: frozenset[str],
     rows_by_city: Mapping[str, AssignmentRow],
     warehouse_by_id: Mapping[str, WarehouseRecord],
-) -> list[NetworkMapFeature]:
+    *,
+    coverage: bool = False,
+) -> list[NetworkMapFeature | CoverageNetworkMapFeature]:
     assigned_demand = {
         warehouse_id: sum(
             (
@@ -517,7 +587,7 @@ def _linehaul_features(
         )
         for warehouse_id in active_ids
     }
-    features: list[NetworkMapFeature] = []
+    features: list[NetworkMapFeature | CoverageNetworkMapFeature] = []
     for warehouse_id in sorted(active_ids):
         warehouse = warehouse_by_id[warehouse_id]
         if warehouse.warehouse_type != "cross_docking":
@@ -539,8 +609,9 @@ def _linehaul_features(
             warehouse.longitude,
             warehouse.latitude,
         )
+        feature_type = CoverageNetworkMapFeature if coverage else NetworkMapFeature
         features.append(
-            NetworkMapFeature(
+            feature_type(
                 id=_feature_id(
                     scenario,
                     "linehaul",

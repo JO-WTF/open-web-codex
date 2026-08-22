@@ -85,6 +85,7 @@ def _load_assignment_coverage_result(
     str,
     Literal["before", "scenario", "after"],
     PlanningInputIdentity,
+    list[float],
 ]:
     """Adapt one solved domain result without choosing or recomputing it."""
     if resource_ref.resource_schema == "network_baseline.v2":
@@ -95,6 +96,7 @@ def _load_assignment_coverage_result(
             baseline.label,
             "before",
             baseline.input_identity,
+            [metric.target_hours for metric in baseline.coverage],
         )
     if resource_ref.resource_schema == "network_scenario.v2":
         scenario = _runtime().load_model(resource_ref, "network_scenario.v2", ScenarioResult)
@@ -104,6 +106,7 @@ def _load_assignment_coverage_result(
             "scenario",
             "scenario",
             scenario.input_identity,
+            [metric.target_hours for metric in scenario.service],
         )
     facility = _runtime().load_model(resource_ref, "facility_location_solution.v4", PMedianSolution)
     if facility.assignment is None:
@@ -116,6 +119,7 @@ def _load_assignment_coverage_result(
         facility.status,
         "after",
         facility.input_identity,
+        [metric.target_hours for metric in facility.service],
     )
 
 
@@ -368,13 +372,16 @@ def prepare_network_comparison_map(
 def prepare_network_coverage_map(
     prepared_input_relative_path: Annotated[str, Field(min_length=1, max_length=1024)],
     assignment_result_ref: AssignmentResultResourceRef,
+    service_target_hours: Annotated[float, Field(gt=0)],
     ctx: Context,
 ) -> CallToolResult:
     """Publish all straight-line coverage facts for one exact solved result."""
     prepared, input_identity = _load_ready_network(prepared_input_relative_path, ctx)
-    assignment, active_ids, result_label, scenario, result_identity = (
+    assignment, active_ids, result_label, scenario, result_identity, available_targets = (
         _load_assignment_coverage_result(assignment_result_ref)
     )
+    if service_target_hours not in available_targets:
+        raise McpResourceContractError("coverage_map_service_target_unavailable")
     try:
         require_matching_input(input_identity, result_identity)
     except ValueError as error:
@@ -393,6 +400,7 @@ def prepare_network_coverage_map(
         active_ids,
         result_label=result_label,
         scenario=scenario,
+        service_target_hours=service_target_hours,
     )
     result = _publish_geojson(
         geojson.schema_version,
@@ -402,7 +410,12 @@ def prepare_network_coverage_map(
     structured = result.structuredContent
     if structured is None:
         raise McpResourceContractError("map_data_result_missing")
-    structured.update({"feature_count": len(geojson.features)})
+    structured.update(
+        {
+            "feature_count": len(geojson.features),
+            "service_target_hours": service_target_hours,
+        }
+    )
     return result
 
 

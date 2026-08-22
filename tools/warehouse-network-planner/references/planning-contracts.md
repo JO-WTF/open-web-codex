@@ -48,6 +48,17 @@ selected-set change returns `source_changed` without creating output. `needs_inp
 business handoff, not a retry loop. Data registers no Resource or Resource template, so callers must
 not use `read_mcp_resource` for the inspection result.
 
+`prepare_route_matrix` returns a discriminated `ready | needs_input` result. `ready` always has
+zero missing pairs and the exact `route_matrix.v3` reference. An incomplete provided scope returns
+bounded missing-pair evidence and executable completion choices without publishing a consumable
+route reference. Baseline, facility-change and location Tools independently reject incomplete
+route matrices. Only Root may turn the child handoff into the native `request_user_input` card.
+
+`prepare_network_coverage_map` requires one `service_target_hours` value already present in the
+source result. Planner assigns `attained`, `missed` or `unassigned` to every demand point and the
+corresponding status to each available last-mile line. Maps consumes these values for presentation
+and does not derive service attainment from display-layer expressions.
+
 Every Network Resource-producing Tool also returns `resource_name` in its structured result.
 Use that exact stable name when citing evidence; never expose or relabel the opaque
 Resource URI as a human-readable name. `resource_ref` is the calculation handoff identity,

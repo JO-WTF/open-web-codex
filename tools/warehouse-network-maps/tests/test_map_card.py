@@ -9,9 +9,9 @@ from pathlib import Path
 import maps_mcp.server as server
 from maps_mcp.data_refs import GeoJsonResourceStore, MapCardSpecStore
 from maps_mcp.map_card import GeoJsonSource, MapCardPatch, MapCardSpec
-from open_web_codex_provider import GeoJsonResourceRef
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult
+from open_web_codex_provider import GeoJsonResourceRef
 from pydantic import ValidationError
 
 
@@ -83,8 +83,8 @@ def coverage_data_ref() -> dict[str, object]:
     return {
         "type": "mcp_resource",
         "server": "supply_chain",
-        "uri": "supply-chain://resources/network_coverage_geojson.v1-digest",
-        "resource_schema": "network_coverage_geojson.v1",
+        "uri": "supply-chain://resources/network_coverage_geojson.v2-digest",
+        "resource_schema": "network_coverage_geojson.v2",
         "format": "geojson",
         "profile": {
             "schema_version": "geojson-profile.v3",
@@ -103,6 +103,7 @@ def coverage_data_ref() -> dict[str, object]:
                         "distance_km": "number",
                         "duration_hours": "number",
                         "kind": "string",
+                        "service_status": "string",
                     },
                 },
                 {
@@ -114,6 +115,7 @@ def coverage_data_ref() -> dict[str, object]:
                         "distance_km": "number",
                         "duration_hours": "number",
                         "kind": "string",
+                        "service_status": "string",
                         "warehouse_id": "string",
                     },
                 },
@@ -175,16 +177,34 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("existing-center", layer_ids)
                 self.assertIn("candidate-cross-docking", layer_ids)
                 self.assertIn("added-facilities", layer_ids)
-                self.assertIn("last-mile-coverage", layer_ids)
+                self.assertIn("attained-last-mile-coverage", layer_ids)
+                self.assertIn("missed-last-mile-coverage", layer_ids)
                 self.assertIn("linehaul-coverage", layer_ids)
+                self.assertIn("attained-demand-cities", layer_ids)
+                self.assertIn("missed-demand-cities", layer_ids)
+                self.assertIn("unassigned-demand-cities", layer_ids)
                 hover_layers = {
                     item["layer"]: item
                     for item in spec["extensions"]["hover"]["layers"]
                 }
-                self.assertIn("demand-cities", hover_layers)
-                self.assertIn("last-mile-coverage", hover_layers)
+                self.assertIn("attained-demand-cities", hover_layers)
+                self.assertIn("missed-demand-cities", hover_layers)
+                self.assertIn("attained-last-mile-coverage", hover_layers)
+                self.assertIn(
+                    "service_status",
+                    hover_layers["missed-demand-cities"]["fields"],
+                )
                 self.assertIn("before_active", hover_layers["existing-center"]["fields"])
-                self.assertIn("duration_hours", hover_layers["demand-cities"]["fields"])
+                self.assertIn(
+                    "duration_hours",
+                    hover_layers["attained-demand-cities"]["fields"],
+                )
+                legend_labels = {
+                    item["label"] for item in spec["extensions"]["legend"]["items"]
+                }
+                self.assertTrue(
+                    {"达标城市", "未达标城市", "无法判断城市"} <= legend_labels
+                )
             finally:
                 server._map_card_spec_store = original
 
@@ -194,6 +214,10 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
         assert isinstance(demand, dict)
         properties = demand["properties"]
         assert isinstance(properties, dict)
+        properties.pop("service_status")
+        last_mile = comparison["profile"]["feature_types"][1]
+        assert isinstance(last_mile, dict)
+        last_mile["properties"].pop("service_status")
         properties.update(
             {
                 "after_duration_hours": "number",

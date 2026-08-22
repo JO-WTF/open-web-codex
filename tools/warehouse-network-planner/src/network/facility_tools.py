@@ -124,6 +124,15 @@ def _load_facility_scenario_inputs(
         raise McpResourceContractError("scenario_input_identity_mismatch") from error
     if scenario.objective == "min_cost" and costs is None:
         raise McpResourceContractError("min_cost_scenario_requires_cost_matrix")
+    route_validation = _validate_route_matrix_model(
+        prepared.demand_cities,
+        prepared.warehouses,
+        routes,
+    )
+    if not route_validation.valid:
+        raise McpResourceContractError("scenario_route_matrix_incomplete")
+    if costs is not None and (costs.missing_routes or not costs.stats.complete):
+        raise McpResourceContractError("scenario_cost_matrix_incomplete")
     warehouse_by_id = {warehouse.warehouse_id: warehouse for warehouse in prepared.warehouses}
     add_ids = set(scenario.add_warehouse_ids)
     remove_ids = set(scenario.remove_warehouse_ids)

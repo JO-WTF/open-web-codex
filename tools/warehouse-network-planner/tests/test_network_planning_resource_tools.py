@@ -243,7 +243,13 @@ def test_network_planning_tools_use_workspace_input_and_keep_compute_results_as_
         assert "prepared_input_relative_path" in schema["required"]
         assert "normalized_input_ref" not in schema["properties"]
 
-    assert "resource_ref" in tools["prepare_route_matrix"].outputSchema["properties"]
+    route_output = tools["prepare_route_matrix"].outputSchema
+    route_variants = route_output["oneOf"]
+    assert len(route_variants) == 2
+    assert {variant["$ref"].rsplit("/", 1)[-1] for variant in route_variants} == {
+        "RouteMatrixNeedsInput",
+        "RouteMatrixReady",
+    }
     assert "prepared_input_relative_path" in tools["prepare_route_matrix"].inputSchema["properties"]
     assert "cost_policy" in tools["plan_cost_matrix"].inputSchema["properties"]
     assert "calculation_policy" not in tools["plan_cost_matrix"].inputSchema["properties"]
@@ -253,6 +259,86 @@ def test_network_planning_tools_use_workspace_input_and_keep_compute_results_as_
     assert "opening_policy" in tools["solve_p_median"].inputSchema["properties"]
     assert "number_to_open" not in tools["solve_p_median"].inputSchema["properties"]
     assert "solver_stages" in tools["solve_p_median"].outputSchema["properties"]
+
+
+def test_provided_candidate_route_gap_returns_typed_needs_input_without_resource(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace, _store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    prepared_path = _prepared_input(workspace)
+
+    result = route_tools.prepare_route_matrix(
+        prepared_path,
+        "provided",
+        ctx,
+        warehouse_scope=ExistingPlusCandidatesWarehouseScope(
+            candidate_ids=["WH-CANDIDATE-BALIKPAPAN"]
+        ),
+    )
+
+    assert result.structuredContent is not None
+    payload = result.structuredContent
+    assert payload["state"] == "needs_input"
+    assert payload["next_action"] == "request_user_input"
+    assert payload["retryable"] is False
+    assert payload["missing_pair_count"] == 51
+    assert len(payload["missing_pairs"]) == 20
+    assert payload["missing_pairs_truncated"] is True
+    assert payload["questions"][0]["id"] == "route_completion"
+    assert payload["questions"][0]["options"][0]["label"].endswith("(Recommended)")
+    assert "resource_ref" not in payload
+
+
+def test_analysis_tools_reject_incomplete_route_resources_defensively(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace, _store = _runtime(tmp_path, monkeypatch)
+    ctx = _context(workspace)
+    prepared_path = _prepared_input(workspace)
+    prepared, input_identity = tool_runtime._load_ready_network(prepared_path, ctx)
+    complete = route_tools._build_provided_route_matrix(
+        prepared.demand_cities,
+        prepared.warehouses,
+        prepared.provided_route_facts,
+        warehouse_scope=ExistingOnlyWarehouseScope(),
+        input_identity=input_identity,
+    )
+    incomplete = complete.model_copy(update={"rows": complete.rows[:-1]})
+    incomplete_ref = _ref(
+        tool_runtime._runtime().publish(
+            incomplete.schema_version,
+            incomplete,
+            "test incomplete route matrix",
+        )
+    )
+
+    with pytest.raises(ProviderContractError, match="baseline_route_matrix_incomplete"):
+        analysis_tools.evaluate_network_baseline(
+            prepared_path,
+            incomplete_ref,
+            "min_time",
+            [12],
+            ctx,
+        )
+
+    scenario = ScenarioSpec(
+        add_warehouse_ids=[],
+        remove_warehouse_ids=[],
+        relocations=[],
+        objective="min_time",
+        service_targets=[12],
+    )
+    with pytest.raises(ProviderContractError, match="scenario_route_matrix_incomplete"):
+        facility_tools._load_facility_scenario_inputs(
+            prepared_path,
+            incomplete_ref,
+            None,
+            scenario,
+            ctx,
+        )
 
 
 def test_comparable_loader_rejects_facility_without_assignment(monkeypatch) -> None:
@@ -573,7 +659,7 @@ def test_plan_cost_matrix_rejects_duplicate_quote_mean_layers(
 def test_prepared_input_drives_baseline_optimization_map_and_report(
     tmp_path: Path, monkeypatch
 ) -> None:
-    workspace, _store = _runtime(tmp_path, monkeypatch)
+    workspace, store = _runtime(tmp_path, monkeypatch)
     (workspace / "outputs").mkdir()
     ctx = _context(workspace)
     prepared_path = _prepared_input(workspace)
@@ -781,9 +867,33 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
         == "network_comparison_geojson.v2"
     )
 
-    coverage = delivery_tools.prepare_network_coverage_map(prepared_path, facility, ctx)
+    coverage = delivery_tools.prepare_network_coverage_map(prepared_path, facility, 12, ctx)
     assert coverage.structuredContent is not None
     assert coverage.structuredContent["feature_count"] > 0
+    assert coverage.structuredContent["service_target_hours"] == 12
+    coverage_resource_id = coverage.structuredContent["data_ref"]["uri"].rsplit("/", 1)[-1]
+    coverage_geojson = json.loads(store.read(coverage_resource_id))
+    assert coverage_geojson["service_target_hours"] == 12
+    demand_features = [
+        feature
+        for feature in coverage_geojson["features"]
+        if feature["properties"]["kind"] == "demand"
+    ]
+    statuses = [feature["properties"]["service_status"] for feature in demand_features]
+    assert set(statuses) <= {"attained", "missed", "unassigned"}
+    target_metric = next(
+        metric for metric in facility_result.structuredContent["coverage"]
+        if metric["target_hours"] == 12
+    )
+    assert statuses.count("attained") == target_metric["covered_city_count"]
+    attained_demand = sum(
+        feature["properties"]["demand_quantity"]
+        for feature in demand_features
+        if feature["properties"]["service_status"] == "attained"
+    )
+    assert attained_demand == float(target_metric["covered_demand"])
+    with pytest.raises(ProviderContractError, match="coverage_map_service_target_unavailable"):
+        delivery_tools.prepare_network_coverage_map(prepared_path, facility, 7, ctx)
 
     report = delivery_tools.publish_network_planning_report(
         NetworkComparisonReportInput(plan_comparison_ref=comparison),

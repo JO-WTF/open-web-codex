@@ -639,23 +639,83 @@ def _network_layers(
             ]
         )
         legend_items.append({"label": "行政区边界", "color": "#64748B", "type": "line"})
-    for kind, layer_id, color, width, label in (
-        ("last_mile_assignment", "last-mile-coverage", "#2563EB", 1.5, "末端覆盖"),
-        ("linehaul_connection", "linehaul-coverage", "#1E3A8A", 2.5, "干线连接"),
-    ):
-        if _network_feature_type(network_data_ref, kind) is None:
-            continue
+    last_mile = _network_feature_type(network_data_ref, "last_mile_assignment")
+    if last_mile is not None and last_mile.properties.get("service_status") == "string":
+        for status, layer_id, color, label in (
+            ("attained", "attained-last-mile-coverage", "#16A34A", "达标覆盖"),
+            ("missed", "missed-last-mile-coverage", "#DC2626", "未达标覆盖"),
+        ):
+            layers.append(
+                {
+                    "id": layer_id,
+                    "type": "line",
+                    "source": "network",
+                    "filter": [
+                        "all",
+                        ["==", ["get", "kind"], "last_mile_assignment"],
+                        ["==", ["get", "service_status"], status],
+                    ],
+                    "paint": {
+                        "line-color": color,
+                        "line-width": 1.75,
+                        "line-opacity": 0.7,
+                    },
+                }
+            )
+            legend_items.append({"label": label, "color": color, "type": "line"})
+    elif last_mile is not None:
         layers.append(
             {
-                "id": layer_id,
+                "id": "last-mile-coverage",
                 "type": "line",
                 "source": "network",
-                "filter": ["==", ["get", "kind"], kind],
-                "paint": {"line-color": color, "line-width": width, "line-opacity": 0.65},
+                "filter": ["==", ["get", "kind"], "last_mile_assignment"],
+                "paint": {
+                    "line-color": "#2563EB",
+                    "line-width": 1.5,
+                    "line-opacity": 0.65,
+                },
             }
         )
-        legend_items.append({"label": label, "color": color, "type": "line"})
-    if _network_feature_type(network_data_ref, "demand") is not None:
+        legend_items.append({"label": "末端覆盖", "color": "#2563EB", "type": "line"})
+    if _network_feature_type(network_data_ref, "linehaul_connection") is not None:
+        layers.append(
+            {
+                "id": "linehaul-coverage",
+                "type": "line",
+                "source": "network",
+                "filter": ["==", ["get", "kind"], "linehaul_connection"],
+                "paint": {"line-color": "#1E3A8A", "line-width": 2.5, "line-opacity": 0.65},
+            }
+        )
+        legend_items.append({"label": "干线连接", "color": "#1E3A8A", "type": "line"})
+    demand = _network_feature_type(network_data_ref, "demand")
+    if demand is not None and demand.properties.get("service_status") == "string":
+        for status, layer_id, color, radius, label in (
+            ("attained", "attained-demand-cities", "#16A34A", 5, "达标城市"),
+            ("missed", "missed-demand-cities", "#DC2626", 6, "未达标城市"),
+            ("unassigned", "unassigned-demand-cities", "#64748B", 6, "无法判断城市"),
+        ):
+            layers.append(
+                {
+                    "id": layer_id,
+                    "type": "circle",
+                    "source": "network",
+                    "filter": [
+                        "all",
+                        ["==", ["get", "kind"], "demand"],
+                        ["==", ["get", "service_status"], status],
+                    ],
+                    "paint": {
+                        "circle-color": color,
+                        "circle-radius": radius,
+                        "circle-stroke-color": "#FFFFFF",
+                        "circle-stroke-width": 1.5,
+                    },
+                }
+            )
+            legend_items.append({"label": label, "color": color, "type": "circle"})
+    elif demand is not None:
         layers.append(
             {
                 "id": "demand-cities",
@@ -791,30 +851,49 @@ def _network_hover_layers(
             }
         )
 
-    add(
+    for layer_id in (
         "demand-cities",
-        "city_name",
-        (
-            "city_id",
-            "demand_quantity",
-            "assigned_warehouse_id",
-            "before_warehouse_id",
-            "after_warehouse_id",
-            "duration_hours",
-            "before_duration_hours",
-            "after_duration_hours",
-            "unit_cost",
-            "before_unit_cost",
-            "after_unit_cost",
-        ),
-        "demand",
-    )
-    add(
+        "attained-demand-cities",
+        "missed-demand-cities",
+        "unassigned-demand-cities",
+    ):
+        add(
+            layer_id,
+            "city_name",
+            (
+                "city_id",
+                "demand_quantity",
+                "assigned_warehouse_id",
+                "before_warehouse_id",
+                "after_warehouse_id",
+                "duration_hours",
+                "before_duration_hours",
+                "after_duration_hours",
+                "unit_cost",
+                "before_unit_cost",
+                "after_unit_cost",
+                "service_status",
+            ),
+            "demand",
+        )
+    for layer_id in (
         "last-mile-coverage",
-        "demand_city_id",
-        ("scenario", "warehouse_id", "demand_quantity", "duration_hours", "unit_cost"),
-        "last_mile_assignment",
-    )
+        "attained-last-mile-coverage",
+        "missed-last-mile-coverage",
+    ):
+        add(
+            layer_id,
+            "demand_city_id",
+            (
+                "scenario",
+                "warehouse_id",
+                "demand_quantity",
+                "duration_hours",
+                "unit_cost",
+                "service_status",
+            ),
+            "last_mile_assignment",
+        )
     add(
         "linehaul-coverage",
         "crossdock_warehouse_id",

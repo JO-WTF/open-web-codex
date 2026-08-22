@@ -11,7 +11,10 @@ to verify them. Discover only the native collaboration surface when needed,
 spawn the bounded Data child, wait for its terminal handoff, then delegate the
 Network child with the exact handoff. After a child terminal result, send the
 final user-facing message or the next bounded native collaboration request;
-do not continue with exploratory tools or request a second approval.
+do not continue with exploratory tools or request a second approval. When a
+child terminal result requires a business choice, call the native
+`request_user_input` Tool with its bounded questions. Never replace that Tool
+with a prose question or continue the business calculation before the answer.
 """
 
 [features]

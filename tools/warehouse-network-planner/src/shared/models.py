@@ -417,17 +417,76 @@ class DataPreparationToolResult(
     """Discriminated Data-to-Network preparation result."""
 
 
-class RouteMatrixPreparationToolResult(StrictModel):
+class PlanningInputOption(StrictModel):
+    label: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=240)
+
+
+class PlanningInputQuestion(StrictModel):
+    id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    header: str = Field(min_length=1, max_length=12)
+    question: str = Field(min_length=1, max_length=300)
+    options: list[PlanningInputOption] = Field(min_length=2, max_length=3)
+
+    @model_validator(mode="after")
+    def validate_options(self) -> PlanningInputQuestion:
+        labels = [option.label for option in self.options]
+        if len(labels) != len(set(labels)):
+            raise ValueError("planning_input_option_labels_duplicate")
+        if not labels[0].endswith("(Recommended)"):
+            raise ValueError("planning_input_recommended_option_must_be_first")
+        return self
+
+
+class RouteMatrixReady(StrictModel):
     state: Literal["ready"]
     summary: str
     resource_ref: _ResourceRef
     warehouse_ids: list[str] = Field(min_length=1, max_length=256)
+    missing_pair_count: Literal[0] = 0
 
     @model_validator(mode="after")
-    def validate_state_schema(self) -> RouteMatrixPreparationToolResult:
+    def validate_state_schema(self) -> RouteMatrixReady:
         if self.resource_ref.resource_schema != "route_matrix.v3":
             raise ValueError("ready requires route_matrix.v3")
         return self
+
+
+class RouteMatrixNeedsInput(StrictModel):
+    state: Literal["needs_input"]
+    summary: str
+    next_action: Literal["request_user_input"]
+    retryable: Literal[False]
+    warehouse_scope: WarehouseScope
+    warehouse_ids: list[str] = Field(min_length=1, max_length=256)
+    missing_pair_count: int = Field(gt=0)
+    missing_pairs: list[tuple[str, str, Literal["last_mile", "linehaul"]]] = Field(
+        min_length=1,
+        max_length=20,
+    )
+    missing_pairs_truncated: bool
+    questions: list[PlanningInputQuestion] = Field(min_length=1, max_length=3)
+
+    @model_validator(mode="after")
+    def validate_missing_pairs(self) -> RouteMatrixNeedsInput:
+        if len(self.missing_pairs) != min(self.missing_pair_count, 20):
+            raise ValueError("route_missing_pair_count_bounded_length_mismatch")
+        if self.missing_pairs_truncated != (self.missing_pair_count > 20):
+            raise ValueError("route_missing_pair_count_truncation_mismatch")
+        if self.missing_pairs != sorted(set(self.missing_pairs)):
+            raise ValueError("route_missing_pairs_not_canonical")
+        return self
+
+
+class RouteMatrixPreparationToolResult(
+    RootModel[
+        Annotated[
+            RouteMatrixReady | RouteMatrixNeedsInput,
+            Field(discriminator="state"),
+        ]
+    ]
+):
+    """Complete route matrix or one bounded request for a completion choice."""
 
 
 class CostMatrixPlanningToolResult(StrictModel):

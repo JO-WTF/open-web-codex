@@ -30,7 +30,7 @@ metadata:
 - `selection_required`：按 Tool 要求缩小来源；仍无法确定时再询问。
 - `inspected`：提交 `source_selections` 和必要的显式 mapping，调用 `prepare_network_input`。
 - `ready`：交接 `status/outcome`、`operation`、prepared path、input identity、`role_counts`、`warning_count` 和有界 warnings。
-- `needs_input`：原样交接真实 requirements，一次询问后停止，不猜、不循环。
+- `needs_input`：只为真实 requirements 调用一次原生 `request_user_input`；不得用普通文字代替输入卡片，不猜、不循环。用户选择补充文件或取消时停止。
 - `source_changed`：只允许一次重新 inspect；再次变化立即报告并停止。
 
 候选仓是否纳入由用户目标决定；已确认的候选事实不因 baseline 的 `existing_only` 计算范围被删除。

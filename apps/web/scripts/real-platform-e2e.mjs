@@ -925,6 +925,7 @@ class DeterministicModelServer {
         return network("network:coverage", "prepare_network_coverage_map", {
           prepared_input_relative_path: preparedPath,
           assignment_result_ref: baselineRef,
+          service_target_hours: 12,
         });
       }
       if (!has("network:search-map")) {
@@ -1608,7 +1609,7 @@ async function runCase(index) {
     for (const schema of [
       "route_matrix.v3",
       "network_baseline.v2",
-      "network_coverage_geojson.v1",
+      "network_coverage_geojson.v2",
     ]) {
       assert(schemas.has(schema), "missing Resource provenance for " + schema);
     }

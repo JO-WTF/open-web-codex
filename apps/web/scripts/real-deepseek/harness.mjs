@@ -74,6 +74,7 @@ const state = {
   manifest: undefined,
   proxy: undefined,
   cleanupErrors: [],
+  userInputInteractions: [],
 };
 
 class ApiError extends Error {
@@ -1802,12 +1803,57 @@ function turnFailureEvent(events, turnId) {
   });
 }
 
-async function waitForTurn(taskId, turnId, timeoutMs = 300_000) {
+async function answerPendingUserInputs(runId, answeredIds) {
+  const requests = await api("/runs/" + runId + "/user-input-requests");
+  for (const request of requests) {
+    if (answeredIds.has(request.id)) continue;
+    assert.equal(request.source?.kind, "root", "business input must be requested by Root");
+    assert(
+      Array.isArray(request.questions) &&
+        request.questions.length >= 1 &&
+        request.questions.length <= 3,
+      "user input must contain one to three questions",
+    );
+    const answers = {};
+    for (const question of request.questions) {
+      assert(
+        Array.isArray(question.options) &&
+          question.options.length >= 2 &&
+          question.options.length <= 3,
+        "every user input question must have two or three options",
+      );
+      const selected = question.options[0]?.label;
+      assert.match(selected ?? "", /\(Recommended\)$/);
+      answers[question.id] = { answers: [selected] };
+    }
+    await api("/approvals/" + request.id + "/user-input", {
+      method: "POST",
+      body: { answers, version: request.version },
+    });
+    answeredIds.add(request.id);
+    state.userInputInteractions.push({
+      run_id: runId,
+      request_id: request.id,
+      source: request.source,
+      question_ids: request.questions.map((question) => question.id),
+      selected_labels: Object.values(answers).flatMap((answer) => answer.answers),
+    });
+  }
+}
+
+async function waitForTurn(taskId, turnId, options = 300_000) {
+  const settings =
+    typeof options === "number" ? { timeoutMs: options } : options;
+  const timeoutMs = settings.timeoutMs ?? 300_000;
+  const answeredUserInputIds = new Set();
   try {
     return await eventually(
       async () => {
         const snapshot = await taskEventsSnapshot(taskId);
         const events = snapshot.events;
+        if (settings.autoAnswerUserInput && settings.runId) {
+          await answerPendingUserInputs(settings.runId, answeredUserInputIds);
+        }
         const failure = turnFailureEvent(events, turnId);
         if (failure) {
           const failureData = eventData(failure);
@@ -1823,8 +1869,15 @@ async function waitForTurn(taskId, turnId, timeoutMs = 300_000) {
           });
         }
         const approval = events.find(
-          (event) =>
-            event.turn_id === turnId && event.event_type === "platform.approval.requested",
+          (event) => {
+            if (event.turn_id !== turnId || event.event_type !== "platform.approval.requested") {
+              return false;
+            }
+            const approvalId = String(
+              eventData(event).approvalId ?? event.item_id ?? "",
+            );
+            return !answeredUserInputIds.has(approvalId);
+          },
         );
         if (approval) {
           throw new NativeRuntimeBlocker("approval_required", {
@@ -2111,7 +2164,11 @@ async function runGate(provider) {
     };
     log("[ROUND 1] " + JSON.stringify(minimalEvidence));
 
-    await waitForTurn(record.task.id, response.turn_id);
+    await waitForTurn(record.task.id, response.turn_id, {
+      timeoutMs: 600_000,
+      runId: record.run.id,
+      autoAnswerUserInput: true,
+    });
     const projection = await awaitProjectionConvergence(record.task.id, {
       label: "multi-agent typed business projection",
       turnId: response.turn_id,
@@ -2126,6 +2183,21 @@ async function runGate(provider) {
     const events = projection.events;
     const allEvents = projection.events;
     const nativeNames = nativeToolNames(allEvents);
+    const userInputInteractions = state.userInputInteractions.filter(
+      (interaction) => interaction.run_id === record.run.id,
+    );
+    if (
+      userInputInteractions.length < 1 ||
+      !userInputInteractions.some((interaction) =>
+        interaction.question_ids.includes("route_completion"),
+      )
+    ) {
+      throw new NativeRuntimeBlocker("route_gap_user_input_not_projected", {
+        provider_id: provider.id,
+        model,
+        interactions: userInputInteractions,
+      });
+    }
     const rounds = state.proxy.rounds
       .filter((round) => round.round > roundStart)
       .slice(-40)
@@ -2252,6 +2324,7 @@ async function runGate(provider) {
       map_producer_turn_id: mapProducerEvent.turn_id,
       map_producer_status: mapProducerEvent.payload?.data?.status,
       root_final_map_embed: rootFinalMapEmbed,
+      user_input_count: userInputInteractions.length,
       round_count: rounds.length,
       native_tool_names: nativeNames,
     };

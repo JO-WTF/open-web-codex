@@ -18,6 +18,9 @@ from pydantic import (
     Field,
     ValidationError,
 )
+from supply_chain_planner.network.matrix import (
+    validate_route_matrix as _validate_route_matrix_model,
+)
 from supply_chain_planner.network.matrix_models import (
     CostMatrix,
     ExistingOnlyWarehouseScope,
@@ -208,8 +211,19 @@ def evaluate_network_baseline(
         costs.warehouse_scope != existing_scope or costs.warehouse_ids != existing_ids
     ):
         raise McpResourceContractError("baseline_cost_scope_mismatch")
+    route_validation = _validate_route_matrix_model(
+        prepared.demand_cities,
+        prepared.warehouses,
+        routes,
+    )
+    if not route_validation.valid:
+        raise McpResourceContractError("baseline_route_matrix_incomplete")
     if objective == "min_cost" and costs is None:
         raise McpResourceContractError("min_cost_baseline_requires_cost_matrix")
+    if objective == "min_cost" and costs is not None and (
+        costs.missing_routes or not costs.stats.complete
+    ):
+        raise McpResourceContractError("baseline_cost_matrix_incomplete")
     active_ids = set(existing_ids)
     resolved_coverage_mode = (
         "actual_current"

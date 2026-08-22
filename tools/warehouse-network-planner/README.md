@@ -53,10 +53,10 @@ Data Tool 会把用户输入中完整的起点、终点、距离、时长与来�
 
 `solve_p_median` 的 `opening_policy` 支持 `exact` 和一次有界的 `minimum_feasible` 两阶段求解。后者在一个总 `time_limit_seconds` 内先最小化新增仓数，再在该仓数下最小化成本，返回最多两个 typed `solver_stages`、`selected_number_to_open` 和最终 coverage，避免由 Agent 循环调用多个求解 Tool。报价均值外推且距离成本为零只是敏感性方案；没有仓租、建设、容量或吞吐成本时，结果不得称为经济意义上的全局最优。
 
-地图数据合同只发布仓库、需求城市、分配关系以及逐城市距离、时长和成本等原始事实，不包含
-标题、图层、颜色、大小、标签、悬浮信息或图例。Network Skill 根据用户当次自然语言要求，
-把 Planner 返回的完整 `data_ref` 交给通用 `map_utils/create_map_card`，并用标准 Mapbox Style
-表达本次展示意图；改变样式不会改变或重新发布仓网业务数据。
+地图数据合同发布仓库、需求城市、分配关系、逐城市距离、时长、成本以及相对用户所选服务目标的
+`attained/missed/unassigned` 状态，不包含标题、颜色、大小、标签、悬浮信息或图例。
+`prepare_network_coverage_map` 要求确切 `service_target_hours` 并验证该目标存在于计算结果；高层
+`map_utils/create_network_map_card` 只按这些 Planner 事实生成默认仓网图层和图例，不重新计算 SLA。
 
 `assess_facility_change` 接受精确的标准化输入、路线、可选成本以及任意合法的
 baseline/scenario/facility-location `before_ref`，以引用中的活动仓集合为起点，一次完成增仓、关仓或迁仓后的分配求解和前后比较。
@@ -92,7 +92,7 @@ Skill 自动使用，不创建 Workspace 文件。最终 map 文件与 Markdown 
 | `enterprise-network-planning-agent@6.0.0` | 需求定义、路线/成本口径、覆盖、成本、场景、选址和地图/报告 |
 | `enterprise-supervisor-copilot@6.0.0` | 动态协调 Data 和 Network，不写死国家、阶段数量或调用顺序 |
 
-Supervisor 不绑定 Visualization Agent。用户输入统一通过 Runtime 官方 `requestUserInput`，平台将 root 和 child 请求投影到同一个 Run 输入队列。
+Supervisor 不绑定 Visualization Agent。child 只把 typed `needs_input` 交给 Root；只有 Root 调用 Runtime 官方 `request_user_input`，平台把该请求投影到 Run 输入队列。普通 Assistant 文字不能代替输入卡片。
 
 ## 印尼教程 Fixture
 
