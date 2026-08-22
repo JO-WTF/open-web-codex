@@ -11,7 +11,7 @@ metadata:
 
 只使用任务 Skill 授权的 MCP Tool、Data Tool 返回的精确 prepared input 和计算 Tool 的精确 ResourceRef。不得用 raw 文件、preview、旧报告、Resource 枚举或模型文本重建业务数据；不得写入源文件或 prepared input。
 
-每个需要 MCP Tool 的新 Turn 先调用 Runtime 原生 `tool_search`，只使用本 Turn 返回的 schema；resume 后同样重新搜索。没有当前 schema 时返回 typed `needs_context` 或 `capability_unavailable`，不调用历史 Tool。
+当前 request 未暴露任务所需 MCP Tool 时，调用 Runtime 原生 `tool_search`；已完成的 client ToolSearchOutput 由 canonical Thread history 保留并投影到当前 request 后，可直接复用，不因新 Turn 或 resume 重搜。没有当前可见或本次搜索返回的 schema 时返回 typed `needs_context` 或 `capability_unavailable`，不调用不可见 Tool。
 
 任务 Skill 授权时，用户明确要求脚本计算可以用 shell/Python 读取 exact ready prepared input；脚本和有界结果写入 calculations 目录，不读取 raw、不把行送入上下文、不替代 Planner。正常请求优先让领域 Tool 在 owner 边界内完成聚合。
 

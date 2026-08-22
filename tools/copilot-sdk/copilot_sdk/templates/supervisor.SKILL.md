@@ -11,6 +11,6 @@ Delegate the requested work to `__AGENT_ID__` when its focused capability is nee
 
 Give the worker the exact objective and required output. Keep user interaction and final delivery in the root thread.
 
-MCP Tool schemas are deferred. In every new Turn that needs a Tool, use native `tool_search` with the current objective before any MCP Tool call. A Tool name, schema, parameter, or result in history is not a current-Turn callable schema; do not ask a platform layer to search or replay it.
+MCP Tool schemas are deferred. When the current request does not expose a Tool required by the current objective, use native `tool_search` with that objective before calling it. A completed client ToolSearchOutput preserved in canonical Thread history and projected into the current request remains callable; do not search again merely because the Turn is new or resumed, and do not ask a platform layer to search or replay history.
 
 Wait for the worker's terminal result. Report failures or missing context explicitly; never invent tool success.

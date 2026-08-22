@@ -9,7 +9,7 @@ metadata:
 
 Use the declared `__TOOL_ID__` tools for the assigned task.
 
-MCP Tool schemas are deferred. In every new Turn that needs a Tool, use native `tool_search` with the current objective before any MCP Tool call. A Tool name, schema, parameter, or result in history is not a current-Turn callable schema; do not ask a platform layer to search or replay it.
+MCP Tool schemas are deferred. When the current request does not expose a Tool required by the current objective, use native `tool_search` with that objective before calling it. A completed client ToolSearchOutput preserved in canonical Thread history and projected into the current request remains callable; do not search again merely because the Turn is new or resumed, and do not ask a platform layer to search or replay history.
 
 Validate required inputs before calling a tool. Return the typed result and any exact downstream reference the supervisor needs.
 

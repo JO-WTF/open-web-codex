@@ -152,9 +152,11 @@ deterministic multi-agent gate 全部通过；Rust 中要求外部 PostgreSQL/�
 各自前置条件保留，不冒充已运行。
 
 Chat 与 Responses 共用同一个 Thread/Turn/ToolRouter/Agent/Skill/MCP 主干。Chat 仅在 wire 边界把
-canonical Responses request 转为 Chat Completions，并把 SSE 恢复为 `ResponseEvent`；当前 Turn 的
-completed ToolSearch schema 只做 request-scoped Chat function 转译，不进入 Core registry、缓存或
-cold-resume state。Data Tool 对无歧义 source profile 自动物化字段 mapping 并原子完成 geography；
+canonical Responses request 转为 Chat Completions，并把 SSE 恢复为 `ResponseEvent`；canonical history
+中的 completed/client ToolSearch call-output 对做 request-scoped Chat function 转译，已加载且当前
+request 可见的 schema 在新 Turn/resume 后继续可用，不进入 Core registry、缓存或第二份 Tool 状态；
+失败、取消和孤立结果不产生目标，已从当前 Runtime 移除的历史 Tool 仍由 Core ToolRouter typed 拒绝。
+Data Tool 对无歧义 source profile 自动物化字段 mapping 并原子完成 geography；
 baseline Tool 的 `coverage_mode=auto` 根据标准输入是否存在 current assignments 决定实际或优化现有
 仓口径，模型不再猜测后重试。
 
@@ -226,19 +228,20 @@ Platform map projection 故障；没有伪造重试或业务结果。确定性 m
 在投影任何 FunctionCall Item 前先校验整组 Tool 名和参数，因此不再显示为
 `stream disconnected`，也不会留下已接受一半的 `tool_search`/业务 Tool 组。
 
-#### D5c：Chat current-Turn mailbox boundary 与真实完整门
+#### D5c：Chat history-loaded Tool 投影与真实完整门
 
-Chat bridge 现在以最新 user-role item 携带的 exact `turn_id` 作为当前 Turn 身份，并扫描同一
-`turn_id` 的 ToolSearch call/output；同一 Turn 后追加的 Agent completion user-role mailbox 不会
-清除已发现的 deferred target。缺少 metadata 或不同 Turn 会安全清除旧 target。Runtime 在 active
-Turn 注入 model-visible Agent completion 时补齐该 Turn metadata；非 OpenAI Chat Provider 在本地
-Chat translation 完成前保留 metadata，但 Chat wire `messages` 不序列化该内部字段。
+Chat bridge 对 canonical history 中的 completed/client ToolSearch call-output 对建立 exact
+namespace/name reverse target 和 function schema，并将其投影到当前 Chat request；不会按 `turn_id`
+清除跨 Turn 或 resume 后的已加载 Tool。缺失、失败、取消和孤立结果不产生目标；同名不同
+identity/schema 是 typed conflict。Runtime 在 active Turn 注入 model-visible Agent completion 时
+仍可携带内部 metadata，但 Chat wire `messages` 不序列化该字段；当前 Runtime 已移除的历史 Tool
+即使仍可见也由 Core ToolRouter typed 拒绝。
 
-D5c 真实 DeepSeek 门通过：最小 `tool_search → spawn_agent` 通过，完整门 canonical native chain
-包含 `spawnAgent → wait → Data MCP → prepared Workspace input → Network route/baseline/coverage →
-create_network_map_card → closeAgent`；地图 Tool Item 为 completed，Provider 请求均 HTTP 200/SSE
-done。临时 Provider、Run、Workspace、Project 均清理。确定性 multi-agent gate 重启后 Gate 1/2
-连续通过并保留 `route_matrix.v3`、`network_baseline.v2`、`map_card_spec.v1` 等 provenance。
+`codex-api` 的 222 项测试及 history-loaded/resume-shaped schema 复用、相同 target/schema 去重、
+failed/cancelled/orphan 结果处理等 focused 机制门已通过。这些确定性门只证明 Chat adapter 的
+历史投影与 typed rejection 合同，不证明真实 Provider 的跨 Turn 复用。本轮真实 DeepSeek Flash
+门仍待 Root 在 Web 端同一 Task/Workspace 中连续验收：12 小时达标率地图、添加 Balikpapan 后的
+时效变化率地图、以及 90% 达标率下最少仓库覆盖地图；在该验收完成前不声称真实门通过。
 
 #### D6：仓网 Agent 执行面与地图交付终态
 
@@ -553,7 +556,7 @@ ADR-018 是阶段一规范裁决，Codex 子树 seam 只由 Patch Map 分类。�
 
 | 稳定 ID | 分类 | 已验证问题与源码证据 | 风险 | 当前裁决与阶段/触发条件 | 目标 owner/删除条件 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `P1-R2-CHAT` | 当前关键链 | pinned official Codex 的 Chat transport 与 Platform `PUT/list` 依赖保留在 `codex/codex-rs/codex-api/src/{chat_translate.rs,chat_translate_history.rs,endpoint/chat.rs,sse/chat.rs}`、`core/src/client/chat.rs` 和 app-server catalog processor；Chat bridge 将 Runtime 原生 client ToolSearch 映射为普通 function call；当前用户 Turn 的 completed client `ToolSearchOutput` 贡献 exact namespace/name 的 request-scoped reverse target，并在 Chat wire request 中提供对应 function schema；该 projection 不进入 canonical `Prompt.tools`，same-Turn user-role Agent mailbox 通过 `internal_chat_message_metadata_passthrough.turn_id` 保留 target，旧 Turn、取消、失败、恢复前输出和缺 metadata 不参与映射，Responses transport 不变。业务 child 恢复后，Root 以 `send_input.items` 重新注入当前任务 Skill；child 需要领域 Tool 时以 fresh `tool_search` 作为该 Turn 第一项 Tool 调用，只接受本次返回的 schema。Runtime 仍拥有搜索、deferred registry、Tool identity、审批与分派。Role MCP server scope 仍是搜索边界。Chat Provider 的 function-tool 能力来自 `ModelProviderInfo.supports_function_tools` 的显式 typed 配置/目录事实，缺失时在 Core tool planning 返回 `ProviderFunctionToolsUnsupported`；ToolSearch 仍只由模型级 `ModelInfo.supports_search_tool` 决定；Runtime 不按 `wire_api`、模型名或错误文本推断，Platform 只在可编辑 Provider 保存边界按 Chat 类型写入 function-tools 总闸门。 | 自定义 active-Turn schema plan、历史 schema 回放和 cold-resume schema 恢复会制造第二个工具生命周期 owner，并可能让新 Turn 继续使用旧 provider schema；纯文本 `send_input.message` 又会使恢复 Turn 丢失任务 Skill，fresh search 因而看不到 Role 领域面 | 仅保留 Chat wire 适配、Provider capability/catalog 和真实仓网 gate 所需的最小 typed seam；新 Turn、取消、失败或恢复后重新传 Skill 并执行原生 tool_search，fresh search 为空则 typed unavailable；D5c 真实 DeepSeek gate 只在 `spawn_agent → wait → Data MCP → Workspace prepared input → route → 12h baseline → Balikpapan 增仓时效变化率 → coverage → create_network_map_card` 全链完成时通过 | Codex 拥有 wire/app-server typed 执行、deferred registry、搜索与 Provider capability gate；Supervisor Skill 只拥有 structured continuation 方法；Platform 只拥有 CRUD、授权与密文注入 | 已验证：Chat request/stream/history 基础 round-trip、same-Turn mailbox reverse target、旧 Turn exclusion、missing metadata safe clear、collision/schema rejection、ToolSearch schema 不进入 `Prompt.tools`、Chat unsupported/function-only Core 回归、typed managed Role MCP/Skill projection、旧 marker 拒绝、unmarked authority rejection。2026-08-21 真实 DeepSeek 恢复门以同一 Wanwan 完成 `closeAgent → resumeAgent → sendInput(items=[warehouse-data, text])`；child 新 Turn canonical rollout ordinal 37 为 fresh `tool_search_call`、38 为当前 Data ToolSearch output、44 才调用 `discover_workspace_sources`，前一 Turn ordinal 18 的 Tool 未被复用；两轮均无 Workspace 写入并在完成后关闭 child |
+| `P1-R2-CHAT` | 当前关键链 | pinned official Codex 的 Chat transport 与 Platform `PUT/list` 依赖保留在 `codex/codex-rs/codex-api/src/{chat_translate.rs,chat_translate_history.rs,endpoint/chat.rs,sse/chat.rs}`、`core/src/client/chat.rs` 和 app-server catalog processor；Chat bridge 将 Runtime 原生 client ToolSearch 映射为普通 function call；canonical Thread history 中的 completed/client ToolSearch call-output 对贡献 exact namespace/name 的 request-scoped reverse target 与对应 function schema，稳定去重相同 target/schema，并对 identity/schema 冲突返回 typed failure；projection 不改写 canonical `Prompt.tools`、Platform 状态或 Core ToolRouter registry，Responses transport 不变。业务 child 恢复后，Root 以 `send_input.items` 重新注入当前任务 Skill；Skill item 重新注入与 Tool schema 历史复用是独立事实；同一 Task、同一业务 Role 默认复用稳定 child target，只有所需 Tool 不在当前 request 时才调用原生 `tool_search`。Runtime 仍拥有搜索、deferred registry、Tool identity、审批与分派，Role MCP server scope 仍是搜索边界；历史可见但已被当前 Runtime 移除的 Tool 仍由 Core typed 拒绝。Chat Provider 的 function-tool 能力来自 `ModelProviderInfo.supports_function_tools` 的显式 typed 配置/目录事实，缺失时在 Core tool planning 返回 `ProviderFunctionToolsUnsupported`；ToolSearch 仍只由模型级 `ModelInfo.supports_search_tool` 决定；Runtime 不按 `wire_api`、模型名或错误文本推断，Platform 只在可编辑 Provider 保存边界按 Chat 类型写入 function-tools 总闸门。 | 自定义历史 schema 缓存、Platform 回放或 Core authorization snapshot 会制造第二个工具生命周期 owner；纯文本 `send_input.message` 又会使恢复 child 丢失任务 Skill | 仅保留 Chat wire 适配、Provider capability/catalog 和真实仓网 gate 所需的最小 typed seam；历史 Tool schema 仅通过 canonical history 与当前 request 投影复用，ToolRouter 仍是最终权限 owner；Role/Skill 只规定 missing-tool search 与 stable child continuation，不建缓存、调度器或重试。真实 DeepSeek 本轮复验由 Root 在 2B 后执行，当前不声称通过 | Codex 拥有 wire/app-server typed 执行、deferred registry、搜索与 Provider capability gate；Supervisor Skill 只拥有 structured continuation 方法；Platform 只拥有 CRUD、授权与密文注入 | 已验证：Chat request/stream/history 基础 round-trip、history-loaded schema/reverse-target replay、resume-shaped input、相同 schema 去重、failed/cancelled/orphan handling、collision/schema rejection、ToolSearch schema 不进入 `Prompt.tools`、Chat unsupported/function-only Core 回归；2A Role/Skill/SDK/Web 文本合同与 focused copilot_package/SDK CLI tests 通过；真实 DeepSeek 本轮尚待 Root 验收 |
 | `P1-SC-REF` | 当前关键链 | Network `server.py` 的 decorated active tools 使用一个 logical `supply_chain` provider、Workspace-scoped ResourceStore 和 strict `ResourceRef`；Data inspection 不发布 Resource，只由 Workspace authority 返回 inline typed identity。通用 ref/schema/codec/bounds/store/runtime/Workspace primitives 已迁到独立 provider SDK，仓网旧模块和 import 已删除 | 跨 provider 越权、Resource 不可达、同一内容多个身份 | Network 保持单一 provider ResourceStore 与 strict typed refs；Data 保持 inline inspection identity，不建 Broker/新表或路径 fallback | Network MCP provider 拥有中间内容；Data Tool 拥有文件 inspection identity；provider SDK 拥有通用 primitives | Provider SDK 11/11、Planner full 123/123 与 Data/Network stdio normal/domain gates 通过 |
 | `P1-SC-DATA4` | 当前关键链 | `data_server.py` active path 的 inspect 返回 bounded inline `workspace_source_profile.v2`、exact source units、`preview_sample_count`、`total_count`、`total_count_exact`、`inspection_identity` 与 `inspected_relative_paths`；角色评估不构成全局业务缺口，只有选中 unit 的语义、单位、值或冲突无法确定时才询问。`prepare_network_input` 使用 `source_selections` 和显式 mapping，重检变化返回 `source_changed` 且不写 output；ready prepared 绑定 selected raw/admin provenance、roles、role_counts 与 `selected_source_identity`，fresh candidate 只有显式选中才自动复用，内容不同则一次选择。| 预览样本曾被模型误认为完整正文，且生成输入曾落在 Workspace 根目录或源数据目录；缺字段曾使 Data Agent 在 mapping 与 schema 错误之间重复调用而不询问；旧 source profile Resource 使 Data/Network 产生不必要的 read 链 | strict surface：discover→inspect→prepare，fresh prepared 为 discover→inspect→handoff；`needs_input` 一次询问并终止，`source_changed` 最多一次重检；Data `list_resources`/templates 为空；目录截断时不得断言候选仓不存在；Indonesia built-in asset 只属于验收 fixture，其他国家无 provider 时 typed unavailable | Data Tool 拥有格式/映射/inspection identity/标准化、typed 数据缺口和生成目录；Skill 只把业务终态转为一次询问，不建重试状态机；复用 `workspace_intake.py`、`mapping.py`、`normalization.py` 中纯函数与 `geography.py`，不建 source/revision/CAS 包装 | focused Data tests 覆盖 sample/total、`warehouse_type` 缺失 no-write、非标准表头、multi-sheet/nested JSON、order-independent identity、fresh reuse、selected raw/admin change、Balikpapan 位于 preview 外完整准备、Data Resource surface empty 与两套 stdio domain gates |
 | `P1-SC-COST-MEAN` | 当前关键链 | `plan_cost_matrix` 的 discriminated `cost_policy` 区分显式数值与 `observed_quote_mean`；后者在 Planner owner 内读取 exact ready prepared input 的完整标准化报价，按层计算 `arithmetic_mean(price_per_vehicle / vehicle_capacity)`，把 `warehouse_quote_mean_calculation.v1` 的 prepared identity、完整总数、分层计数、币种、公式、均值和 Tool 版本写入 bounded result 与 `cost_matrix.v3`。单 Agent Role 显式保留 shell，但 Skill 只允许用户明确要求的同口径脚本读取 exact prepared input，并把 agent 创建的 typed script/result create-new 写入 calculations 目录；Planner 重新计算并校验脚本证据 | 旧 Skill 把 preview 上下文限制扩大成禁止执行端完整计算；Planner 又只收显式数值，导致用户已授权“按全量报价均值外推”仍被错误终止 | preview 继续只用于映射；普通均值外推由 Planner Tool 完成，脚本只作为用户明确要求的可审计证据，不修改 prepared/raw 数据或替代求解 | Planner 拥有业务聚合和 cost matrix；单 Agent Skill 拥有何时创建并执行脚本，Workspace 拥有计算证据文件 | focused cost/Tool tests 已覆盖 580 条完整报价、550/30 分层计数、均值、缺层失败、evidence mismatch、bounded structured output 与 exact input identity；Role/Copilot 合同测试覆盖 shell 开启、multi-agent 关闭和 calculations 目录约束；2026-08-20 真实 DeepSeek 单 Agent typed evidence/one-call gate 已通过 |

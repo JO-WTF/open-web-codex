@@ -42,6 +42,11 @@ class CopilotCliTests(unittest.TestCase):
             )
             self.assertIn("native `tool_search`", root_skill)
             self.assertIn("native `tool_search`", child_skill)
+            for skill in (root_skill, child_skill):
+                self.assertIn("current request does not expose a Tool required", skill)
+                self.assertIn("completed client ToolSearchOutput preserved in canonical Thread history", skill)
+                self.assertNotIn("In every new Turn that needs a Tool", skill)
+                self.assertNotIn("not a current-Turn callable schema", skill)
             self.assertTrue((root / "agents/order-review-worker.toml").is_file())
             manifest = (root / "copilot.toml").read_text(encoding="utf-8")
             self.assertIn("[[tests]]", manifest)

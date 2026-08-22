@@ -1742,26 +1742,48 @@ mod tests {
         assert!(SUPERVISOR_SKILL.contains("`$warehouse-map-delivery`"));
         assert!(SUPERVISOR_SKILL.contains("必须用 `send_input.items` 开启新 child Turn"));
         assert!(SUPERVISOR_SKILL.contains("不得使用 `send_input.message`"));
-        assert!(SUPERVISOR_SKILL.contains("任何 Tool 动作前先按当前目标调用 native `tool_search`"));
+        assert!(SUPERVISOR_SKILL.contains("同一 Task、同一业务 Role 默认复用同一稳定 child target"));
+        assert!(SUPERVISOR_SKILL
+            .contains("只要当前 Thread 已有可验证的该 Role target，后续请求一律复用该 child"));
+        assert!(SUPERVISOR_SKILL.contains("仅在当前 Thread 不存在该 Role target"));
+        assert!(
+            SUPERVISOR_SKILL.contains("当前请求不自动重试或重派；后续用户请求仍优先恢复原 child")
+        );
+        assert!(!SUPERVISOR_SKILL.contains("且正确性依赖它尚未结构化的判断"));
+        assert!(!SUPERVISOR_SKILL.contains("当前请求已具备完整 `prepared_input_relative_path`"));
+        assert!(SUPERVISOR_SKILL
+            .contains("如果所需 Tool 不在当前 request，才按目标调用 native `tool_search`"));
+        assert!(!SUPERVISOR_SKILL.contains("新 child Turn 先执行 `tool_search`"));
         assert!(!SUPERVISOR_SKILL.contains("`send_input(target, message)`"));
     }
 
     #[test]
-    fn resumed_warehouse_roles_require_fresh_tool_search_before_any_other_tool() {
+    fn resumed_warehouse_roles_reuse_history_loaded_tools_and_reinject_skills() {
         for (role, expected_skill) in [
             (DATA_ROLE, "$warehouse-data"),
             (NETWORK_ROLE, "$warehouse-*"),
         ] {
             assert!(role.contains("this applies again after `resume_agent`"));
-            assert!(role.contains("the first model-visible Tool call must be native `tool_search`"));
-            assert!(
-                role.contains("Only Tools returned by this exact current-Turn search are callable")
-            );
+            assert!(role.contains(
+                "A completed client ToolSearchOutput preserved in canonical Thread history"
+            ));
+            assert!(role.contains("projected into the current request remains callable"));
+            assert!(role.contains("When the current request does not expose"));
             assert!(role.contains("return `capability_unavailable` and stop"));
+            assert!(
+                !role.contains("the first model-visible Tool call must be native `tool_search`")
+            );
+            assert!(!role
+                .contains("Only Tools returned by this exact current-Turn search are callable"));
             assert!(role.contains(expected_skill));
         }
-        assert!(NETWORK_ROLE.contains("One `tool_search` authorizes only Tools returned"));
-        assert!(SINGLE_AGENT_ROOT_ROLE.contains("One `tool_search` authorizes only Tools returned"));
+        assert!(
+            NETWORK_ROLE.contains("If a needed deferred Tool is absent from the current request")
+        );
+        assert!(SINGLE_AGENT_ROOT_ROLE
+            .contains("If a needed deferred Tool is absent from the current request"));
+        assert!(SINGLE_AGENT_ROOT_ROLE
+            .contains("do not search again merely because the Turn is new or resumed"));
     }
 
     #[test]

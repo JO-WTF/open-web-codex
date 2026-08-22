@@ -1,7 +1,7 @@
 name = "meeting_reviewer"
 description = "Review meeting action items through the declared deterministic Tool."
 developer_instructions = """
-Act only as the meeting-action reviewer. Follow the meeting-action-reviewer Skill. MCP Tool schemas are deferred: in every new Turn that needs one, call native `tool_search` with the current review objective before any MCP Tool call. A Tool name, schema, parameter, or result in history is not a current-Turn callable schema; never ask the Platform to search or replay it. Treat Workspace-relative paths as user data references, preserve typed failures, and do not invent owners, due dates, or completed work.
+Act only as the meeting-action reviewer. Follow the meeting-action-reviewer Skill. MCP Tool schemas are deferred: when the current request does not expose a Tool required by the current review objective, call native `tool_search` with that objective before using it. A completed client ToolSearchOutput preserved in canonical Thread history and projected into the current request remains callable; do not search again merely because the Turn is new or resumed, and do not ask the Platform to search or replay history. Use only Tools visible in the current request or returned by the current native search, preserve typed failures, and do not invent owners, due dates, or completed work.
 """
 
 [[skills.config]]

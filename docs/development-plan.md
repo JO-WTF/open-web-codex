@@ -278,7 +278,7 @@ Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。
 2. 使用 Codex 原生 `$CODEX_HOME/skills` 与 `$CODEX_HOME/agents/*.toml`。每个 Copilot 只有一个
    小型常驻 Root Skill；任务 Skill 通过 Runtime Catalog 的 name、description、short-description 和 locator
    渐进发现，只有原生选中后才加载完整正文。Role TOML 源码只持有 Plugin/server policy；选中的 server 内 Tool
-   一律通过 deferred `tool_search` 发现，不维护 `enabled_tools` 名称白名单；命中 schema 只在同一 Turn 的下一次模型调用有效，新 Turn 重新搜索。已关闭 child 恢复后必须用 `send_input.items` 重新注入精确任务 Skill，领域 Tool 需要时 fresh `tool_search` 是该 child Turn 的第一项 Tool 调用；禁止纯文本 follow-up 复用历史 Skill/Tool。SDK prepared descriptor 提供 transport，Server
+   一律通过 deferred `tool_search` 发现，不维护 `enabled_tools` 名称白名单；完成的 client ToolSearchOutput 由 canonical Thread history 保留，并由 Chat bridge 投影到后续 request，已加载且当前 request 可见的 schema 可直接复用；只有所需 Tool 未在当前 request 中出现时才重新搜索。已关闭 child 恢复后必须用 `send_input.items` 重新注入精确任务 Skill，Skill item 重新注入与 Tool schema 历史复用分开；同一 Task、同一业务 Role 默认复用稳定 child target，禁止用纯文本 follow-up 丢失任务 Skill。SDK prepared descriptor 提供 transport，Server
    在当前 Profile 下解析 typed binding 后合成 Role-local MCP。不改 Profile `config.toml`、全局 role allowlist
    或 Codex built-in roles。Profile Host 的普通 startup file 只为 clean Profile seed 默认文件
    并保留已存在内容；仓网三项内置 Skill 与两项内置 Role 是显式 managed 保留 ID，部署升级
@@ -368,7 +368,7 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
 
 当前唯一关键路径固定为：
 
-1. **A — Codex Runtime 最小封口。** R2 的 Chat transport 已完成 current-Turn
+1. **A — Codex Runtime 最小封口。** R2 的 Chat transport 已完成
    `tool_search → spawn_agent` 兼容门；D3 又把能力声明收敛为既有 Provider `models` 配置中的
    typed exact `ProviderModelConfig.supports_search_tool`，由 `ModelsManager` 合并到原生
    `ModelInfo`，未配置默认 false，不按模型名或普通 `/models` ID 推断。Platform DTO/API/UI、Profile

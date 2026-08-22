@@ -199,9 +199,11 @@ typed failure. The Provider capability, Run, Workspace and Project are restored
 or removed in terminal cleanup.
 
 The default `observe` mode never rewrites `tool_choice`; the optional
-`force_first_tool` mode is diagnostic only. The Chat bridge keeps the typed
-current-Turn metadata needed to translate deferred tools, consumes it locally,
-and never serializes it into Chat `messages`. The production gate verifies
+`force_first_tool` mode is diagnostic only. The Chat bridge preserves completed
+client ToolSearch call/output pairs from canonical Thread history and projects
+their loaded schemas and reverse targets into each current Chat request; it
+consumes internal metadata locally and never serializes it into Chat `messages`.
+The production gate verifies
 structured Skill selection, Data preparation, Network route/12h calculation,
 a typed Balikpapan facility-change assessment, and completed
 `create_network_map_card` delivery with canonical provenance.
