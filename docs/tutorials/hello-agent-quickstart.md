@@ -194,4 +194,4 @@ python3 \
 - [ ] 能解释 Agent、Skill、Tool 和业务函数的区别；
 - [ ] 能解释为什么这个 Tool 可以免逐次审批，但其他高风险操作仍可能需要审批。
 
-接下来阅读[Copilot 开发者快速开始](copilot-developer-quickstart.md)。
+接下来阅读[开发一个仓网 Copilot](warehouse-copilot-developer-tutorial.md)。

@@ -1,6 +1,9 @@
-# Copilot 开发者快速开始
+# Copilot 开发命令速查
 
-这个快速开始使用 Copilot SDK 创建、静态验证并在隔离 Profile 中发现一个最小 Copilot 源码
+想从业务问题开发出一个完整 Copilot，请先阅读[开发一个仓网 Copilot](warehouse-copilot-developer-tutorial.md)。
+本页只说明 SDK 命令怎样创建、验证和运行开发检查。
+
+本命令速查使用 Copilot SDK 创建、静态验证并在隔离 Profile 中发现一个最小 Copilot 源码
 目录。完成后，你会得到一个声明 Supervisor Skill、child Skill、Runtime Role 和 Tool 组件的
 `copilot.toml`，以及一份来自真实 Codex app-server 的 `discovery_ready` 结果。
 

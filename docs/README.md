@@ -56,7 +56,10 @@
   - [评估新增 Balikpapan 仓](tutorials/indonesia-network-03-two-level-cost.md)
   - [找出达到 90% 的最少新增仓](tutorials/indonesia-network-04-optimization-map.md)
   - [审批与故障恢复](tutorials/approvals-and-recovery.md)
-- [Copilot 开发者快速开始](tutorials/copilot-developer-quickstart.md)：当前
+- [开发一个仓网 Copilot](tutorials/warehouse-copilot-developer-tutorial.md)：面向开发者的完整
+  路径：从业务边界、共享领域 Tool、Skill、Role 和 `copilot.toml`，走到 SDK 验证和 Web
+  真实验收。
+- [Copilot 开发者快速开始](tutorials/copilot-developer-quickstart.md)：命令速查；当前
   `copilot init` / `validate` / `prepare` / `dev` / `test` 源码入口；SDK 从显式 runtime manifest
   和 hash lock 准备外置 Tool 环境，`dev` 在隔离 Profile 中验证 Skill 与 MCP Server discovery，
   `test` 用本地确定性 Provider 验证单条原生 Supervisor/Role/MCP 正常链。它们不证明真实生产

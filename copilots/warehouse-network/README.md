@@ -39,3 +39,6 @@ python3 -m copilot_sdk prepare copilots/warehouse-network \
 
 Platform 负责通用的验证、依赖准备、Profile 投影和 Runtime 启动；本目录只负责该多 Agent
 Copilot 的组合、提示、Role、交付声明与测试。Tool 源码由根级 Tool package 独立拥有。
+
+如何基于这个参考工程开发新的领域 Copilot，见
+[开发一个仓网 Copilot](../../docs/tutorials/warehouse-copilot-developer-tutorial.md)。

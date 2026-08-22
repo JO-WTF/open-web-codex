@@ -133,4 +133,5 @@ copilot validate copilots/warehouse-network
 
 Settings 中的 Agents 管理 Codex Runtime Role；它不是 Copilot 创建、安装或 readiness 页面。
 
-完整的新手流程见[开发者快速开始](../../docs/tutorials/copilot-developer-quickstart.md)。
+完整的开发路径见[开发一个仓网 Copilot](../../docs/tutorials/warehouse-copilot-developer-tutorial.md)；
+命令参数速查见[Copilot 开发者快速开始](../../docs/tutorials/copilot-developer-quickstart.md)。

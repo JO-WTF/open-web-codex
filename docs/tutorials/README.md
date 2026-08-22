@@ -76,4 +76,6 @@
 
 ## 需要开发自己的 Copilot？
 
-这套教程面向使用者。开发、验证和本地运行请阅读 [Copilot 开发者快速开始](copilot-developer-quickstart.md)。
+这套教程面向使用者。要基于平台开发仓网或其他领域 Copilot，请阅读
+[开发一个仓网 Copilot](warehouse-copilot-developer-tutorial.md)；命令参数速查见
+[Copilot 开发者快速开始](copilot-developer-quickstart.md)。
