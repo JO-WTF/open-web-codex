@@ -1704,6 +1704,25 @@ mod tests {
     }
 
     #[test]
+    fn warehouse_roles_separate_base_identity_from_developer_constraints() {
+        for (role_name, contents, expected_base) in [
+            ("warehouse_supervisor_root", ROOT_ROLE, "你是仓网协调助手"),
+            ("data_agent", DATA_ROLE, "你是仓网数据准备专家"),
+            ("network_agent", NETWORK_ROLE, "你是仓网规划专家"),
+        ] {
+            let role = parse_role_template(role_name, contents).expect("parse warehouse Role");
+            let instructions = role["instructions"]
+                .as_str()
+                .expect("base Role instructions");
+            let developer_instructions = role["developer_instructions"]
+                .as_str()
+                .expect("Role developer instructions");
+            assert!(instructions.contains(expected_base));
+            assert!(!developer_instructions.contains(expected_base));
+        }
+    }
+
+    #[test]
     fn warehouse_map_delivery_skill_preserves_default_map_visual_hierarchy() {
         for skill in [MAP_DELIVERY_SKILL, SINGLE_AGENT_MAP_DELIVERY_SKILL] {
             let has_hex_color = skill.as_bytes().windows(7).any(|window| {
@@ -1745,8 +1764,11 @@ mod tests {
         assert!(SUPERVISOR_SKILL.contains("`agent_type=\"data_agent\"`"));
         assert!(SUPERVISOR_SKILL.contains("`agent_type=\"network_agent\"`"));
         assert!(SUPERVISOR_SKILL.contains("`spawn_agent.items`"));
+        assert!(SUPERVISOR_SKILL.contains("完整的用户业务目标"));
+        assert!(SUPERVISOR_SKILL.contains("一次纳入候选仓来源"));
         assert!(SUPERVISOR_SKILL.contains("用 `send_input.items` 发送本次所需 Skill"));
         assert!(SUPERVISOR_SKILL.contains("同一任务中的同一角色默认复用原 child"));
+        assert!(SUPERVISOR_SKILL.contains("普通完成后不调用 `close_agent`"));
         assert!(SUPERVISOR_SKILL
             .contains("只有找不到原 child、原 child 无法恢复、角色不同或 Workspace 不同时才新建"));
         assert!(SUPERVISOR_SKILL.contains("只有本次确实缺少所需工具时才执行 `tool_search`"));
@@ -1781,6 +1803,7 @@ mod tests {
         assert!(DATA_SKILL.contains("返回 `source_changed` 时重新检查一次"));
         assert!(DATA_SKILL.contains("时效、达标率或成本分析"));
         assert!(DATA_SKILL.contains("路线或报价"));
+        assert!(DATA_SKILL.contains("首次准备就同时纳入候选仓"));
         assert!(SINGLE_AGENT_DATA_SKILL.contains("时效、达标率或成本分析"));
         assert!(SINGLE_AGENT_DATA_SKILL.contains("路线或报价"));
     }
@@ -1838,6 +1861,8 @@ mod tests {
             assert!(skill.contains("不要生造“成本制分配”"));
         }
         assert!(ROOT_ROLE.contains("只使用业务语言"));
+        assert!(ROOT_ROLE.contains("不描述内部协作、角色状态或工具过程"));
+        assert!(!ROOT_ROLE.contains("$warehouse-supervisor"));
         assert!(SINGLE_AGENT_ROOT_ROLE.contains("面向用户的回答"));
         assert!(SINGLE_AGENT_ROOT_SKILL.contains("`$warehouse-data-preparation`"));
         assert!(SINGLE_AGENT_ROOT_SKILL.contains("`$warehouse-single-network-planning`"));
@@ -2265,6 +2290,10 @@ runtime = "tools/maps/runtime.toml"
             .expect("data instructions");
         assert!(data_instructions.contains("$warehouse-data"));
         assert!(data_instructions.contains("不得使用 shell、Git、临时代码或资源枚举"));
+        assert!(data["instructions"]
+            .as_str()
+            .expect("Data Role base instructions")
+            .contains("你是仓网数据准备专家"));
         assert!(network["mcp_servers"]["supply_chain"].get("cwd").is_none());
         assert_eq!(
             network["mcp_servers"]["supply_chain"]["required"].as_bool(),
@@ -2396,11 +2425,11 @@ runtime = "tools/maps/runtime.toml"
                 .as_str(),
             Some("approve")
         );
-        assert_eq!(
-            network["mcp_servers"]["map_utils"]["tools"]["publish_workspace_geojson"]
-                ["approval_mode"]
-                .as_str(),
-            Some("approve")
+        assert!(
+            network["mcp_servers"]["map_utils"]["tools"]
+                .get("publish_workspace_geojson")
+                .is_none(),
+            "final Workspace GeoJSON export must inherit the server default prompt",
         );
         assert_eq!(
             network["mcp_servers"]["map_utils"]["tools"]["revise_map_card"]["approval_mode"]
@@ -2433,7 +2462,7 @@ runtime = "tools/maps/runtime.toml"
             .as_str()
             .expect("network Role instructions");
         assert!(network_instructions.contains("仓网规划专家"));
-        assert!(network_instructions.contains("不是软件开发助手"));
+        assert!(network_instructions.contains("基于已准备的数据完成仓网分析和地图交付"));
         assert_eq!(
             network["include_permissions_instructions"].as_bool(),
             Some(false)

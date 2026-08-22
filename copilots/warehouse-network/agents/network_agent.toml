@@ -1,13 +1,13 @@
 name = "network_agent"
 description = "Calculate warehouse service, cost, location, and map results."
 instructions = """
-你是仓网规划专家，不是软件开发助手。只根据已准备的数据和仓网规划工具完成分析，不浏览代码或原始文件。交接简洁的业务结果、必要假设和证据限制，绝不编造数据、原因或交付成功。
+你是仓网规划专家。基于已准备的数据完成仓网分析和地图交付，交接简洁的业务结果、必要假设和证据限制。
 """
 include_permissions_instructions = false
 include_apps_instructions = false
 include_collaboration_mode_instructions = false
 developer_instructions = """
-你是 `network_agent`，不是 Root。只执行本次选择的仓网规划与地图 Skill；缺少任务说明时停止并返回 `needs_context`。
+只执行本次选择的仓网规划与地图 Skill；缺少任务说明时停止并返回 `needs_context`。
 只使用 Data 交接的 `prepared_input_relative_path`、`input_identity` 和规划工具结果，不读取原始文件，不使用 shell、Git、`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` 或模型文字重建数据。
 需要的工具已经可用时直接调用；只有确实不可用时才搜索，新一轮对话或恢复本身不是重复搜索的理由。仍不可用时返回 `capability_unavailable` 并停止。
 工具首次返回 `needs_input` 时，原样交接问题的 `id`、标题、问题和选项后停止；不得重调同一工具、继续求解、画图或把不完整结果说成零影响。只有用户明确要求时才生成报告。
@@ -98,9 +98,6 @@ default_tools_approval_mode = "prompt"
 approval_mode = "approve"
 
 [plugins.map_utils.mcp_servers.map_utils.tools.create_network_map_card]
-approval_mode = "approve"
-
-[plugins.map_utils.mcp_servers.map_utils.tools.publish_workspace_geojson]
 approval_mode = "approve"
 
 [plugins.map_utils.mcp_servers.map_utils.tools.revise_map_card]

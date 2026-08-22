@@ -143,7 +143,7 @@ Platform 侧过滤 Runtime discovery 或 Tool。
 对 exact ready prepared input 做有界确定性聚合，脚本和结果 create-new 写入 calculations 目录，不能读取
 任意 raw 文件、修改 prepared input 或替代 Planner 求解。两者只共享根级 Tool package，不互相引用或
 通信。Data 的四个有界本地 Tool（发现、检查、完整准备、地理补全）统一预批准；Network 以 `prompt` 为默认，
-预批准路线/成本/验证/分析/选址/比较、coverage GeoJSON 等本地 Tool 与最终 Markdown 报告 `publish_network_planning_report`；`map_utils` 预批准 `create_map_card` 与 `revise_map_card`。
+预批准路线/成本/验证/分析/选址/比较、coverage GeoJSON 等本地 Tool 与最终 Markdown 报告 `publish_network_planning_report`；`map_utils` 预批准 `create_network_map_card`、`create_map_card` 与 `revise_map_card`。
 外部导航、距离矩阵和 final Workspace 地图导出继续保留 official approval。Data→Network 输入是 Data Tool
 create-new 的 `prepared_network_input.v2` Workspace 相对路径与 `input_identity`；Network Tool 在同一授权
 Workspace 内自行验证和读取该文件，Role 不枚举、猜测、扫描 raw 数据或重解析其来源。fresh prepared candidate

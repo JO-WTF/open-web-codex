@@ -469,8 +469,8 @@ Profile seed 与显式应用资产 composition：
   多 Agent Root 不发现任务 Skill，单 Agent Root 与 child Role 按其显式 scope 通过 Runtime Catalog 渐进发现并按原生选择读取。Role source 持有精确 MCP server scope
   与 Tool 级 approval policy；server 内 Tool 通过 Runtime deferred discovery 暴露，Server 从 prepared descriptor 投影
   role-local MCP transport，Root 没有全局仓网
-  MCP；Data4 全部是有界本地预批准，Network 预批准本地计算/验证与 `publish_network_planning_report`，maps 只预批准
-  `create_map_card`，外部地图调用和 final Workspace 地图导出保持 `prompt`。prepared transport
+  MCP；Data4 全部是有界本地预批准，Network 预批准本地计算/验证与 `publish_network_planning_report`，maps 预批准
+  `create_network_map_card`、`create_map_card` 与 `revise_map_card`，外部地图调用和 final Workspace 地图导出保持 `prompt`。prepared transport
   不携带 cwd，Runtime 使用 Thread 已授权的 Workspace 作为 maps stdio MCP cwd；
   状态写入 Profile 私有 `mcp-state/maps-mcp`。Network 所有分析入口在 Tool schema 固定为
   Data provider 的 `supply_chain_data` inline inspection identity 与 Workspace prepared file；Role
