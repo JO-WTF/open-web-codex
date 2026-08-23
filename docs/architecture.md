@@ -3,8 +3,8 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前事实 |
-| 快照日期 | 2026-08-21 |
-| 代码快照 | 阶段二 Copilot 平台工作树；仓网 source-unit/prepared v2 合同以 ADR-025 为当前补充 |
+| 快照日期 | 2026-08-23 |
+| 代码快照 | 阶段三 Runtime owner 收敛工作树；阶段一仓网与阶段二开发者 SDK 作为已通过基线 |
 | 当前阶段边界 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md)、[ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md)、[ADR-024](adr/024-warehouse-copilot-contract-simplification.md)、[ADR-025](adr/025-source-unit-prepared-v2-reuse.md) 与 [开发计划](development-plan.md) |
 | 接受决策 | ADR-018；ADR-019 局部替代其单包/default 假设；ADR-024/025 约束当前仓网 Tool 合同 |
 
@@ -42,7 +42,7 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | 通用 Copilot Resource/Workspace 基础合同 | Platform/Workspace authority 与 `packages/copilot-provider-sdk` 分工拥有 | Workspace 授权与 Artifact 物化属于 Platform/Runner；独立、领域无关的 provider SDK 提供 `ResourceRef` envelope、expected-schema 校验、canonical codec、payload bounds、typed errors、Workspace canonical/no-follow writer 与 provider load/publish primitives。Tool 用 `runtime.toml.platform_packages` 声明受 SDK registry 管理的平台包；generic provisioner 从已安装 SDK distribution 构建并注入 Tool 环境，不读取仓网路径或在 Runtime 启动时安装 |
 | Task、Run、Approval、Artifact、Audit | Platform | Task 固定一个显式选择的 `copilot_package_id`；Run、Thread 创建与后续 Turn 沿用该 ID，Task 不保存路径或运行配置。持久 Artifact 只接受 active package registries 合并后的 exact producer、固定 typed kind/schema/MIME/verifier 和 Workspace-relative descriptor，并按 producing Item provenance 物化；中间 Resource 永不注册 Artifact。两个仓网包声明相同地图/报告交付，meeting 包声明 Markdown 报告；Platform 不理解业务字段。producer-time verifier snapshot 随 Artifact 持久化，恢复和下载不依赖届时 active registry |
 | Codex Inline Visualization | Codex Runtime + Platform 授权快照投影 | Runtime 仍生成原生 `visualize`/`file` 引用和 Thread-scoped 文件；Platform 将执行器绝对路径投影为 basename，并且只在完成的 Agent Message 出现严格的 `workspace_file` 指令时，经权威 Run/Thread/Workspace 和 no-follow 文件读取，把受限 HTML 快照进该 Thread 的原生目录后改写为官方 `file` 引用。浏览器只允许当前授权 Profile/Thread 读取。Web 直接支持原生 HTML 与静态 PNG/JPEG/GIF/WebP；HTML 复用 Codex viewer assets 并运行在无 same-origin 权限的脚本沙箱/CSP 中，图片验证扩展名、大小与文件签名。SVG、Markdown 和任意 Artifact 脚本不进入该表面；额外 typed 卡片只来自 active Copilot 声明的固定 delivery kind，当前实例是仓网 `map.v3` |
-| 用户输入 | Runtime 请求，Platform Approval 投影 | Root 官方输入路径已在真实 E2E 中通过 |
+| 用户输入与审批 | Runtime 请求，Platform Approval 投影 | Root 官方输入路径已在真实 E2E 中通过；Platform 只对 exact pending request 回送 typed decision，旧 `/profile/approval-rules`、Browser command-prefix allowlist 和直接 Profile rule 写入已删除 |
 | Agent execution | Runtime 事件，Platform projection | 有等待、输入、完整终态和有界、裁剪后的 reasoning 文本投影；属于可重建视图，不暴露 encrypted reasoning |
 | Capability Draft/Release/Installation | 无当前生产 owner | Catalog/Studio/Python publish crate、route、DTO、client、UI 与无 owner 数据表均已删除，不参与启动或 readiness |
 | Work State 与 Platform coordination | 无当前 production owner | work-state-service、route、MCP、gate、schema 与第二控制面已由 Slice 4B.2-A 删除；不建设替代状态机 |
@@ -293,12 +293,13 @@ neutral directory 作为 app-server process cwd，初启与 restart 共用该目
 
 生产构建只有一个浏览器入口：`index.html` 加载 `browser/browser-entry.ts`，入口完成平台会话
 后直接渲染 `WebApp`。仓库没有 desktop/Tauri Runtime；源码中的 `@tauri-apps/*` specifier 由
-Vite 映射到 browser shim。当前 production import graph 在展开该 alias 后只包含 75 个本地
-non-test TS/TSX/CSS 文件，其中 Markdown 外链仍通过一个 opener shim；仓库另有 466 个 non-test
-Browser 文件不在该图内，但 `tsconfig` 仍会把它们全部编译。`src/main.tsx`、`App`、`MainApp`
+Vite 映射到 browser shim。production graph 之外仍有大量 non-test Browser 文件被 `tsconfig`
+编译；`src/main.tsx`、`App`、`MainApp`
 及其 hooks/facade/styles/tests 因而仍构成非生产维护面。`PlatformClient` 又以一个完整 class 进入
 生产 bundle，未使用的 legacy methods 和 endpoint 字符串不会被 tree-shake，形成浏览器 API
-第二表面；这些事实不能作为第二产品入口或兼容合同继续扩展。
+第二表面；阶段三 Atom 1 已删除 hidden generation、generic adapter RPC、remembered approval 及其
+旧 UI 控件，剩余 Terminal、Usage、Prompts、Preferences 和 raw Profile writer 继续按 owner 原子清理，
+不建立兼容 facade。
 历史 `check-main-ui-parity` 字节级第二 UI truth 及其手工 SHA/overlay CI gate 已删除；Web 交付
 使用类型检查、组件/合同测试、生产构建与真实浏览器验收。`check:no-desktop` 继续作为
 browser-only 边界门。
@@ -312,7 +313,8 @@ SDK 当前提供单/多 Agent `init`、共享 `tool init`、`validate/prepare/de
 Runtime 与共享 build store，`sync` 通过完整 `check` 后把冷重启交回 `run-local.sh`。`test`
 支持 Root 直调和 child Role、多用例隔离，并从 canonical Thread history 验证 Tool 与终态。
 当前仍没有公开安装/发布、持久 Runtime readiness、Web 源码创作链路或任意模型质量矩阵。
-公开 SDK、Studio 和 Copilot Builder 已后移到阶段二；它们不是阶段一缺口或退出门。
+阶段二已完成仓库内开发者 SDK 入口；Studio、Copilot Builder 和 Marketplace 仍未实现，也不因
+阶段三清理 Runtime 并行实现而恢复旧 Web authoring 表面。
 
 ## 8. 当前最重要的边界偏离
 

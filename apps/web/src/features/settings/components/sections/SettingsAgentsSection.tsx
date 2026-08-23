@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { ModelOption } from "@/types";
-import {
-  MagicSparkleIcon,
-  MagicSparkleLoaderIcon,
-} from "@/features/shared/components/MagicSparkleIcon";
 import type { SettingsAgentsSectionProps } from "@settings/hooks/useSettingsAgentsSection";
 import { fileManagerName, openInFileManagerLabel } from "@utils/platformPaths";
 import {
@@ -44,8 +40,6 @@ export function SettingsAgentsSection({
   deletingAgentName,
   readingConfigAgentName,
   writingConfigAgentName,
-  createDescriptionGenerating,
-  editDescriptionGenerating,
   error,
   onRefresh,
   onSetMultiAgentEnabled,
@@ -56,8 +50,6 @@ export function SettingsAgentsSection({
   onDeleteAgent,
   onReadAgentConfig,
   onWriteAgentConfig,
-  onGenerateCreateDescription,
-  onGenerateEditDescription,
   modelOptions,
   modelOptionsLoading,
   modelOptionsError,
@@ -84,7 +76,6 @@ export function SettingsAgentsSection({
   const [configEditorAgentName, setConfigEditorAgentName] = useState<string | null>(null);
   const [configEditorContent, setConfigEditorContent] = useState("");
   const [configEditorDirty, setConfigEditorDirty] = useState(false);
-  const canGenerateCreateFromName = createName.trim().length > 0;
   const effectiveModelOptions = modelOptions.length > 0 ? modelOptions : FALLBACK_AGENT_MODELS;
 
   useEffect(() => {
@@ -480,39 +471,6 @@ export function SettingsAgentsSection({
           <label className="settings-label" htmlFor="settings-agent-create-name">
             Name
           </label>
-          <button
-            type="button"
-            className="ghost settings-icon-button settings-agents-generate-button"
-            onClick={() => {
-              if (createDescriptionGenerating || !canGenerateCreateFromName) {
-                return;
-              }
-              void (async () => {
-                const generated = await onGenerateCreateDescription({
-                  name: createName,
-                  description: createDescription,
-                  developerInstructions: createDeveloperInstructions,
-                });
-                if (generated != null) {
-                  if (generated.description.trim().length > 0) {
-                    setCreateDescription(generated.description);
-                  }
-                  if (generated.developerInstructions.trim().length > 0) {
-                    setCreateDeveloperInstructions(generated.developerInstructions);
-                  }
-                }
-              })();
-            }}
-            disabled={creatingAgent || createDescriptionGenerating || !canGenerateCreateFromName}
-            title="Generate description and developer instructions with AI"
-            aria-label="Generate fields for new agent"
-          >
-            {createDescriptionGenerating ? (
-              <MagicSparkleLoaderIcon className="settings-agents-generate-loader" />
-            ) : (
-              <MagicSparkleIcon />
-            )}
-          </button>
         </div>
         <input
           id="settings-agent-create-name"
@@ -618,7 +576,6 @@ export function SettingsAgentsSection({
         const isReadingConfig = readingConfigAgentName === agent.name;
         const isWritingConfig = writingConfigAgentName === agent.name;
         const isConfigEditorOpen = configEditorAgentName === agent.name;
-        const canGenerateEditFromName = editNameDraft.trim().length > 0;
         return (
           <div className="settings-field settings-agent-card" key={agent.name}>
             <div className="settings-agent-card-header">
@@ -708,41 +665,6 @@ export function SettingsAgentsSection({
                   >
                     Name
                   </label>
-                  <button
-                    type="button"
-                    className="ghost settings-icon-button settings-agents-generate-button"
-                    onClick={() => {
-                      if (editDescriptionGenerating || !canGenerateEditFromName) {
-                        return;
-                      }
-                      void (async () => {
-                        const generated = await onGenerateEditDescription({
-                          name: editNameDraft || agent.name,
-                          description: editDescriptionDraft,
-                          developerInstructions: editDeveloperInstructionsDraft,
-                        });
-                        if (generated != null) {
-                          if (generated.description.trim().length > 0) {
-                            setEditDescriptionDraft(generated.description);
-                          }
-                          if (generated.developerInstructions.trim().length > 0) {
-                            setEditDeveloperInstructionsDraft(generated.developerInstructions);
-                          }
-                        }
-                      })();
-                    }}
-                    disabled={
-                      isUpdating || editDescriptionGenerating || !canGenerateEditFromName
-                    }
-                    title="Generate description and developer instructions with AI"
-                    aria-label={`Generate fields for ${agent.name}`}
-                  >
-                    {editDescriptionGenerating ? (
-                      <MagicSparkleLoaderIcon className="settings-agents-generate-loader" />
-                    ) : (
-                      <MagicSparkleIcon />
-                    )}
-                  </button>
                 </div>
                 <input
                   id={`settings-agent-edit-name-${agent.name}`}

@@ -1247,20 +1247,6 @@ export class PlatformClient {
     });
   }
 
-  generateText(runId: string, kind: "runMetadata" | "agentDescription" | "commitMessage", input: string, model?: string | null) {
-    return this.request<{ text: string }>(`/api/runs/${encodeURIComponent(runId)}/generate`, {
-      method: "POST",
-      body: JSON.stringify({ kind, input, model: model ?? null }),
-    });
-  }
-
-  rememberApprovalRule(runId: string, command: string[]) {
-    return this.request<{ ok: boolean }>("/api/profile/approval-rules", {
-      method: "POST",
-      body: JSON.stringify({ runId, command }),
-    });
-  }
-
   private profileList(
     resource: "apps" | "mcp-servers" | "experimental-features",
     runId: string,

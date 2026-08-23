@@ -29,8 +29,6 @@ const baseProps = (): SettingsAgentsSectionProps => ({
   deletingAgentName: null,
   readingConfigAgentName: null,
   writingConfigAgentName: null,
-  createDescriptionGenerating: false,
-  editDescriptionGenerating: false,
   error: null,
   onRefresh: vi.fn(),
   onSetMultiAgentEnabled: vi.fn(async () => true),
@@ -41,8 +39,6 @@ const baseProps = (): SettingsAgentsSectionProps => ({
   onDeleteAgent: vi.fn(async () => true),
   onReadAgentConfig: vi.fn(async () => "model = \"gpt-5-codex\""),
   onWriteAgentConfig: vi.fn(async () => true),
-  onGenerateCreateDescription: vi.fn(async () => null),
-  onGenerateEditDescription: vi.fn(async () => null),
   modelOptions: [
     {
       id: "gpt-5-codex",
@@ -61,57 +57,6 @@ const baseProps = (): SettingsAgentsSectionProps => ({
 describe("SettingsAgentsSection", () => {
   afterEach(() => {
     cleanup();
-  });
-
-  it("enables create generation only when name is present", () => {
-    const props = baseProps();
-    render(<SettingsAgentsSection {...props} />);
-
-    const improveButton = screen.getByRole("button", {
-      name: "Generate fields for new agent",
-    }) as HTMLButtonElement;
-    expect(improveButton.disabled).toBe(true);
-
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "researcher" } });
-    expect(improveButton.disabled).toBe(false);
-  });
-
-  it("applies generated description to create textarea", async () => {
-    const props = baseProps();
-    const onGenerateCreateDescription = vi.fn(async () => ({
-      description: "Stabilizes flaky test suites",
-      developerInstructions:
-        "Reproduce failures first.\nPrefer deterministic fixes.\nAdd targeted regression tests.",
-    }));
-    render(
-      <SettingsAgentsSection
-        {...props}
-        onGenerateCreateDescription={onGenerateCreateDescription}
-      />,
-    );
-
-    const createName = screen.getByLabelText("Name") as HTMLInputElement;
-    const createDescription = screen.getByLabelText("Description") as HTMLTextAreaElement;
-    const createDeveloperInstructions = screen.getByLabelText(
-      "Developer instructions",
-    ) as HTMLTextAreaElement;
-    fireEvent.change(createName, { target: { value: "researcher" } });
-    fireEvent.change(createDescription, { target: { value: "flaky tests" } });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Generate fields for new agent" }),
-    );
-
-    await waitFor(() => {
-      expect(onGenerateCreateDescription).toHaveBeenCalledWith({
-        name: "researcher",
-        description: "flaky tests",
-        developerInstructions: "",
-      });
-    });
-    await waitFor(() => {
-      expect(createDescription.value).toBe("Stabilizes flaky test suites");
-      expect(createDeveloperInstructions.value).toContain("Reproduce failures first.");
-    });
   });
 
   it("does not send developerInstructions when unchanged during edit", async () => {

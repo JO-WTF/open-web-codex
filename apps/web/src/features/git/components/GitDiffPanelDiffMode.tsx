@@ -1,8 +1,4 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
-import {
-  MagicSparkleIcon,
-  MagicSparkleLoaderIcon,
-} from "@/features/shared/components/MagicSparkleIcon";
 import Download from "lucide-react/dist/esm/icons/download";
 import RotateCcw from "lucide-react/dist/esm/icons/rotate-ccw";
 import Upload from "lucide-react/dist/esm/icons/upload";
@@ -31,13 +27,10 @@ type GitDiffModeContentProps = {
   gitRootCandidates: string[];
   gitRoot: string | null;
   onSelectGitRoot?: (path: string) => void;
-  showGenerateCommitMessage: boolean;
+  showCommitMessage: boolean;
   showApplyWorktree: boolean;
   commitMessage: string;
   onCommitMessageChange?: (value: string) => void;
-  commitMessageLoading: boolean;
-  canGenerateCommitMessage: boolean;
-  onGenerateCommitMessage?: () => void | Promise<void>;
   worktreeApplyTitle: string | null;
   worktreeApplyLoading: boolean;
   worktreeApplySuccess: boolean;
@@ -93,13 +86,10 @@ export function GitDiffModeContent({
   gitRootCandidates,
   gitRoot,
   onSelectGitRoot,
-  showGenerateCommitMessage,
+  showCommitMessage,
   showApplyWorktree,
   commitMessage,
   onCommitMessageChange,
-  commitMessageLoading,
-  canGenerateCommitMessage,
-  onGenerateCommitMessage,
   worktreeApplyTitle,
   worktreeApplyLoading,
   worktreeApplySuccess,
@@ -138,7 +128,6 @@ export function GitDiffModeContent({
     : missingRepo
       ? "This workspace isn't a Git repository yet."
       : "Choose a repo for this workspace.";
-  const generateCommitMessageTooltip = "Generate commit message";
   const showWorktreeApplyInUnstaged = showApplyWorktree && unstagedFiles.length > 0;
   const showWorktreeApplyInStaged =
     showApplyWorktree && unstagedFiles.length === 0 && stagedFiles.length > 0;
@@ -244,7 +233,7 @@ export function GitDiffModeContent({
           )}
         </div>
       )}
-      {showGenerateCommitMessage && (
+      {showCommitMessage && (
         <div className="commit-message-section">
           <div className="commit-message-input-wrapper">
             <textarea
@@ -252,31 +241,8 @@ export function GitDiffModeContent({
               placeholder="Commit message..."
               value={commitMessage}
               onChange={(event) => onCommitMessageChange?.(event.target.value)}
-              disabled={commitMessageLoading}
               rows={2}
             />
-            <button
-              type="button"
-              className="commit-message-generate-button diff-row-action ds-tooltip-trigger"
-              onClick={() => {
-                if (!canGenerateCommitMessage) {
-                  return;
-                }
-                void onGenerateCommitMessage?.();
-              }}
-              disabled={commitMessageLoading || !canGenerateCommitMessage}
-              title={generateCommitMessageTooltip}
-              data-tooltip={generateCommitMessageTooltip}
-              data-tooltip-placement="bottom"
-              data-tooltip-align="end"
-              aria-label="Generate commit message"
-            >
-              {commitMessageLoading ? (
-                <MagicSparkleLoaderIcon className="commit-message-loader" />
-              ) : (
-                <MagicSparkleIcon />
-              )}
-            </button>
           </div>
           <CommitButton
             commitMessage={commitMessage}

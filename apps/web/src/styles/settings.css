@@ -593,17 +593,6 @@
   height: 14px;
 }
 
-.settings-agents-generate-button:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.settings-agents-generate-loader {
-  width: 14px;
-  height: 14px;
-  animation: settings-spin var(--ds-spinner-dur) linear infinite;
-}
-
 .settings-agents-textarea {
   width: 100%;
   min-height: 150px;

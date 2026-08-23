@@ -5,7 +5,6 @@ pub mod browser_workspaces;
 pub mod configuration;
 pub mod copilots;
 pub mod events;
-pub mod generation;
 pub mod github;
 pub mod health;
 pub mod me;
@@ -179,10 +178,6 @@ pub fn router(
             "/profile/prompts/move",
             axum::routing::post(profile_content::move_prompt),
         )
-        .route(
-            "/profile/approval-rules",
-            axum::routing::post(profile_content::remember_approval_rule),
-        )
         .route("/approvals", axum::routing::get(approvals::list_pending))
         .route(
             "/runs/{id}/approval-requests",
@@ -260,10 +255,6 @@ pub fn router(
         .route(
             "/runs/{id}/thread/name",
             axum::routing::put(threads::set_name),
-        )
-        .route(
-            "/runs/{id}/generate",
-            axum::routing::post(generation::generate),
         )
         .route("/runs/{id}/cancel", axum::routing::post(runs::cancel_run))
         .route(

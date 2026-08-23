@@ -53,7 +53,6 @@ type ThreadEventHandlersOptions = {
     receivers: CollabAgentRef[],
   ) => void | Promise<void>;
   onReviewExited?: (workspaceId: string, threadId: string) => void;
-  approvalAllowlistRef: MutableRefObject<Record<string, string[][]>>;
   pendingInterruptsRef: MutableRefObject<Set<string>>;
 };
 
@@ -79,13 +78,9 @@ export function useThreadEventHandlers({
   applyCollabThreadLinks,
   hydrateSubagentThreads,
   onReviewExited,
-  approvalAllowlistRef,
   pendingInterruptsRef,
 }: ThreadEventHandlersOptions) {
-  const onApprovalRequest = useThreadApprovalEvents({
-    dispatch,
-    approvalAllowlistRef,
-  });
+  const onApprovalRequest = useThreadApprovalEvents({ dispatch });
   const onRequestUserInput = useThreadUserInputEvents({ dispatch });
   const {
     onHookStarted: handleHookStarted,

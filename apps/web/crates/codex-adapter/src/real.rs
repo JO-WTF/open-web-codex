@@ -3,7 +3,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig, ProfileHostState};
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
@@ -188,7 +188,6 @@ pub struct RealCodexAdapter {
     thread_workspaces: Arc<RwLock<HashMap<String, AuthorizedWorkspace>>>,
     child_thread_identities: Arc<RwLock<HashMap<String, RuntimeThreadIdentity>>>,
     thread_history_modes: Arc<RwLock<HashMap<String, bool>>>,
-    suppressed_threads: Arc<RwLock<HashSet<String>>>,
     active_login_id: Arc<RwLock<Option<String>>>,
     login_statuses: Arc<RwLock<HashMap<String, ProfileLoginStatus>>>,
     terminal_workspaces: Arc<RwLock<HashMap<String, AuthorizedWorkspace>>>,
@@ -291,7 +290,6 @@ impl RealCodexAdapter {
             thread_workspaces: Arc::new(RwLock::new(HashMap::new())),
             child_thread_identities: Arc::new(RwLock::new(HashMap::new())),
             thread_history_modes: Arc::new(RwLock::new(HashMap::new())),
-            suppressed_threads: Arc::new(RwLock::new(HashSet::new())),
             active_login_id: Arc::new(RwLock::new(None)),
             login_statuses: Arc::new(RwLock::new(HashMap::new())),
             terminal_workspaces: Arc::new(RwLock::new(HashMap::new())),
@@ -321,19 +319,6 @@ impl RealCodexAdapter {
     /// The browser must never receive this transport directly.
     pub fn profile_host(&self) -> ProfileHost {
         self.host.clone()
-    }
-
-    fn require_workspace(&self, params: &Value) -> Result<(), AdapterError> {
-        let requested = params
-            .get("workspaceId")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AdapterError::Internal("missing workspaceId".to_string()))?;
-        if requested != self.workspace_id {
-            return Err(AdapterError::Rpc(format!(
-                "workspace '{requested}' is not registered with this Profile Host"
-            )));
-        }
-        Ok(())
     }
 
     fn authorized_root(&self, workspace: &AuthorizedWorkspace) -> Result<String, AdapterError> {
@@ -816,46 +801,6 @@ impl CodexAdapter for RealCodexAdapter {
 
     async fn runtime_instance_id(&self) -> uuid::Uuid {
         self.host.runtime_instance_id().await
-    }
-
-    async fn rpc(&self, method: &str, params: Value) -> Result<Value, AdapterError> {
-        match method {
-            "list_workspaces" => Ok(json!([{
-                "id": self.workspace_id,
-                "name": self.workspace_id,
-                "path": self.workspace_root,
-                "connected": true,
-                "kind": "profile",
-            }])),
-            "start_thread" => {
-                self.require_workspace(&params)?;
-                let workspace = AuthorizedWorkspace {
-                    id: self.workspace_id.clone(),
-                    root: self.workspace_root.clone(),
-                };
-                let started = self.start_thread_in_workspace(&workspace, None).await?;
-                Ok(json!({ "threadId": started.thread_id }))
-            }
-            "send_user_message" => {
-                self.require_workspace(&params)?;
-                let workspace = AuthorizedWorkspace {
-                    id: self.workspace_id.clone(),
-                    root: self.workspace_root.clone(),
-                };
-                let thread_id = params.get("threadId").and_then(Value::as_str).unwrap_or_default();
-                let text = params.get("text").and_then(Value::as_str).unwrap_or_default();
-                self.send_user_message_in_workspace(
-                    &workspace,
-                    thread_id,
-                    text,
-                    &TurnOptions::default(),
-                )
-                .await
-            }
-            other => Err(AdapterError::NotImplemented(format!(
-                "native Profile Host adapter method '{other}' is not available through the transitional RPC interface"
-            ))),
-        }
     }
 
     async fn start_thread(
@@ -1343,96 +1288,6 @@ impl CodexAdapter for RealCodexAdapter {
         Ok(())
     }
 
-    async fn generate_text(
-        &self,
-        workspace: &AuthorizedWorkspace,
-        prompt: &str,
-        model: Option<&str>,
-    ) -> Result<String, AdapterError> {
-        if prompt.trim().is_empty() {
-            return Err(AdapterError::Internal(
-                "generation prompt is required".to_string(),
-            ));
-        }
-        let mut events = self.host.subscribe();
-        let started = self.start_thread_in_workspace(workspace, None).await?;
-        self.suppressed_threads
-            .write()
-            .await
-            .insert(started.thread_id.clone());
-        let workspace_root = self.authorized_root(workspace)?;
-        let mut params = json!({
-            "threadId": &started.thread_id,
-            "input": [{ "type": "text", "text": prompt.trim() }],
-            "cwd": workspace_root,
-            "approvalPolicy": "never",
-            "sandboxPolicy": { "type": "readOnly" }
-        });
-        if let Some(model) = model.filter(|value| !value.trim().is_empty()) {
-            params
-                .as_object_mut()
-                .expect("generation params are an object")
-                .insert("model".to_string(), json!(model));
-        }
-        let thread_id = started.thread_id.clone();
-        let collected = async {
-            let turn = self.host.request("turn/start", params).await?;
-            let turn_id = turn
-                .pointer("/turn/id")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            tokio::time::timeout(std::time::Duration::from_secs(60), async {
-                let mut output = String::new();
-                loop {
-                    let event = events.recv().await.map_err(|error| {
-                        AdapterError::Unreachable(format!(
-                            "background generation stream closed: {error}"
-                        ))
-                    })?;
-                    let event = event.message;
-                    if message_thread_id(&event) != Some(thread_id.as_str()) {
-                        continue;
-                    }
-                    let method = event
-                        .get("method")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    if method == "item/agentMessage/delta" {
-                        if let Some(delta) = event.pointer("/params/delta").and_then(Value::as_str)
-                        {
-                            output.push_str(delta);
-                        }
-                    } else if method == "turn/completed" && turn_matches(&event, turn_id.as_deref())
-                    {
-                        return Ok(output);
-                    } else if method == "turn/error" && turn_matches(&event, turn_id.as_deref()) {
-                        return Err(AdapterError::Rpc(
-                            "background generation failed".to_string(),
-                        ));
-                    }
-                }
-            })
-            .await
-            .map_err(|_| AdapterError::Unreachable("background generation timed out".to_string()))?
-        }
-        .await;
-        let _ = self
-            .host
-            .request("thread/archive", json!({ "threadId": &started.thread_id }))
-            .await;
-        self.thread_workspaces
-            .write()
-            .await
-            .remove(&started.thread_id);
-        let output = collected?.trim().to_string();
-        if output.is_empty() {
-            return Err(AdapterError::Rpc(
-                "background generation returned no text".to_string(),
-            ));
-        }
-        Ok(output)
-    }
-
     async fn compact_thread(
         &self,
         workspace: &AuthorizedWorkspace,
@@ -1612,11 +1467,6 @@ impl CodexAdapter for RealCodexAdapter {
                         }
                     }
                     let thread_identity = self.inherit_child_thread_workspace(&message).await?;
-                    if let Some(thread_id) = message_thread_id(&message) {
-                        if self.suppressed_threads.read().await.contains(thread_id) {
-                            continue;
-                        }
-                    }
                     let workspace_id = if let Some(workspace_id) = message_workspace_id(&message) {
                         workspace_id.to_string()
                     } else if let Some(process_id) = message_process_id(&message) {
@@ -2050,16 +1900,6 @@ fn identity_failure_category(error: &AdapterError) -> &'static str {
         AdapterError::NotImplemented(_) => "unsupported",
         AdapterError::CapabilityUnavailable(_) => "capability",
     }
-}
-
-fn turn_matches(message: &Value, expected: Option<&str>) -> bool {
-    expected.is_none_or(|expected| {
-        message
-            .pointer("/params/turnId")
-            .or_else(|| message.pointer("/params/turn/id"))
-            .and_then(Value::as_str)
-            == Some(expected)
-    })
 }
 
 fn turn_sandbox_policy(workspace_root: &Path, read_only: bool) -> Value {

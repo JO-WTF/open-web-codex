@@ -37,7 +37,6 @@ import { useTerminalController } from "@/features/terminal/hooks/useTerminalCont
 import { useWorkspaceLaunchScript } from "@app/hooks/useWorkspaceLaunchScript";
 import { useWorkspaceLaunchScripts } from "@app/hooks/useWorkspaceLaunchScripts";
 import { useWorktreeSetupScript } from "@app/hooks/useWorktreeSetupScript";
-import { effectiveCommitMessageModelId } from "@/features/git/utils/commitMessageModelSelection";
 import { useMobileServerSetup } from "@/features/mobile/hooks/useMobileServerSetup";
 import { useMainAppModals } from "@app/hooks/useMainAppModals";
 import { useMainAppDisplayNodes } from "@app/hooks/useMainAppDisplayNodes";
@@ -340,11 +339,6 @@ export default function MainApp() {
     setSelectedCodexArgsOverride,
     persistThreadCodexParams,
   });
-  const commitMessageModelId = useMemo(
-    () => effectiveCommitMessageModelId(models, appSettings.commitMessageModelId),
-    [models, appSettings.commitMessageModelId],
-  );
-
   const composerShortcuts = {
     modelShortcut: appSettings.composerModelShortcut,
     accessShortcut: appSettings.composerAccessShortcut,
@@ -490,7 +484,6 @@ export default function MainApp() {
     updateCustomInstructions,
     confirmCustom,
     handleApprovalDecision,
-    handleApprovalRemember,
     refreshAccountInfo,
     refreshAccountRateLimits,
   } = useThreads({
@@ -506,7 +499,6 @@ export default function MainApp() {
     ensureWorkspaceRuntimeCodexArgs,
     reviewDeliveryMode: appSettings.reviewDeliveryMode,
     steerEnabled: appSettings.steerEnabled,
-    threadTitleAutogenerationEnabled: appSettings.threadTitleAutogenerationEnabled,
     chatHistoryScrollbackItems: appSettingsLoading
       ? null
       : appSettings.chatHistoryScrollbackItems,
@@ -578,7 +570,6 @@ export default function MainApp() {
     },
     addDebugEntry,
     updateWorkspaceSettings,
-    commitMessageModelId,
     connectWorkspace,
     startThreadForWorkspace,
     sendUserMessageToThread,
@@ -1622,7 +1613,6 @@ export default function MainApp() {
     onSwitchAccount: handleSwitchAccount,
     onCancelSwitchAccount: handleCancelSwitchAccount,
     onDecision: handleApprovalDecision,
-    onRemember: handleApprovalRemember,
     onPlanAccept: handlePlanAccept,
     onPlanSubmitChanges: handlePlanSubmitChanges,
     activePlan,

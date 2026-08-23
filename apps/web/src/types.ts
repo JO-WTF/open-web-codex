@@ -276,7 +276,6 @@ export type AppSettings = {
   usageShowRemaining: boolean;
   showMessageFilePath: boolean;
   chatHistoryScrollbackItems: number | null;
-  threadTitleAutogenerationEnabled: boolean;
   automaticAppUpdateChecksEnabled: boolean;
   uiFontFamily: string;
   codeFontFamily: string;
@@ -287,8 +286,6 @@ export type AppSettings = {
   splitChatDiffView: boolean;
   preloadGitDiffs: boolean;
   gitDiffIgnoreWhitespaceChanges: boolean;
-  commitMessagePrompt: string;
-  commitMessageModelId: string | null;
   collaborationModesEnabled: boolean;
   steerEnabled: boolean;
   followUpMessageBehavior: FollowUpMessageBehavior;

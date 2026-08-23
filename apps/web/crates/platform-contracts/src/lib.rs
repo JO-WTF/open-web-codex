@@ -1229,27 +1229,6 @@ pub struct MovePromptRequest {
     pub scope: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GenerateTextRequest {
-    pub kind: String,
-    pub input: String,
-    pub model: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GenerateTextResponse {
-    pub text: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RememberApprovalRuleRequest {
-    pub run_id: Uuid,
-    pub command: Vec<String>,
-}
-
 // ── Messages ──────────────────────────────────────────────────────
 
 /// One explicit, provenance-bound MCP Resource selected by the user. The

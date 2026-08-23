@@ -230,21 +230,6 @@ export function SettingsDisplaySection({
           }
         />
       </SettingsToggleRow>
-      <SettingsToggleRow
-        title="Auto-generate new thread titles"
-        subtitle="Generate a short title from your first message (uses extra tokens)."
-      >
-        <SettingsToggleSwitch
-          pressed={appSettings.threadTitleAutogenerationEnabled}
-          onClick={() =>
-            void onUpdateAppSettings({
-              ...appSettings,
-              threadTitleAutogenerationEnabled:
-                !appSettings.threadTitleAutogenerationEnabled,
-            })
-          }
-        />
-      </SettingsToggleRow>
       <div className="settings-subsection-title">Chat</div>
       <div className="settings-subsection-subtitle">
         Control how much conversation history is retained per thread.

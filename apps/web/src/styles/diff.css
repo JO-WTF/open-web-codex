@@ -1161,7 +1161,7 @@
   background: var(--cm-surface-panel);
   border: 1px solid var(--cm-border-default);
   border-radius: 14px;
-  padding: 11px 40px 11px 12px;
+  padding: 11px 12px;
   resize: vertical;
   min-height: 56px;
   max-height: 132px;
@@ -1177,51 +1177,6 @@
   background: var(--cm-surface-panel-hover);
   border-color: var(--cm-border-accent-strong);
   color: var(--text-emphasis);
-}
-
-.commit-message-input:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.commit-message-generate-button {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 999px;
-  border: 1px solid var(--cm-border-soft);
-  background: var(--cm-surface-panel-soft);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
-}
-
-.commit-message-generate-button:hover:not(:disabled) {
-  background: var(--cm-surface-panel-hover);
-  border-color: var(--cm-border-hover);
-  color: var(--text-emphasis);
-}
-
-.commit-message-generate-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.commit-message-generate-button svg {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-}
-
-.commit-message-loader {
-  width: 14px;
-  height: 14px;
-  animation: spin var(--ds-spinner-dur) linear infinite;
 }
 
 .commit-message-error {

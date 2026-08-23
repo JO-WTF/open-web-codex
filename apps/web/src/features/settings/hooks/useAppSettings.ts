@@ -18,7 +18,6 @@ import {
 import { normalizeOpenAppTargets } from "@app/utils/openApp";
 import { getDefaultInterruptShortcut, isMacPlatform } from "@utils/shortcuts";
 import { isMobilePlatform } from "@utils/platformPaths";
-import { DEFAULT_COMMIT_MESSAGE_PROMPT } from "@utils/commitMessagePrompt";
 
 const allowedThemes = new Set(["system", "light", "dark", "dim"]);
 const allowedPersonality = new Set(["friendly", "pragmatic"]);
@@ -170,7 +169,6 @@ function buildDefaultSettings(): AppSettings {
     usageShowRemaining: false,
     showMessageFilePath: true,
     chatHistoryScrollbackItems: CHAT_SCROLLBACK_DEFAULT,
-    threadTitleAutogenerationEnabled: false,
     automaticAppUpdateChecksEnabled: true,
     uiFontFamily: DEFAULT_UI_FONT_FAMILY,
     codeFontFamily: DEFAULT_CODE_FONT_FAMILY,
@@ -181,8 +179,6 @@ function buildDefaultSettings(): AppSettings {
     splitChatDiffView: false,
     preloadGitDiffs: true,
     gitDiffIgnoreWhitespaceChanges: false,
-    commitMessagePrompt: DEFAULT_COMMIT_MESSAGE_PROMPT,
-    commitMessageModelId: null,
     collaborationModesEnabled: true,
     steerEnabled: true,
     followUpMessageBehavior: "queue",
@@ -233,10 +229,6 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     : hasStoredSelection
       ? storedOpenAppId
       : normalizedTargets[0]?.id ?? DEFAULT_OPEN_APP_ID;
-  const commitMessagePrompt =
-    settings.commitMessagePrompt && settings.commitMessagePrompt.trim().length > 0
-      ? settings.commitMessagePrompt
-      : DEFAULT_COMMIT_MESSAGE_PROMPT;
   const chatHistoryScrollbackItems = normalizeChatHistoryScrollbackItems(
     settings.chatHistoryScrollbackItems,
   );
@@ -273,7 +265,6 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     reviewDeliveryMode:
       settings.reviewDeliveryMode === "detached" ? "detached" : "inline",
     chatHistoryScrollbackItems,
-    commitMessagePrompt,
     openAppTargets: normalizedTargets,
     selectedOpenAppId,
   };

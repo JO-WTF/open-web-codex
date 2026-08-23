@@ -5,7 +5,6 @@ import type {
   ServiceTier,
   WorkspaceInfo,
 } from "../../../types";
-import { generateRunMetadata } from "../../../services/tauri";
 
 export type WorkspaceRunMode = "local" | "worktree";
 
@@ -100,19 +99,6 @@ const buildRunTitle = (prompt: string) => {
   return normalized;
 };
 
-const ALLOWED_PREFIXES = [
-  "feat",
-  "fix",
-  "chore",
-  "test",
-  "docs",
-  "refactor",
-  "perf",
-  "build",
-  "ci",
-  "style",
-];
-
 const PREFIX_RULES: Array<{ prefix: string; keywords: string[] }> = [
   { prefix: "test", keywords: ["test", "tests", "testing"] },
   { prefix: "docs", keywords: ["doc", "docs", "documentation", "readme"] },
@@ -160,29 +146,6 @@ const buildWorktreeBranch = (prompt: string) => {
 
 const resolveModelLabel = (model: ModelOption | null, fallback: string) =>
   model?.displayName?.trim() || model?.model?.trim() || fallback;
-
-const normalizeWorktreeName = (value: string | null | undefined) => {
-  if (!value) {
-    return null;
-  }
-  const trimmed = value.trim().toLowerCase();
-  for (const prefix of ALLOWED_PREFIXES) {
-    const prefixWithSlash = `${prefix}/`;
-    if (trimmed.startsWith(prefixWithSlash)) {
-      const remainder = trimmed.slice(prefixWithSlash.length).replace(/^\/+/, "");
-      return remainder ? `${prefixWithSlash}${remainder}` : null;
-    }
-  }
-  for (const prefix of ALLOWED_PREFIXES) {
-    const dashPrefix = `${prefix}-`;
-    if (trimmed.startsWith(dashPrefix)) {
-      const remainder = trimmed.slice(dashPrefix.length).replace(/^\/+/, "");
-      return remainder ? `${prefix}/${remainder}` : null;
-    }
-  }
-  const fallback = trimmed.replace(/^\/+/, "");
-  return fallback ? `feat/${fallback}` : null;
-};
 
 export function useWorkspaceHome({
   activeWorkspace,
@@ -442,35 +405,8 @@ export function useWorkspaceHome({
       draftsByWorkspace: { ...prev.draftsByWorkspace, [activeWorkspaceId]: "" },
     }));
 
-    let worktreeBaseName: string | null = null;
-    if (runMode === "local") {
-      void generateRunMetadata(activeWorkspace.id, prompt)
-        .then((metadata) => {
-          if (!metadata?.title) {
-            return;
-          }
-          const nextTitle = metadata.title.trim();
-          if (nextTitle && nextTitle !== fallbackTitle) {
-            updateRunTitle(activeWorkspaceId, runId, nextTitle);
-          }
-        })
-        .catch(() => {
-          // Metadata is best-effort for local runs.
-        });
-    } else {
-      try {
-        const metadata = await generateRunMetadata(activeWorkspace.id, prompt);
-        if (metadata?.title && metadata.title.trim() !== fallbackTitle) {
-          updateRunTitle(activeWorkspaceId, runId, metadata.title.trim());
-        }
-        worktreeBaseName = normalizeWorktreeName(metadata?.worktreeName) ?? null;
-      } catch {
-        // Best-effort fallback to local naming.
-      }
-      if (!worktreeBaseName) {
-        worktreeBaseName = buildWorktreeBranch(prompt);
-      }
-    }
+    const worktreeBaseName =
+      runMode === "worktree" ? buildWorktreeBranch(prompt) : null;
     const worktreeSlugBase = worktreeBaseName
       ? `${worktreeBaseName}-${runSuffix}`
       : null;

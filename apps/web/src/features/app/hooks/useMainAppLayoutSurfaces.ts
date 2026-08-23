@@ -64,7 +64,6 @@ type UseMainAppLayoutSurfacesArgs = {
   onSwitchAccount: SidebarProps["onSwitchAccount"];
   onCancelSwitchAccount: SidebarProps["onCancelSwitchAccount"];
   onDecision: LayoutNodesOptions["primary"]["approvalToastsProps"]["onDecision"];
-  onRemember: LayoutNodesOptions["primary"]["approvalToastsProps"]["onRemember"];
   onPlanAccept: LayoutNodesOptions["primary"]["messagesProps"]["onPlanAccept"];
   onPlanSubmitChanges: LayoutNodesOptions["primary"]["messagesProps"]["onPlanSubmitChanges"];
   activePlan: LayoutNodesOptions["secondary"]["planPanelProps"]["plan"];
@@ -266,7 +265,6 @@ function buildPrimarySurface({
   onSwitchAccount,
   onCancelSwitchAccount,
   onDecision,
-  onRemember,
   onPlanAccept,
   onPlanSubmitChanges,
   activeTokenUsage,
@@ -563,7 +561,6 @@ function buildPrimarySurface({
       approvals,
       workspaces,
       onDecision,
-      onRemember,
     },
     updateToastProps: {
       state: appModalsAboutOpen ? { stage: "idle" as const } : updaterState,
@@ -807,10 +804,7 @@ function buildGitSurface({
       onReviewUncommittedChanges: (workspaceId) =>
         startUncommittedReview(workspaceId ?? activeWorkspace?.id ?? null),
       commitMessage: gitState.commitMessage,
-      commitMessageLoading: gitState.commitMessageLoading,
-      commitMessageError: gitState.commitMessageError,
       onCommitMessageChange: gitState.handleCommitMessageChange,
-      onGenerateCommitMessage: gitState.handleGenerateCommitMessage,
       onCommit: gitState.handleCommit,
       onCommitAndPush: gitState.handleCommitAndPush,
       onCommitAndSync: gitState.handleCommitAndSync,
@@ -970,7 +964,6 @@ export function useMainAppLayoutSurfaces({
   onSwitchAccount,
   onCancelSwitchAccount,
   onDecision,
-  onRemember,
   onPlanAccept,
   onPlanSubmitChanges,
   activePlan,
@@ -1131,7 +1124,6 @@ export function useMainAppLayoutSurfaces({
     onSwitchAccount,
     onCancelSwitchAccount,
     onDecision,
-    onRemember,
     onPlanAccept,
     onPlanSubmitChanges,
     activePlan,

@@ -9,8 +9,8 @@ use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
     AgentSummary, AgentsSettings, CreateAgentRequest, CreatePromptRequest, DeleteAgentQuery,
     DeletePromptRequest, MovePromptRequest, ProfileTextFile, PromptEntry, PromptListQuery,
-    RememberApprovalRuleRequest, SetAgentsCoreRequest, SetExperimentalFeatureRequest,
-    UpdateAgentRequest, UpdatePromptRequest, WriteProfileTextFileRequest,
+    SetAgentsCoreRequest, SetExperimentalFeatureRequest, UpdateAgentRequest, UpdatePromptRequest,
+    WriteProfileTextFileRequest,
 };
 use open_web_codex_platform_store::AppState;
 use serde_json::{json, Value};
@@ -27,8 +27,6 @@ type ApiResult<T> = Result<Json<T>, ApiError>;
 const MAX_PROFILE_TEXT_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_MAX_THREADS: u32 = 6;
 const DEFAULT_MAX_DEPTH: u32 = 1;
-
-static RULES_WRITE_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
 
 pub async fn set_experimental_feature(
     State(state): State<AppState>,
@@ -474,51 +472,6 @@ pub async fn move_prompt(
         argument_hint,
         body,
     )))
-}
-
-pub async fn remember_approval_rule(
-    State(state): State<AppState>,
-    auth: AuthenticatedUser,
-    Extension(profile): Extension<RuntimeProfileBinding>,
-    Json(request): Json<RememberApprovalRuleRequest>,
-) -> ApiResult<Value> {
-    authorize_run_project(&state, &auth, request.run_id).await?;
-    let command = request
-        .command
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
-    if command.is_empty()
-        || command.len() > 32
-        || command.iter().any(|value| value.len() > 512)
-        || command.iter().map(String::len).sum::<usize>() > 4096
-    {
-        return Err(bad_request("Invalid approval command prefix"));
-    }
-    let rule = format!(
-        "prefix_rule(\n    pattern = [{}],\n    decision = \"allow\",\n)\n",
-        command
-            .iter()
-            .map(|value| serde_json::to_string(value).expect("string serialization"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    let path = profile_root(&profile)?.join("rules").join("default.rules");
-    let lock = RULES_WRITE_LOCK.get_or_init(|| tokio::sync::Mutex::new(()));
-    let _guard = lock.lock().await;
-    let mut current = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-    if !current.contains(&rule) {
-        if !current.is_empty() && !current.ends_with('\n') {
-            current.push('\n');
-        }
-        if !current.is_empty() {
-            current.push('\n');
-        }
-        current.push_str(&rule);
-        atomic_write(&path, current.as_bytes()).await?;
-    }
-    Ok(Json(json!({ "ok": true })))
 }
 
 async fn agents_settings(

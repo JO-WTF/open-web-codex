@@ -23,7 +23,6 @@ struct MockThread {
     id: String,
     ws_id: String,
     developer_instructions: Option<String>,
-    created_at: String,
     status: String,
     msg_count: u64,
     updated_at: i64,
@@ -169,125 +168,6 @@ impl CodexAdapter for FakeCodexAdapter {
         self.runtime_instance_id
     }
 
-    async fn rpc(&self, method: &str, params: Value) -> Result<Value, AdapterError> {
-        match method {
-            "list_workspaces" => {
-                let s = self.state.lock().await;
-                Ok(Value::Array(s.workspaces.clone()))
-            }
-
-            "add_workspace" => {
-                let path = params["path"]
-                    .as_str()
-                    .ok_or_else(|| AdapterError::Internal("missing path".into()))?
-                    .to_string();
-                let mut s = self.state.lock().await;
-                let id = Uuid::now_v7().to_string();
-                let name = path.rsplit('/').next().unwrap_or("workspace").to_string();
-                let ws = json!({
-                    "id": id, "name": name, "path": path,
-                    "connected": false, "kind": "main",
-                    "settings": { "sidebarCollapsed": false },
-                });
-                s.workspaces.push(ws.clone());
-                Ok(ws)
-            }
-
-            "connect_workspace" => {
-                let id = params["id"]
-                    .as_str()
-                    .ok_or_else(|| AdapterError::Internal("missing id".into()))?;
-                let mut s = self.state.lock().await;
-                for ws in &mut s.workspaces {
-                    if ws["id"] == id {
-                        ws["connected"] = json!(true);
-                        return Ok(json!({}));
-                    }
-                }
-                Err(AdapterError::Rpc(format!("workspace not found: {id}")))
-            }
-
-            "start_thread" => {
-                let ws_id = params["workspaceId"]
-                    .as_str()
-                    .ok_or_else(|| AdapterError::Internal("missing workspaceId".into()))?;
-                let now = Utc::now();
-                {
-                    let s = self.state.lock().await;
-                    if !s.workspaces.iter().any(|w| w["id"] == ws_id) {
-                        return Err(AdapterError::Rpc(format!("workspace not found: {ws_id}")));
-                    }
-                }
-                let n = self.counter.fetch_add(1, Ordering::SeqCst);
-                let thread_id = format!("mock-thread-{:04x}", n);
-                let created = now.to_rfc3339();
-                let updated_ts = now.timestamp_millis();
-
-                {
-                    let mut s = self.state.lock().await;
-                    s.threads.push(MockThread {
-                        id: thread_id.clone(),
-                        ws_id: ws_id.to_string(),
-                        developer_instructions: params
-                            .get("developerInstructions")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                        created_at: created.clone(),
-                        status: "active".into(),
-                        msg_count: 0,
-                        updated_at: updated_ts,
-                    });
-                }
-                // Emit thread/started event immediately
-                self.emit(Self::started_event(ws_id, &thread_id)).await;
-
-                Ok(json!({ "threadId": thread_id, "createdAt": created }))
-            }
-
-            "list_threads" => {
-                let ws_id = params["workspaceId"].as_str().unwrap_or("");
-                let s = self.state.lock().await;
-                let threads: Vec<Value> = s
-                    .threads
-                    .iter()
-                    .filter(|t| t.ws_id == ws_id)
-                    .map(|t| {
-                        json!({
-                            "id": t.id, "name": format!("Fake Thread ({})", &t.id[13..]),
-                            "createdAt": t.created_at, "updatedAt": t.updated_at,
-                            "messageCount": t.msg_count, "status": t.status,
-                        })
-                    })
-                    .collect();
-                Ok(json!({ "threads": threads, "totalCount": threads.len() }))
-            }
-
-            "send_user_message" => {
-                let ws_id = params["workspaceId"].as_str().unwrap_or("");
-                let th_id = params["threadId"].as_str().unwrap_or("");
-                let text = params["text"].as_str().unwrap_or("");
-                tracing::info!(ws = %ws_id, thread = %th_id, text = %text, "fake: user message");
-
-                // Increment message count
-                {
-                    let mut s = self.state.lock().await;
-                    if let Some(th) = s.threads.iter_mut().find(|t| t.id == th_id) {
-                        th.msg_count += 1;
-                        th.updated_at = Utc::now().timestamp_millis();
-                    }
-                }
-
-                // Schedule a mock turn after a brief delay (handled by subscribe_events).
-                let turn_id = format!("turn-{}", Uuid::now_v7());
-                Ok(json!({ "status": "sent", "turnId": turn_id }))
-            }
-
-            other => Err(AdapterError::NotImplemented(format!(
-                "fake adapter: method '{other}' not implemented"
-            ))),
-        }
-    }
-
     async fn start_thread(
         &self,
         workspace: &AuthorizedWorkspace,
@@ -309,16 +189,25 @@ impl CodexAdapter for FakeCodexAdapter {
                 }));
             }
         }
-        let result = self
-            .rpc("start_thread", json!({ "workspaceId": workspace.id }))
-            .await?;
-        let thread_id = result
-            .get("threadId")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AdapterError::Rpc("fake Thread omitted id".to_string()))?;
-        Ok(StartedThread {
-            thread_id: thread_id.to_string(),
-        })
+        let now = Utc::now();
+        let thread_id = format!(
+            "mock-thread-{:04x}",
+            self.counter.fetch_add(1, Ordering::SeqCst)
+        );
+        {
+            let mut state = self.state.lock().await;
+            state.threads.push(MockThread {
+                id: thread_id.clone(),
+                ws_id: workspace.id.clone(),
+                developer_instructions: None,
+                status: "active".into(),
+                msg_count: 0,
+                updated_at: now.timestamp_millis(),
+            });
+        }
+        self.emit(Self::started_event(&workspace.id, &thread_id))
+            .await;
+        Ok(StartedThread { thread_id })
     }
 
     async fn fork_thread(
@@ -395,15 +284,24 @@ impl CodexAdapter for FakeCodexAdapter {
         text: &str,
         _options: &TurnOptions,
     ) -> Result<Value, AdapterError> {
-        self.rpc(
-            "send_user_message",
-            json!({
-                "workspaceId": workspace.id,
-                "threadId": thread_id,
-                "text": text,
-            }),
-        )
-        .await
+        tracing::info!(
+            workspace = %workspace.id,
+            thread = %thread_id,
+            text = %text,
+            "fake: user message"
+        );
+        let mut state = self.state.lock().await;
+        let thread = state
+            .threads
+            .iter_mut()
+            .find(|thread| thread.id == thread_id && thread.ws_id == workspace.id)
+            .ok_or_else(|| AdapterError::Rpc("fake Thread was not found".to_string()))?;
+        thread.msg_count += 1;
+        thread.updated_at = Utc::now().timestamp_millis();
+        Ok(json!({
+            "status": "sent",
+            "turnId": format!("turn-{}", Uuid::now_v7()),
+        }))
     }
 
     async fn steer_turn(
@@ -602,21 +500,6 @@ impl CodexAdapter for FakeCodexAdapter {
             Ok(())
         } else {
             Err(AdapterError::Rpc("fake Thread was not found".to_string()))
-        }
-    }
-
-    async fn generate_text(
-        &self,
-        _workspace: &AuthorizedWorkspace,
-        prompt: &str,
-        _model: Option<&str>,
-    ) -> Result<String, AdapterError> {
-        if prompt.contains("worktreeName") {
-            Ok(r#"{"title":"Thread","worktreeName":"feat/thread"}"#.to_string())
-        } else if prompt.contains("developerInstructions") {
-            Ok(r#"{"description":"Specialized agent","developerInstructions":"Complete the requested specialty carefully and report concrete results."}"#.to_string())
-        } else {
-            Ok("Update workspace changes".to_string())
         }
     }
 

@@ -3,12 +3,12 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前与下一里程碑的执行计划 |
-| 更新日期 | 2026-08-21 |
-| 当前阶段 | 阶段二：公开 SDK 与 Web 创作体验 |
-| 当前状态 | 多 Agent 仓网正常业务主链完成；目录发现、Task 显式选包、独立单 Agent 仓网包与根级共享 Tool 已落地 focused gate |
+| 更新日期 | 2026-08-23 |
+| 当前阶段 | 阶段三：回归 Codex Runtime owner 并清理并行实现 |
+| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三 Atom 1 已删除 hidden generation、永久 approval rule writer 和 generic adapter RPC 三条旁路 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018/019/024/025 为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
-| 阶段二后续 | Web Studio、Marketplace、生产模型质量与真实产品 E2E；多用户产品流程属于阶段三 |
+| 阶段三后续 | 先清理剩余 Browser legacy API；再收敛 Provider/model owner、Run/Thread 状态和 history/event 投影；Codex upstream 同步与 seam 收敛独立作为最后步骤 |
 
 本文记录阶段一已完成的正常业务主链、仍有效的边界和后续工作。用户心智统一为：
 
@@ -19,7 +19,25 @@ Workspace 下的 Task 可按用户意图复用普通文件，也可通过同一�
 Resource ref 复用中间数据。保存什么、读取什么、怎样复用、裁剪、合并或覆盖，由用户
 要求、Skill 和 Tool 决定，Platform 不理解仓网数据语义。
 
-## 0. 阶段二当前切片：Copilot SDK、Task 选包与单 Profile 多包组合
+## 0. 阶段三当前切片：Runtime owner 收敛
+
+阶段三不新增第二套 Runtime，也不以兼容接口保留已经确认的旧旁路。当前 Atom 1 已完成：
+
+1. 删除 `/runs/{id}/generate`、Platform generation prompts、Adapter `generate_text`、隐藏 Thread
+   event suppression 和对应 Browser 自动标题、自动提交信息、自动 Agent 描述入口。需要模型工作的
+   产品能力必须使用用户可见的正常 Thread/Turn，不能由 Platform 创建并隐藏持久 Thread。
+2. 删除 `/profile/approval-rules`、Browser 自报 command prefix、旧 UI 本地 allowlist 与自动接受。
+   现役审批只保留 exact pending approval 的 typed accept/decline/accept-for-session 回送；现有用户
+   Profile rules 文件不在本切片中读取、修改或删除。
+3. 删除 `CodexAdapter::rpc(method, Value)` 和 Real/Fake 字符串 dispatch；Platform 只通过 typed
+   Thread/Turn 方法调用 Runtime，Fake 也直接实现同一 typed trait。
+4. 本切片不修改 Provider、Run lifecycle/history、Terminal、Usage、Prompts、Profile writer、
+   Codex subtree 或数据库 schema。下一原子片按 owner 单独处理，不在本次删除中引入 fallback。
+
+验收要求是源码无生产引用、删除的两个认证 route 返回 404、官方 typed approval 与 Thread 路径
+继续通过，Web/Rust/no-desktop 门全绿。
+
+## 0A. 阶段二已完成基线：Copilot SDK、Task 选包与单 Profile 多包组合
 
 Atom 1 先建立一个不依赖 Web、Catalog 或安装状态的开发者源码入口：
 
@@ -90,7 +108,7 @@ Web Studio、外部 push/import、Release 和 Marketplace 仍不在本切片。
 
 ### 已验证的运行体验与低延迟领域操作基线
 
-阶段二已经开始，但不从旧 Catalog/Work State 方案恢复实现。当前先处理真实用户运行中已经
+阶段二期间没有从旧 Catalog/Work State 方案恢复实现，并先处理了真实用户运行中已经
 测量到的两个普通问题：Agent activity/等待状态需要可理解，简单仓网 follow-up 的领域计算只有
 毫秒级，却因多个模型回合和重复 child history 变成分钟级。当前修复保持以下边界：
 

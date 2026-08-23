@@ -124,24 +124,3 @@ function splitCommandLine(input: string): string[] {
 export function normalizeCommandTokens(tokens: string[]): string[] {
   return tokens.map((token) => token.trim()).filter(Boolean);
 }
-
-export function matchesCommandPrefix(
-  command: string[],
-  allowlist: string[][],
-): boolean {
-  const normalized = normalizeCommandTokens(command);
-  if (!normalized.length) {
-    return false;
-  }
-  return allowlist.some((prefix) => {
-    if (!prefix.length || prefix.length > normalized.length) {
-      return false;
-    }
-    for (let i = 0; i < prefix.length; i += 1) {
-      if (prefix[i] !== normalized[i]) {
-        return false;
-      }
-    }
-    return true;
-  });
-}

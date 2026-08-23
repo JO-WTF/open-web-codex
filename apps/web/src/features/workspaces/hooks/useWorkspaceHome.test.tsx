@@ -2,12 +2,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelOption, WorkspaceInfo } from "../../../types";
-import { generateRunMetadata } from "../../../services/tauri";
 import { useWorkspaceHome } from "./useWorkspaceHome";
-
-vi.mock("../../../services/tauri", () => ({
-  generateRunMetadata: vi.fn(),
-}));
 
 const workspace: WorkspaceInfo = {
   id: "ws-1",
@@ -52,11 +47,6 @@ describe("useWorkspaceHome", () => {
     const startThreadForWorkspace = vi.fn().mockResolvedValue("thread-1");
     const sendUserMessageToThread = vi.fn().mockResolvedValue(undefined);
     const seedThreadCodexParams = vi.fn();
-    vi.mocked(generateRunMetadata).mockResolvedValue({
-      title: "Test run",
-      worktreeName: "feat/test",
-    });
-
     const { result } = renderHook(() =>
       useWorkspaceHome({
         activeWorkspace: workspace,
@@ -100,11 +90,6 @@ describe("useWorkspaceHome", () => {
     const startThreadForWorkspace = vi.fn().mockResolvedValue("thread-1");
     const sendUserMessageToThread = vi.fn().mockResolvedValue(undefined);
     const seedThreadCodexParams = vi.fn();
-    vi.mocked(generateRunMetadata).mockResolvedValue({
-      title: "Image run",
-      worktreeName: "feat/image",
-    });
-
     const { result } = renderHook(() =>
       useWorkspaceHome({
         activeWorkspace: workspace,
@@ -142,11 +127,6 @@ describe("useWorkspaceHome", () => {
     const connectWorkspace = vi.fn();
     const startThreadForWorkspace = vi.fn();
     const sendUserMessageToThread = vi.fn();
-    vi.mocked(generateRunMetadata).mockResolvedValue({
-      title: "Blocked",
-      worktreeName: "feat/blocked",
-    });
-
     const { result } = renderHook(() =>
       useWorkspaceHome({
         activeWorkspace: workspace,
@@ -184,11 +164,6 @@ describe("useWorkspaceHome", () => {
     const connectWorkspace = vi.fn().mockResolvedValue(undefined);
     const startThreadForWorkspace = vi.fn().mockResolvedValue("thread-1");
     const sendUserMessageToThread = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(generateRunMetadata).mockResolvedValue({
-      title: "Partial",
-      worktreeName: "feat/partial",
-    });
-
     const { result } = renderHook(() =>
       useWorkspaceHome({
         activeWorkspace: workspace,
@@ -216,19 +191,11 @@ describe("useWorkspaceHome", () => {
     expect(result.current.runs[0].instanceErrors.length).toBeGreaterThan(0);
   });
 
-  it("updates title after metadata resolves for local runs", async () => {
+  it("keeps the prompt-derived title for local runs", async () => {
     const addWorktreeAgent = vi.fn();
     const connectWorkspace = vi.fn().mockResolvedValue(undefined);
     const startThreadForWorkspace = vi.fn().mockResolvedValue("thread-1");
     const sendUserMessageToThread = vi.fn().mockResolvedValue(undefined);
-    let resolveMetadata: (value: { title: string; worktreeName: string }) => void =
-      () => {};
-    vi.mocked(generateRunMetadata).mockReturnValue(
-      new Promise((resolve) => {
-        resolveMetadata = resolve;
-      }),
-    );
-
     const { result } = renderHook(() =>
       useWorkspaceHome({
         activeWorkspace: workspace,
@@ -251,12 +218,7 @@ describe("useWorkspaceHome", () => {
 
     expect(result.current.runs[0].title).toBe("Local prompt");
 
-    await act(async () => {
-      resolveMetadata({ title: "Meta title", worktreeName: "feat/meta" });
-      await Promise.resolve();
-    });
-
-    expect(result.current.runs[0].title).toBe("Meta title");
+    expect(result.current.runs[0].title).toBe("Local prompt");
   });
 
   it("keeps attachments when worktree selection is missing", async () => {
@@ -264,11 +226,6 @@ describe("useWorkspaceHome", () => {
     const connectWorkspace = vi.fn();
     const startThreadForWorkspace = vi.fn();
     const sendUserMessageToThread = vi.fn();
-    vi.mocked(generateRunMetadata).mockResolvedValue({
-      title: "Blocked",
-      worktreeName: "feat/blocked",
-    });
-
     const { result } = renderHook(() =>
       useWorkspaceHome({
         activeWorkspace: workspace,

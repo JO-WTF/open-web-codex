@@ -2012,6 +2012,30 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .await;
     assert_eq!(legacy_runtime.0, StatusCode::NOT_FOUND);
 
+    let removed_generation = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!("/api/runs/{first_run_id}/generate"),
+            &first_token,
+            json!({"kind": "commitMessage", "input": "ignored"}),
+        ),
+    )
+    .await;
+    assert_eq!(removed_generation.0, StatusCode::NOT_FOUND);
+
+    let removed_approval_rule_writer = call(
+        &app,
+        authenticated_json(
+            "POST",
+            "/api/profile/approval-rules",
+            &first_token,
+            json!({"runId": first_run_id, "command": ["git", "status"]}),
+        ),
+    )
+    .await;
+    assert_eq!(removed_approval_rule_writer.0, StatusCode::NOT_FOUND);
+
     let switched = call(
         &app,
         authenticated_json(

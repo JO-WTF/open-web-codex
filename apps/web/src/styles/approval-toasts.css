@@ -81,10 +81,6 @@
   color: var(--text-muted);
 }
 
-.approval-toast-remember {
-  white-space: nowrap;
-}
-
 :root[data-theme="light"] .approval-toast {
   --ds-toast-shadow: 0 18px 42px rgba(40, 52, 72, 0.18);
 }

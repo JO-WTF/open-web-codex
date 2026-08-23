@@ -267,12 +267,10 @@ button.window-caption-control:focus-visible,
   /* Restore functional spinners — these communicate loading state */
   .working-spinner,
   .git-panel-spinner,
-  .commit-message-loader,
   .commit-button-spinner,
   .sidebar-refresh-icon.spinning,
   .worktree-deleting-spinner,
   .sidebar-account-spinner,
-  .settings-agents-generate-loader,
   .composer-action-spinner,
   .compact-codex-refresh-icon.spinning,
   .home-usage-refresh-icon.spinning {

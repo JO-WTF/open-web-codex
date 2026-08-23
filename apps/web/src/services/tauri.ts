@@ -548,13 +548,6 @@ export async function respondToUserInputRequest(
   });
 }
 
-export async function rememberApprovalRule(
-  workspaceId: string,
-  command: string[],
-) {
-  return invoke("remember_approval_rule", { workspaceId, command });
-}
-
 export async function getGitStatus(workspace_id: string): Promise<{
   branchName: string;
   files: GitFileStatus[];
@@ -755,13 +748,6 @@ export async function setCodexFeatureFlag(
   enabled: boolean,
 ): Promise<void> {
   return invoke("set_codex_feature_flag", { featureKey, enabled });
-}
-
-export async function generateRunMetadata(workspaceId: string, prompt: string) {
-  return invoke<{ title: string; worktreeName: string }>("generate_run_metadata", {
-    workspaceId,
-    prompt,
-  });
 }
 
 export async function getCollaborationModes(workspaceId: string) {
@@ -1110,25 +1096,6 @@ export async function setTrayRecentThreads(entries: TrayRecentThreadEntry[]) {
 
 export async function setTraySessionUsage(usage: TraySessionUsage | null) {
   return invoke<void>("set_tray_session_usage", { usage });
-}
-
-export async function generateCommitMessage(
-  workspaceId: string,
-  commitMessageModelId: string | null,
-): Promise<string> {
-  return invoke("generate_commit_message", { workspaceId, commitMessageModelId });
-}
-
-export type GeneratedAgentConfiguration = {
-  description: string;
-  developerInstructions: string;
-};
-
-export async function generateAgentDescription(
-  workspaceId: string,
-  description: string,
-): Promise<GeneratedAgentConfiguration> {
-  return invoke("generate_agent_description", { workspaceId, description });
 }
 
 export type AppBuildType = "debug" | "release";

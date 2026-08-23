@@ -1,15 +1,13 @@
-import { useCallback, useEffect, useMemo, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { WorkspaceInfo } from "../../../types";
 import {
   commitGit,
-  generateCommitMessage,
   fetchGit,
   pullGit,
   pushGit,
   stageGitAll,
   syncGit,
 } from "../../../services/tauri";
-import { shouldApplyCommitMessage } from "../../../utils/commitMessage";
 import { useGitStatus } from "../../git/hooks/useGitStatus";
 
 type GitStatusState = ReturnType<typeof useGitStatus>["status"];
@@ -17,8 +15,6 @@ type GitStatusState = ReturnType<typeof useGitStatus>["status"];
 type GitCommitControllerOptions = {
   activeWorkspace: WorkspaceInfo | null;
   activeWorkspaceId: string | null;
-  activeWorkspaceIdRef: RefObject<string | null>;
-  commitMessageModelId: string | null;
   gitStatus: GitStatusState;
   refreshGitStatus: () => void;
   refreshGitLog?: () => void;
@@ -26,8 +22,6 @@ type GitCommitControllerOptions = {
 
 type GitCommitController = {
   commitMessage: string;
-  commitMessageLoading: boolean;
-  commitMessageError: string | null;
   commitLoading: boolean;
   pullLoading: boolean;
   fetchLoading: boolean;
@@ -40,7 +34,6 @@ type GitCommitController = {
   syncError: string | null;
   hasWorktreeChanges: boolean;
   onCommitMessageChange: (value: string) => void;
-  onGenerateCommitMessage: () => Promise<void>;
   onCommit: () => Promise<void>;
   onCommitAndPush: () => Promise<void>;
   onCommitAndSync: () => Promise<void>;
@@ -53,17 +46,11 @@ type GitCommitController = {
 export function useGitCommitController({
   activeWorkspace,
   activeWorkspaceId,
-  activeWorkspaceIdRef,
-  commitMessageModelId,
   gitStatus,
   refreshGitStatus,
   refreshGitLog,
 }: GitCommitControllerOptions): GitCommitController {
   const [commitMessage, setCommitMessage] = useState("");
-  const [commitMessageLoading, setCommitMessageLoading] = useState(false);
-  const [commitMessageError, setCommitMessageError] = useState<string | null>(
-    null,
-  );
   const [commitLoading, setCommitLoading] = useState(false);
   const [pullLoading, setPullLoading] = useState(false);
   const [fetchLoading, setFetchLoading] = useState(false);
@@ -94,37 +81,8 @@ export function useGitCommitController({
     setCommitMessage(value);
   }, []);
 
-  const handleGenerateCommitMessage = useCallback(async () => {
-    if (!activeWorkspace || commitMessageLoading) {
-      return;
-    }
-    const workspaceId = activeWorkspace.id;
-    setCommitMessageLoading(true);
-    setCommitMessageError(null);
-    try {
-      const message = await generateCommitMessage(workspaceId, commitMessageModelId);
-      if (!shouldApplyCommitMessage(activeWorkspaceIdRef.current, workspaceId)) {
-        return;
-      }
-      setCommitMessage(message);
-    } catch (error) {
-      if (!shouldApplyCommitMessage(activeWorkspaceIdRef.current, workspaceId)) {
-        return;
-      }
-      setCommitMessageError(
-        error instanceof Error ? error.message : String(error),
-      );
-    } finally {
-      if (shouldApplyCommitMessage(activeWorkspaceIdRef.current, workspaceId)) {
-        setCommitMessageLoading(false);
-      }
-    }
-  }, [activeWorkspace, commitMessageLoading, activeWorkspaceIdRef, commitMessageModelId]);
-
   useEffect(() => {
     setCommitMessage("");
-    setCommitMessageError(null);
-    setCommitMessageLoading(false);
   }, [activeWorkspaceId]);
 
   const handleCommit = useCallback(async () => {
@@ -326,8 +284,6 @@ export function useGitCommitController({
 
   return {
     commitMessage,
-    commitMessageLoading,
-    commitMessageError,
     commitLoading,
     pullLoading,
     fetchLoading,
@@ -340,7 +296,6 @@ export function useGitCommitController({
     syncError,
     hasWorktreeChanges,
     onCommitMessageChange: handleCommitMessageChange,
-    onGenerateCommitMessage: handleGenerateCommitMessage,
     onCommit: handleCommit,
     onCommitAndPush: handleCommitAndPush,
     onCommitAndSync: handleCommitAndSync,

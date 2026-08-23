@@ -102,7 +102,6 @@ describe("GitDiffPanel", () => {
         {...baseProps}
         commitMessage="feat: add thing"
         onCommit={onCommit}
-        onGenerateCommitMessage={vi.fn()}
         unstagedFiles={[
           { path: "file.txt", status: "M", additions: 1, deletions: 0 },
         ]}

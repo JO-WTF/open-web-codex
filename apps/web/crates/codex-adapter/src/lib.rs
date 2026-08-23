@@ -204,11 +204,6 @@ pub trait CodexAdapter: Send + Sync {
     /// Server Request ids are valid only inside this instance.
     async fn runtime_instance_id(&self) -> Uuid;
 
-    /// Transitional internal RPC call. Product routes should replace this
-    /// with typed Thread/Turn operations; it is never a public browser
-    /// contract.
-    async fn rpc(&self, method: &str, params: Value) -> Result<Value, AdapterError>;
-
     /// Start a Thread in a server-owned, authorization-checked workspace.
     async fn start_thread(
         &self,
@@ -318,15 +313,6 @@ pub trait CodexAdapter: Send + Sync {
         thread_id: &str,
         name: &str,
     ) -> Result<(), AdapterError>;
-
-    /// Run a short, platform-authored background prompt in an authorized
-    /// workspace and return only the final assistant text.
-    async fn generate_text(
-        &self,
-        workspace: &AuthorizedWorkspace,
-        prompt: &str,
-        model: Option<&str>,
-    ) -> Result<String, AdapterError>;
 
     async fn compact_thread(
         &self,

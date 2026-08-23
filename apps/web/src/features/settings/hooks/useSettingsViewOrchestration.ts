@@ -203,7 +203,6 @@ export function useSettingsViewOrchestration({
   const gitSectionProps = useSettingsGitSection({
     appSettings,
     onUpdateAppSettings,
-    models: codexSectionProps.defaultModels,
   });
 
   const featuresSectionProps = useSettingsFeaturesSection({

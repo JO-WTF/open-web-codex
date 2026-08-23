@@ -34,7 +34,6 @@ type UseMainAppGitStateOptions = {
   };
   addDebugEntry: (entry: DebugEntry) => void;
   updateWorkspaceSettings: Parameters<typeof useGitRootSelection>[0]["updateWorkspaceSettings"];
-  commitMessageModelId: string | null;
   connectWorkspace: (workspace: WorkspaceInfo) => Promise<void>;
   startThreadForWorkspace: (
     workspaceId: string,
@@ -199,7 +198,6 @@ export function useMainAppGitState({
   appSettings,
   addDebugEntry,
   updateWorkspaceSettings,
-  commitMessageModelId,
   connectWorkspace,
   startThreadForWorkspace,
   sendUserMessageToThread,
@@ -371,8 +369,6 @@ export function useMainAppGitState({
 
   const {
     commitMessage,
-    commitMessageLoading,
-    commitMessageError,
     commitLoading,
     pullLoading,
     fetchLoading,
@@ -384,7 +380,6 @@ export function useMainAppGitState({
     pushError,
     syncError,
     onCommitMessageChange: handleCommitMessageChange,
-    onGenerateCommitMessage: handleGenerateCommitMessage,
     onCommit: handleCommit,
     onCommitAndPush: handleCommitAndPush,
     onCommitAndSync: handleCommitAndSync,
@@ -395,8 +390,6 @@ export function useMainAppGitState({
   } = useGitCommitController({
     activeWorkspace,
     activeWorkspaceId,
-    activeWorkspaceIdRef,
-    commitMessageModelId,
     gitStatus,
     refreshGitStatus,
     refreshGitLog,
@@ -514,8 +507,6 @@ export function useMainAppGitState({
     handlePickGitRoot,
     fileStatus,
     commitMessage,
-    commitMessageLoading,
-    commitMessageError,
     commitLoading,
     pullLoading,
     fetchLoading,
@@ -527,7 +518,6 @@ export function useMainAppGitState({
     pushError,
     syncError,
     handleCommitMessageChange,
-    handleGenerateCommitMessage,
     handleCommit,
     handleCommitAndPush,
     handleCommitAndSync,

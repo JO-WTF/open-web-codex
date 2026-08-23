@@ -21,7 +21,6 @@ import {
   getModelList,
   listWorkspaces,
 } from "@services/tauri";
-import { DEFAULT_COMMIT_MESSAGE_PROMPT } from "@utils/commitMessagePrompt";
 import { SettingsView } from "./SettingsView";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -112,7 +111,6 @@ const baseSettings: AppSettings = {
   usageShowRemaining: false,
   showMessageFilePath: true,
   chatHistoryScrollbackItems: 200,
-  threadTitleAutogenerationEnabled: false,
   automaticAppUpdateChecksEnabled: true,
   uiFontFamily:
     'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
@@ -125,8 +123,6 @@ const baseSettings: AppSettings = {
   splitChatDiffView: false,
   preloadGitDiffs: true,
   gitDiffIgnoreWhitespaceChanges: false,
-  commitMessagePrompt: DEFAULT_COMMIT_MESSAGE_PROMPT,
-  commitMessageModelId: null,
   collaborationModesEnabled: true,
   steerEnabled: true,
   followUpMessageBehavior: "queue",

@@ -50,7 +50,6 @@ import {
   deleteAgent,
   readAgentConfigToml,
   readImageAsDataUrl,
-  generateAgentDescription,
   writeAgentConfigToml,
   writeAgentMd,
 } from "./tauri";
@@ -694,22 +693,6 @@ describe("tauri invoke wrappers", () => {
     expect(invokeMock).toHaveBeenCalledWith("write_agent_config_toml", {
       agentName: "researcher",
       content: "model = \"gpt-5-codex\"",
-    });
-  });
-
-  it("generates an improved agent description", async () => {
-    const invokeMock = vi.mocked(invoke);
-    invokeMock.mockResolvedValueOnce({
-      description: "Stabilizes flaky test suites",
-      developerInstructions:
-        "Reproduce failures first.\nPrefer deterministic fixes.\nAdd targeted coverage.",
-    });
-
-    await generateAgentDescription("ws-agent", "tests");
-
-    expect(invokeMock).toHaveBeenCalledWith("generate_agent_description", {
-      workspaceId: "ws-agent",
-      description: "tests",
     });
   });
 

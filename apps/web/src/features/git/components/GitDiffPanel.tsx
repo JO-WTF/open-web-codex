@@ -120,10 +120,7 @@ type GitDiffPanelProps = {
   selectedCommitSha?: string | null;
   onSelectCommit?: (entry: GitLogEntry) => void;
   commitMessage?: string;
-  commitMessageLoading?: boolean;
-  commitMessageError?: string | null;
   onCommitMessageChange?: (value: string) => void;
-  onGenerateCommitMessage?: () => void | Promise<void>;
   // Git operations
   onCommit?: () => void | Promise<void>;
   onCommitAndPush?: () => void | Promise<void>;
@@ -210,10 +207,7 @@ export function GitDiffPanel({
   onInitGitRepo,
   initGitRepoLoading = false,
   commitMessage = "",
-  commitMessageLoading = false,
-  commitMessageError = null,
   onCommitMessageChange,
-  onGenerateCommitMessage,
   onCommit,
   onCommitAndPush: _onCommitAndPush,
   onCommitAndSync: _onCommitAndSync,
@@ -559,8 +553,7 @@ export function GitDiffPanel({
   const errorScope = `${workspaceId ?? "no-workspace"}:${normalizedGitRoot || "no-git-root"}:${mode}`;
   const hasAnyChanges = stagedFiles.length > 0 || unstagedFiles.length > 0;
   const showApplyWorktree = mode === "diff" && Boolean(onApplyWorktreeChanges) && hasAnyChanges;
-  const canGenerateCommitMessage = hasAnyChanges;
-  const showGenerateCommitMessage = mode === "diff" && Boolean(onGenerateCommitMessage) && hasAnyChanges;
+  const showCommitMessage = mode === "diff" && hasAnyChanges;
   const commitsBehind = logBehind;
 
   const sidebarErrorCandidates = useMemo(() => {
@@ -576,7 +569,6 @@ export function GitDiffPanel({
             { key: "fetch", message: fetchError },
             { key: "commit", message: commitError },
             { key: "sync", message: syncError },
-            { key: "commitMessage", message: commitMessageError },
             { key: "git", message: error },
             { key: "worktreeApply", message: worktreeApplyError },
             { key: "gitRootScan", message: gitRootScanError },
@@ -596,7 +588,6 @@ export function GitDiffPanel({
       }));
   }, [
     commitError,
-    commitMessageError,
     error,
     fetchError,
     gitRootScanError,
@@ -714,13 +705,10 @@ export function GitDiffPanel({
           gitRootCandidates={gitRootCandidates}
           gitRoot={gitRoot}
           onSelectGitRoot={onSelectGitRoot}
-          showGenerateCommitMessage={showGenerateCommitMessage}
+          showCommitMessage={showCommitMessage}
           showApplyWorktree={showApplyWorktree}
           commitMessage={commitMessage}
           onCommitMessageChange={onCommitMessageChange}
-          commitMessageLoading={commitMessageLoading}
-          canGenerateCommitMessage={canGenerateCommitMessage}
-          onGenerateCommitMessage={onGenerateCommitMessage}
           worktreeApplyTitle={worktreeApplyTitle}
           worktreeApplyLoading={worktreeApplyLoading}
           worktreeApplySuccess={worktreeApplySuccess}

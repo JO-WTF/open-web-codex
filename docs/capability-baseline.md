@@ -4,8 +4,8 @@
 | --- | --- |
 | 文档性质 | 当前事实与证据 |
 | 观察日期 | 2026-08-23 |
-| 代码快照 | ADR-025 source-unit/prepared v2 合同；真实 Web + DeepSeek Flash 三段业务验收已通过 |
-| 当前阶段 | 阶段二已进入；阶段一仓网 Copilot 正常业务闭环作为已通过基线 |
+| 代码快照 | 阶段三 Runtime owner 收敛 Atom 1；阶段一仓网与阶段二开发者 SDK 验收作为已通过基线 |
+| 当前阶段 | 阶段三已进入：删除与 Codex Runtime 并行的 Browser/Platform 旧旁路 |
 | 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) + [ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) + [ADR-024](adr/024-warehouse-copilot-contract-simplification.md) + [ADR-025](adr/025-source-unit-prepared-v2-reuse.md) |
 
 本文回答“当前构建能证明什么”。源码存在、局部测试通过、真实 Runtime 运行和从阶段一
@@ -536,7 +536,7 @@ malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除�
 | Runtime history | 当前 subtree 有 `thread/turns/list`/`thread/items/list` 与本地 history seam；隔离 sync 的 latest official 已原生提供 paginated history、Item timestamp 和 Turn error 语义 | official 能力已证实但尚未回填；legacy/materialization 清理进入后续 backlog |
 | Durable event projection | `run_events` 有全局 sequence、run/thread/turn/item provenance、Task/Organization 授权查询和 reconnect replay | 身份/顺序基础可保留；payload、unknown event 与 Browser heuristic 收敛进入后续 backlog，除非真实仓网门证明会泄密或写错数据 |
 | Profile Host | 单 Profile 目录、进程已隔离；只 typed 接收官方 `initialize` 四字段，并只以 `codexHome` 对 owning Profile home 做安全校验；Runtime HOME 与 neutral process cwd 已隔离；Server 仍有显式宿主 auth 导入 | E2，Runtime discovery 隔离已通过，身份隔离未完成 |
-| Approval / User Input | Root 官方输入可持久化、回答并恢复执行 | E3，最小链 2 次通过 |
+| Approval / User Input | Root 官方输入可持久化、回答并恢复执行；现役写路径只对 exact pending approval 回送 typed accept/decline/accept-for-session，不再接受 Browser 自报 command prefix 或直接写 Profile rules | E3，最小链 2 次通过；旧永久 rule writer 已删除 |
 | Agent execution projection | 4 个 execution 收敛到 terminal；等待和输入可投影 | E3，刷新/重启未测 |
 | Work State / Platform coordination | 无 production crate、route、MCP、gate 或 current schema 对象；migration 55 删除十张 Work State 表 | 已删除；不建设替代状态机 |
 | Root coordination | Platform 第二控制面、Supervisor continuation 与主动 Root Turn 已删除；Runtime 原生 wait/mailbox/steer 是唯一协作路径 | E2 原生 runtime/projection gate；完整业务 E2E 未完成 |
@@ -548,12 +548,12 @@ malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除�
 | Skill 创作 | 阶段一仅支持直接编辑 Profile Skill；公开 SDK/Web 创作后移 | 无阶段一产品流 |
 | Agent/Supervisor Studio | 旧 Settings/Sidebar Studio 已删除；原生 Profile Agent 配置保留 | 无阶段一 authoring 产品流 |
 | Copilot Builder | 没有 Web 创作入口；现有 Profile 安装状态 API 不是 Builder、Catalog 或 Marketplace | E0 |
-| Browser 产品入口 | 生产 `index.html` 只经 `browser-entry.ts` 渲染 `WebApp`；展开 Vite alias 后 production graph 为 75 个本地 non-test 文件，另 466 个不在图内却仍由 `tsconfig` 编译；完整 `PlatformClient` 又把 dead endpoint methods 带入 bundle | E2 单一生产入口；legacy import graph/client 收缩进入后续 backlog，不阻断当前仓网链 |
+| Browser 产品入口 | 生产 `index.html` 只经 `browser-entry.ts` 渲染 `WebApp`；旧 `main.tsx`/`App` 仍不在 production graph，但仍由 `tsconfig` 编译。阶段三 Atom 1 已从完整 `PlatformClient`、旧 facade 和旧 UI 删除 generation/remembered-approval 方法与控件 | E2 单一生产入口；剩余 legacy import graph/client 继续按 owner 原子收缩 |
 | Web UI parity | 历史 `check-main-ui-parity`、Git/UI overlay 和手工 SHA 清单已删除 | 已删除第二 UI truth；当前以类型检查、组件/合同测试、生产构建和真实浏览器验收为准 |
 | Browser Terminal | 生产 `/web` WebApp 不调用 Terminal API；旧 App 路径仍保留 Workspace Terminal UI。Server 打开 Terminal 时按 `run.updated_at DESC` 猜一个最新 Run，并把输出投影到该 Run | E1 legacy 残余；多 Task/fork 时会错配会话，待确认旧 App 退出后原子删除，当前不建设新 selector |
 | Browser local usage | 旧 App 的 `/profile/usage` 同时从 `run_events` 近似重算 token/turn，并在完全空时切换到 official `account/usage`；生产 `/web` 未调用 | E1 legacy 双 owner；随旧 App 删除，不建设第二 usage aggregator；`provider_call_metrics` 独立保留真实观测 |
-| Browser hidden generation | 已认证的 `/runs/{id}/generate` 会在 adapter 中创建一个被 `suppressed_threads` 隐藏的持久 official Thread，手工等待 Turn delta 并 best-effort archive；production 无 caller 的 generic `rpc(method, Value)` 又保留字符串 `start_thread`/`send_user_message`；生产 `/web` 不使用两者，但 direct HTTP generation 仍可触发 | 已证实 legacy 偏离；原子删除进入后续 backlog，不阻断当前仓网链 |
-| Browser remembered approval | 生产 `/web` 不使用 `/profile/approval-rules`；该 route 只凭 Run 授权接收 Browser 自报命令前缀并永久写 Profile `default.rules`，不绑定 pending approval/item/version/Profile | 已证实永久执行授权旁路；后续原子删除，当前仓网链只使用 exact pending approval accept/decline |
+| Browser hidden generation | `/runs/{id}/generate`、generation DTO/module、Adapter `generate_text`、`suppressed_threads`、generic `rpc(method, Value)`、Browser 自动标题/提交信息/Agent 描述调用和对应控件均已删除；Fake typed start/send 直接实现现役 trait | 已删除；模型工作只能进入用户可见的正常 Runtime Thread/Turn |
+| Browser remembered approval | `/profile/approval-rules`、Browser DTO/client/facade、旧 UI `Always allow` 和本地 prefix 自动接受均已删除；没有读取、修改或删除已有 Profile rules 文件 | 已删除永久授权旁路；exact pending approval typed decision 保留 |
 | Browser raw Profile files | 生产 `/web` 不使用 `/profile/files/{agents|config}`；config PUT 直接替换整个 `config.toml`，只在事后调用 `config/read`，绕过 official expected-version CAS 和 reload owner | 已证实配置写旁路；后续整链删除，Workspace `AGENTS.md` 文件面不受影响 |
 | Browser Workspace preferences | 生产 `/web` 不使用 `browser_workspace_preferences`；旧 App 路径仍可存任意 JSON、不会实际应用却回显为 applied 的 Runtime 参数，以及取出后经 Terminal 自动执行的 worktree setup script | E1 legacy 假能力/危险执行残余；与 Terminal/Usage 同片删除，不保留为未来 Workspace 合同 |
 | Browser custom prompts | 生产 `/web` 不使用 `/profile/prompts`；Platform 自行扫描和编辑 `$CODEX_HOME/web-prompts/<project>` 与 `$CODEX_HOME/prompts`，但 latest official 没有 prompts discovery/API，只有 cwd-scoped Skills/Plugins | E1 legacy Profile 污染；与旧 App 同片删除，不迁移为另一套 Prompt 系统 |
@@ -585,10 +585,10 @@ ADR-018 是阶段一规范裁决，Codex 子树 seam 只由 Patch Map 分类。�
 | `P1-SC-COST-MEAN` | 当前关键链 | `plan_cost_matrix` 的 discriminated `cost_policy` 区分显式数值与 `observed_quote_mean`；后者在 Planner owner 内读取 exact ready prepared input 的完整标准化报价，按层计算 `arithmetic_mean(price_per_vehicle / vehicle_capacity)`，把 `warehouse_quote_mean_calculation.v1` 的 prepared identity、完整总数、分层计数、币种、公式、均值和 Tool 版本写入 bounded result 与 `cost_matrix.v3`。单 Agent Role 显式保留 shell，但 Skill 只允许用户明确要求的同口径脚本读取 exact prepared input，并把 agent 创建的 typed script/result create-new 写入 calculations 目录；Planner 重新计算并校验脚本证据 | 旧 Skill 把 preview 上下文限制扩大成禁止执行端完整计算；Planner 又只收显式数值，导致用户已授权“按全量报价均值外推”仍被错误终止 | preview 继续只用于映射；普通均值外推由 Planner Tool 完成，脚本只作为用户明确要求的可审计证据，不修改 prepared/raw 数据或替代求解 | Planner 拥有业务聚合和 cost matrix；单 Agent Skill 拥有何时创建并执行脚本，Workspace 拥有计算证据文件 | focused cost/Tool tests 已覆盖 580 条完整报价、550/30 分层计数、均值、缺层失败、evidence mismatch、bounded structured output 与 exact input identity；Role/Copilot 合同测试覆盖 shell 开启、multi-agent 关闭和 calculations 目录约束；2026-08-20 真实 DeepSeek 单 Agent typed evidence/one-call gate 已通过 |
 | `P1-SC-NET9` | 当前关键链 | `server.py` 的 active Resource/final tools 使用 strict `ResourceRef`；`prepare_route_matrix` 统一 provided/haversine 入口并返回 discriminated `ready/needs_input`，只有零缺失矩阵才发布 `route_matrix.v3`；导航继续走显式 request/import 合同。baseline、设施变化和选址 Tool 独立拒绝不完整路线或成本。`assess_facility_change` 组合一次 scenario solve 与直接 before/after compare，并返回 scenario ref、单一 provenance-bound comparison ref 和最多 10 个重点城市。`prepare_network_coverage_map` 要求结果中存在的确切 `service_target_hours`，发布 `network_coverage_geojson.v2`，在需求点和末程线上携带 `attained/missed/unassigned` 状态；Maps 只按该状态生成红绿灰图层，不重算 SLA。 | Data/Network 必须继续保持单一 provider ResourceStore 与 strict typed refs，不能恢复旧 Case 状态、Demo 入口或 Platform workflow；数据缺口不得冒充零影响，普通文字不得冒充输入卡片 | 路线/cost 由 pair/lane fact 自主部分复用；child 把 typed `needs_input` 交 Root，只有 Root 调用 Runtime 原生 `request_user_input`；模型不再选择重复的 plan/build/validate、standalone scenario 或四引用交付拼装路径 | Network Tool 拥有算法、pair facts、缺口终态与业务地图状态；Root Skill 拥有输入卡片调用；Maps 拥有展示样式；Provider ResourceStore 拥有中间内容和统一 GeoJSON ref/profile | Planner 188/188、Maps 38/38、stdio 双门、Copilot/Skill validate、Web 1348/1348、deterministic multi-agent 2/2 通过；真实 DeepSeek 复验需恢复 Provider 凭据后完成 |
 | `P1-ART-FINAL` | 当前关键链 | generic ResourceLink→Artifact、Run-scoped通用 inline 表、Artifact 输入回流和旧 `report.v1` JSON inline 卡片已删除；durable delivery 只认 active Copilot `[[deliveries]]` 的 exact producer、固定 typed kind/schema/MIME/verifier 与 Workspace-relative descriptor。Platform 只理解通用 delivery kind，不理解仓网、地图或会议字段。Artifact 持久化 producer-time verifier snapshot，恢复和读取不依赖当前 active registry。仓网报告/地图文件/地图卡片与 meeting Markdown 报告是当前声明实例；Resource 字节仍由 provider 持有 | 把展示卡片误写成文件会触发不必要审批并制造交付物；把任意 Resource 升为 Artifact 会形成第二数据面；依赖模型文本或 active package 猜既有 Artifact 合同会在刷新、改写或切包时丢失交付 | producer 只返回其声明 kind 的固定 structuredContent envelope；Platform 按 producing Item provenance 与 verifier snapshot 物化/恢复。原生 inline-vis 通过授权 Profile/Thread 文件端点读取 HTML 或签名验证后的 PNG/JPEG/GIF/WebP；完成的 Agent Message 可用严格 `workspace_file` 指令请求 Platform 以权威 Workspace no-follow reader 快照 HTML，再投影为官方 native `file` 引用 | Platform 拥有通用交付授权投影、verifier snapshot、原生文件授权读取、Workspace HTML→Thread snapshot 与 Artifact 物化；Copilot 包拥有 producer 声明；Codex 拥有原生 visualize；MCP provider 拥有 Resource 内容 | 原生 Workspace HTML 快照定向 Rust tests 已通过；仓网自然语言案例已通过；meeting package/Tool delivery gate 已通过，真实 Web 交付未运行 |
-| `B-PROVIDER-OWNER` | 后续 backlog | `apps/web/crates/provider-service/src/secured.rs` 的 `profile_provider_definitions`、`apps/web/crates/platform-store/src/configuration.rs` 的 global default 与 Profile config/Runtime 重复 | 默认选择、已物化 Thread 实际 pair 和 refresh 被不同 owner 覆盖 | 当前 R2 只补 exact 真实 gate 依赖；全量 owner 收敛仅在仓网 gate 证明会选错 Provider/model 时提前 | Profile config/Runtime 拥有定义、未来 Thread default 和 Thread actual pair；Platform 只留密文 Secret 与必要 audit | 已证实，不阻断当前关键链 |
-| `B-THREAD-HISTORY` | 后续 backlog | `codex-adapter/src/real.rs` 的 history mode/隐藏 Thread，`routes/threads.rs` 的 overlay，`WebApp.tsx`/`webThreadHistory.ts` 的 live/history 启发式合并 | 连续同文本消息误去重，Task/Run status 可以冒充 official Thread/Turn 事实 | 全量 Thread/Run/history/lease 轻纠偏是后续 backlog；只有当前 E2E 证明消息投递错乱才同原子修复 | Codex Runtime 拥有 Thread/Turn/Item/history，Platform 只做授权和 exact Item 投影 | 已证实，不阻断当前关键链 |
-| `B-EVENT-BOUND` | 后续 backlog | `apps/web/server/src/event_projection.rs` 和 Browser item renderer 仍按动态 Tool 名/文本猜 command/diff，unknown event 可进对话，多类 payload 无统一限长/retention owner | 事件污染、过大持久化与未授权内容暴露 | 保留 `run_events` sequence/provenance；普通 RunEvent 不广播 private Resource ref；若仓网真实 gate 证明泄密才成为当前安全门 | Platform 只投影 bounded typed Runtime 事实；unknown 不猜内容 | 已证实，当前仅保留泄密负向门 |
-| `B-BROWSER-LEGACY` | 后续 backlog | 生产只有 `browser-entry.ts`→`WebApp`，但死 `main.tsx`/`App`、全量 client、Terminal/Usage/generation/prompts/preferences/raw Profile writer/记忆 approval routes 仍在 | 继续维护第二 UI/API 表面，其中 generation/规则/整文件写面可创建隐藏 Thread 或绕过 official CAS/approval | 统一收缩已记入 backlog，不再作为仓网前置；只在真实关键链调用到旧入口时前移 | Browser 只保留 WebApp typed surface；Server 路由按 production reachability 原子删除，不建替代子系统 | 已证实，不阻断当前关键链 |
+| `B-BROWSER-LEGACY` | 阶段三下一 Atom | 生产只有 `browser-entry.ts`→`WebApp`；阶段三 Atom 1 已删除 generation、generic RPC 和 remembered approval 全链，剩余 dead UI/live API 为 Terminal、Usage、prompts、preferences 与 raw Profile writer | 继续维护第二 UI/API 表面会让 Platform 与 Runtime/Runner owner 冲突 | 先按 owner 原子删除剩余 Browser legacy API，不建替代子系统或兼容 facade | Browser 只保留 WebApp typed surface；Server 路由按 production reachability 收敛 | 部分完成；Atom 1 已验证删除，剩余项最先处理 |
+| `B-PROVIDER-OWNER` | Browser legacy 清理后 | `apps/web/crates/provider-service/src/secured.rs` 的 `profile_provider_definitions`、`apps/web/crates/platform-store/src/configuration.rs` 的 global default 与 Profile config/Runtime 重复 | 默认选择、已物化 Thread 实际 pair 和 refresh 被不同 owner 覆盖 | Browser legacy 收敛后处理 Provider/model 单一 owner，不与前一 Atom 混改 | Profile config/Runtime 拥有定义、未来 Thread default 和 Thread actual pair；Platform 只留密文 Secret 与必要 audit | 已证实，待后续 Atom |
+| `B-THREAD-HISTORY` | Provider/model owner 后 | `codex-adapter/src/real.rs` 的 history mode、`routes/threads.rs` 的 overlay、`WebApp.tsx`/`webThreadHistory.ts` 的 live/history 启发式合并 | 连续同文本消息误去重，Task/Run status 可以冒充 official Thread/Turn 事实 | hidden generation 已删除；Provider/model owner 收敛后，再按 official identity 处理 Run/Thread 与 history | Codex Runtime 拥有 Thread/Turn/Item/history，Platform 只做授权和 exact Item 投影 | 已证实，待后续 Atom |
+| `B-EVENT-BOUND` | Run/Thread 与 history 同批后段 | `apps/web/server/src/event_projection.rs` 和 Browser item renderer 仍按动态 Tool 名/文本猜 command/diff，unknown event 可进对话，多类 payload 无统一限长/retention owner | 事件污染、过大持久化与未授权内容暴露 | 保留 `run_events` sequence/provenance；在 Run/Thread/history owner 明确后收敛 event payload 与 renderer，不提前改写事实 | Platform 只投影 bounded typed Runtime 事实；unknown 不猜内容 | 已证实，待后续 Atom |
 | `B-PROFILE-AUTH` | 后续 backlog | `apps/web/server/src/main.rs::import_file_backed_codex_auth_if_missing` 在单 Profile 过渡模式可从宿主 home 导入 `auth.json` | 未来多用户身份边界不成立 | 当前单 Profile 不阻断；启用多用户前必须删除宿主默认导入并完成隔离矩阵 | Profile 认证由显式用户/Profile owner 提供，不读服务器操作者 home | 已证实，多用户触发 |
 | `D-CONTROL-PLANE` | 已删除 | migration 55 和 fresh-schema gate 证明 Work State/coordination 十表、Supervisor snapshot/binding/continuation 六表及对应 crate/route/MCP/gate 不存在 | 曾与 Codex context/mailbox/scheduler 形成第二控制面 | 不建替代状态机 | Codex 拥有协作；Platform 仅保留 Agent/Approval/Audit 投影 | 已完成，需继续通过 fresh-schema denial |
 | `D-CATALOG-MANIFEST` | 已删除 | Catalog/Studio/Python publish 生产链与无 owner 表已删；migration 56 删 `profile_capabilities`，ProfileHost 只验证 official initialize 四字段 | 曾在 Codex 原生 Skill/Role/MCP discovery 上叠加发布/安装/本地 manifest truth | 阶段一 built-in 只走 Profile seed + Runtime discovery；公开 Studio/SDK 后移 | Codex 拥有 discovery，Platform 不伪造 readiness | 已完成，公开平台另起后续阶段 |
@@ -625,27 +625,23 @@ ADR-018 是阶段一规范裁决，Codex 子树 seam 只由 Patch Map 分类。�
     新建 Run selector；应在 legacy App 退出后删除未使用的 route、session schema 和事件投影。
     同一路径的 `/profile/usage` 又混用本地 `run_events` 近似值与 official account usage，并把
     Turn 数标成 Agent Run；它应随旧 App 删除，不能演化为另一套 usage owner。
-11. legacy `/runs/{id}/generate` 由 Platform 写死生成提示词，并在 adapter 内创建不会进入正常
-    事件投影的持久 official Thread；`suppressed_threads` 没有终止清理，archive 又只是 best-effort，
-    因而 direct HTTP 可制造隐藏 Thread、吞掉官方事件并累积进程状态。generic adapter
-    `rpc(method, Value)` 同时保留字符串 `start_thread`/`send_user_message`，虽无 production caller，
-    仍会迫使 typed Provider/首消息合同保留旁路。两者都不应继续兼容新的 `thread/start` 合同。
-12. `browser_workspace_preferences` 只服务旧 App，却继续持久化 untyped settings、未实际应用的
+11. `browser_workspace_preferences` 只服务旧 App，却继续持久化 untyped settings、未实际应用的
     Runtime 参数和由 Terminal 自动执行的 worktree setup script；这些字段没有当前 Workspace/Runner
     lifecycle owner，不能作为未来初始化或 Runtime 配置合同保留。
-13. `/profile/prompts` 只服务旧 App，在 Platform 内自建 project/global 目录、扫描、frontmatter
+12. `/profile/prompts` 只服务旧 App，在 Platform 内自建 project/global 目录、扫描、frontmatter
     parser 和 move lifecycle；latest official Runtime 不发现这些目录，当前原生扩展面是 cwd-scoped
     Skills/Plugins，因此该 API 写入的文件不是可用 Runtime capability。
-14. `/profile/approval-rules` 没有绑定 exact pending approval、Item、版本或 requested Profile，
-    却接受 Browser 自报命令前缀并永久写 Profile allow rule；latest official 已让 approval 请求携带
-    `proposedExecpolicyAmendment` 并以 typed decision 原路响应，因此该文件写入是额外授权旁路。
-15. `/profile/files/{agents|config}` 把 Profile 指令和 Runtime 配置折叠为同一个 whole-file writer；
+13. `/profile/files/{agents|config}` 把 Profile 指令和 Runtime 配置折叠为同一个 whole-file writer；
     config 分支直接 rename 文件后才做 `config/read` 探测，没有使用 official config write 的
     expected-version CAS/reload，因此可与 Provider/Agent 等合法配置写并发互相覆盖。
 
 ## 7. 当前阶段裁决
 
-阶段一内置仓网 Copilot 的正常业务链已经完成：旧跨 owner 数据面与 compatibility island 已删，
+阶段一内置仓网 Copilot 的正常业务链和阶段二仓库内开发者 SDK 验收已经完成。阶段三当前按
+Runtime owner 清理并行实现；Atom 1 已删除 hidden generation、generic adapter RPC 和 remembered
+approval 全链，没有增加替代缓存、兼容 facade 或新的持久状态。旧跨 owner 数据面与 compatibility island 已删，
+后续顺序固定为剩余 Browser legacy API → Provider/model owner → Run/Thread 与 history/event；
+Codex upstream 同步与 retained seam 收敛独立放在最后，不与 Platform 原子片交叉实施。
 Runtime/bridge、Profile Skill/Role、Workspace 文件、provider Resource、Approval、Agent activity、
 `map.v3` 与最终 Markdown Artifact 在真实 Web 链中闭合。阶段二已用
 `copilots/meeting-action-review` 验证同一 Copilot/Tool SDK 合同可承载一个非仓网领域，但该证据

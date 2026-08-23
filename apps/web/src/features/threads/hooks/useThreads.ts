@@ -22,7 +22,6 @@ import { useThreadRateLimits } from "./useThreadRateLimits";
 import { useThreadSelectors } from "./useThreadSelectors";
 import { useThreadStatus } from "./useThreadStatus";
 import { useThreadUserInput } from "./useThreadUserInput";
-import { useThreadTitleAutogeneration } from "./useThreadTitleAutogeneration";
 import { useDetachedReviewTracking } from "./useDetachedReviewTracking";
 import {
   archiveThread as archiveThreadService,
@@ -56,7 +55,6 @@ type UseThreadsOptions = {
   onSelectServiceTier?: (tier: ServiceTier | null | undefined) => void;
   reviewDeliveryMode?: "inline" | "detached";
   steerEnabled?: boolean;
-  threadTitleAutogenerationEnabled?: boolean;
   chatHistoryScrollbackItems?: number | null;
   customPrompts?: CustomPromptOption[];
   onMessageActivity?: () => void;
@@ -87,7 +85,6 @@ export function useThreads({
   onSelectServiceTier,
   reviewDeliveryMode = "inline",
   steerEnabled = false,
-  threadTitleAutogenerationEnabled = false,
   chatHistoryScrollbackItems,
   customPrompts = [],
   onMessageActivity,
@@ -128,8 +125,7 @@ export function useThreads({
   threadParentByIdRef.current = state.threadParentById;
   const rateLimitsByWorkspaceRef = useRef(state.rateLimitsByWorkspace);
   rateLimitsByWorkspaceRef.current = state.rateLimitsByWorkspace;
-  const { approvalAllowlistRef, handleApprovalDecision, handleApprovalRemember } =
-    useThreadApprovals({ dispatch, onDebug });
+  const { handleApprovalDecision } = useThreadApprovals({ dispatch });
   const { handleUserInputSubmit } = useThreadUserInput({ dispatch });
   const {
     customNamesRef,
@@ -397,15 +393,6 @@ export function useThreads({
     [dispatch, getCustomName, onDebug, onSubagentThreadDetected, updateThreadParent],
   );
 
-  const { onUserMessageCreated } = useThreadTitleAutogeneration({
-    enabled: threadTitleAutogenerationEnabled,
-    itemsByThreadRef,
-    threadsByWorkspaceRef,
-    getCustomName,
-    renameThread,
-    onDebug,
-  });
-
   const threadHandlers = useThreadEventHandlers({
     activeThreadId,
     dispatch,
@@ -421,14 +408,12 @@ export function useThreads({
     getActiveTurnId,
     safeMessageActivity,
     recordThreadActivity,
-    onUserMessageCreated,
     pushThreadErrorMessage,
     onDebug,
     onWorkspaceConnected: handleWorkspaceConnected,
     applyCollabThreadLinks,
     hydrateSubagentThreads,
     onReviewExited: handleReviewExited,
-    approvalAllowlistRef,
     pendingInterruptsRef,
   });
 
@@ -931,7 +916,6 @@ export function useThreads({
     updateCustomInstructions,
     confirmCustom,
     handleApprovalDecision,
-    handleApprovalRemember,
     handleUserInputSubmit,
   };
 }
