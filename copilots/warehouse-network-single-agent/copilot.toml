@@ -75,7 +75,7 @@ display_name = "Revised interactive map"
 [[tests]]
 id = "single-agent-data-health"
 prompt = "Inspect the authorized Workspace sources with the declared warehouse Tool and return its typed result."
-agent = "warehouse_single_agent"
+target = { kind = "root" }
 tool = "supply_chain"
 server = "supply_chain_data"
 tool_name = "discover_workspace_sources"

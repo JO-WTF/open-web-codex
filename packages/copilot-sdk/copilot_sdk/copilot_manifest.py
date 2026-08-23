@@ -6,10 +6,11 @@ import hashlib
 import json
 import os
 import stat
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import tomllib
 
 from .tool_runtime_manifest import (
     ToolRuntimeManifestError,
@@ -28,6 +29,7 @@ ROLE_MCP_SERVER_POLICY_FIELDS = frozenset(
 MAX_DELIVERIES = 32
 MAX_DELIVERY_TEXT = 256
 MAX_DELIVERY_SCHEMA_BYTES = 1024 * 1024
+MAX_TESTS = 16
 
 
 class CopilotPackageError(ValueError):
@@ -75,7 +77,8 @@ class CopilotTestCase:
 
     id: str
     prompt: str
-    agent: str
+    target_kind: str
+    target_agent: str | None
     tool: str
     server: str
     tool_name: str
@@ -122,8 +125,6 @@ def validate_copilot_package(
     skill_ids = tuple(entry["id"] for entry in skills)
     agent_ids = tuple(entry["id"] for entry in agents)
     tool_ids = tuple(entry["id"] for entry in tools)
-    tests = _test_entries(manifest, agent_ids=agent_ids, tool_ids=tool_ids)
-
     root_config = _required(manifest, "root", "copilot.toml")
     if not isinstance(root_config, dict):
         _fail("invalid_type", "root", "must be a table")
@@ -158,6 +159,12 @@ def validate_copilot_package(
                 "root.agent",
                 f"references undeclared agent {root_agent!r}",
             )
+    tests = _test_entries(
+        manifest,
+        agent_ids=agent_ids,
+        tool_ids=tool_ids,
+        root_agent=root_agent,
+    )
 
     author_files: dict[str, Path] = {
         manifest_relative.as_posix(): manifest_file,
@@ -201,26 +208,28 @@ def validate_copilot_package(
         author_files[relative.as_posix()] = role_file
 
     for index, test in enumerate(tests):
-        tool_policy = agent_tool_policies[test.agent].get(test.tool)
+        policy_agent = root_agent if test.target_kind == "root" else test.target_agent
+        assert policy_agent is not None
+        tool_policy = agent_tool_policies[policy_agent].get(test.tool)
         if tool_policy is None:
             _fail(
                 "missing_reference",
                 f"tests[{index}].tool",
-                f"agent {test.agent!r} does not enable declared tool {test.tool!r}",
+                f"target {policy_agent!r} does not enable declared tool {test.tool!r}",
             )
         policy = tool_policy.get(test.server)
         if policy is None and test.server not in tool_policy:
             _fail(
                 "missing_reference",
                 f"tests[{index}].server",
-                f"agent {test.agent!r} does not enable MCP server {test.server!r} "
+                f"target {policy_agent!r} does not enable MCP server {test.server!r} "
                 f"from capability root {test.tool!r}",
             )
         if policy is not None and test.tool_name not in policy:
             _fail(
                 "missing_reference",
                 f"tests[{index}].tool_name",
-                f"agent {test.agent!r} does not enable tool method {test.tool_name!r}",
+                f"target {policy_agent!r} does not enable tool method {test.tool_name!r}",
             )
 
     tool_server_ids: dict[str, set[str]] = {}
@@ -312,7 +321,14 @@ def load_copilot_test_cases(
     manifest_relative = _manifest_relative_path(root, manifest_path)
     manifest = _load_toml(root / manifest_relative, manifest_relative.as_posix())
     tests = _test_entries(
-        manifest, agent_ids=summary.agent_ids, tool_ids=summary.tool_ids
+        manifest,
+        agent_ids=summary.agent_ids,
+        tool_ids=summary.tool_ids,
+        root_agent=(
+            manifest.get("root", {}).get("agent")
+            if isinstance(manifest.get("root"), dict)
+            else None
+        ),
     )
     return tuple(tests)
 
@@ -694,32 +710,82 @@ def _validate_bounded_schema(value: Any, location: str) -> None:
 
 
 def _test_entries(
-    manifest: dict[str, Any], *, agent_ids: tuple[str, ...], tool_ids: tuple[str, ...]
+    manifest: dict[str, Any],
+    *,
+    agent_ids: tuple[str, ...],
+    tool_ids: tuple[str, ...],
+    root_agent: str | None,
 ) -> list[CopilotTestCase]:
     raw_tests = manifest.get("tests", [])
     if not isinstance(raw_tests, list):
         _fail("invalid_type", "tests", "must be an array of tables")
+    if len(raw_tests) > MAX_TESTS:
+        _fail("invalid_type", "tests", f"must not exceed {MAX_TESTS} entries")
     tests: list[CopilotTestCase] = []
     seen: set[str] = set()
     for index, raw_test in enumerate(raw_tests):
         location = f"tests[{index}]"
         if not isinstance(raw_test, dict):
             _fail("invalid_type", location, "must be a table")
+        unknown = sorted(
+            set(raw_test)
+            - {"id", "prompt", "target", "tool", "server", "tool_name", "arguments", "expect"}
+        )
+        if unknown:
+            _fail("invalid_field", f"{location}.{unknown[0]}", "field is not part of schema v1")
         test_id = _required_string(raw_test, "id", location)
         if test_id in seen:
             _fail("duplicate_id", f"{location}.id", f"duplicate id {test_id!r}")
         seen.add(test_id)
         prompt = _required_string(raw_test, "prompt", location)
-        agent = _required_string(raw_test, "agent", location)
+        target = _required(raw_test, "target", location)
+        if not isinstance(target, dict):
+            _fail("invalid_type", f"{location}.target", "must be a table")
+        target_kind = _required_string(target, "kind", f"{location}.target")
+        target_agent: str | None
+        if target_kind == "root":
+            if set(target) != {"kind"}:
+                _fail(
+                    "invalid_field",
+                    f"{location}.target",
+                    "root target requires only kind",
+                )
+            if root_agent is None:
+                _fail(
+                    "missing_reference",
+                    f"{location}.target",
+                    "root target requires root.agent with an explicit Tool policy",
+                )
+            target_agent = None
+        elif target_kind == "agent":
+            if set(target) != {"kind", "agent"}:
+                _fail(
+                    "invalid_field",
+                    f"{location}.target",
+                    "agent target requires exactly kind and agent",
+                )
+            target_agent = _required_string(target, "agent", f"{location}.target")
+            if target_agent not in agent_ids:
+                _fail(
+                    "missing_reference",
+                    f"{location}.target.agent",
+                    f"references undeclared agent {target_agent!r}",
+                )
+            if target_agent == root_agent:
+                _fail(
+                    "invalid_field",
+                    f"{location}.target.agent",
+                    "root Agent must use target.kind = 'root'",
+                )
+        else:
+            _fail(
+                "invalid_field",
+                f"{location}.target.kind",
+                "must equal 'root' or 'agent'",
+            )
         tool = _required_string(raw_test, "tool", location)
         server = _required_string(raw_test, "server", location)
         tool_name = _required_string(raw_test, "tool_name", location)
-        if agent not in agent_ids:
-            _fail(
-                "missing_reference",
-                f"{location}.agent",
-                f"references undeclared agent {agent!r}",
-            )
         if tool not in tool_ids:
             _fail(
                 "missing_reference",
@@ -732,6 +798,12 @@ def _test_entries(
         expect = _required(raw_test, "expect", location)
         if not isinstance(expect, dict):
             _fail("invalid_type", f"{location}.expect", "must be a table")
+        if set(expect) != {"structured_content"}:
+            _fail(
+                "invalid_field",
+                f"{location}.expect",
+                "requires only structured_content",
+            )
         structured = _required(expect, "structured_content", f"{location}.expect")
         if not isinstance(structured, dict):
             _fail(
@@ -747,7 +819,8 @@ def _test_entries(
             CopilotTestCase(
                 id=test_id,
                 prompt=prompt,
-                agent=agent,
+                target_kind=target_kind,
+                target_agent=target_agent,
                 tool=tool,
                 server=server,
                 tool_name=tool_name,

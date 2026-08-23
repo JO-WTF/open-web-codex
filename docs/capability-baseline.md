@@ -27,8 +27,10 @@ Root config 和 Web 显式选择的 E1/E2 证据；本轮将真实 DeepSeek 入�
 验证；`copilot dev` 提供隔离 discovery probe：通过官方 app-server 握手、
 `skills/list`、带 `selectedCapabilityRoots` 的临时 `thread/start` 和线程范围
 `mcpServerStatus/list` 验证声明能力可被 Runtime 发现。`copilot test` 另以本地确定性 Responses
-fixture 驱动真实 app-server，已从 fresh init 通过 Supervisor Skill、声明 Role、精确 MCP Tool
-参数/结构化结果、child terminal 和 Root terminal 的单条 normal case；PASS 不读取最终文本。
+fixture 驱动真实 app-server；每个用例使用独立临时 Profile 和 durable Thread，支持 Root 直调
+或声明 child Role 两种 target，并从 `thread/read(includeTurns=true)` 的 canonical history 验证
+精确 MCP Tool 参数/结构化结果、Role/parent 与 terminal 顺序。当前 repo Codex 已分别通过
+meeting child 和仓网 single-Agent Root 两种真实正常链；PASS 不读取最终文本或模型请求体。
 它没有生产模型质量验收、Web 创作链、Catalog 或 Marketplace。Platform 现在从显式可信
 Copilot 根发现所有一级 package，并以 `(profile, package)` 持久 desired/configured/failure；
 Browser 创建 Thread 时列出可用 package 并只提交所选 ID。Profile Host 在 Runtime 启动前收敛

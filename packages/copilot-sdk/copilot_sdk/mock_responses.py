@@ -49,6 +49,15 @@ def _call(call_id: str, name: str, arguments: dict[str, Any], *, namespace: str 
     return item
 
 
+def _tool_search_call(call_id: str, query: str) -> dict[str, Any]:
+    return {
+        "type": "tool_search_call",
+        "call_id": call_id,
+        "execution": "client",
+        "arguments": {"query": query, "limit": 20},
+    }
+
+
 def _message(item_id: str, text: str) -> dict[str, Any]:
     return {
         "type": "message",
@@ -68,6 +77,43 @@ def _has_tool_output(value: Any, call_id: str) -> bool:
     if isinstance(value, list):
         return any(_has_tool_output(item, call_id) for item in value)
     return False
+
+
+def _has_tool_search_output(value: Any, call_id: str) -> bool:
+    if isinstance(value, dict):
+        if value.get("type") == "tool_search_output" and value.get("call_id") == call_id:
+            return True
+        return any(_has_tool_search_output(item, call_id) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_tool_search_output(item, call_id) for item in value)
+    return False
+
+
+def _spawned_agent_id(value: Any, call_id: str) -> str | None:
+    if isinstance(value, dict):
+        if value.get("type") in ("function_call_output", "custom_tool_call_output") and value.get(
+            "call_id"
+        ) == call_id:
+            output = value.get("output")
+            if isinstance(output, str):
+                try:
+                    output = json.loads(output)
+                except json.JSONDecodeError:
+                    return None
+            if isinstance(output, dict):
+                candidate = output.get("agent_id")
+                if isinstance(candidate, str):
+                    return candidate
+        for child in value.values():
+            found = _spawned_agent_id(child, call_id)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _spawned_agent_id(child, call_id)
+            if found is not None:
+                return found
+    return None
 
 
 def _has_child_task_envelope(body: dict[str, Any], task_name: str) -> bool:
@@ -117,45 +163,18 @@ def _has_user_prompt(body: dict[str, Any], prompt: str) -> bool:
     return False
 
 
-def _has_supervisor_marker(body: dict[str, Any], marker: str) -> bool:
-    """Match Codex's official SkillInstructions user-message projection."""
-
-    inputs = body.get("input")
-    if not isinstance(inputs, list):
-        return False
-    for item in inputs:
-        if not isinstance(item, dict) or item.get("role") != "user":
-            continue
-        content = item.get("content")
-        if not isinstance(content, list):
-            continue
-        for part in content:
-            text = part.get("text") if isinstance(part, dict) else None
-            if (
-                isinstance(part, dict)
-                and part.get("type") == "input_text"
-                and isinstance(text, str)
-                and text.startswith("<skill>\n<name>")
-                and text.endswith("\n</skill>")
-                and marker in text
-            ):
-                return True
-    return False
-
-
 @dataclass
 class MockResponsesFixture:
-    agent: str
+    target_kind: str
+    agent: str | None
     server: str
     tool_name: str
     arguments: dict[str, Any]
-    supervisor_marker: str
     root_prompt: str
     child_prompt: str
     child_task_name: str
+    collaboration_namespace: bool = True
     request_classifications: list[dict[str, Any]] = field(default_factory=list)
-    supervisor_request_count: int = field(default=0, init=False)
-    first_root_request_has_supervisor_marker: bool | None = field(default=None, init=False)
     _server: ThreadingHTTPServer | None = field(default=None, init=False)
     _thread: threading.Thread | None = field(default=None, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
@@ -182,22 +201,20 @@ class MockResponsesFixture:
                 )
                 with fixture._lock:
                     fixture.request_classifications.append(classification)
-                    if _has_supervisor_marker(body, fixture.supervisor_marker):
-                        fixture.supervisor_request_count += 1
-                    if (
-                        fixture.first_root_request_has_supervisor_marker is None
-                        and classification["userPrompt"]
-                        and not classification["child"]
-                    ):
-                        fixture.first_root_request_has_supervisor_marker = _has_supervisor_marker(
-                            body, fixture.supervisor_marker
-                        )
-                if _has_tool_output(body, "copilot-child-mcp"):
+                if _has_tool_output(body, "copilot-root-mcp"):
+                    output = _response(
+                        "copilot-root-final",
+                        _message("copilot-root-message", "Root verified the MCP result."),
+                    )
+                elif _has_tool_output(body, "copilot-child-mcp"):
                     output = _response(
                         "copilot-child-final",
                         _message("copilot-child-message", "Worker verified the MCP result."),
                     )
-                elif _has_child_task_envelope(body, fixture.child_task_name):
+                elif _has_child_task_envelope(body, fixture.child_task_name) or (
+                    not fixture.collaboration_namespace
+                    and _has_input_text(body, fixture.child_prompt)
+                ):
                     output = _response(
                         "copilot-child-mcp-response",
                         _call(
@@ -212,33 +229,92 @@ class MockResponsesFixture:
                         "copilot-root-final",
                         _message("copilot-root-message", "Supervisor received the worker result."),
                     )
-                elif _has_tool_output(body, "copilot-root-spawn"):
+                elif (
+                    not fixture.collaboration_namespace
+                    and _has_tool_search_output(body, "copilot-root-wait-search")
+                ):
+                    agent_id = _spawned_agent_id(body, "copilot-root-spawn")
                     output = _response(
                         "copilot-root-wait-response",
                         _call(
                             "copilot-root-wait",
                             "wait_agent",
-                            {"timeout_ms": 30_000},
-                            namespace="collaboration",
+                            {"targets": [agent_id] if agent_id is not None else []},
+                            namespace="multi_agent_v1",
                         ),
                     )
-                elif not fixture._root_started and _has_user_prompt(body, fixture.root_prompt):
-                    with fixture._lock:
-                        fixture._root_started = True
+                elif _has_tool_output(body, "copilot-root-spawn"):
+                    if not fixture.collaboration_namespace:
+                        output = _response(
+                            "copilot-root-wait-search-response",
+                            _tool_search_call(
+                                "copilot-root-wait-search", "wait for a spawned agent"
+                            ),
+                        )
+                    else:
+                        output = _response(
+                            "copilot-root-wait-response",
+                            _call(
+                                "copilot-root-wait",
+                                "wait_agent",
+                                {"timeout_ms": 30_000},
+                                namespace="collaboration",
+                            ),
+                        )
+                elif (
+                    not fixture.collaboration_namespace
+                    and _has_tool_search_output(body, "copilot-root-spawn-search")
+                ):
                     output = _response(
                         "copilot-root-spawn-response",
                         _call(
                             "copilot-root-spawn",
                             "spawn_agent",
                             {
-                                "task_name": fixture.child_task_name,
                                 "message": fixture.child_prompt,
                                 "agent_type": fixture.agent,
-                                "fork_turns": "none",
+                                "fork_context": False,
                             },
-                            namespace="collaboration",
+                            namespace="multi_agent_v1",
                         ),
                     )
+                elif not fixture._root_started and _has_user_prompt(body, fixture.root_prompt):
+                    with fixture._lock:
+                        fixture._root_started = True
+                    if fixture.target_kind == "root":
+                        output = _response(
+                            "copilot-root-mcp-response",
+                            _call(
+                                "copilot-root-mcp",
+                                fixture.tool_name,
+                                fixture.arguments,
+                                namespace=f"mcp__{fixture.server}",
+                            ),
+                        )
+                    else:
+                        assert fixture.agent is not None
+                        if fixture.collaboration_namespace:
+                            output = _response(
+                                "copilot-root-spawn-response",
+                                _call(
+                                    "copilot-root-spawn",
+                                    "spawn_agent",
+                                    {
+                                        "task_name": fixture.child_task_name,
+                                        "message": fixture.child_prompt,
+                                        "agent_type": fixture.agent,
+                                        "fork_turns": "none",
+                                    },
+                                    namespace="collaboration",
+                                ),
+                            )
+                        else:
+                            output = _response(
+                                "copilot-root-spawn-search-response",
+                                _tool_search_call(
+                                    "copilot-root-spawn-search", "spawn a specialized agent"
+                                ),
+                            )
                 else:
                     output = _response(
                         "copilot-startup-response",

@@ -36,7 +36,7 @@ content_verifier = { kind = "markdown_marker", marker = "<!-- meeting_action_rev
 [[tests]]
 id = "review-inline-action-items"
 prompt = "Review the supplied meeting action items and return the exact typed result."
-agent = "meeting_reviewer"
+target = { kind = "agent", agent = "meeting_reviewer" }
 tool = "meeting_review"
 server = "meeting_action_review"
 tool_name = "review_action_items"

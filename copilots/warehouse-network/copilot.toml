@@ -83,7 +83,7 @@ display_name = "Revised interactive map"
 [[tests]]
 id = "empty-workspace-source-discovery"
 prompt = "Discover supported source files in the authorized empty Workspace and return the verified catalog."
-agent = "data_agent"
+target = { kind = "agent", agent = "data_agent" }
 tool = "supply_chain"
 server = "supply_chain_data"
 tool_name = "discover_workspace_sources"

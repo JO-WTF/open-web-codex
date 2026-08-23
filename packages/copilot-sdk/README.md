@@ -58,15 +58,24 @@ app-server 的 HOME 和进程 cwd 使用 Profile 外的另一临时目录，并�
 
 ## 原生正常链验收
 
-`init` 生成的 `[[tests]]` 声明一个有界正常用例。运行：
+`init` 生成的 `[[tests]]` 声明一个有界正常用例；一个 package 最多可声明 16 个相互隔离的
+用例。运行全部用例：
 
 ```bash
 copilot test ./scratch/example-copilot --workspace "$PWD"
 ```
 
-`test` 使用隔离 Profile 和本地确定性 Responses fixture，但执行真实 Codex app-server 协议：
-官方 Skill discovery、Thread/Turn、原生 Agent spawn/wait、Role-local MCP 调用和终态事件都必须
-完成。通过条件来自 canonical Runtime 事件和精确 Tool 参数/结构化结果，不读取最终回答文本。
+只运行一个用例：
+
+```bash
+copilot test ./scratch/example-copilot --workspace "$PWD" --case native-worker-health
+```
+
+每个用例使用独立的临时 Profile、durable Thread 和本地确定性 Responses fixture，但执行真实
+Codex app-server 协议。`target = { kind = "root" }` 验证单 Agent Root 直调；
+`target = { kind = "agent", agent = "..." }` 验证原生 child Role。实时通知只用于等待身份和
+终态；MCP 调用、参数、结构化结果、Role/parent 与最终顺序统一从
+`thread/read(includeTurns=true)` 的 canonical history 验证，不读取最终回答文本或模型请求体。
 有界成功结果只公开组合摘要、fixture Provider、声明组件和终态证据，不公开 Runtime Thread/Turn
 ID、绝对路径或原始请求。
 

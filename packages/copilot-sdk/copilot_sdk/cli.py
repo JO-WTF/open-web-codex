@@ -446,14 +446,20 @@ def _print_prepare_result(payload: dict[str, object], *, as_json: bool) -> None:
 
 
 def _test_error_payload(error: CopilotTestError) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "ok": False,
         "error": {
             "code": error.code,
             "stage": error.stage,
             "message": error.public_message,
+            "nextAction": error.next_action,
         },
     }
+    details = payload["error"]
+    assert isinstance(details, dict)
+    if error.test_id is not None:
+        details["testId"] = error.test_id
+    return payload
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -492,6 +498,7 @@ def main(argv: list[str] | None = None) -> int:
     test_copilot.add_argument("--codex-bin", type=Path)
     test_copilot.add_argument("--tool-environment-root", type=Path)
     test_copilot.add_argument("--build-store-root", type=Path)
+    test_copilot.add_argument("--case", dest="case_id")
     test_copilot.add_argument("--timeout-seconds", type=float, default=45.0)
     test_copilot.add_argument("--json", action="store_true")
 
@@ -535,6 +542,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.manifest,
                 args.workspace,
                 _resolve_codex_bin(args.codex_bin),
+                case_id=args.case_id,
                 timeout_seconds=args.timeout_seconds,
                 tool_environment_root=args.tool_environment_root,
                 build_store_root=args.build_store_root,
@@ -564,7 +572,7 @@ def main(argv: list[str] | None = None) -> int:
     except CopilotDevError as error:
         if getattr(args, "resource", None) == "test":
             test_error = CopilotTestError(
-                error.code,
+                "runtime_unavailable",
                 error.stage,
                 "native acceptance environment preparation failed",
             )
@@ -573,7 +581,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(
                     f"copilot: {test_error.code}: {test_error.stage}: "
-                    f"{test_error.public_message}",
+                    f"{test_error.public_message} Next: {test_error.next_action}",
                     file=sys.stderr,
                 )
             return 2
@@ -593,4 +601,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"copilot: {error.code}: {error.stage}: {error.public_message}",
                 file=sys.stderr,
             )
+            if error.test_id is not None:
+                print(f"  test: {error.test_id}", file=sys.stderr)
+            print(f"  next: {error.next_action}", file=sys.stderr)
         return 2

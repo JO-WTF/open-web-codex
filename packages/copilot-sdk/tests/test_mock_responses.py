@@ -4,39 +4,12 @@ import unittest
 
 from copilot_sdk.mock_responses import (
     _has_child_task_envelope,
-    _has_supervisor_marker,
     _has_user_prompt,
     classify_request,
 )
 
 
 class MockResponsesRoutingTests(unittest.TestCase):
-    def test_supervisor_marker_matches_official_skill_user_message(self) -> None:
-        marker = (
-            "---\nname: supervisor\ndescription: Coordinate work.\n---\n\n"
-            "Delegate the requested work to `worker`.\n"
-        )
-        body = {
-            "input": [
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": (
-                                "<skill>\n<name>supervisor</name>\n"
-                                "<path>/profile/skills/supervisor/SKILL.md</path>\n"
-                                f"{marker}\n</skill>"
-                            ),
-                        }
-                    ],
-                }
-            ]
-        }
-
-        self.assertTrue(_has_supervisor_marker(body, marker))
-
     def test_acceptance_spawn_uses_fresh_role_context(self) -> None:
         from copilot_sdk.mock_responses import _call
 

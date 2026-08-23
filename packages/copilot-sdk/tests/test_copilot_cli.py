@@ -221,8 +221,9 @@ class CopilotCliTests(unittest.TestCase):
             self.assertEqual(result, 2)
             self.assertEqual(stderr, "")
             payload = json.loads(stdout)
-            self.assertEqual(payload["error"]["code"], "WorkspaceInvalid")
+            self.assertEqual(payload["error"]["code"], "runtime_unavailable")
             self.assertEqual(payload["error"]["stage"], "workspace")
+            self.assertIn("nextAction", payload["error"])
             self.assertNotIn("relative-private-workspace", stdout)
             self.assertNotIn("path", payload["error"])
 
@@ -247,6 +248,35 @@ class CopilotCliTests(unittest.TestCase):
             self.assertEqual(stderr, "")
             self.assertNotIn(str(missing), stdout)
             self.assertNotIn("path", json.loads(stdout)["error"])
+
+    def test_test_case_selects_one_declared_case(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "source"
+            result, _, _ = self.invoke("init", str(root), "--name", "order-review")
+            self.assertEqual(result, 0)
+            payload = {
+                "ok": True,
+                "state": "test_passed",
+                "copilot": {"id": "order-review"},
+                "durationMs": 1,
+                "tests": [{"id": "native-worker-health", "state": "passed"}],
+            }
+            with patch("copilot_sdk.cli.run_copilot_tests", return_value=payload) as run:
+                result, stdout, stderr = self.invoke(
+                    "test",
+                    str(root),
+                    "--workspace",
+                    str(Path(directory).resolve()),
+                    "--codex-bin",
+                    sys.executable,
+                    "--case",
+                    "native-worker-health",
+                    "--json",
+                )
+
+            self.assertEqual(result, 0, stderr)
+            self.assertEqual(json.loads(stdout)["tests"][0]["id"], "native-worker-health")
+            self.assertEqual(run.call_args.kwargs["case_id"], "native-worker-health")
 
     def test_init_rejects_id_that_could_escape_destination(self):
         with tempfile.TemporaryDirectory() as directory:

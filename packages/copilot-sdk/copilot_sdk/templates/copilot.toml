@@ -26,7 +26,7 @@ runtime = "tools/__TOOL_DIR__/runtime.toml"
 [[tests]]
 id = "native-worker-health"
 prompt = "Run the declared worker health check and return its verified result."
-agent = "__AGENT_ID__"
+target = { kind = "agent", agent = "__AGENT_ID__" }
 tool = "__TOOL_ID__"
 server = "__TOOL_ID__"
 tool_name = "health"

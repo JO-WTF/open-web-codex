@@ -98,7 +98,7 @@ runtime = "tools/routes/runtime.toml"
         manifest += f'''\n[[tests]]
 id = "health"
 prompt = "Check health."
-agent = "planner"
+target = {{ kind = "agent", agent = "planner" }}
 tool = "routes"
 server = "{server}"
 tool_name = "{tool_name}"
@@ -156,6 +156,54 @@ structured_content = {{ status = "ok" }}
         self.assertEqual(summary.test_ids, ("health",))
         self.assertEqual(case.tool, "routes")
         self.assertEqual(case.server, "routing_api")
+        self.assertEqual(case.target_kind, "agent")
+        self.assertEqual(case.target_agent, "planner")
+
+    def test_root_target_requires_explicit_root_agent_and_uses_its_policy(self) -> None:
+        manifest = (self.root / "copilot.toml").read_text(encoding="utf-8")
+        manifest = manifest.replace(
+            'task_skills = "none"',
+            'task_skills = "none"\nagent = "planner"',
+        )
+        manifest += '''
+[[tests]]
+id = "health"
+prompt = "Check health."
+target = { kind = "root" }
+tool = "routes"
+server = "routing_api"
+tool_name = "health"
+arguments = {}
+[tests.expect]
+structured_content = { status = "ok" }
+'''
+        self.write_manifest(manifest)
+
+        case = load_copilot_test_cases(self.root)[0]
+
+        self.assertEqual(case.target_kind, "root")
+        self.assertIsNone(case.target_agent)
+
+    def test_rejects_more_than_sixteen_tests(self) -> None:
+        manifest = (self.root / "copilot.toml").read_text(encoding="utf-8")
+        cases = []
+        for index in range(17):
+            cases.append(
+                f'''\n[[tests]]
+id = "health-{index}"
+prompt = "Check health."
+target = {{ kind = "agent", agent = "planner" }}
+tool = "routes"
+server = "routing_api"
+tool_name = "health"
+arguments = {{}}
+[tests.expect]
+structured_content = {{ status = "ok" }}
+'''
+            )
+        self.write_manifest(manifest + "".join(cases))
+
+        self.assert_code("invalid_type")
 
     def test_workspace_delivery_uses_fixed_envelope_and_embeds_validated_schema(self) -> None:
         schema = self.root / "tools/routes/result.schema.json"
