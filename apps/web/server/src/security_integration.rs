@@ -108,6 +108,8 @@ async fn task_creation_binds_only_an_authorized_project_workspace() {
         );
     }
     for (table, column) in [
+        ("tasks", "model_provider"),
+        ("tasks", "model"),
         ("workspaces", "source_revision"),
         ("artifacts", "intake_envelope"),
         ("provider_call_metrics", "stable_prefix_sha256"),
@@ -126,6 +128,18 @@ async fn task_creation_binds_only_an_authorized_project_workspace() {
         .unwrap();
         assert_eq!(count, 0, "retired column remains: {table}.{column}");
     }
+    let legacy_global_model_selection: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM platform_configuration \
+         WHERE scope_kind = 'global' AND scope_id = 'global' \
+           AND config_key = 'models.default_selection'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        legacy_global_model_selection, 0,
+        "retired global model selection remains"
+    );
     let runtime_key = "task-workspace-test-profile";
     let profile = RuntimeProfileBinding {
         runtime_key: runtime_key.to_string(),

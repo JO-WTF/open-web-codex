@@ -489,8 +489,8 @@ export class CodexMonitorWebClient {
       createdAt: thread.createdAt || task.created_at,
       updatedAt: thread.updatedAt || run.updated_at,
       activeTurnId: activeTurnIdForThread(run, status),
-      modelProvider: task.model_provider,
-      model: task.model,
+      modelProvider: null,
+      model: null,
       status,
       turns: thread.turns,
     };
@@ -500,8 +500,6 @@ export class CodexMonitorWebClient {
     workspaceId: string,
     options: {
       operationId: string;
-      providerId: string;
-      modelId: string;
       copilot?: CopilotTaskSelection | null;
       onRunAccepted?: (accepted: AcceptedThreadStart) => void;
     },
@@ -522,7 +520,6 @@ export class CodexMonitorWebClient {
       };
       this.threadStartDrafts.set(draftKey, draft);
     }
-    const taskWasReused = draft.taskId !== null;
     let task: Task;
     if (draft.taskId) {
       task = await this.platform.getTask(draft.taskId);
@@ -531,10 +528,6 @@ export class CodexMonitorWebClient {
         workspace.project_id,
         workspace.id,
         "Thread",
-        {
-          providerId: options.providerId,
-          modelId: options.modelId,
-        },
         options.copilot,
       );
       try {
@@ -548,17 +541,6 @@ export class CodexMonitorWebClient {
       } finally {
         draft.taskPromise = null;
       }
-    }
-    if (
-      taskWasReused &&
-      !draft.acceptedRunId &&
-      (task.model_provider !== options.providerId || task.model !== options.modelId)
-    ) {
-      await this.platform.updateTaskModelSelection(
-        task.id,
-        options.providerId,
-        options.modelId,
-      );
     }
     if (
       options.copilot &&
@@ -689,8 +671,6 @@ export class CodexMonitorWebClient {
         createdAt: task.created_at,
         updatedAt: run.updated_at,
         activeTurnId: run.status === "recovery_pending" ? null : run.active_turn_id,
-        modelProvider: task.model_provider,
-        model: task.model,
         status: runtimeThreadStatus(run).type,
       })),
       nextCursor: null,
@@ -769,7 +749,6 @@ export class CodexMonitorWebClient {
       baseUrl: String(input.baseUrl ?? ""),
       wireApi,
       credentials,
-      supportsFunctionTools: wireApi === "chat",
       select: input.select === true,
     });
   }
@@ -789,7 +768,7 @@ export class CodexMonitorWebClient {
     modelId: string,
   ) {
     const context = await this.findThreadContext(threadId);
-    return await this.platform.updateTaskModelSelection(
+    return await this.platform.updateThreadModelSettings(
       context.taskId,
       providerId,
       modelId,
@@ -897,15 +876,11 @@ export class CodexMonitorWebClient {
     _workspaceId: string,
     threadId: string,
     text: string,
-    model?: string | null,
-    modelProvider?: string | null,
     mapCardRef?: string | null,
   ) {
     const context = await this.findThreadContext(threadId);
     this.selectedRunByWorkspace.set(context.workspaceId, context.runId);
     const response = await this.platform.sendMessage(context.taskId, text, {
-      model,
-      modelProvider,
       mapCardRef,
     });
     return {

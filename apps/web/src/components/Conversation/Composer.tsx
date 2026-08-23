@@ -56,6 +56,7 @@ export type ModelProviderSummary = {
   models?: {
     modelId: string;
     modelName?: string | null;
+    showInPicker?: boolean;
     contextWindow?: number | null;
     supportsSearchTool?: boolean;
   }[];

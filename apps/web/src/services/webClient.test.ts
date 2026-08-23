@@ -17,8 +17,7 @@ const task = {
   workspace_id: project.id,
   title: "Thread",
   status: "pending",
-  model_provider: "deepseek",
-  model: "deepseek-v4-flash",
+  copilot_package_id: null,
   created_at: "2026-07-22T00:00:00Z",
   updated_at: "2026-07-22T00:00:00Z",
 };
@@ -224,8 +223,6 @@ describe("WebApp direct Server client", () => {
     });
     const options = {
       operationId: "stable-launch-operation",
-      providerId: task.model_provider,
-      modelId: task.model,
     };
 
     await expect(
@@ -283,8 +280,6 @@ describe("WebApp direct Server client", () => {
     await expect(
       client.startThread(workspace.id, {
         operationId: "accepted-terminal-run",
-        providerId: task.model_provider,
-        modelId: task.model,
         onRunAccepted,
       }),
     ).rejects.toMatchObject({
@@ -450,8 +445,6 @@ describe("WebApp direct Server client", () => {
       data: [expect.objectContaining({
         id: "thread-1",
         activeTurnId: null,
-        modelProvider: "deepseek",
-        model: "deepseek-v4-flash",
         status: "idle",
       })],
       nextCursor: null,
@@ -480,7 +473,7 @@ describe("WebApp direct Server client", () => {
     });
   });
 
-  it("persists a Thread-specific Provider and model through the task route", async () => {
+  it("updates a materialized Thread model through the typed task route", async () => {
     const baseFetch = resourceFetch();
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
@@ -490,7 +483,7 @@ describe("WebApp direct Server client", () => {
           providerId: "openai",
           modelId: "gpt-5.1-codex",
         });
-        return json({ providerId: "openai", modelId: "gpt-5.1-codex" });
+        return json({ type: "updated", providerId: "openai", modelId: "gpt-5.1-codex" });
       }
       return baseFetch(input, init);
     });
@@ -503,6 +496,7 @@ describe("WebApp direct Server client", () => {
       "openai",
       "gpt-5.1-codex",
     )).resolves.toEqual({
+      type: "updated",
       providerId: "openai",
       modelId: "gpt-5.1-codex",
     });
@@ -605,16 +599,12 @@ describe("WebApp direct Server client", () => {
         baseUrl: "https://api.deepseek.com",
         wireApi: "chat",
         credentials: { mode: "none" },
-        supportsFunctionTools: true,
         select: true,
       },
     }]);
   });
 
-  it.each([
-    ["chat", true],
-    ["responses", false],
-  ])("derives function-tool capability from Wire API %s", async (wireApi, expected) => {
+  it("does not send a browser function-tool capability field", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       expect(init?.method).toBe("PUT");
       return json({ currentProviderId: "deepseek", data: [] });
@@ -627,12 +617,12 @@ describe("WebApp direct Server client", () => {
       id: "deepseek",
       name: "DeepSeek",
       baseUrl: "https://api.deepseek.com",
-      wireApi,
+      wireApi: "chat",
       credentialMode: "none",
     });
 
     const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
-    expect(body.supportsFunctionTools).toBe(expected);
+    expect(body.supportsFunctionTools).toBeUndefined();
   });
 
   it("archives the selected Thread through the typed Server Run route", async () => {

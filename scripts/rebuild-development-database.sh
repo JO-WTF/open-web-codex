@@ -18,10 +18,10 @@ usage() {
 Usage: ./scripts/rebuild-development-database.sh --confirm-development-only [options]
 
 Destroys and recreates the selected development database. It preserves only the
-identity closure required to restore Provider credentials, the default model
-selection, and the active maps credential: organizations, users, memberships,
-profiles, profile_secrets, platform configuration, and platform configuration
-secrets. Secret ciphertext is never printed or decrypted.
+identity closure required to restore Provider credentials and the active maps
+credential: organizations, users, memberships, profiles, profile_secrets,
+platform configuration, and platform configuration secrets. Secret ciphertext
+is never printed or decrypted.
 
 Options:
   --confirm-development-only  Required destructive-operation acknowledgement.
@@ -202,7 +202,7 @@ WITH preserved(value) AS (
         SELECT 'platform_configuration:' || to_jsonb(entry)::text
         FROM platform_configuration AS entry
         WHERE scope_kind = 'global' AND scope_id = 'global'
-          AND config_key IN ('models.default_selection', 'maps.mapbox_public_access_token')
+          AND config_key IN ('maps.mapbox_public_access_token')
     UNION ALL
         SELECT 'platform_configuration_secrets:' || to_jsonb(entry)::text
         FROM platform_configuration_secrets AS entry
@@ -217,7 +217,7 @@ case "$preservation_schema_state" in
     has_preservable_configuration="1"
     preservation_digest_before="$(preservation_digest)"
     critical_configuration_digest_before="$(critical_configuration_digest)"
-    printf 'Exporting encrypted Provider credentials, default model selection, and maps configuration...\n'
+    printf 'Exporting encrypted Provider credentials and maps configuration...\n'
     "$postgres_bin/pg_dump" "$database_url" \
       --format=custom --data-only --no-owner --no-privileges \
       --table=organizations --table=users --table=memberships --table=profiles \
@@ -226,14 +226,14 @@ case "$preservation_schema_state" in
       --file="$backup_file"
     ;;
   empty)
-    printf 'No persisted Provider credentials/default model selection/maps configuration exists; starting with an empty development database.\n'
+    printf 'No persisted Provider credentials/maps configuration exists; starting with an empty development database.\n'
     ;;
   incomplete)
-    printf 'error: refusing to rebuild because Provider credential/default model selection or Maps persistence is incomplete; migrate or repair it before destructive rebuild.\n' >&2
+    printf 'error: refusing to rebuild because Provider credential or Maps persistence is incomplete; migrate or repair it before destructive rebuild.\n' >&2
     exit 1
     ;;
   *)
-    printf 'error: could not determine Provider credential/default model selection/maps preservation state.\n' >&2
+    printf 'error: could not determine Provider credential/maps preservation state.\n' >&2
     exit 1
     ;;
 esac
@@ -246,11 +246,11 @@ printf 'Applying current migrations...\n'
 "$server_bin" --database-url "$database_url" --migrate-only
 
 if [[ "$has_preservable_configuration" == "1" ]]; then
-  printf 'Restoring encrypted Provider credentials, default model selection, and maps configuration...\n'
+  printf 'Restoring encrypted Provider credentials and maps configuration...\n'
   "$postgres_bin/pg_restore" --dbname="$database_url" --data-only --exit-on-error \
     --no-owner --no-privileges "$backup_file"
   if [[ "$(preservation_digest)" != "$preservation_digest_before" ]]; then
-    printf 'error: restored Provider credentials/default model selection or Maps persistence does not match the encrypted backup.\n' >&2
+    printf 'error: restored Provider credentials or Maps persistence does not match the encrypted backup.\n' >&2
     exit 1
   fi
   "$postgres_bin/psql" "$database_url" -v ON_ERROR_STOP=1 <<'SQL'
@@ -258,7 +258,7 @@ DELETE FROM platform_configuration
 WHERE NOT (
     scope_kind = 'global'
     AND scope_id = 'global'
-    AND config_key IN ('models.default_selection', 'maps.mapbox_public_access_token')
+    AND config_key IN ('maps.mapbox_public_access_token')
 );
 
 DELETE FROM platform_configuration_secrets
@@ -269,7 +269,7 @@ WHERE NOT (
 );
 SQL
   if [[ "$(critical_configuration_digest)" != "$critical_configuration_digest_before" ]]; then
-    printf 'error: rebuilt database did not retain Provider credentials/default model selection or Maps credentials.\n' >&2
+    printf 'error: rebuilt database did not retain Provider credentials or Maps credentials.\n' >&2
     exit 1
   fi
 fi

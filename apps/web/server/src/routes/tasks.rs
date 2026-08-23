@@ -6,15 +6,11 @@ use axum::{
 use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter, TurnOptions};
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
-    CreateTaskRequest, ExplicitResourceSelection, ListTaskEventsParams, ModelSelection,
-    ResourceReferenceSummary, RunEvent, SendMessageRequest, SendMessageResponse, Task,
-    UpdateTaskModelSelectionRequest,
-};
-use open_web_codex_platform_store::configuration::{
-    get_global, put_global, MODEL_SELECTION_CONFIG_KEY,
+    CreateTaskRequest, ExplicitResourceSelection, ListTaskEventsParams, ResourceReferenceSummary,
+    RunEvent, SendMessageRequest, SendMessageResponse, Task, ThreadModelSettingsUpdateResponse,
+    UpdateThreadModelSettingsRequest,
 };
 use open_web_codex_platform_store::AppState;
-use open_web_codex_provider_service::secured::{AuthorizedProviderOperations, ProviderActor};
 use open_web_codex_run_orchestrator::{RecoverRunRequest, RunOrchestrator};
 use serde::Deserialize;
 use sqlx::Row;
@@ -40,8 +36,7 @@ pub async fn list_tasks(
     Query(params): Query<ListTasksParams>,
 ) -> ApiResult<Vec<Task>> {
     let rows = sqlx::query(
-        "SELECT id, project_id, workspace_id, title, status, model_provider, model, \
-                copilot_package_id, created_at, updated_at \
+        "SELECT id, project_id, workspace_id, title, status, copilot_package_id, created_at, updated_at \
          FROM tasks WHERE project_id = $1 AND organization_id = $2 ORDER BY created_at DESC",
     )
     .bind(params.project_id)
@@ -63,8 +58,6 @@ pub async fn list_tasks(
             workspace_id: row.get("workspace_id"),
             title: row.get("title"),
             status: row.get("status"),
-            model_provider: row.get("model_provider"),
-            model: row.get("model"),
             copilot_package_id: row.get("copilot_package_id"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
@@ -88,12 +81,6 @@ pub async fn create_task(
             Json(PlatformError::bad_request("title must not be empty")),
         ));
     }
-    let requested_selection = normalize_model_selection(req.model_provider, req.model)?;
-    let selection = match requested_selection {
-        Some(selection) => Some(selection),
-        None => load_default_model_selection(&state).await?,
-    };
-
     require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
     let copilot_selection = copilots
         .task_selection(req.copilot_package_id.as_deref())
@@ -102,12 +89,11 @@ pub async fn create_task(
 
     let row = sqlx::query(
         "INSERT INTO tasks \
-         (organization_id, project_id, workspace_id, created_by, title, model_provider, model, \
-          copilot_package_id) \
-         SELECT project.organization_id, project.id, workspace.id, $4, $2, $5, $6, $7 \
+         (organization_id, project_id, workspace_id, created_by, title, copilot_package_id) \
+         SELECT project.organization_id, project.id, workspace.id, $4, $2, $5 \
          FROM projects project \
          JOIN profiles runtime_profile ON runtime_profile.organization_id = project.organization_id \
-           AND runtime_profile.owner_user_id = $4 AND runtime_profile.runtime_key = $8 \
+           AND runtime_profile.owner_user_id = $4 AND runtime_profile.runtime_key = $6 \
            AND runtime_profile.status = 'active' \
          JOIN workspaces workspace ON workspace.id = $3 \
            AND workspace.organization_id = project.organization_id \
@@ -120,16 +106,13 @@ pub async fn create_task(
           AND workspace_grant.user_id = $4 \
           AND workspace_grant.profile_id = runtime_profile.id \
           AND workspace_grant.role IN ('owner', 'write') \
-         WHERE project.id = $1 AND project.organization_id = $9 \
-         RETURNING id, project_id, workspace_id, title, status, model_provider, model, \
-                   copilot_package_id, created_at, updated_at",
+         WHERE project.id = $1 AND project.organization_id = $7 \
+         RETURNING id, project_id, workspace_id, title, status, copilot_package_id, created_at, updated_at",
     )
     .bind(req.project_id)
     .bind(&req.title)
     .bind(req.workspace_id)
     .bind(auth.user_id)
-    .bind(selection.as_ref().map(|value| value.provider_id.as_str()))
-    .bind(selection.as_ref().map(|value| value.model_id.as_str()))
     .bind(copilot_selection.as_ref().map(|value| value.package_id.as_str()))
     .bind(&profile.runtime_key)
     .bind(auth.organization_id)
@@ -156,87 +139,99 @@ pub async fn create_task(
         workspace_id: row.get("workspace_id"),
         title: row.get("title"),
         status: row.get("status"),
-        model_provider: row.get("model_provider"),
-        model: row.get("model"),
         copilot_package_id: row.get("copilot_package_id"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }))
 }
 
-/// PUT /api/tasks/:id/model-selection — persist the Provider/model pair that
-/// belongs to this Thread. This does not alter any other existing Thread.
+/// PUT /api/tasks/:id/model-selection — update a materialized Thread's model
+/// without permitting a cross-Provider mutation.
 pub async fn update_model_selection(
     auth: AuthenticatedUser,
     State(state): State<AppState>,
     Path(task_id): Path<Uuid>,
-    Extension(providers): Extension<Arc<dyn AuthorizedProviderOperations>>,
-    Json(request): Json<UpdateTaskModelSelectionRequest>,
-) -> ApiResult<ModelSelection> {
-    let selection = normalize_model_selection(Some(request.provider_id), Some(request.model_id))?
-        .expect("request contains both model selection fields");
-    let catalog = providers
-        .list(ProviderActor {
-            user_id: auth.user_id,
-            organization_id: auth.organization_id,
-        })
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(PlatformError::internal(
-                    "Provider catalog is temporarily unavailable",
-                )),
-            )
-        })?;
-    let provider = catalog
-        .data
-        .iter()
-        .find(|provider| provider.id == selection.provider_id)
-        .ok_or_else(|| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(PlatformError::bad_request(
-                    "selected Provider does not exist",
-                )),
-            )
-        })?;
-    if !provider.models.is_empty()
-        && !provider
-            .models
-            .iter()
-            .any(|model| model.model_id == selection.model_id && model.show_in_picker)
-    {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(PlatformError::bad_request(
-                "selected model is not available for this Provider",
-            )),
-        ));
-    }
-    let updated = sqlx::query(
-        "UPDATE tasks SET model_provider = $1, model = $2, updated_at = now() \
-         WHERE id = $3 AND organization_id = $4 \
-         RETURNING id",
+    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Extension(profile): Extension<RuntimeProfileBinding>,
+    Json(request): Json<UpdateThreadModelSettingsRequest>,
+) -> ApiResult<ThreadModelSettingsUpdateResponse> {
+    let (provider_id, model_id) =
+        normalize_thread_model_settings(request.provider_id, request.model_id)?;
+    require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
+    let run = sqlx::query(
+        "SELECT r.codex_thread_id, r.workspace_id, w.root_path \
+         FROM runs r JOIN tasks t ON t.id = r.task_id \
+           AND t.organization_id = r.organization_id \
+           AND t.workspace_id = r.workspace_id \
+         JOIN workspaces w ON w.id = r.workspace_id \
+           AND w.organization_id = r.organization_id \
+           AND w.state IN ('ready', 'retained') \
+         JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = w.id \
+           AND workspace_grant.organization_id = w.organization_id \
+           AND workspace_grant.user_id = $3 AND workspace_grant.profile_id = w.profile_id \
+           AND workspace_grant.role IN ('owner', 'write') \
+         WHERE r.task_id = $1 AND r.organization_id = $2 AND r.requested_by = $3 \
+           AND r.codex_thread_id IS NOT NULL \
+           AND r.status IN ('running', 'recovery_pending', 'completed') \
+         ORDER BY CASE WHEN r.status IN ('running', 'recovery_pending') THEN 0 ELSE 1 END, \
+                  r.created_at DESC LIMIT 1",
     )
-    .bind(&selection.provider_id)
-    .bind(&selection.model_id)
     .bind(task_id)
     .bind(auth.organization_id)
+    .bind(auth.user_id)
     .fetch_optional(&state.db)
     .await
     .map_err(database_error)?
-    .is_some();
-    if !updated {
-        return Err((
+    .ok_or_else(|| {
+        (
             StatusCode::NOT_FOUND,
-            Json(PlatformError::not_found(format!(
-                "task {task_id} not found"
-            ))),
+            Json(PlatformError::not_found(
+                "materialized Task Thread was not found",
+            )),
+        )
+    })?;
+    let thread_id: String = run.get("codex_thread_id");
+    let workspace = AuthorizedWorkspace {
+        id: run.get::<Uuid, _>("workspace_id").to_string(),
+        root: run.get::<String, _>("root_path").into(),
+    };
+    update_materialized_thread_model(&*adapter, &workspace, &thread_id, provider_id, model_id)
+        .await
+        .map(Json)
+        .map_err(thread_settings_runtime_error)
+}
+
+async fn update_materialized_thread_model(
+    adapter: &dyn CodexAdapter,
+    workspace: &AuthorizedWorkspace,
+    thread_id: &str,
+    provider_id: String,
+    model_id: String,
+) -> Result<ThreadModelSettingsUpdateResponse, open_web_codex_adapter::AdapterError> {
+    let before = adapter
+        .read_thread_model_settings(workspace, thread_id)
+        .await?;
+    if before.model_provider != provider_id {
+        return Ok(ThreadModelSettingsUpdateResponse::RequiresNewThread {
+            provider_id,
+            model_id,
+        });
+    }
+    adapter
+        .update_thread_model(workspace, thread_id, &model_id)
+        .await?;
+    let after = adapter
+        .read_thread_model_settings(workspace, thread_id)
+        .await?;
+    if after.model_provider != before.model_provider || after.model != model_id {
+        return Err(open_web_codex_adapter::AdapterError::Rpc(
+            "Runtime did not confirm the Thread model update".to_string(),
         ));
     }
-    persist_default_model_selection(&state, auth.user_id, &selection).await?;
-    Ok(Json(selection))
+    Ok(ThreadModelSettingsUpdateResponse::Updated {
+        provider_id: after.model_provider,
+        model_id: after.model,
+    })
 }
 
 /// GET /api/tasks/:id/events — list persisted run events for a task.
@@ -383,7 +378,7 @@ pub async fn send_message(
     // Resolve the server-owned workspace; the browser never supplies a path.
     let active_run = sqlx::query(
         "SELECT r.id, r.status, r.codex_thread_id, r.workspace_id, w.profile_id, w.root_path, \
-                t.title, t.model_provider, t.model, t.copilot_package_id \
+                t.title, t.copilot_package_id \
          FROM runs r JOIN tasks t ON t.id = r.task_id \
            AND t.organization_id = r.organization_id \
            AND t.workspace_id = r.workspace_id \
@@ -450,20 +445,6 @@ pub async fn send_message(
             .await
             .map_err(super::runs::orchestrator_error)?;
     }
-    if req.model.is_some() != req.model_provider.is_some() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(PlatformError::bad_request(
-                "model and model_provider must be selected together",
-            )),
-        ));
-    }
-    let selection = if req.model.is_some() {
-        normalize_model_selection(req.model_provider.clone(), req.model.clone())?
-    } else {
-        normalize_model_selection(active_run.get("model_provider"), active_run.get("model"))?
-    };
-    let persist_requested_selection = req.model.is_some();
     let message_text = selected_map_card_turn_text(
         &state,
         auth.organization_id,
@@ -490,8 +471,6 @@ pub async fn send_message(
             &thread_id,
             &message_text,
             &TurnOptions {
-                model: selection.as_ref().map(|value| value.model_id.clone()),
-                model_provider: selection.as_ref().map(|value| value.provider_id.clone()),
                 effort: req.effort,
                 service_tier: req.service_tier,
                 access_mode: req.access_mode,
@@ -529,23 +508,6 @@ pub async fn send_message(
             )
         })?
         .to_string();
-    if persist_requested_selection {
-        let selection = selection
-            .as_ref()
-            .expect("validated request selection remains available");
-        sqlx::query(
-            "UPDATE tasks SET model_provider = $1, model = $2, updated_at = now() \
-             WHERE id = $3 AND organization_id = $4",
-        )
-        .bind(&selection.provider_id)
-        .bind(&selection.model_id)
-        .bind(task_id)
-        .bind(auth.organization_id)
-        .execute(&state.db)
-        .await
-        .map_err(database_error)?;
-        persist_default_model_selection(&state, auth.user_id, selection).await?;
-    }
     if let Err(error) = sqlx::query(
         "WITH updated_run AS (
              UPDATE runs SET status = 'running', active_turn_id = $1,
@@ -728,8 +690,7 @@ pub async fn get_task(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Task> {
     let row = sqlx::query(
-        "SELECT id, project_id, workspace_id, title, status, model_provider, model, \
-                copilot_package_id, created_at, updated_at \
+        "SELECT id, project_id, workspace_id, title, status, copilot_package_id, created_at, updated_at \
          FROM tasks WHERE id = $1 AND organization_id = $2",
     )
     .bind(id)
@@ -755,8 +716,6 @@ pub async fn get_task(
         workspace_id: row.get("workspace_id"),
         title: row.get("title"),
         status: row.get("status"),
-        model_provider: row.get("model_provider"),
-        model: row.get("model"),
         copilot_package_id: row.get("copilot_package_id"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
@@ -785,41 +744,29 @@ fn copilot_selection_error(error: CopilotInstallationError) -> (StatusCode, Json
     }
 }
 
-fn normalize_model_selection(
-    provider_id: Option<String>,
-    model_id: Option<String>,
-) -> Result<Option<ModelSelection>, (StatusCode, Json<PlatformError>)> {
-    match (provider_id, model_id) {
-        (None, None) => Ok(None),
-        (Some(provider_id), Some(model_id)) => {
-            let provider_id = provider_id.trim();
-            let model_id = model_id.trim();
-            let invalid = provider_id.is_empty()
-                || model_id.is_empty()
-                || provider_id.len() > 200
-                || model_id.len() > 300
-                || provider_id
-                    .chars()
-                    .chain(model_id.chars())
-                    .any(|character| matches!(character, '\0' | '\n' | '\r'));
-            if invalid {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(PlatformError::bad_request("model selection is invalid")),
-                ));
-            }
-            Ok(Some(ModelSelection {
-                provider_id: provider_id.to_string(),
-                model_id: model_id.to_string(),
-            }))
-        }
-        _ => Err((
+fn normalize_thread_model_settings(
+    provider_id: String,
+    model_id: String,
+) -> Result<(String, String), (StatusCode, Json<PlatformError>)> {
+    let provider_id = provider_id.trim();
+    let model_id = model_id.trim();
+    let invalid = provider_id.is_empty()
+        || model_id.is_empty()
+        || provider_id.len() > 200
+        || model_id.len() > 300
+        || provider_id
+            .chars()
+            .chain(model_id.chars())
+            .any(|character| matches!(character, '\0' | '\n' | '\r'));
+    if invalid {
+        return Err((
             StatusCode::BAD_REQUEST,
             Json(PlatformError::bad_request(
-                "model and model_provider must be selected together",
+                "Thread model settings are invalid",
             )),
-        )),
+        ));
     }
+    Ok((provider_id.to_string(), model_id.to_string()))
 }
 
 fn suggested_thread_name(current_name: &str, message: &str) -> Option<String> {
@@ -840,36 +787,15 @@ fn suggested_thread_name(current_name: &str, message: &str) -> Option<String> {
     }
 }
 
-async fn load_default_model_selection(
-    state: &AppState,
-) -> Result<Option<ModelSelection>, (StatusCode, Json<PlatformError>)> {
-    let stored = get_global(&state.db, MODEL_SELECTION_CONFIG_KEY)
-        .await
-        .map_err(database_error)?;
-    Ok(stored.and_then(|stored| serde_json::from_value(stored.value).ok()))
-}
-
-async fn persist_default_model_selection(
-    state: &AppState,
-    user_id: Uuid,
-    selection: &ModelSelection,
-) -> Result<(), (StatusCode, Json<PlatformError>)> {
-    put_global(
-        &state.db,
-        MODEL_SELECTION_CONFIG_KEY,
-        serde_json::to_value(selection).map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(PlatformError::internal(
-                    "model selection could not be encoded",
-                )),
-            )
-        })?,
-        user_id,
+fn thread_settings_runtime_error(
+    _: open_web_codex_adapter::AdapterError,
+) -> (StatusCode, Json<PlatformError>) {
+    (
+        StatusCode::BAD_GATEWAY,
+        Json(PlatformError::internal(
+            "Codex Runtime could not read or update Thread settings",
+        )),
     )
-    .await
-    .map_err(database_error)?;
-    Ok(())
 }
 
 fn database_error(_: sqlx::Error) -> (StatusCode, Json<PlatformError>) {
@@ -881,19 +807,103 @@ fn database_error(_: sqlx::Error) -> (StatusCode, Json<PlatformError>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_model_selection, suggested_thread_name};
+    use super::{
+        normalize_thread_model_settings, suggested_thread_name, update_materialized_thread_model,
+    };
+    use open_web_codex_adapter::fake::FakeCodexAdapter;
+    use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter};
+    use open_web_codex_platform_contracts::ThreadModelSettingsUpdateResponse;
+    use std::path::PathBuf;
 
     #[test]
-    fn model_selection_requires_a_provider_model_pair() {
-        assert!(normalize_model_selection(None, None).unwrap().is_none());
-        assert!(normalize_model_selection(
-            Some("deepseek".to_string()),
-            Some("deepseek-v4-flash".to_string()),
+    fn thread_model_settings_require_nonempty_bounded_values() {
+        assert!(normalize_thread_model_settings(
+            "deepseek".to_string(),
+            "deepseek-v4-flash".to_string(),
         )
-        .unwrap()
-        .is_some());
-        assert!(normalize_model_selection(Some("deepseek".to_string()), None,).is_err());
-        assert!(normalize_model_selection(None, Some("deepseek-v4-flash".to_string()),).is_err());
+        .is_ok());
+        assert!(normalize_thread_model_settings(" ".to_string(), "model".to_string(),).is_err());
+        assert!(
+            normalize_thread_model_settings("provider".to_string(), "\n".to_string(),).is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn updates_only_the_model_of_a_same_provider_thread() {
+        let adapter = FakeCodexAdapter::new();
+        let workspace = AuthorizedWorkspace {
+            id: "workspace".to_string(),
+            root: PathBuf::from("/tmp"),
+        };
+        let thread = adapter
+            .start_thread(&workspace, None)
+            .await
+            .expect("start fake Thread");
+
+        let result = update_materialized_thread_model(
+            &adapter,
+            &workspace,
+            &thread.thread_id,
+            "mock_provider".to_string(),
+            "mock-model-updated".to_string(),
+        )
+        .await
+        .expect("same-provider model update");
+
+        assert_eq!(
+            result,
+            ThreadModelSettingsUpdateResponse::Updated {
+                provider_id: "mock_provider".to_string(),
+                model_id: "mock-model-updated".to_string(),
+            }
+        );
+        assert_eq!(adapter.thread_model_update_count().await, 1);
+        assert_eq!(
+            adapter
+                .read_thread_model_settings(&workspace, &thread.thread_id)
+                .await
+                .expect("read updated fake Thread settings")
+                .model,
+            "mock-model-updated"
+        );
+    }
+
+    #[tokio::test]
+    async fn cross_provider_model_selection_requires_a_new_thread_without_mutation() {
+        let adapter = FakeCodexAdapter::new();
+        let workspace = AuthorizedWorkspace {
+            id: "workspace".to_string(),
+            root: PathBuf::from("/tmp"),
+        };
+        let thread = adapter
+            .start_thread(&workspace, None)
+            .await
+            .expect("start fake Thread");
+
+        let result = update_materialized_thread_model(
+            &adapter,
+            &workspace,
+            &thread.thread_id,
+            "other_provider".to_string(),
+            "other-model".to_string(),
+        )
+        .await
+        .expect("cross-provider selection must be explicit");
+
+        assert_eq!(
+            result,
+            ThreadModelSettingsUpdateResponse::RequiresNewThread {
+                provider_id: "other_provider".to_string(),
+                model_id: "other-model".to_string(),
+            }
+        );
+        assert_eq!(adapter.thread_model_update_count().await, 0);
+        let settings = adapter
+            .read_thread_model_settings(&workspace, &thread.thread_id)
+            .await
+            .expect("read unchanged fake Thread settings");
+        assert_eq!(settings.model_provider, "mock_provider");
+        assert_eq!(settings.model, "mock-model");
     }
 
     #[test]

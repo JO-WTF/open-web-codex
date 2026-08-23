@@ -1152,7 +1152,6 @@ mod tests {
                     base_url: "https://custom.example/v1".to_string(),
                     wire_api: "chat".to_string(),
                     credentials: ProviderCredentialInput::NoCredential,
-                    supports_function_tools: Some(false),
                     select: false,
                 },
             )
@@ -1175,7 +1174,6 @@ mod tests {
                     base_url: "https://custom.example/v2".to_string(),
                     wire_api: "responses".to_string(),
                     credentials: ProviderCredentialInput::Preserve,
-                    supports_function_tools: Some(true),
                     select: false,
                 },
             )
@@ -1198,7 +1196,6 @@ mod tests {
                     base_url: "https://custom.example/v3".to_string(),
                     wire_api: "chat".to_string(),
                     credentials: ProviderCredentialInput::Preserve,
-                    supports_function_tools: None,
                     select: false,
                 },
             )
@@ -1446,7 +1443,6 @@ mod tests {
                     credentials: ProviderCredentialInput::Direct {
                         api_key: "direct-secret".to_string(),
                     },
-                    supports_function_tools: Some(false),
                     select: true,
                 },
             )

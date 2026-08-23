@@ -39,8 +39,6 @@ export type Task = {
   workspace_id: string;
   title: string;
   status: string;
-  model_provider: string | null;
-  model: string | null;
   copilot_package_id: string | null;
   created_at: string;
   updated_at: string;
@@ -549,6 +547,8 @@ export type WorkspaceCommitDiff = {
 export type ProviderModel = {
   modelId: string;
   modelName?: string | null;
+  maxTokenLen?: number | null;
+  maxOutputTokens?: number | null;
   showInPicker: boolean;
   contextWindow?: number | null;
   supportsSearchTool: boolean;
@@ -557,24 +557,28 @@ export type ProviderModel = {
 export type Provider = {
   id: string;
   name: string;
+  baseUrl: string | null;
+  envKey: string | null;
   wireApi: string;
   supportsFunctionTools: boolean;
   kind: "builtIn" | "local" | "custom";
   isCurrent: boolean;
   modelCount: number;
+  canEdit: boolean;
+  canDelete: boolean;
+  canFetchModels: boolean;
   models: ProviderModel[];
 };
 
 export type ProviderCatalog = {
   data: Provider[];
   currentProviderId: string;
-  currentModelId?: string | null;
+  currentModelId: string | null;
 };
 
-export type ModelSelection = {
-  providerId: string;
-  modelId: string;
-};
+export type ThreadModelSettingsUpdateResponse =
+  | { type: "updated"; providerId: string; modelId: string }
+  | { type: "requiresNewThread"; providerId: string; modelId: string };
 
 export type ProfileLoginStart = { loginId: string; authUrl: string };
 export type ProfileLoginCancel = { canceled: boolean; status: string };

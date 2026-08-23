@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::{
     AdapterError, AuthorizedWorkspace, CanceledProfileLogin, CodexAdapter, HealthStatus,
     ProfileLoginStatus, ProfileMutation, ProfileQuery, ReviewTarget, StartedProfileLogin,
-    StartedThread, TurnOptions,
+    StartedThread, ThreadModelSettings, TurnOptions,
 };
 /// A tracked mock thread for list/show responses.
 #[derive(Clone)]
@@ -21,6 +21,8 @@ struct MockThread {
     id: String,
     ws_id: String,
     developer_instructions: Option<String>,
+    model_provider: String,
+    model: String,
     status: String,
     msg_count: u64,
     updated_at: i64,
@@ -37,6 +39,7 @@ struct FakeState {
 /// In-memory Codex adapter that simulates workspace, thread and event flows.
 pub struct FakeCodexAdapter {
     state: Arc<Mutex<FakeState>>,
+    thread_model_update_calls: Arc<Mutex<u64>>,
     active_login_id: Arc<Mutex<Option<String>>>,
     login_statuses: Arc<Mutex<HashMap<String, ProfileLoginStatus>>>,
     notify: Arc<tokio::sync::Notify>,
@@ -58,6 +61,7 @@ impl FakeCodexAdapter {
                 threads: vec![],
                 pending_events: vec![],
             })),
+            thread_model_update_calls: Arc::new(Mutex::new(0)),
             active_login_id: Arc::new(Mutex::new(None)),
             login_statuses: Arc::new(Mutex::new(HashMap::new())),
             notify: Arc::new(tokio::sync::Notify::new()),
@@ -81,6 +85,10 @@ impl FakeCodexAdapter {
         }));
         drop(state);
         self
+    }
+
+    pub async fn thread_model_update_count(&self) -> u64 {
+        *self.thread_model_update_calls.lock().await
     }
 
     /// Helper: push an SSE frame event and notify the event loop.
@@ -163,6 +171,8 @@ impl CodexAdapter for FakeCodexAdapter {
                 id: thread_id.clone(),
                 ws_id: workspace.id.clone(),
                 developer_instructions: None,
+                model_provider: "mock_provider".to_string(),
+                model: "mock-model".to_string(),
                 status: "active".into(),
                 msg_count: 0,
                 updated_at: now.timestamp_millis(),
@@ -207,9 +217,48 @@ impl CodexAdapter for FakeCodexAdapter {
                 "updatedAt": thread.updated_at / 1000,
                 "status": { "type": if thread.status == "active" { "active" } else { "idle" } },
                 "developerInstructions": thread.developer_instructions,
+                "modelProvider": thread.model_provider,
+                "model": thread.model,
                 "turns": [],
             }
         }))
+    }
+
+    async fn read_thread_model_settings(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<ThreadModelSettings, AdapterError> {
+        let state = self.state.lock().await;
+        let thread = state
+            .threads
+            .iter()
+            .find(|thread| thread.id == thread_id && thread.ws_id == workspace.id)
+            .ok_or_else(|| AdapterError::Rpc("fake Thread was not found".to_string()))?;
+        Ok(ThreadModelSettings {
+            model_provider: thread.model_provider.clone(),
+            model: thread.model.clone(),
+        })
+    }
+
+    async fn update_thread_model(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+        model: &str,
+    ) -> Result<(), AdapterError> {
+        if model.trim().is_empty() {
+            return Err(AdapterError::Internal("model is required".to_string()));
+        }
+        let mut state = self.state.lock().await;
+        let thread = state
+            .threads
+            .iter_mut()
+            .find(|thread| thread.id == thread_id && thread.ws_id == workspace.id)
+            .ok_or_else(|| AdapterError::Rpc("fake Thread was not found".to_string()))?;
+        thread.model = model.trim().to_string();
+        *self.thread_model_update_calls.lock().await += 1;
+        Ok(())
     }
 
     async fn list_thread_turns(

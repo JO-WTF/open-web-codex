@@ -76,6 +76,7 @@ grep -F -- '--table=platform_configuration_secrets' "$record_file" >/dev/null
 grep -F 'pg_restore --dbname=postgresql://fixture@localhost/rebuild_fixture --data-only --exit-on-error' "$record_file" >/dev/null
 grep -F "'maps.active_credential'" "$record_file" >/dev/null
 grep -F "'maps.mapbox_public_access_token'" "$record_file" >/dev/null
+! grep -F "'models.default_selection'" "$record_file" >/dev/null
 
 : >"$record_file"
 if REBUILD_TEST_RECORD="$record_file" \

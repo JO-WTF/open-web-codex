@@ -79,8 +79,6 @@ pub struct Task {
     pub workspace_id: Uuid,
     pub title: String,
     pub status: String,
-    pub model_provider: Option<String>,
-    pub model: Option<String>,
     /// Immutable application-discovered Copilot package selected for this
     /// Task. The browser never submits a package path or Runtime config.
     pub copilot_package_id: Option<String>,
@@ -97,25 +95,30 @@ pub struct CreateTaskRequest {
     pub workspace_id: Uuid,
     pub title: String,
     #[serde(default)]
-    pub model_provider: Option<String>,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
     pub copilot_package_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelSelection {
-    pub provider_id: String,
-    pub model_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UpdateTaskModelSelectionRequest {
+pub struct UpdateThreadModelSettingsRequest {
     pub provider_id: String,
     pub model_id: String,
+}
+
+/// The platform never changes a materialized Thread's Provider. A request for
+/// another Provider must create a new Thread after the Profile default has
+/// been selected through the Provider API.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ThreadModelSettingsUpdateResponse {
+    Updated {
+        provider_id: String,
+        model_id: String,
+    },
+    RequiresNewThread {
+        provider_id: String,
+        model_id: String,
+    },
 }
 
 // ── Auth ────────────────────────────────────────────────────────────
@@ -1049,10 +1052,6 @@ pub struct SendMessageRequest {
     #[serde(default)]
     pub text: String,
     #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub model_provider: Option<String>,
-    #[serde(default)]
     pub effort: Option<String>,
     #[serde(default)]
     pub service_tier: Option<String>,
@@ -1666,11 +1665,6 @@ pub struct UpsertProviderRequest {
     pub base_url: String,
     pub wire_api: String,
     pub credentials: ProviderCredentialInput,
-    /// Browser-projected product declaration. The Provider save boundary writes
-    /// Chat as enabled and Responses as disabled; the Runtime never infers this
-    /// capability from the transport name.
-    #[serde(default)]
-    pub supports_function_tools: Option<bool>,
     #[serde(default)]
     pub select: bool,
 }

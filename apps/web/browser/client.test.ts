@@ -65,7 +65,6 @@ describe("PlatformClient", () => {
       "project-1",
       "workspace-1",
       "Plan the network",
-      null,
       { packageId: "warehouse-network-single-agent" },
     );
 
@@ -73,8 +72,6 @@ describe("PlatformClient", () => {
       project_id: "project-1",
       workspace_id: "workspace-1",
       title: "Plan the network",
-      model_provider: null,
-      model: null,
       copilot_package_id: "warehouse-network-single-agent",
     });
   });
@@ -193,10 +190,7 @@ describe("PlatformClient", () => {
     const client = new PlatformClient({ baseUrl: "https://platform.test", token: "session-token" });
 
     await client.startRun("task/one", {});
-    await expect(client.sendMessage("task/one", "hello", {
-      model: "deepseek-v4-flash",
-      modelProvider: "deepseek",
-    })).resolves.toMatchObject({
+    await expect(client.sendMessage("task/one", "hello")).resolves.toMatchObject({
       thread_id: "thread-1",
       turn_id: "turn-1",
       thread_name: "hello",
@@ -211,8 +205,6 @@ describe("PlatformClient", () => {
     expect(fetchMock.mock.calls[1]?.[0]).toBe("https://platform.test/api/tasks/task%2Fone/messages");
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
       text: "hello",
-      model: "deepseek-v4-flash",
-      model_provider: "deepseek",
     });
     expect(fetchMock.mock.calls.every((call) => !String(call[0]).includes("/api/rpc"))).toBe(true);
   });

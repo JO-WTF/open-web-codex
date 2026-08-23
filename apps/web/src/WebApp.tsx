@@ -208,63 +208,116 @@ function parseThreadUpdatedAt(value: unknown): number {
   return 0;
 }
 
-function parseModelProviderCatalog(value: unknown): {
+export function parseModelProviderCatalog(value: unknown): {
   providers: ModelProviderSummary[];
   currentProviderId: string | null;
   currentModelId: string | null;
 } {
   const payload = unwrapWebRpcResult(value);
-  const record = payload && typeof payload === "object"
-    ? payload as Record<string, unknown>
-    : {};
-  const currentProviderId = typeof record.currentProviderId === "string"
-    ? record.currentProviderId
-    : null;
-  const currentModelId = typeof record.currentModelId === "string"
-    ? record.currentModelId
-    : null;
-  const rawProviders = Array.isArray(record.data) ? record.data : [];
-  const providers = rawProviders.flatMap((value): ModelProviderSummary[] => {
-    if (!value || typeof value !== "object") return [];
-    const provider = value as Record<string, unknown>;
-    if (typeof provider.id !== "string" || typeof provider.name !== "string") return [];
-    if (typeof provider.supportsFunctionTools !== "boolean") {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Invalid Provider model catalog response");
+  }
+  const record = payload as Record<string, unknown>;
+  const requiredString = (source: Record<string, unknown>, key: string) => {
+    const value = source[key];
+    if (typeof value !== "string" || !value.trim()) {
       throw new Error("Invalid Provider model catalog response");
     }
-    const models = Array.isArray(provider.models) ? provider.models.flatMap((value) => {
-      if (!value || typeof value !== "object") return [];
-      const model = value as Record<string, unknown>;
-      if (typeof model.modelId !== "string" || model.showInPicker === false) return [];
-      return [{
-        modelId: model.modelId,
-        modelName: typeof model.modelName === "string" ? model.modelName : null,
-        contextWindow: typeof model.contextWindow === "number" ? model.contextWindow : null,
-        supportsSearchTool: model.supportsSearchTool === true,
-      }];
-    }) : [];
-    return [{
-      id: provider.id,
-      name: provider.name,
-      kind: provider.kind === "local" || provider.kind === "custom" ? provider.kind : "builtIn",
-      isCurrent: provider.id === currentProviderId,
-      modelCount: models.length,
-      baseUrl: typeof provider.baseUrl === "string" ? provider.baseUrl : null,
-      envKey: typeof provider.envKey === "string" ? provider.envKey : null,
-      wireApi: typeof provider.wireApi === "string" ? provider.wireApi : "responses",
-      supportsFunctionTools: provider.supportsFunctionTools,
-      canEdit: provider.canEdit === true,
-      canDelete: provider.canDelete === true,
-      canFetchModels: provider.canFetchModels === true,
+    return value;
+  };
+  const requiredNullableString = (source: Record<string, unknown>, key: string) => {
+    if (!(key in source)) throw new Error("Invalid Provider model catalog response");
+    const value = source[key];
+    if (value === null) return null;
+    if (typeof value === "string") return value;
+    throw new Error("Invalid Provider model catalog response");
+  };
+  const requiredNullableNumber = (source: Record<string, unknown>, key: string) => {
+    if (!(key in source)) throw new Error("Invalid Provider model catalog response");
+    const value = source[key];
+    if (value === null) return null;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    throw new Error("Invalid Provider model catalog response");
+  };
+  const requiredBoolean = (source: Record<string, unknown>, key: string) => {
+    if (typeof source[key] !== "boolean") {
+      throw new Error("Invalid Provider model catalog response");
+    }
+    return source[key] as boolean;
+  };
+  if (!Array.isArray(record.data)) throw new Error("Invalid Provider model catalog response");
+  const currentProviderId = requiredString(record, "currentProviderId");
+  const currentModelId = requiredNullableString(record, "currentModelId");
+  if (currentModelId !== null && !currentModelId.trim()) {
+    throw new Error("Invalid Provider model catalog response");
+  }
+  const providerIds = new Set<string>();
+  const providers = record.data.map((entry): ModelProviderSummary => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error("Invalid Provider model catalog response");
+    }
+    const provider = entry as Record<string, unknown>;
+    const id = requiredString(provider, "id");
+    if (providerIds.has(id)) throw new Error("Invalid Provider model catalog response");
+    providerIds.add(id);
+    const kind = provider.kind;
+    if (kind !== "builtIn" && kind !== "local" && kind !== "custom") {
+      throw new Error("Invalid Provider model catalog response");
+    }
+    if (!Array.isArray(provider.models)
+      || !Number.isSafeInteger(provider.modelCount)
+      || provider.modelCount !== provider.models.length) {
+      throw new Error("Invalid Provider model catalog response");
+    }
+    const modelIds = new Set<string>();
+    const models = provider.models.map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        throw new Error("Invalid Provider model catalog response");
+      }
+      const model = entry as Record<string, unknown>;
+      const modelId = requiredString(model, "modelId");
+      if (modelIds.has(modelId)) throw new Error("Invalid Provider model catalog response");
+      modelIds.add(modelId);
+      return {
+        modelId,
+        modelName: requiredNullableString(model, "modelName"),
+        maxTokenLen: requiredNullableNumber(model, "maxTokenLen"),
+        maxOutputTokens: requiredNullableNumber(model, "maxOutputTokens"),
+        showInPicker: requiredBoolean(model, "showInPicker"),
+        contextWindow: requiredNullableNumber(model, "contextWindow"),
+        supportsSearchTool: requiredBoolean(model, "supportsSearchTool"),
+      };
+    });
+    const wireApi = requiredString(provider, "wireApi");
+    if (wireApi !== "chat" && wireApi !== "responses") {
+      throw new Error("Invalid Provider model catalog response");
+    }
+    return {
+      id,
+      name: requiredString(provider, "name"),
+      kind,
+      isCurrent: requiredBoolean(provider, "isCurrent"),
+      modelCount: provider.modelCount,
+      baseUrl: requiredNullableString(provider, "baseUrl"),
+      envKey: requiredNullableString(provider, "envKey"),
+      wireApi,
+      supportsFunctionTools: requiredBoolean(provider, "supportsFunctionTools"),
+      canEdit: requiredBoolean(provider, "canEdit"),
+      canDelete: requiredBoolean(provider, "canDelete"),
+      canFetchModels: requiredBoolean(provider, "canFetchModels"),
       models,
-    }];
+    };
   });
+  if (!providerIds.has(currentProviderId)) {
+    throw new Error("Invalid Provider model catalog response");
+  }
   return { providers, currentProviderId, currentModelId };
 }
 
 function modelSummariesForProvider(
   provider: ModelProviderSummary | undefined,
 ): ModelSummary[] {
-  return (provider?.models ?? []).map((model) => ({
+  return (provider?.models ?? []).filter((model) => model.showInPicker === true).map((model) => ({
     id: model.modelId,
     model: model.modelId,
     displayName: model.modelName ?? model.modelId,
@@ -298,59 +351,19 @@ function parseFetchedProviderCatalog(
   targetProviderId: string,
   requiredSelection: { providerId: string; modelId: string } | null,
 ): ParsedModelProviderCatalog | null {
-  const payload = unwrapWebRpcResult(value);
-  if (!payload || typeof payload !== "object") return null;
-  const record = payload as Record<string, unknown>;
-  if (!Array.isArray(record.data)) return null;
-  if (typeof record.currentProviderId !== "string" || !record.currentProviderId.trim()) return null;
-  if (record.currentModelId !== undefined
-    && record.currentModelId !== null
-    && (typeof record.currentModelId !== "string" || !record.currentModelId.trim())) {
-    return null;
-  }
-  const seenProviderIds = new Set<string>();
-  for (const candidate of record.data) {
-    if (!candidate || typeof candidate !== "object") return null;
-    const provider = candidate as Record<string, unknown>;
-    if (typeof provider.id !== "string" || !provider.id.trim()
-      || typeof provider.name !== "string" || !provider.name.trim()
-      || typeof provider.supportsFunctionTools !== "boolean"
-      || seenProviderIds.has(provider.id)) {
-      return null;
-    }
-    seenProviderIds.add(provider.id);
-    if (!Array.isArray(provider.models)) return null;
-    const seenModelIds = new Set<string>();
-    for (const model of provider.models) {
-      if (!model || typeof model !== "object") return null;
-      const modelRecord = model as Record<string, unknown>;
-      if (typeof modelRecord.modelId !== "string" || !modelRecord.modelId.trim()) return null;
-      if (seenModelIds.has(modelRecord.modelId)) return null;
-      seenModelIds.add(modelRecord.modelId);
-    }
-  }
-  if (!seenProviderIds.has(record.currentProviderId)) return null;
-  const target = record.data.find((candidate) => {
-    if (!candidate || typeof candidate !== "object") return false;
-    return (candidate as Record<string, unknown>).id === targetProviderId;
-  });
-  if (!target || typeof target !== "object") return null;
-  const targetRecord = target as Record<string, unknown>;
-  if (typeof targetRecord.name !== "string" || !targetRecord.name.trim()) return null;
-  if (!Array.isArray(targetRecord.models) || targetRecord.models.length === 0) return null;
-
-  const catalog = parseModelProviderCatalog(value);
-  if (catalog.providers.length !== record.data.length
-    || catalog.providers.some((provider) => !seenProviderIds.has(provider.id))) {
+  let catalog: ParsedModelProviderCatalog;
+  try {
+    catalog = parseModelProviderCatalog(value);
+  } catch {
     return null;
   }
   const parsedTarget = catalog.providers.find((provider) => provider.id === targetProviderId);
   if (!parsedTarget || (parsedTarget.models?.length ?? 0) === 0) return null;
   const parsedCurrentProvider = catalog.providers.find(
-    (provider) => provider.id === record.currentProviderId,
+    (provider) => provider.id === catalog.currentProviderId,
   );
-  if (record.currentModelId
-    && !parsedCurrentProvider?.models?.some((model) => model.modelId === record.currentModelId)) {
+  if (catalog.currentModelId
+    && !parsedCurrentProvider?.models?.some((model) => model.modelId === catalog.currentModelId)) {
     return null;
   }
   if (requiredSelection) {
@@ -394,7 +407,7 @@ function projectModelCatalogState(
     providerModels,
     selectedProviderModelId: selectedModelId && providerModels.some((model) => model.id === selectedModelId)
       ? selectedModelId
-      : providerModels[0]?.id ?? null,
+      : null,
   };
 }
 
@@ -495,6 +508,7 @@ export default function WebApp() {
     providerId: string;
     modelId: string;
   } | null>(null);
+  const startThreadRef = useRef<((workspaceId?: string) => Promise<string | null>) | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">(() =>
     localStorage.getItem("open-web-codex:theme") === "light" ? "light" : "dark",
   );
@@ -566,64 +580,52 @@ export default function WebApp() {
     providerId: string,
     modelId: string,
   ) => {
-    if (!threadId || threadId.startsWith("pending-thread:")) return;
-    await client.updateThreadModelSelection(workspaceId, threadId, providerId, modelId);
+    if (!threadId || threadId.startsWith("pending-thread:")) return null;
+    const result = await client.updateThreadModelSelection(workspaceId, threadId, providerId, modelId);
+    if (result.type === "requiresNewThread") return result;
     setThreadsByWorkspace((previous) => ({
       ...previous,
       [workspaceId]: (previous[workspaceId] ?? []).map((thread) =>
         thread.id === threadId
-          ? { ...thread, modelProvider: providerId, model: modelId }
+          ? { ...thread, modelProvider: result.providerId, model: result.modelId }
           : thread),
     }));
     if (activeThreadIdRef.current === threadId) {
-      activeThreadModelSelectionRef.current = { threadId, providerId, modelId };
+      activeThreadModelSelectionRef.current = {
+        threadId,
+        providerId: result.providerId,
+        modelId: result.modelId,
+      };
     }
+    return result;
   }, [client]);
 
-  const selectProviderAndDefaultModel = useCallback(async (providerId: string) => {
+  const selectProvider = useCallback(async (providerId: string) => {
     const workspaceId = activeWorkspaceId;
     if (!workspaceId) return;
-    const previousProviderId = currentProviderId;
-    let switched = false;
     setCatalogLoading(true);
     setCatalogError(null);
     try {
-      await client.writeModelProvider({ action: "select", id: providerId });
-      switched = true;
-      const modelResponse = await client.listModels(workspaceId);
-      const nextModels = parseModelListResponse(modelResponse);
-      const nextModel = nextModels.find((model) => model.isDefault) ?? nextModels[0];
-      if (!nextModel) {
-        throw new Error("This Provider has no selectable models");
-      }
-      await client.selectProviderModel(workspaceId, providerId, nextModel.model);
-      await persistThreadModelSelection(
-        workspaceId,
-        activeThreadId,
-        providerId,
-        nextModel.model,
+      const response = await client.writeModelProvider({ action: "select", id: providerId });
+      const next = projectModelCatalogState(
+        parseModelProviderCatalog(response),
+        null,
+        null,
       );
-      setCurrentProviderId(providerId);
-      setProviderModels(nextModels);
-      setSelectedProviderModelId(nextModel.id);
-      await refreshModelCatalog();
-    } catch (error) {
-      if (switched && previousProviderId && previousProviderId !== providerId) {
-        try {
-          await client.writeModelProvider({
-            action: "select",
-            id: previousProviderId,
-          });
-          await refreshModelCatalog();
-        } catch {
-          // Keep the original selection error; Refresh remains available.
-        }
+      setModelProviders(next.providers);
+      setCurrentProviderId(next.currentProviderId);
+      setProviderModels(next.providerModels);
+      setSelectedProviderModelId(next.selectedProviderModelId);
+      if (!next.selectedProviderModelId) {
+        setCatalogError("Select a model for this Provider before starting.");
+        setProviderCatalogOpenRequest((request) => request + 1);
       }
+    } catch (error) {
       setCatalogError(error instanceof Error ? error.message : String(error));
     } finally {
       setCatalogLoading(false);
     }
-  }, [activeThreadId, activeWorkspaceId, client, currentProviderId, persistThreadModelSelection, refreshModelCatalog]);
+  }, [activeWorkspaceId, client]);
 
   const selectThreadModel = useCallback(async (modelId: string) => {
     const workspaceId = activeWorkspaceId;
@@ -636,12 +638,15 @@ export default function WebApp() {
     setCatalogError(null);
     try {
       await client.selectProviderModel(workspaceId, providerId, model);
-      await persistThreadModelSelection(
+      const result = await persistThreadModelSelection(
         workspaceId,
         activeThreadId,
         providerId,
         model,
       );
+      if (result?.type === "requiresNewThread") {
+        await startThreadRef.current?.(workspaceId);
+      }
     } catch (error) {
       setCatalogError(error instanceof Error ? error.message : String(error));
       await refreshModelCatalog();
@@ -2121,9 +2126,7 @@ export default function WebApp() {
             id: String(t.id ?? ""),
             label: normalizeThreadName(t.name ?? t.label) ?? "Thread",
             updatedAt: parseThreadUpdatedAt(t.updatedAt ?? t.updated_at),
-            modelProvider: typeof t.modelProvider === "string"
-              ? t.modelProvider
-              : typeof t.model_provider === "string" ? t.model_provider : null,
+            modelProvider: typeof t.modelProvider === "string" ? t.modelProvider : null,
             model: typeof t.model === "string" ? t.model : null,
             turnCount: typeof t.turnCount === "number" ? t.turnCount : undefined,
             status: parseThreadStatus(t.status),
@@ -2260,8 +2263,6 @@ export default function WebApp() {
      setProviderCatalogOpenRequest((request) => request + 1);
      return null;
    }
-   const providerId = currentProviderId;
-   const modelId = selectedModel.model;
    const temporaryId = retryTemporaryId
      ?? `pending-thread:${newLogId()}`;
    const startedAt = Date.now();
@@ -2305,8 +2306,6 @@ export default function WebApp() {
      await client.connectWorkspace(wid);
      const result = await client.startThread(wid, {
        operationId: temporaryId,
-       providerId,
-       modelId,
        copilot,
        onRunAccepted: showAcceptedStart,
      });
@@ -2326,9 +2325,7 @@ export default function WebApp() {
        : null;
      const createdProvider = typeof createdThread?.modelProvider === "string"
        ? createdThread.modelProvider
-       : typeof createdThread?.model_provider === "string"
-         ? createdThread.model_provider
-         : currentProviderId;
+       : currentProviderId;
      const createdModel = typeof createdThread?.model === "string"
        ? createdThread.model
        : providerModels.find((model) => model.id === selectedProviderModelId)?.model
@@ -2393,6 +2390,7 @@ export default function WebApp() {
      return null;
    }
   }, [activeWorkspaceId, appendLog, client, currentProviderId, providerModels, refreshThreads, selectedProviderModelId]);
+  startThreadRef.current = startThread;
 
   const archiveThread = useCallback(async (workspaceId: string, threadId: string) => {
     const thread = (threadsByWorkspace[workspaceId] ?? []).find((candidate) => candidate.id === threadId);
@@ -2433,13 +2431,10 @@ export default function WebApp() {
     setStopping(false);
     setBusy(true);
     try {
-      const selectedModel = providerModels.find((model) => model.id === selectedProviderModelId);
       const response = await client.sendUserMessage(
         targetWorkspaceId,
         targetThreadId,
         text,
-        selectedModel?.model ?? selectedProviderModelId,
-        currentProviderId,
         mapCardRef,
       );
       const payload = unwrapWebRpcResult(response);
@@ -2474,7 +2469,7 @@ export default function WebApp() {
     } finally {
       setBusy(false);
     }
-  }, [activeThreadId, activeWorkspaceId, appendLog, client, currentProviderId, providerModels, selectedProviderModelId]);
+  }, [activeThreadId, activeWorkspaceId, appendLog, client]);
 
   const sendMessage = useCallback(async () => {
     const text = draft.trim();
@@ -3103,7 +3098,7 @@ export default function WebApp() {
               }
               if (action === "upsert" && input.select === true && typeof input.id === "string") {
                 if (activeWorkspaceId) {
-                  await selectProviderAndDefaultModel(input.id);
+                  await selectProvider(input.id);
                 } else {
                   const catalog = parseModelProviderCatalog(response);
                   const next = projectModelCatalogState(catalog, null, null);
@@ -3130,7 +3125,7 @@ export default function WebApp() {
               setCatalogLoading(false);
             }
           }}
-          onSelectProvider={(providerId) => { void selectProviderAndDefaultModel(providerId); }}
+          onSelectProvider={(providerId) => { void selectProvider(providerId); }}
           selectedModelId={selectedProviderModelId}
           onSelectModel={(modelId) => { void selectThreadModel(modelId); }}
           providerCatalogOpenRequest={providerCatalogOpenRequest}

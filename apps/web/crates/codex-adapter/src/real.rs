@@ -14,7 +14,8 @@ use tokio::sync::RwLock;
 use crate::{
     AdapterError, AuthorizedWorkspace, CanceledProfileLogin, CodexAdapter, HealthStatus,
     ProfileLoginStatus, ProfileMutation, ProfileQuery, ReviewTarget, RuntimeThreadIdentity,
-    RuntimeThreadIdentitySidecar, StartedProfileLogin, StartedThread, TurnOptions,
+    RuntimeThreadIdentitySidecar, StartedProfileLogin, StartedThread, ThreadModelSettings,
+    TurnOptions,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,6 +142,47 @@ fn thread_fork_params(thread_id: &str, target_root: &str) -> Value {
         "cwd": target_root,
         "approvalPolicy": "on-request",
     })
+}
+
+fn thread_model_settings_resume_params(thread_id: &str) -> Value {
+    json!({ "threadId": thread_id, "excludeTurns": true })
+}
+
+fn turn_start_params(
+    thread_id: &str,
+    input: Vec<Value>,
+    workspace_root: &str,
+    read_only: bool,
+    options: &TurnOptions,
+) -> Value {
+    let mut params = json!({
+        "threadId": thread_id,
+        "input": input,
+        "cwd": workspace_root,
+        "approvalPolicy": "on-request",
+        "sandboxPolicy": turn_sandbox_policy(Path::new(workspace_root), read_only),
+    });
+    let object = params
+        .as_object_mut()
+        .expect("turn/start params are an object");
+    if let Some(effort) = options
+        .effort
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        object.insert("effort".to_string(), json!(effort));
+    }
+    if let Some(service_tier) = options
+        .service_tier
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        object.insert("serviceTier".to_string(), json!(service_tier));
+    }
+    if let Some(collaboration_mode) = &options.collaboration_mode {
+        object.insert("collaborationMode".to_string(), collaboration_mode.clone());
+    }
+    params
 }
 
 fn thread_resume_params(
@@ -423,6 +465,80 @@ impl RealCodexAdapter {
         Ok((workspace_root, runtime))
     }
 
+    /// Resume a Thread with no configuration overrides, while establishing the
+    /// same workspace binding invariant used by every Runtime operation.
+    async fn resume_thread_for_model_settings(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<Value, AdapterError> {
+        if thread_id.trim().is_empty() {
+            return Err(AdapterError::Internal("Thread id is required".to_string()));
+        }
+        let _runtime = self.prepare_runtime().await?;
+        let workspace_root = self.authorized_root(workspace)?;
+        if let Some(bound) = self.thread_workspaces.read().await.get(thread_id).cloned() {
+            if bound != *workspace {
+                return Err(AdapterError::Rpc(
+                    "Thread is not bound to the authorized workspace".to_string(),
+                ));
+            }
+        }
+        let response = self
+            .host
+            .request(
+                "thread/resume",
+                thread_model_settings_resume_params(thread_id),
+            )
+            .await?;
+        let returned_thread_id = response
+            .pointer("/thread/id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| AdapterError::Rpc("thread/resume omitted thread.id".to_string()))?;
+        if returned_thread_id != thread_id {
+            return Err(AdapterError::Rpc(
+                "thread/resume returned a different Thread".to_string(),
+            ));
+        }
+        let resumed_cwd = response
+            .pointer("/thread/cwd")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| AdapterError::Rpc("thread/resume omitted thread.cwd".to_string()))?;
+        let resumed_cwd = Path::new(resumed_cwd).canonicalize().map_err(|error| {
+            AdapterError::Rpc(format!("Runtime Thread cwd could not be resolved: {error}"))
+        })?;
+        if !resumed_cwd.starts_with(Path::new(&workspace_root)) {
+            return Err(AdapterError::Rpc(
+                "Runtime Thread cwd is outside its authorized Workspace".to_string(),
+            ));
+        }
+        self.thread_workspaces
+            .write()
+            .await
+            .insert(thread_id.to_string(), workspace.clone());
+        Ok(response)
+    }
+
+    async fn require_thread_model_settings_binding(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<(), AdapterError> {
+        if thread_id.trim().is_empty() {
+            return Err(AdapterError::Internal("Thread id is required".to_string()));
+        }
+        self.prepare_runtime().await?;
+        self.authorized_root(workspace)?;
+        match self.thread_workspaces.read().await.get(thread_id) {
+            Some(bound) if bound == workspace => Ok(()),
+            _ => Err(AdapterError::Rpc(
+                "Thread is not bound to the authorized workspace".to_string(),
+            )),
+        }
+    }
+
     async fn abandon_bound_unmaterialized_thread(
         &self,
         workspace: &AuthorizedWorkspace,
@@ -627,47 +743,7 @@ impl RealCodexAdapter {
             }
         }
         let read_only = options.access_mode.as_deref() == Some("read-only");
-        let mut params = json!({
-            "threadId": thread_id,
-            "input": input,
-            "cwd": &workspace_root,
-            "approvalPolicy": "on-request",
-            "sandboxPolicy": turn_sandbox_policy(Path::new(&workspace_root), read_only),
-        });
-        let object = params
-            .as_object_mut()
-            .expect("turn/start params are an object");
-        if let Some(model) = options
-            .model
-            .as_ref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            object.insert("model".to_string(), json!(model));
-        }
-        if let Some(model_provider) = options
-            .model_provider
-            .as_ref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            object.insert("modelProvider".to_string(), json!(model_provider));
-        }
-        if let Some(effort) = options
-            .effort
-            .as_ref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            object.insert("effort".to_string(), json!(effort));
-        }
-        if let Some(service_tier) = options
-            .service_tier
-            .as_ref()
-            .filter(|value| !value.trim().is_empty())
-        {
-            object.insert("serviceTier".to_string(), json!(service_tier));
-        }
-        if let Some(collaboration_mode) = &options.collaboration_mode {
-            object.insert("collaborationMode".to_string(), collaboration_mode.clone());
-        }
+        let params = turn_start_params(thread_id, input, &workspace_root, read_only, options);
         let result = self.host.request("turn/start", params).await?;
         Ok(json!({
             "status": "sent",
@@ -841,6 +917,50 @@ impl CodexAdapter for RealCodexAdapter {
             )
             .await
             .map_err(Into::into)
+    }
+
+    async fn read_thread_model_settings(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<ThreadModelSettings, AdapterError> {
+        let response = self
+            .resume_thread_for_model_settings(workspace, thread_id)
+            .await?;
+        let model_provider = response
+            .get("modelProvider")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| AdapterError::Rpc("thread/resume omitted modelProvider".to_string()))?;
+        let model = response
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| AdapterError::Rpc("thread/resume omitted model".to_string()))?;
+        Ok(ThreadModelSettings {
+            model_provider: model_provider.to_string(),
+            model: model.to_string(),
+        })
+    }
+
+    async fn update_thread_model(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+        model: &str,
+    ) -> Result<(), AdapterError> {
+        if model.trim().is_empty() {
+            return Err(AdapterError::Internal("model is required".to_string()));
+        }
+        self.require_thread_model_settings_binding(workspace, thread_id)
+            .await?;
+        self.host
+            .request(
+                "thread/settings/update",
+                json!({ "threadId": thread_id, "model": model.trim() }),
+            )
+            .await?;
+        Ok(())
     }
 
     async fn list_thread_turns(
@@ -1727,11 +1847,11 @@ mod tests {
         cached_thread_identity_sidecar, codex_bubblewrap_is_unavailable,
         codex_sandbox_disabled_by_environment, is_authorized_workspace_root, login_completion,
         message_parent_thread_id, message_thread_id, parse_runtime_thread_identity,
-        resolve_root_skill_selections, thread_resume_params, thread_spawn_parent_thread_id,
-        thread_start_params, turn_sandbox_policy, RealCodexAdapter, RootExecutionConfig,
-        ThreadSkillConfig,
+        resolve_root_skill_selections, thread_model_settings_resume_params, thread_resume_params,
+        thread_spawn_parent_thread_id, thread_start_params, turn_sandbox_policy, turn_start_params,
+        RealCodexAdapter, RootExecutionConfig, ThreadSkillConfig,
     };
-    use crate::{AdapterError, RuntimeThreadIdentity, RuntimeThreadIdentitySidecar};
+    use crate::{AdapterError, RuntimeThreadIdentity, RuntimeThreadIdentitySidecar, TurnOptions};
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::path::Path;
@@ -1793,6 +1913,47 @@ mod tests {
                 },
             })
         );
+    }
+
+    #[test]
+    fn thread_model_settings_resume_has_no_configuration_overrides() {
+        let first = thread_model_settings_resume_params("thread-1");
+        let second = thread_model_settings_resume_params("thread-1");
+        assert_eq!(
+            first,
+            json!({ "threadId": "thread-1", "excludeTurns": true })
+        );
+        assert_eq!(second, first);
+        for key in [
+            "model",
+            "modelProvider",
+            "cwd",
+            "permissions",
+            "sandbox",
+            "approvalPolicy",
+            "config",
+        ] {
+            assert!(first.get(key).is_none(), "resume must not override {key}");
+        }
+    }
+
+    #[test]
+    fn normal_turn_params_never_include_model_or_provider_overrides() {
+        let params = turn_start_params(
+            "thread-1",
+            vec![json!({ "type": "text", "text": "hello" })],
+            "/runner/workspace",
+            true,
+            &TurnOptions {
+                effort: Some("high".to_string()),
+                service_tier: Some("fast".to_string()),
+                ..TurnOptions::default()
+            },
+        );
+        assert_eq!(params["effort"], "high");
+        assert_eq!(params["serviceTier"], "fast");
+        assert!(params.get("model").is_none());
+        assert!(params.get("modelProvider").is_none());
     }
 
     #[test]

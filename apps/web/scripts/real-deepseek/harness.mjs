@@ -1312,20 +1312,12 @@ async function configureTemporaryProvider() {
     });
   }
   if (useExistingProvider) {
-    const originalSupports = process.env.E2E_REAL_DEEPSEEK_ORIGINAL_SUPPORTS_FUNCTION_TOOLS;
-    if (!["0", "1"].includes(originalSupports ?? "")) {
-      throw new NativeRuntimeBlocker("provider_capability_restore_contract_missing", {
-        provider_id: providerSourceId,
-        required_environment: "E2E_REAL_DEEPSEEK_ORIGINAL_SUPPORTS_FUNCTION_TOOLS=0|1",
-      });
-    }
     await api("/providers/" + encodeURIComponent(source.id), {
       method: "PUT",
       body: {
         name: source.name,
         baseUrl: state.proxy.address + "/v1",
         wireApi: "chat",
-        supportsFunctionTools: true,
         credentials: { mode: "preserve" },
         select: false,
       },
@@ -1334,7 +1326,6 @@ async function configureTemporaryProvider() {
       id: source.id,
       source,
       restoreExisting: true,
-      originalSupportsFunctionTools: originalSupports === "1",
       originalBaseUrl: source.baseUrl,
       originalWireApi: source.wireApi,
       originalName: source.name,
@@ -1356,7 +1347,6 @@ async function configureTemporaryProvider() {
       name: "DeepSeek Real E2E (temporary)",
       baseUrl: state.proxy.address + "/v1",
       wireApi: "chat",
-      supportsFunctionTools: true,
       credentials: { mode: "environment", envKey },
       select: false,
     },
@@ -1403,7 +1393,6 @@ async function removeTemporaryProvider(provider) {
           name: provider.originalName,
           baseUrl: provider.originalBaseUrl,
           wireApi: provider.originalWireApi,
-          supportsFunctionTools: provider.originalSupportsFunctionTools,
           credentials: { mode: "preserve" },
           select: false,
         },
@@ -1484,8 +1473,6 @@ async function createTaskAndRun(providerIdValue, title) {
         project_id: project.id,
         workspace_id: workspace.id,
         title,
-        model_provider: providerIdValue,
-        model,
         copilot_package_id: copilotPackageId,
       },
     });
@@ -1527,8 +1514,6 @@ async function send(taskId, minimal = false) {
     method: "POST",
     body: {
       text,
-      model,
-      model_provider: taskProviderId,
       effort: "none",
       service_tier: null,
       access_mode: "workspace-write",

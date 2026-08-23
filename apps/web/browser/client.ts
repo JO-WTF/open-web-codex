@@ -14,6 +14,7 @@ import type {
   PendingUserInputSummary,
   Session,
   Task,
+  ThreadModelSettingsUpdateResponse,
   Workspace,
   WorkspaceStatus,
   WorkspaceFileContent,
@@ -373,7 +374,6 @@ export class PlatformClient {
     projectId: string,
     workspaceId: string,
     title: string,
-    selection?: { providerId: string; modelId: string } | null,
     copilot?: { packageId: string } | null,
   ) {
     return this.request<Task>("/api/tasks", {
@@ -382,8 +382,6 @@ export class PlatformClient {
         project_id: projectId,
         workspace_id: workspaceId,
         title,
-        model_provider: selection?.providerId ?? null,
-        model: selection?.modelId ?? null,
         copilot_package_id: copilot?.packageId ?? null,
       }),
     });
@@ -407,8 +405,8 @@ export class PlatformClient {
     });
   }
 
-  updateTaskModelSelection(taskId: string, providerId: string, modelId: string) {
-    return this.request<{ providerId: string; modelId: string }>(
+  updateThreadModelSettings(taskId: string, providerId: string, modelId: string) {
+    return this.request<ThreadModelSettingsUpdateResponse>(
       `/api/tasks/${encodeURIComponent(taskId)}/model-selection`,
       {
         method: "PUT",
@@ -621,8 +619,6 @@ export class PlatformClient {
     taskId: string,
     text: string,
     options: {
-      model?: string | null;
-      modelProvider?: string | null;
       effort?: string | null;
       serviceTier?: string | null;
       accessMode?: string | null;
@@ -643,8 +639,6 @@ export class PlatformClient {
         method: "POST",
         body: JSON.stringify({
           text,
-          model: options.model ?? null,
-          model_provider: options.modelProvider ?? null,
           effort: options.effort ?? null,
           service_tier: options.serviceTier ?? null,
           access_mode: options.accessMode ?? null,

@@ -1,13 +1,10 @@
 use std::sync::Arc;
 
-use axum::extract::State;
 use axum::{extract::Path, http::StatusCode, Extension, Json};
 use open_web_codex_platform_contracts::error::{ErrorKind, PlatformError, ProviderCatalogFailure};
 use open_web_codex_platform_contracts::{
-    ModelSelection, ProviderCatalog, UpdateProviderModelRequest, UpsertProviderRequest,
+    ProviderCatalog, UpdateProviderModelRequest, UpsertProviderRequest,
 };
-use open_web_codex_platform_store::configuration::{put_global, MODEL_SELECTION_CONFIG_KEY};
-use open_web_codex_platform_store::AppState;
 use open_web_codex_provider_service::secured::{
     AuthorizedProviderError, AuthorizedProviderOperations, ProviderActor,
 };
@@ -56,31 +53,18 @@ pub async fn select_provider(
         .map_err(provider_error)
 }
 
-/// POST /api/providers/:provider_id/models/:model_id/select — persist the
-/// platform-wide default Provider/model pair and update the active Profile.
+/// POST /api/providers/:provider_id/models/:model_id/select — update the
+/// Profile Runtime default. Materialized Threads keep their own settings.
 pub async fn select_provider_model(
-    State(state): State<AppState>,
     auth: AuthenticatedUser,
     Path((provider_id, model_id)): Path<(String, String)>,
     Extension(providers): Extension<Arc<dyn AuthorizedProviderOperations>>,
 ) -> ApiResult<ProviderCatalog> {
-    let catalog = providers
+    providers
         .select_model(provider_actor(&auth), &provider_id, &model_id)
         .await
-        .map_err(provider_error)?;
-    put_global(
-        &state.db,
-        MODEL_SELECTION_CONFIG_KEY,
-        serde_json::to_value(ModelSelection {
-            provider_id: provider_id.clone(),
-            model_id: model_id.clone(),
-        })
-        .map_err(|_| internal_error("Model selection could not be encoded"))?,
-        auth.user_id,
-    )
-    .await
-    .map_err(|_| internal_error("Model selection could not be persisted"))?;
-    Ok(Json(catalog))
+        .map(Json)
+        .map_err(provider_error)
 }
 
 /// DELETE /api/providers/:id — remove a non-current custom Provider.
@@ -147,13 +131,6 @@ fn provider_actor(auth: &AuthenticatedUser) -> ProviderActor {
         user_id: auth.user_id,
         organization_id: auth.organization_id,
     }
-}
-
-fn internal_error(message: &str) -> (StatusCode, Json<PlatformError>) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(PlatformError::internal(message)),
-    )
 }
 
 fn provider_service_error(error: ProviderServiceError) -> (StatusCode, Json<PlatformError>) {

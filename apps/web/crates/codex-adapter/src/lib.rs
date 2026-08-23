@@ -103,8 +103,6 @@ pub struct ProfileLoginStatus {
 
 #[derive(Debug, Clone, Default)]
 pub struct TurnOptions {
-    pub model: Option<String>,
-    pub model_provider: Option<String>,
     pub effort: Option<String>,
     pub service_tier: Option<String>,
     pub access_mode: Option<String>,
@@ -113,6 +111,13 @@ pub struct TurnOptions {
     /// Server-resolved package persisted by the owning Task. This is never
     /// accepted as a Runtime path or arbitrary configuration value.
     pub copilot_package_id: Option<String>,
+}
+
+/// Exact Runtime-owned model settings for one materialized Thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadModelSettings {
+    pub model_provider: String,
+    pub model: String,
 }
 
 #[derive(Debug, Clone)]
@@ -187,6 +192,24 @@ pub trait CodexAdapter: Send + Sync {
         workspace: &AuthorizedWorkspace,
         thread_id: &str,
     ) -> Result<Value, AdapterError>;
+
+    /// Read the actual Thread model settings through the official resume
+    /// lifecycle without applying any configuration overrides.
+    async fn read_thread_model_settings(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<ThreadModelSettings, AdapterError>;
+
+    /// Persist a model-only update for an authorized Thread. The caller must
+    /// first establish that the requested Provider equals the Runtime-owned
+    /// Provider, then read the settings again to confirm the update.
+    async fn update_thread_model(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+        model: &str,
+    ) -> Result<(), AdapterError>;
 
     /// Read all persisted Turns with full items from Codex pagination.
     async fn list_thread_turns(

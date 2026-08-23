@@ -4,7 +4,6 @@ use uuid::Uuid;
 
 pub const GLOBAL_SCOPE_KIND: &str = "global";
 pub const GLOBAL_SCOPE_ID: &str = "global";
-pub const MODEL_SELECTION_CONFIG_KEY: &str = "models.default_selection";
 
 #[derive(Debug, Clone)]
 pub struct StoredConfiguration {

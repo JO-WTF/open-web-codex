@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebApp, {
+  parseModelProviderCatalog,
   providerCatalogFailureMessage,
   resolveTurnStartedAt,
 } from "./WebApp";
@@ -18,6 +19,72 @@ import { PlatformRequestError } from "../browser/client";
 import type { AppServerEvent } from "./types";
 
 let appServerEventHandler: ((event: AppServerEvent) => void) | null = null;
+
+function strictProviderCatalog() {
+  return {
+    currentProviderId: "deepseek",
+    currentModelId: "deepseek-v4-flash",
+    data: [{
+      id: "deepseek",
+      name: "DeepSeek",
+      baseUrl: "https://api.deepseek.example/v1",
+      envKey: null,
+      wireApi: "chat",
+      supportsFunctionTools: true,
+      kind: "custom",
+      isCurrent: true,
+      modelCount: 1,
+      canEdit: true,
+      canDelete: false,
+      canFetchModels: true,
+      models: [{
+        modelId: "deepseek-v4-flash",
+        modelName: "DeepSeek V4 Flash",
+        maxTokenLen: null,
+        maxOutputTokens: null,
+        showInPicker: true,
+        contextWindow: 128000,
+        supportsSearchTool: true,
+      }],
+    }],
+  };
+}
+
+function completeProviderCatalog(value: Record<string, unknown>) {
+  const currentProviderId = String(value.currentProviderId ?? "");
+  const rawProviders = Array.isArray(value.data) ? value.data : [];
+  return {
+    ...value,
+    currentProviderId,
+    currentModelId: "currentModelId" in value ? value.currentModelId : null,
+    data: rawProviders.map((entry) => {
+      const provider = entry as Record<string, unknown>;
+      const rawModels = Array.isArray(provider.models) ? provider.models : [];
+      return {
+        baseUrl: null,
+        envKey: null,
+        wireApi: "responses",
+        supportsFunctionTools: false,
+        kind: "custom",
+        isCurrent: provider.id === currentProviderId,
+        canEdit: true,
+        canDelete: true,
+        canFetchModels: true,
+        ...provider,
+        modelCount: rawModels.length,
+        models: rawModels.map((entry) => ({
+          modelName: null,
+          maxTokenLen: null,
+          maxOutputTokens: null,
+          showInPicker: true,
+          contextWindow: null,
+          supportsSearchTool: false,
+          ...(entry as Record<string, unknown>),
+        })),
+      };
+    }),
+  };
+}
 
 const client = {
   health: vi.fn(),
@@ -78,21 +145,15 @@ describe("WebApp workspace-first messaging", () => {
     });
     client.listThreads.mockResolvedValue({ data: [] });
     client.connectWorkspace.mockResolvedValue({});
-    client.listModelProviders.mockResolvedValue({
-      currentProviderId: "deepseek",
-      currentModelId: "deepseek-v4-flash",
-      data: [{
-        id: "deepseek",
-        name: "DeepSeek",
-        kind: "custom",
-        supportsFunctionTools: false,
-        models: [{ modelId: "deepseek-v4-flash", showInPicker: true }],
-      }],
-    });
+    client.listModelProviders.mockResolvedValue(strictProviderCatalog());
     client.listModels.mockResolvedValue({ data: [] });
     client.writeModelProvider.mockResolvedValue({ data: [] });
     client.selectProviderModel.mockResolvedValue({ data: [] });
-    client.updateThreadModelSelection.mockResolvedValue({});
+    client.updateThreadModelSelection.mockResolvedValue({
+      type: "updated",
+      providerId: "deepseek",
+      modelId: "deepseek-v4-flash",
+    });
     client.listMcpServerStatus.mockResolvedValue({ data: [] });
     client.getAccountRateLimits.mockResolvedValue({});
     client.getSupervisorOverview.mockResolvedValue(null);
@@ -144,7 +205,7 @@ describe("WebApp workspace-first messaging", () => {
   });
 
   it("applies a successful Fetch snapshot directly without a stale catalog read", async () => {
-    client.listModelProviders.mockResolvedValue({
+    client.listModelProviders.mockResolvedValue(completeProviderCatalog({
       currentProviderId: "provider-1",
       currentModelId: "old-model",
       data: [{
@@ -155,8 +216,8 @@ describe("WebApp workspace-first messaging", () => {
         canFetchModels: true,
         models: [{ modelId: "old-model", showInPicker: true }],
       }],
-    });
-    client.writeModelProvider.mockResolvedValueOnce({
+    }));
+    client.writeModelProvider.mockResolvedValueOnce(completeProviderCatalog({
       currentProviderId: "provider-1",
       currentModelId: "new-model",
       data: [{
@@ -167,7 +228,7 @@ describe("WebApp workspace-first messaging", () => {
         canFetchModels: true,
         models: [{ modelId: "new-model", showInPicker: true }],
       }],
-    });
+    }));
     render(<WebApp />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Provider" }));
@@ -202,7 +263,7 @@ describe("WebApp workspace-first messaging", () => {
   });
 
   it("rejects a Provider catalog with a non-boolean function-tool declaration", async () => {
-    client.listModelProviders.mockResolvedValue({
+    client.listModelProviders.mockResolvedValue(completeProviderCatalog({
       currentProviderId: "provider-1",
       data: [{
         id: "provider-1",
@@ -211,7 +272,7 @@ describe("WebApp workspace-first messaging", () => {
         supportsFunctionTools: "true",
         models: [],
       }],
-    });
+    }));
     render(<WebApp />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Codex" }));
@@ -219,7 +280,7 @@ describe("WebApp workspace-first messaging", () => {
   });
 
   it("preserves the catalog and hides raw error text when Fetch fails", async () => {
-    client.listModelProviders.mockResolvedValue({
+    client.listModelProviders.mockResolvedValue(completeProviderCatalog({
       currentProviderId: "provider-1",
       currentModelId: "old-model",
       data: [{
@@ -230,7 +291,7 @@ describe("WebApp workspace-first messaging", () => {
         canFetchModels: true,
         models: [{ modelId: "old-model", showInPicker: true }],
       }],
-    });
+    }));
     client.writeModelProvider.mockRejectedValueOnce(new PlatformRequestError(
       "secret provider response",
       { providerCatalogFailure: "authentication" },
@@ -251,7 +312,7 @@ describe("WebApp workspace-first messaging", () => {
   });
 
   it("preserves the existing catalog for malformed, duplicate, empty, or stale current data", async () => {
-    client.listModelProviders.mockResolvedValue({
+    client.listModelProviders.mockResolvedValue(completeProviderCatalog({
       currentProviderId: "provider-1",
       currentModelId: "old-model",
       data: [{
@@ -262,7 +323,7 @@ describe("WebApp workspace-first messaging", () => {
         canFetchModels: true,
         models: [{ modelId: "old-model", showInPicker: true }],
       }],
-    });
+    }));
     client.writeModelProvider
       .mockResolvedValueOnce({
         currentProviderId: "provider-1",
@@ -359,7 +420,7 @@ describe("WebApp workspace-first messaging", () => {
   });
 
   it("preserves the catalog for duplicate models or a missing current model", async () => {
-    client.listModelProviders.mockResolvedValue({
+    client.listModelProviders.mockResolvedValue(completeProviderCatalog({
       currentProviderId: "provider-1",
       currentModelId: "old-model",
       data: [{
@@ -370,7 +431,7 @@ describe("WebApp workspace-first messaging", () => {
         canFetchModels: true,
         models: [{ modelId: "old-model", showInPicker: true }],
       }],
-    });
+    }));
     client.writeModelProvider
       .mockResolvedValueOnce({
         currentProviderId: "provider-1",
@@ -436,7 +497,7 @@ describe("WebApp workspace-first messaging", () => {
       status: "completed",
       items: [{ id: "assistant-1", type: "agentMessage", text: "Thread ready" }],
     }]);
-    client.listModelProviders.mockResolvedValue({
+    client.listModelProviders.mockResolvedValue(completeProviderCatalog({
       currentProviderId: "provider-1",
       currentModelId: "old-model",
       data: [{
@@ -447,8 +508,8 @@ describe("WebApp workspace-first messaging", () => {
         canFetchModels: true,
         models: [{ modelId: "old-model", showInPicker: true }],
       }],
-    });
-    client.writeModelProvider.mockResolvedValueOnce({
+    }));
+    client.writeModelProvider.mockResolvedValueOnce(completeProviderCatalog({
       currentProviderId: "provider-1",
       currentModelId: "new-model",
       data: [{
@@ -459,7 +520,7 @@ describe("WebApp workspace-first messaging", () => {
         canFetchModels: true,
         models: [{ modelId: "new-model", showInPicker: true }],
       }],
-    });
+    }));
     render(<WebApp />);
 
     fireEvent.click(await screen.findByText("First thread"));
@@ -490,7 +551,7 @@ describe("WebApp workspace-first messaging", () => {
       status: "completed",
       items: [{ id: "assistant-1", type: "agentMessage", text: "Thread ready" }],
     }]);
-    client.listModelProviders.mockResolvedValue({
+    client.listModelProviders.mockResolvedValue(completeProviderCatalog({
       currentProviderId: "provider-1",
       currentModelId: "old-model",
       data: [{
@@ -501,7 +562,7 @@ describe("WebApp workspace-first messaging", () => {
         canFetchModels: true,
         models: [{ modelId: "old-model", showInPicker: true }],
       }],
-    });
+    }));
     client.writeModelProvider.mockResolvedValueOnce({
       currentProviderId: "provider-1",
       currentModelId: "new-model",
@@ -538,7 +599,7 @@ describe("WebApp workspace-first messaging", () => {
 
   it("persists a Profile Provider without requiring a Workspace", async () => {
     client.listWorkspaces.mockResolvedValue([]);
-    client.listModelProviders.mockResolvedValue({
+    client.listModelProviders.mockResolvedValue(completeProviderCatalog({
       currentProviderId: "openai",
       data: [{
         id: "openai",
@@ -547,8 +608,8 @@ describe("WebApp workspace-first messaging", () => {
         supportsFunctionTools: true,
         models: [],
       }],
-    });
-    client.writeModelProvider.mockResolvedValueOnce({
+    }));
+    client.writeModelProvider.mockResolvedValueOnce(completeProviderCatalog({
       currentProviderId: "deepseek",
       currentModelId: "deepseek-v4-flash",
       data: [{
@@ -558,7 +619,7 @@ describe("WebApp workspace-first messaging", () => {
         supportsFunctionTools: false,
         models: [{ modelId: "deepseek-v4-flash", showInPicker: true }],
       }],
-    });
+    }));
     render(<WebApp />);
 
     const catalog = await screen.findByRole("dialog", { name: "Providers and models" });
@@ -591,7 +652,7 @@ describe("WebApp workspace-first messaging", () => {
 
   it("keeps the Provider editor open and shows a safe error when Profile persistence fails", async () => {
     client.listWorkspaces.mockResolvedValue([]);
-    client.listModelProviders.mockResolvedValue({
+    client.listModelProviders.mockResolvedValue(completeProviderCatalog({
       currentProviderId: "openai",
       data: [{
         id: "openai",
@@ -600,7 +661,7 @@ describe("WebApp workspace-first messaging", () => {
         supportsFunctionTools: true,
         models: [],
       }],
-    });
+    }));
     client.writeModelProvider.mockRejectedValueOnce(new Error("credential-canary"));
     render(<WebApp />);
 
@@ -623,22 +684,18 @@ describe("WebApp workspace-first messaging", () => {
     expect(screen.queryByText("credential-canary")).toBeNull();
   });
 
-  it("opens the Provider catalog and does not create a Thread without a valid model", async () => {
+  it("does not create a Thread when the Provider catalog is invalid", async () => {
     client.listModelProviders.mockResolvedValue({ data: [] });
     render(<WebApp />);
 
-    const catalog = await screen.findByRole("dialog", { name: "Providers and models" });
-    expect(within(catalog).getByText("Select a Provider and model before starting.")).toBeTruthy();
     const send = screen.getByRole("button", { name: "Send" });
     expect((send as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(send);
-    fireEvent.click(screen.getByRole("button", { name: "New task in Demo" }));
     expect(client.startThread).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog", { name: "Providers and models" })).toBe(catalog);
   });
 
   it("creates a thread before sending when only a workspace is selected", async () => {
-    client.listModelProviders.mockResolvedValue({
+    client.listModelProviders.mockResolvedValue(completeProviderCatalog({
       currentProviderId: "deepseek",
       currentModelId: "deepseek-v4-flash",
       data: [{
@@ -648,7 +705,7 @@ describe("WebApp workspace-first messaging", () => {
         supportsFunctionTools: false,
         models: [{ modelId: "deepseek-v4-flash", showInPicker: true }],
       }],
-    });
+    }));
     render(<WebApp />);
 
     const composer = await screen.findByPlaceholderText("Ask Codex to do something...");
@@ -667,8 +724,6 @@ describe("WebApp workspace-first messaging", () => {
       "workspace-1",
       "thread-new",
       "Start from this workspace",
-      "deepseek-v4-flash",
-      "deepseek",
       null,
     ));
     expect(client.startThread.mock.invocationCallOrder[0]).toBeLessThan(
@@ -688,6 +743,78 @@ describe("WebApp workspace-first messaging", () => {
 
     await waitFor(() => expect(screen.getAllByText("Generated title").length).toBeGreaterThan(0));
     expect(screen.queryByText("thread-n…")).toBeNull();
+  });
+
+  it("creates a new same-workspace Thread when a model request crosses Providers", async () => {
+    client.listThreads.mockResolvedValue({
+      data: [{
+        id: "thread-existing",
+        name: "Existing thread",
+        cwd: "/tmp/demo",
+        updatedAt: Date.now(),
+        modelProvider: "deepseek",
+        model: "deepseek-v4-flash",
+      }],
+    });
+    client.listThreadTurns.mockResolvedValue([]);
+    client.listModelProviders.mockResolvedValue(completeProviderCatalog({
+      currentProviderId: "deepseek",
+      currentModelId: "deepseek-v4-flash",
+      data: [{
+        id: "deepseek",
+        name: "DeepSeek",
+        kind: "custom",
+        models: [{ modelId: "deepseek-v4-flash" }],
+      }, {
+        id: "openai",
+        name: "OpenAI",
+        kind: "builtIn",
+        models: [{ modelId: "gpt-new" }],
+      }],
+    }));
+    client.writeModelProvider.mockResolvedValueOnce(completeProviderCatalog({
+      currentProviderId: "openai",
+      currentModelId: "gpt-new",
+      data: [{
+        id: "deepseek",
+        name: "DeepSeek",
+        kind: "custom",
+        models: [{ modelId: "deepseek-v4-flash" }],
+      }, {
+        id: "openai",
+        name: "OpenAI",
+        kind: "builtIn",
+        models: [{ modelId: "gpt-new" }],
+      }],
+    }));
+    client.selectProviderModel.mockResolvedValue({});
+    client.updateThreadModelSelection.mockResolvedValue({
+      type: "requiresNewThread",
+      providerId: "openai",
+      modelId: "gpt-new",
+    });
+    render(<WebApp />);
+
+    fireEvent.click(await screen.findByText("Existing thread"));
+    await waitFor(() => expect(client.listThreadTurns).toHaveBeenCalledWith(
+      "workspace-1",
+      "thread-existing",
+    ));
+    fireEvent.click(await screen.findByRole("button", { name: "DeepSeek" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Built-in providers/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /OpenAI.*1 models/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /gpt-new/ }));
+
+    await waitFor(() => expect(client.updateThreadModelSelection).toHaveBeenCalledWith(
+      "workspace-1",
+      "thread-existing",
+      "openai",
+      "gpt-new",
+    ));
+    await waitFor(() => expect(client.startThread).toHaveBeenCalledWith(
+      "workspace-1",
+      expect.objectContaining({ operationId: expect.any(String) }),
+    ));
   });
 
   it("keeps the Agents tab available and shows an empty state before collaboration starts", async () => {
@@ -994,8 +1121,8 @@ describe("WebApp workspace-first messaging", () => {
     expect(client.runIdForThread).not.toHaveBeenCalled();
   });
 
-  it("rolls back a Provider switch when its model catalog is empty", async () => {
-    client.listModelProviders.mockResolvedValue({
+  it("requires an explicit model instead of selecting the first model after a Provider switch", async () => {
+    client.listModelProviders.mockResolvedValue(completeProviderCatalog({
       currentProviderId: "deepseek",
       currentModelId: "deepseek-v4-flash",
       data: [
@@ -1018,8 +1145,24 @@ describe("WebApp workspace-first messaging", () => {
           models: [{ modelId: "deepseek-v4-flash", showInPicker: true }],
         },
       ],
-    });
-    client.listModels.mockResolvedValueOnce({ data: [] });
+    }));
+    client.writeModelProvider.mockResolvedValueOnce(completeProviderCatalog({
+      currentProviderId: "openai",
+      currentModelId: null,
+      data: [{
+        id: "openai",
+        name: "OpenAI",
+        kind: "builtIn",
+        supportsFunctionTools: true,
+        models: [],
+      }, {
+        id: "deepseek",
+        name: "DeepSeek",
+        kind: "custom",
+        supportsFunctionTools: false,
+        models: [{ modelId: "deepseek-v4-flash", showInPicker: true }],
+      }],
+    }));
 
     render(<WebApp />);
 
@@ -1027,15 +1170,12 @@ describe("WebApp workspace-first messaging", () => {
     fireEvent.click(screen.getByRole("button", { name: /Built-in providers/i }));
     fireEvent.click(screen.getByRole("button", { name: /OpenAI.*Built-in catalog/i }));
 
-    await screen.findByText("This Provider has no selectable models");
     expect(client.writeModelProvider).toHaveBeenNthCalledWith(
       1,
       { action: "select", id: "openai" },
     );
-    expect(client.writeModelProvider).toHaveBeenNthCalledWith(
-      2,
-      { action: "select", id: "deepseek" },
-    );
+    expect(client.writeModelProvider).toHaveBeenCalledTimes(1);
+    expect(client.selectProviderModel).not.toHaveBeenCalled();
   });
 
   it("shows a temporary Thread only after the platform accepts the Run", async () => {
@@ -1743,5 +1883,26 @@ describe("WebApp workspace-first messaging", () => {
       name: "0 tool calls, 1 message · 0:48",
     }));
     expect(screen.getByText("I will find the boundary data.")).toBeTruthy();
+  });
+});
+
+describe("Provider catalog strictness", () => {
+  it("rejects missing required catalog fields instead of inventing defaults", () => {
+    const missingCurrentModel = strictProviderCatalog();
+    delete (missingCurrentModel as { currentModelId?: string | null }).currentModelId;
+    expect(() => parseModelProviderCatalog(missingCurrentModel)).toThrow();
+
+    const missingSearchCapability = strictProviderCatalog();
+    delete (missingSearchCapability.data[0].models[0] as { supportsSearchTool?: boolean })
+      .supportsSearchTool;
+    expect(() => parseModelProviderCatalog(missingSearchCapability)).toThrow();
+
+    const emptyCurrentModel = strictProviderCatalog();
+    emptyCurrentModel.currentModelId = " ";
+    expect(() => parseModelProviderCatalog(emptyCurrentModel)).toThrow();
+
+    const unknownWireApi = strictProviderCatalog();
+    unknownWireApi.data[0].wireApi = "unknown";
+    expect(() => parseModelProviderCatalog(unknownWireApi)).toThrow();
   });
 });

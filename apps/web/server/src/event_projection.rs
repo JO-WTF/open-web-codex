@@ -258,7 +258,6 @@ pub async fn persist_frame_with_deliveries(
         )
         .await?;
     }
-    project_provider_call_metric(&mut transaction, &context, &event, event_sequence).await?;
     project_runtime_agent_execution(
         &mut transaction,
         &context,
@@ -393,107 +392,6 @@ pub async fn persist_frame_with_deliveries(
         payload,
         pending_artifact_ids,
     }))
-}
-
-/// Persist only provider-reported, bounded usage metadata. This function is
-/// intentionally a no-op when the Runtime did not emit token usage; a missing
-/// field is different from a reported zero and remains observable as NULL.
-async fn project_provider_call_metric(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    context: &EventRunContext,
-    event: &ProjectedEvent,
-    event_sequence: i64,
-) -> Result<(), String> {
-    if event.event_type != "codex.thread.token_usage.updated" {
-        return Ok(());
-    }
-    let usage = event
-        .payload
-        .pointer("/data/tokenUsage/last")
-        .or_else(|| event.payload.pointer("/data/tokenUsage/total"));
-    let Some(usage) = usage else {
-        return Ok(());
-    };
-    let task = sqlx::query(
-        "SELECT COALESCE(model_provider, 'unreported') AS provider_id,
-                COALESCE(model, 'unreported') AS model_id
-         FROM tasks WHERE id = $1 AND organization_id = $2",
-    )
-    .bind(context.task_id)
-    .bind(context.organization_id)
-    .fetch_optional(&mut **transaction)
-    .await
-    .map_err(|error| format!("provider metric task lookup error: {error}"))?;
-    let Some(task) = task else {
-        return Ok(());
-    };
-    let input_tokens = token_number(usage, &["inputTokens", "input_tokens"]);
-    let cached_input_tokens = token_number(
-        usage,
-        &[
-            "cachedInputTokens",
-            "cached_input_tokens",
-            "cacheReadInputTokens",
-        ],
-    );
-    let output_tokens = token_number(usage, &["outputTokens", "output_tokens"]);
-    let tool_schema_tokens = token_number(usage, &["toolSchemaTokens", "tool_schema_tokens"]);
-    let compaction_count = token_number(
-        event.payload.pointer("/data").unwrap_or(&Value::Null),
-        &["compactionCount", "compaction_count"],
-    )
-    .unwrap_or(0)
-    .clamp(0, i64::from(i32::MAX)) as i32;
-    let latency_ms = elapsed_ms(event.payload.pointer("/data").unwrap_or(&Value::Null));
-    sqlx::query(
-        "INSERT INTO provider_call_metrics
-         (organization_id, profile_id, run_id, provider_id, model_id,
-          input_tokens, cached_input_tokens, output_tokens, tool_schema_tokens,
-          latency_ms, first_token_ms, compaction_count, terminal_status,
-          source_event_sequence)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                 'observed', $13)
-         ON CONFLICT (run_id, source_event_sequence) DO NOTHING",
-    )
-    .bind(context.organization_id)
-    .bind(context.profile_id)
-    .bind(context.run_id)
-    .bind(task.get::<String, _>("provider_id"))
-    .bind(task.get::<String, _>("model_id"))
-    .bind(input_tokens)
-    .bind(cached_input_tokens)
-    .bind(output_tokens)
-    .bind(tool_schema_tokens)
-    .bind(latency_ms)
-    .bind(first_token_ms(
-        event.payload.pointer("/data").unwrap_or(&Value::Null),
-    ))
-    .bind(compaction_count)
-    .bind(event_sequence)
-    .execute(&mut **transaction)
-    .await
-    .map_err(|error| format!("provider metric projection error: {error}"))?;
-    Ok(())
-}
-
-fn token_number(value: &Value, keys: &[&str]) -> Option<i64> {
-    keys.iter()
-        .find_map(|key| value.get(*key))
-        .and_then(|value| {
-            value
-                .as_i64()
-                .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
-        })
-}
-
-fn elapsed_ms(value: &Value) -> Option<i64> {
-    let started = token_number(value, &["startedAtMs", "started_at_ms"])?;
-    let completed = token_number(value, &["completedAtMs", "completed_at_ms"])?;
-    (completed >= started).then_some(completed - started)
-}
-
-fn first_token_ms(value: &Value) -> Option<i64> {
-    token_number(value, &["firstTokenMs", "first_token_ms"])
 }
 
 fn project_frame_with_deliveries(

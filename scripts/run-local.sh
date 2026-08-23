@@ -49,8 +49,7 @@ Options:
   --rebuild-development-database
                             Rebuild the default local development database
                             after the current build. It preserves encrypted
-                            Provider credentials, the default model selection,
-                            and the active maps credential.
+                            Provider credentials and the active maps credential.
   --stop                    Stop the platform recorded for the data directory.
   --status                  Show process and health status.
   --no-build                Reuse existing browser and Rust build outputs.
