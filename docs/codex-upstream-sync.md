@@ -28,24 +28,25 @@ daily synchronization tracks only `openai/codex/main`.
 
 ## Apply
 
-Start from clean `main`:
+Start from a clean branch containing the local seams to preserve:
 
 ```bash
 ./scripts/sync-codex-upstream.sh --apply
 ```
 
-The script creates `codex/sync-upstream-<sha>`, performs a squash subtree pull
-into `codex/`, and records the integrated upstream commit. Push that branch and
-review it like a normal runtime change.
+The script creates `codex/sync-upstream-<sha>`, merges the official tree into
+`codex/`, and records the integrated upstream commit. Review that branch like a
+normal runtime change before any push or merge.
 
 ## Conflict policy
 
 Resolve by architectural layer:
 
 1. Accept official file/module moves and public API shapes first.
-2. Reapply retained seams in this order: Chat transport; Provider metadata,
-   model discovery and cache; app-server Provider API; TUI Provider workflows;
-   legacy history compatibility; then their generated artifacts.
+2. Reapply only the Patch Map seams in this order: Chat wire adapter;
+   configured Provider capabilities; app-server Provider catalog API; Provider
+   error redaction; Plugin MCP tool exposure; managed child Role projection and
+   resume; then their generated artifacts.
 3. Do not preserve a custom workaround when upstream now provides the behavior.
 4. Keep protocol/schema generated files aligned with their Rust source.
 5. Avoid mixing product Web changes into an upstream runtime sync.
@@ -60,17 +61,15 @@ At minimum, follow `codex/AGENTS.md` and run:
 ```bash
 cd codex/codex-rs
 just fmt
-just test -p codex-app-server-protocol
-just test -p codex-app-server model_list
-just test -p codex-models-manager
-just test -p codex-model-provider
-just test -p codex-tui
-```
-
-Then run:
-
-```bash
 cd ../..
+./scripts/test-codex.sh -p codex-api
+./scripts/test-codex.sh -p codex-app-server-protocol
+./scripts/test-codex.sh -p codex-app-server model_provider_list
+./scripts/test-codex.sh -p codex-app-server model_provider_models_list
+./scripts/test-codex.sh -p codex-models-manager
+./scripts/test-codex.sh -p codex-model-provider
+./scripts/test-codex.sh -p codex-core-plugins
+./scripts/test-codex.sh -p codex-core role
 ./scripts/test-codex.sh -p codex-app-server-protocol schema_fixtures::
 cd apps/web
 npm run smoke:codex-app-server

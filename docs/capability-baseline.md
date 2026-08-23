@@ -3,8 +3,8 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前事实与证据 |
-| 观察日期 | 2026-08-23 |
-| 代码快照 | 阶段三 Runtime owner 收敛 Atom 5；阶段一仓网与阶段二开发者 SDK 验收作为已通过基线 |
+| 观察日期 | 2026-08-24 |
+| 代码快照 | Codex recorded integrated base 为 `2161ec272a7d`；六个最小 Runtime seam 已代码收敛，验证矩阵仍待执行 |
 | 当前阶段 | 阶段三已进入：删除与 Codex Runtime 并行的 Browser/Platform 旧旁路 |
 | 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) + [ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) + [ADR-024](adr/024-warehouse-copilot-contract-simplification.md) + [ADR-025](adr/025-source-unit-prepared-v2-reuse.md) |
 
@@ -224,7 +224,11 @@ schema 或 arguments；临时 Provider、Run、Workspace、Project 和原始选�
 D5b 修正了 Copilot package 将 server-owned Role metadata 写成 `agents.roles.<role>.*` 的路径错误。
 原生 `AgentsToml` 使用 flatten Role 合同，正确路径是 `agents.<role>.*`；旧路径会产生
 `agent role roles must define a description` warning。修正后该 warning 消失，Role 的 typed MCP/Skill
-projection 测试与 child cold-resume 测试通过。
+projection 测试与 child cold-resume 测试通过。当前本地 cold-resume 只接受 canonical stored
+`ThreadSpawn` Role、Runtime-resolved V1 history（包括 upstream unset V1 representation）和 trusted
+SessionFlags；它恢复 Role-owned instructions、
+skills 与 MCP inventory，不信任 caller/Profile/Workspace metadata。V2 保持 upstream AgentControl
+恢复路径，不进入本地 V1 reapply。
 
 同一临时 Provider 的真实门随后确认：Data Turn 已完成并生成 prepared input；Root 的 `wait` Item
 以 `completed` 终态返回，Provider 每个 Chat 请求均为 HTTP 200 且 SSE `done`。Root 下一次采样时
@@ -560,7 +564,7 @@ malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除�
 | Task→Workspace 固定合同 | Task 持久化唯一 Workspace；Run/fork/recovery 只能继承；Browser 无 Run-level 选择权 | E2；HTTP、数据库、orchestrator 与 Browser 定向测试通过 |
 | 通用 Workspace 文件 | `/workspaces/{id}/files` + `GitRuntime` 是当前唯一用户上传/浏览/编辑文件产品面；Web 逐文件处理 conflict，同 Workspace 两 Task 共享和跨租户拒绝已通过 | E4 normal path；真实 Workspace 文件进入 S1/S2/S3 |
 | MCP Resource | Codex 官方 Tool Item/ResourceLink/read_resource 与供应链 Workspace-scoped ResourceStore 形成 Network typed provider 数据链；Data inspection 只返回 inline `workspace_source_profile.v2`、source units 和 `workspace_source_inspection.v2` identity，不注册 Data Resource template。Network 通过 package-owned facade 使用 Profile+Workspace `supply_chain` Resource 域；ResourceRef/codec/bounds/store/runtime/Workspace primitives 已由领域无关的 `open-web-codex-provider-sdk` 提供，仓网只保留领域模型与算法。Platform 不存内容、不建 Broker、handoff ledger、latest 或相似性匹配 | focused 回归覆盖 inspection identity、Data Resource surface empty、Network Resource scope/ref 拒绝、prepared fresh reuse 与 pair-level partial reuse；真实 Web 耗时待本轮复测 |
-| Final Artifact 与地图卡片 | durable `artifacts` 只接受 active Copilot `[[deliveries]]` 声明的 exact producer、固定 typed kind/schema/MIME/verifier 与 Workspace-relative descriptor，并有 Task grant、exact Run/Thread/Turn/Item provenance、物化字节和授权读取；Platform 不理解包或业务字段，也不把任意 Resource 升为 Artifact。仓网 `map.v3` 另有 provider-owned immutable `map_card_spec.v1`：Platform 只保存 renderer、exact spec ref 和卡片 provenance，Maps 保留 parent revision 链；纯样式 revision 复用 GeoJSON，新增覆盖线须先由 Network 产生新 GeoJSON。关闭 producing child 后，inline source 读取以授权 Task 的固定 Copilot package config 第一次 cold-resume child Role/MCP，再走 official `mcpServer/resource/read`；浏览器不能选择 config，Platform 不复制 GeoJSON。紧凑 GeoJSON profile 声明无值的字段类型，Maps 拒绝全空/类型不匹配表达式与未声明 image asset | focused Adapter/Server 回归覆盖首次 resume config；原失败地图 URL 已从 502 修复为 200/129 features，真实浏览器卡片状态 Ready 且控制台无错误 |
+| Final Artifact 与地图卡片 | durable `artifacts` 只接受 active Copilot `[[deliveries]]` 声明的 exact producer、固定 typed kind/schema/MIME/verifier 与 Workspace-relative descriptor，并有 Task grant、exact Run/Thread/Turn/Item provenance、物化字节和授权读取；Platform 不理解包或业务字段，也不把任意 Resource 升为 Artifact。仓网 `map.v3` 另有 provider-owned immutable `map_card_spec.v1`：Platform 只保存 renderer、exact spec ref 和卡片 provenance，Maps 保留 parent revision 链；纯样式 revision 复用 GeoJSON，新增覆盖线须先由 Network 产生新 GeoJSON。关闭 producing child 后，当前仓网 Runtime-resolved V1 cold resume（包括 upstream unset V1 representation）只以 trusted SessionFlags 恢复 canonical stored Role 的 MCP inventory，再走 official `mcpServer/resource/read`；V2 保持 upstream AgentControl 路径。浏览器不能选择或扩大配置，Platform 不复制 GeoJSON。紧凑 GeoJSON profile 声明无值的字段类型，Maps 拒绝全空/类型不匹配表达式与未声明 image asset | focused Adapter/Server 回归覆盖首次 resume config；原失败地图 URL 已从 502 修复为 200/129 features，真实浏览器卡片状态 Ready 且控制台无错误 |
 | Data Intake | SourceAsset、session/draft/mapping/gate、Dataset Release、Task binding/snapshot/projection 生产路径与当前 schema 已删除 | 不再是当前能力；阶段一无替代状态机 |
 | 旧数据引用 | Platform 文件面只接受 Workspace 相对路径；Data/Network active surface 只使用 strict `ResourceRef`，Case/NetworkSnapshot、ArtifactRef、taskEvidence hashes 和双重 ref 旧 tail 已删除 | 已完成 Stage E tail deletion；继续保持单一 ResourceStore owner |
 | 仓网算法 | Data4 标准化保留完整的用户路线 pair facts；Network12 通过一个 `prepare_route_matrix` 入口物化 provided/haversine 路线矩阵或给出 navigation 请求估算，计算成本、场景、求解、交互地图卡片数据和 Markdown 简报，并返回城市数量与需求量加权两种时效达标指标；`prepare_network_coverage_map` 从 exact assignment 生成通用覆盖 LineString。单次设施变更评估从 exact before result 的活动仓集合起算，一次求解并直接比较，返回 scenario ref、绑定标准化输入与前后方案的单一 `plan_comparison_ref` 及有界指标 | 路线规划/构建/显式重复验证和独立场景入口已从模型可见面删除；真实 Web 计时待复测 |

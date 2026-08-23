@@ -3,12 +3,12 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前与下一里程碑的执行计划 |
-| 更新日期 | 2026-08-23 |
+| 更新日期 | 2026-08-24 |
 | 当前阶段 | 阶段三：回归 Codex Runtime owner 并清理并行实现 |
-| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三 Atom 2b 已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统和 Browser Workspace Preferences，Atom 3 已删除独立 Terminal，Atom 4 已删除本地 Usage，Atom 5 已删除 Fake 生产运行模式 |
+| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统、Browser Workspace Preferences、独立 Terminal、本地 Usage 和 Fake 生产运行模式；Codex 六个最小 seam 已代码收敛，验证矩阵待执行 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018/019/024/025 为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
-| 阶段三后续 | 先收敛 Provider/model owner；再处理 Run/Thread 状态和 history/event 投影；Codex upstream 同步与 seam 收敛独立作为最后步骤 |
+| 阶段三后续 | 执行六个 retained seam 的 focused/schema/app-server/product 验证；收敛 Provider/model 单一 owner；再处理 Run/Thread 状态和 history/event 投影 |
 
 本文记录阶段一已完成的正常业务主链、仍有效的边界和后续工作。用户心智统一为：
 
@@ -219,7 +219,7 @@ mailbox、Workflow DSL、Run Completion Controller、签名链或 exactly-once�
 | Skill、MCP、Role config 发现与刷新 | Codex Runtime；Profile Host 负责托管固定内置 Skill/Role 与 MCP activation | built-in 不使用 Plugin/selected roots；观察结果必须来自当前 Runtime |
 | 仓网 Tool 代码与只读 Mock 源 | 显式配置的共享应用资产 | 不复制到 Profile，不从 cwd、Workspace 或源码树扫描 |
 | Task 与唯一执行 Workspace | Platform | Task 创建后固定；Run、resume、fork 不得改选其他 Workspace |
-| Thread cwd 与 MCP sandbox metadata | Codex Runtime | Root/child 都继承授权 Workspace；不新增 Codex seam |
+| Thread cwd 与 MCP sandbox metadata | Codex Runtime | Root/child 都继承授权 Workspace；仅 Patch Map 中 trusted Runtime-resolved V1（包括 upstream unset V1 representation）child Role cold-resume 投影是本地 seam，V2 保持 upstream AgentControl |
 | 普通数据文件 | Workspace 文件系统 | 同 Workspace Task 天然可见；没有 Task→文件 binding 或数据生命周期 |
 | typed intermediate 内容与生命周期 | MCP provider | 通过官方 Resource URI/template/read 使用；Platform 不存内容或建通用 Broker |
 | Workspace authority | Platform/Runner | authenticated Workspace capability、canonical containment/no-follow、final file atomic create-new 与 Artifact 授权物化 |
@@ -388,8 +388,8 @@ Catalog/Studio/Python publish 生产系统及其失去 owner 的旧 DB schema。
    注入。3B.3-B2 进一步删除 `RunStartPreflight`、Governed Agent/Supervisor mode、旧
    `platform-agents/<definition>/<version>` writer/verifier 与 request-scoped SHA Role/inventory
    校验。3B.3-B3 已删除 Catalog/Studio/Python publish crate、route、DTO、client、UI 与
-   Workspace package publisher；3B.3-B4 又删除失去生产 owner 的旧数据库对象。保留 Codex 内
-   已登记的 selected Plugin policy seam，但 built-in 不调用它。
+   Workspace package publisher；3B.3-B4 又删除失去生产 owner 的旧数据库对象。Codex 仅保留
+   typed Plugin MCP `omit_tools_from` 透传；built-in 不建立 selected-root 或 Platform policy 路径。
 
 3B.1 已有证据：Profile startup seed/managed 单测 6 项、Server composition 单测 5 项均通过；真实
 stdio probe 启动 Data/Demo/Network/maps 并断言 Role 所需 inventory，两个 Tool source

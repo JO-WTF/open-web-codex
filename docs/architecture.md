@@ -3,8 +3,8 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前事实 |
-| 快照日期 | 2026-08-23 |
-| 代码快照 | 阶段三 Runtime owner 收敛工作树；阶段一仓网与阶段二开发者 SDK 作为已通过基线 |
+| 快照日期 | 2026-08-24 |
+| 代码快照 | Codex recorded integrated base 为 `2161ec272a7d`；六个最小 Runtime seam 已代码收敛，完整验证仍待执行 |
 | 当前阶段边界 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md)、[ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md)、[ADR-024](adr/024-warehouse-copilot-contract-simplification.md)、[ADR-025](adr/025-source-unit-prepared-v2-reuse.md) 与 [开发计划](development-plan.md) |
 | 接受决策 | ADR-018；ADR-019 局部替代其单包/default 假设；ADR-024/025 约束当前仓网 Tool 合同 |
 
@@ -50,9 +50,11 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | 仓网规划能力 | 供应链 Python 包的 domain owners | 当前阶段统一拥有 demand/facility/candidate/location/lane/route/cost records，Data mapping/normalization/geography、route/cost fact 与 matrix build/validate/partial reuse，actual/optimized baseline、open/close/relocation scenario、assignment/service/cost evaluation、p-median、before/after comparison、分配覆盖 GeoJSON、地图卡片数据和确定性 Markdown 简报。来源预览显式区分样本数与完整总数；完整准备结果返回精确候选仓总数和有界目录。成本 Tool 可在 exact prepared input 内对完整报价按层派生 `warehouse_quote_mean_calculation.v1`，并逐字段校验用户脚本证据后绑定 bounded provenance；单 Agent 只有在任务 Skill 授权或用户明确要求时才可用脚本对同一 prepared input 做确定性聚合，脚本不拥有标准化或求解。需求、候选、现网仓、实际分配、路线或报价事实变动必须完整归一化；生成输入、导航请求、计算证据和最终文件分别只能进入 `outputs/warehouse-network/{prepared,requests,calculations,deliverables}/`。不完整路线返回 typed `needs_input` 且不发布可继续消费的 ready 引用；只有 Root 通过 Runtime 原生 `request_user_input` 收集业务选择。Network 覆盖线从精确分配和坐标派生，并按用户所选服务目标发布 `attained/missed/unassigned` 状态，不含城市/仓库名称分支；Maps 只消费该状态生成样式，不重算 SLA。该领域层不引入 Platform workflow、缓存或第二份业务状态。`solve_p_median` 的 `minimum_feasible` 在一个总时间预算内执行最多两个 CP-SAT stage：先最小化新增仓数，再在该仓数下最小化成本，返回 `selected_number_to_open`、最小仓数证明状态和最终 coverage，避免 Agent 循环调用多个求解 Tool。报告输入以 discriminated typed contract 区分单一 baseline 评估和 generic before/after comparison；comparison v2 接受同一 prepared identity 下任意 baseline、scenario 或 facility-location 结果，不为交付伪造方案结果。结构化计算结果与业务简报分离，不拥有通用 Resource/Workspace infrastructure。Stage E 已删除 Case/NetworkSnapshot/source_ref/ArtifactRef 与多层 hashes 旧偏离。未来若第二个供应链 Copilot 证明存在稳定公共领域合同，再评估内部提取 |
 
 地图卡片读取 provider-owned GeoJSON 时，Platform 从授权 Task 取得固定
-`copilot_package_id`，并在第一次 cold resume producing child 时携带同一
-Root execution config；这样 `close_agent` 后仍能恢复 child Role 的 MCP inventory，
-而浏览器不能选择或扩大该配置，Platform 也不复制 Resource 内容。
+`copilot_package_id`。当前仓网 child Role 在 Runtime contract 下 resolve 为 V1（包括上游未写
+version 的 V1 表示）；首次 direct cold resume 只可通过 trusted SessionFlags 恢复该 stored
+ThreadSpawn Role 的 instructions、skills 与 MCP inventory，
+不能由 Browser、Profile、Workspace 或 caller 元数据扩大。V2 Role 恢复继续由 upstream
+AgentControl 处理。Platform 不复制 Resource 内容。
 
 同一 Task、同一业务 Role 的 child 默认复用稳定 target。Root 对已关闭 child 先调用
 `resume_agent`，再以 `send_input.items` 重新传入当前 Runtime Catalog 中的精确任务 Skill
@@ -333,8 +335,8 @@ Runtime 与共享 build store，`sync` 通过完整 `check` 后把冷重启交�
    多用户身份隔离尚未成立。
 2. 当前 history overlay 按 Tool 名称或 approval message 推断插入位置，Browser 又以相同用户
    文本合并 optimistic/live/history 消息；这些启发式在 Runtime exact Item ID 之外形成第二历史
-   关联规则，连续相同消息会被误合并。当前 Codex subtree 还保留旧 legacy response-tool/history
-   materialization seam，尚未接受 latest official paginated history 全量实现。
+   关联规则，连续相同消息会被误合并。Codex 的 paginated history 仍遵循当前 upstream
+   contract；本地不再保留 legacy response-tool/history materialization seam。
 3. `run_events` 的 sequence 和 run/thread/turn/item provenance 是合理的持久投影，但当前
    `project_item` 会把未统一限长的 agent text、reasoning、command output、diff 与 Tool result
    同时写入 PostgreSQL 和 WebSocket，且 unknown Runtime method 仍可能被 Browser JSON summary
