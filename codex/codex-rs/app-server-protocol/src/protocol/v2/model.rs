@@ -72,7 +72,6 @@ pub struct ModelProviderModelSummary {
     pub max_output_tokens: Option<i64>,
     pub show_in_picker: bool,
     pub context_window: Option<i64>,
-    #[serde(default)]
     pub supports_search_tool: bool,
 }
 
@@ -102,6 +101,12 @@ pub struct ModelProviderListResponse {
     pub data: Vec<ModelProviderSummary>,
     pub current_provider_id: String,
     /// Exact model selected in the current Profile configuration; null when unset.
+    #[serde(deserialize_with = "Option::deserialize")]
+    #[schemars(
+        required,
+        schema_with = "crate::protocol::serde_helpers::nullable_string_schema"
+    )]
+    #[ts(type = "string | null")]
     pub current_model_id: Option<String>,
 }
 

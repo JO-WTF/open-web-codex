@@ -104,6 +104,14 @@ fn model_provider_list_response_serializes_a_nullable_current_model_id() {
         })
     );
 
+    let null: ModelProviderListResponse = serde_json::from_value(json!({
+        "data": [],
+        "currentProviderId": "configured",
+        "currentModelId": null,
+    }))
+    .expect("deserialize null Provider model");
+    assert_eq!(null.current_model_id, None);
+
     let selected: ModelProviderListResponse = serde_json::from_value(json!({
         "data": [],
         "currentProviderId": "configured",
@@ -113,6 +121,49 @@ fn model_provider_list_response_serializes_a_nullable_current_model_id() {
     assert_eq!(
         selected.current_model_id.as_deref(),
         Some("configured-model")
+    );
+
+    assert!(
+        serde_json::from_value::<ModelProviderListResponse>(json!({
+            "data": [],
+            "currentProviderId": "configured",
+        }))
+        .is_err()
+    );
+
+    let schema = serde_json::to_value(schemars::schema_for!(ModelProviderListResponse))
+        .expect("serialize Provider list schema");
+    assert!(
+        schema["required"]
+            .as_array()
+            .is_some_and(|required| required.iter().any(|field| field == "currentModelId"))
+    );
+    assert_eq!(
+        schema["properties"]["currentModelId"]["type"],
+        json!(["string", "null"])
+    );
+}
+
+#[test]
+fn model_provider_model_summary_requires_supports_search_tool() {
+    assert!(
+        serde_json::from_value::<ModelProviderModelSummary>(json!({
+            "modelId": "configured-model",
+            "modelName": null,
+            "maxTokenLen": null,
+            "maxOutputTokens": null,
+            "showInPicker": true,
+            "contextWindow": null,
+        }))
+        .is_err()
+    );
+
+    let schema = serde_json::to_value(schemars::schema_for!(ModelProviderModelSummary))
+        .expect("serialize Provider model schema");
+    assert!(
+        schema["required"]
+            .as_array()
+            .is_some_and(|required| required.iter().any(|field| field == "supportsSearchTool"))
     );
 }
 

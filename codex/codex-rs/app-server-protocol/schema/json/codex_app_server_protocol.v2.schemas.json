@@ -10925,6 +10925,7 @@
         }
       },
       "required": [
+        "currentModelId",
         "currentProviderId",
         "data"
       ],
@@ -10967,13 +10968,13 @@
           "type": "boolean"
         },
         "supportsSearchTool": {
-          "default": false,
           "type": "boolean"
         }
       },
       "required": [
         "modelId",
-        "showInPicker"
+        "showInPicker",
+        "supportsSearchTool"
       ],
       "type": "object"
     },
