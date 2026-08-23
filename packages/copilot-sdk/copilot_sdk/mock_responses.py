@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+ACCEPTANCE_FORK_TURNS = "1"
+
 
 def _event(kind: str, payload: dict[str, Any]) -> str:
     return f"event: {kind}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
@@ -303,7 +305,7 @@ class MockResponsesFixture:
                                         "task_name": fixture.child_task_name,
                                         "message": fixture.child_prompt,
                                         "agent_type": fixture.agent,
-                                        "fork_turns": "none",
+                                        "fork_turns": ACCEPTANCE_FORK_TURNS,
                                     },
                                     namespace="collaboration",
                                 ),

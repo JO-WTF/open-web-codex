@@ -1,0 +1,33 @@
+schema_version = 1
+id = "__ID__"
+display_name = "__DISPLAY_NAME__"
+
+[root]
+skill = "__ROOT_SKILL__"
+agent = "__ROOT_AGENT_ID__"
+task_skills = "none"
+
+[[skills]]
+id = "__ROOT_SKILL__"
+path = "skills/__ROOT_SKILL__"
+
+[[agents]]
+id = "__ROOT_AGENT_ID__"
+role = "agents/__ROOT_AGENT_ID__.toml"
+
+[[tools]]
+id = "__TOOL_ID__"
+root = "tools/__TOOL_DIR__"
+runtime = "tools/__TOOL_DIR__/runtime.toml"
+
+[[tests]]
+id = "native-root-analysis"
+prompt = "Analyze the declared sample record once and return its exact typed result."
+target = { kind = "root" }
+tool = "__TOOL_ID__"
+server = "__TOOL_ID__"
+tool_name = "analyze_record"
+arguments = { record_id = "sample", value = 7 }
+
+[tests.expect]
+structured_content = { status = "ok", record_id = "sample", value = 7 }

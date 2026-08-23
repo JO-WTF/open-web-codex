@@ -4,18 +4,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
+import tempfile
 import time
+from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import asdict
 from importlib.resources import files
 from pathlib import Path
+from types import SimpleNamespace
 
 from .app_server_client import AppServerClient, AppServerClientError
 from .copilot_manifest import CopilotPackageError, validate_copilot_package
 from .dev_profile import (
     CopilotDevError,
+    default_tool_build_store_root,
     load_dev_composition,
     prepare_dev_profile,
     prepare_dev_tool_composition,
@@ -29,16 +35,44 @@ from .tool_environment import (
     garbage_collect_tool_builds,
     prepare_tool_composition,
 )
+from .tool_runtime_manifest import ToolRuntimeManifestError, load_tool_runtime_manifest
 
-COPILOT_TEMPLATE_FILES = {
-    "copilot.toml": "copilot.toml",
-    "skills/__SUPERVISOR_SKILL__/SKILL.md": "supervisor.SKILL.md",
-    "skills/__CHILD_SKILL__/SKILL.md": "child.SKILL.md",
-    "agents/__AGENT_ID__.toml": "child-agent.toml",
+COPILOT_COMMON_TOOL_FILES = {
     "tools/__TOOL_DIR__/pyproject.toml": "tool-pyproject.toml",
     "tools/__TOOL_DIR__/requirements.lock": "tool-requirements.lock",
     "tools/__TOOL_DIR__/runtime.toml": "tool-runtime.toml",
-    "tools/__TOOL_DIR__/server.py": "tool-server.py",
+    "tools/__TOOL_DIR__/src/__PYTHON_PACKAGE__/__init__.py": "tool-package-init.py",
+    "tools/__TOOL_DIR__/src/__PYTHON_PACKAGE__/core.py": "tool-core.py",
+    "tools/__TOOL_DIR__/src/__PYTHON_PACKAGE__/server.py": "tool-server.py",
+    "tools/__TOOL_DIR__/tests/test_core.py": "tool-test-core.py",
+}
+
+COPILOT_TEMPLATE_FILES = {
+    "single-agent": {
+        "copilot.toml": "single-copilot.toml",
+        "skills/__ROOT_SKILL__/SKILL.md": "single-root.SKILL.md",
+        "agents/__ROOT_AGENT_ID__.toml": "single-root-agent.toml",
+        **COPILOT_COMMON_TOOL_FILES,
+    },
+    "multi-agent": {
+        "copilot.toml": "multi-copilot.toml",
+        "skills/__ROOT_SKILL__/SKILL.md": "multi-supervisor.SKILL.md",
+        "skills/__CHILD_SKILL__/SKILL.md": "multi-worker.SKILL.md",
+        "agents/__CHILD_AGENT_ID__.toml": "multi-worker-agent.toml",
+        **COPILOT_COMMON_TOOL_FILES,
+    },
+}
+
+TOOL_TEMPLATE_FILES = {
+    "tool.toml": "tool-package.toml",
+    "runtime.toml": "tool-runtime.toml",
+    "pyproject.toml": "tool-pyproject.toml",
+    "requirements.lock": "tool-requirements.lock",
+    "src/__PYTHON_PACKAGE__/__init__.py": "tool-package-init.py",
+    "src/__PYTHON_PACKAGE__/core.py": "tool-core.py",
+    "src/__PYTHON_PACKAGE__/server.py": "tool-server.py",
+    "tests/test_core.py": "tool-test-core.py",
+    "README.md": "tool-README.md",
 }
 
 
@@ -57,34 +91,81 @@ def _render_template(name: str, replacements: dict[str, str]) -> str:
     return _replace_markers(_template_text(name), replacements)
 
 
-def _init_copilot(path: Path, name: str) -> None:
+def _validate_package_id(name: str) -> None:
     if re.fullmatch(r"[a-z][a-z0-9-]{0,63}", name) is None:
         raise CopilotPackageError(
             "invalid_id",
             "id",
             "must start with a lowercase letter and contain only lowercase letters, digits, or hyphens",
         )
+
+
+def _validate_empty_destination(path: Path) -> None:
+    if os.path.lexists(path) and path.is_symlink():
+        raise CopilotPackageError(
+            "unsafe_symlink", ".", "destination root must not be a symlink"
+        )
     if path.exists() and (not path.is_dir() or any(path.iterdir())):
         raise CopilotPackageError(
             "destination_not_empty", ".", f"refusing to overwrite non-empty path: {path}"
         )
-    agent_id = f"{name}-worker"
+
+
+def _template_replacements(name: str) -> dict[str, str]:
     tool_id = f"{name.replace('-', '_')}_tools"
-    replacements = {
+    return {
         "ID": name,
         "DISPLAY_NAME": name.replace("-", " ").title(),
-        "SUPERVISOR_SKILL": f"{name}-supervisor",
+        "ROOT_SKILL": f"{name}-root",
+        "ROOT_AGENT_ID": f"{name}-root",
         "CHILD_SKILL": f"{name}-worker",
-        "AGENT_ID": agent_id,
+        "CHILD_AGENT_ID": f"{name}-worker",
+        "TOOL_PACKAGE_ID": f"{name}-tools",
         "TOOL_ID": tool_id,
         "TOOL_DIR": f"{name}-tools",
+        "PYTHON_PACKAGE": tool_id,
     }
-    for destination_template, source_template in COPILOT_TEMPLATE_FILES.items():
+
+
+def _write_templates(
+    path: Path,
+    templates: dict[str, str],
+    replacements: dict[str, str],
+) -> None:
+    for destination_template, source_template in templates.items():
         destination = path / _replace_markers(destination_template, replacements)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(
             _render_template(source_template, replacements), encoding="utf-8"
         )
+
+
+def _init_copilot(path: Path, name: str, template: str) -> None:
+    _validate_package_id(name)
+    _validate_empty_destination(path)
+    _write_templates(path, COPILOT_TEMPLATE_FILES[template], _template_replacements(name))
+
+
+def _init_tool(path: Path, name: str) -> dict[str, object]:
+    _validate_package_id(name)
+    _validate_empty_destination(path)
+    replacements = _template_replacements(name)
+    replacements["TOOL_PACKAGE_ID"] = name
+    replacements["TOOL_ID"] = name.replace("-", "_")
+    replacements["PYTHON_PACKAGE"] = name.replace("-", "_")
+    _write_templates(path, TOOL_TEMPLATE_FILES, replacements)
+    try:
+        runtime = load_tool_runtime_manifest(path, path, Path("runtime.toml"))
+    except ToolRuntimeManifestError as error:
+        raise CopilotPackageError(error.code, error.relative_path, error.message) from error
+    return {
+        "ok": True,
+        "tool": {
+            "id": name,
+            "serverIds": [server.id for server in runtime.servers],
+            "dependencyKinds": [dependency.kind for dependency in runtime.dependencies],
+        },
+    }
 
 
 def _copilot_error_payload(error: CopilotPackageError) -> dict[str, object]:
@@ -462,6 +543,179 @@ def _test_error_payload(error: CopilotTestError) -> dict[str, object]:
     return payload
 
 
+def _bounded_check_error(error: Exception) -> dict[str, object]:
+    if isinstance(error, CopilotPackageError):
+        return {"code": error.code, "stage": "validate", "message": error.message}
+    if isinstance(error, CopilotDevError):
+        return {"code": error.code, "stage": error.stage, "message": error.message}
+    if isinstance(error, CopilotTestError):
+        payload: dict[str, object] = {
+            "code": error.code,
+            "stage": error.stage,
+            "message": error.public_message,
+            "nextAction": error.next_action,
+        }
+        if error.test_id is not None:
+            payload["testId"] = error.test_id
+        return payload
+    raise error
+
+
+def _check_phase(
+    phases: list[dict[str, object]],
+    name: str,
+    operation: Callable[[], object],
+) -> object:
+    started = time.monotonic()
+    try:
+        result = operation()
+    except (CopilotPackageError, CopilotDevError, CopilotTestError) as error:
+        phases.append(
+            {
+                "name": name,
+                "state": "failed",
+                "durationMs": round((time.monotonic() - started) * 1000),
+                "errorCode": _bounded_check_error(error)["code"],
+            }
+        )
+        raise
+    phases.append(
+        {
+            "name": name,
+            "state": "passed",
+            "durationMs": round((time.monotonic() - started) * 1000),
+        }
+    )
+    return result
+
+
+def _run_check(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
+    started = time.monotonic()
+    phases: list[dict[str, object]] = []
+    with ExitStack() as cleanup:
+        if args.workspace is None:
+            workspace = Path(
+                cleanup.enter_context(
+                    tempfile.TemporaryDirectory(prefix="copilot-check-workspace-")
+                )
+            )
+        else:
+            workspace = args.workspace
+        if args.tool_environment_root is None:
+            tool_environment_root = Path(
+                cleanup.enter_context(
+                    tempfile.TemporaryDirectory(prefix="copilot-check-tools-")
+                )
+            )
+        else:
+            tool_environment_root = args.tool_environment_root
+
+        try:
+            composition = _check_phase(
+                phases,
+                "validate",
+                lambda: load_dev_composition(
+                    args.source_root,
+                    args.manifest,
+                    tool_registry_root=args.tool_registry_root,
+                ),
+            )
+            assert hasattr(composition, "summary")
+            summary = composition.summary
+            resolved_build_store: list[Path] = []
+
+            def prepare() -> dict[str, object]:
+                build_store = (
+                    args.build_store_root
+                    if args.build_store_root is not None
+                    else default_tool_build_store_root(composition)
+                )
+                resolved_build_store.append(build_store)
+                return _run_prepare(
+                    SimpleNamespace(
+                        source_root=args.source_root,
+                        manifest=args.manifest,
+                        tool_registry_root=args.tool_registry_root,
+                        output_root=tool_environment_root,
+                        build_store_root=build_store,
+                    )
+                )
+
+            _check_phase(phases, "prepare", prepare)
+            build_store_root = resolved_build_store[0]
+            dev_args = SimpleNamespace(
+                source_root=args.source_root,
+                manifest=args.manifest,
+                tool_registry_root=args.tool_registry_root,
+                workspace=workspace,
+                profile=None,
+                keep_profile=False,
+                codex_bin=args.codex_bin,
+                tool_environment_root=tool_environment_root,
+                build_store_root=build_store_root,
+                timeout_seconds=args.timeout_seconds,
+            )
+            _check_phase(phases, "dev", lambda: _run_dev_probe(dev_args))
+            tests = _check_phase(
+                phases,
+                "test",
+                lambda: run_copilot_tests(
+                    args.source_root,
+                    args.manifest,
+                    workspace,
+                    _resolve_codex_bin(args.codex_bin),
+                    case_id=args.case_id,
+                    timeout_seconds=args.timeout_seconds,
+                    tool_environment_root=tool_environment_root,
+                    build_store_root=build_store_root,
+                    tool_registry_root=args.tool_registry_root,
+                ),
+            )
+        except (CopilotPackageError, CopilotDevError, CopilotTestError) as error:
+            return 2, {
+                "ok": False,
+                "state": "check_failed",
+                "failedPhase": phases[-1]["name"],
+                "durationMs": round((time.monotonic() - started) * 1000),
+                "phases": phases,
+                "error": _bounded_check_error(error),
+            }
+
+    assert isinstance(tests, dict)
+    test_entries = tests.get("tests", [])
+    return 0, {
+        "ok": True,
+        "state": "check_passed",
+        "copilot": {
+            "id": summary.id,
+            "compositionDescriptorSha256": summary.composition_descriptor_sha256,
+        },
+        "durationMs": round((time.monotonic() - started) * 1000),
+        "phases": phases,
+        "tests": {"passed": len(test_entries) if isinstance(test_entries, list) else 0},
+    }
+
+
+def _print_check_result(payload: dict[str, object], *, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    phases = payload["phases"]
+    assert isinstance(phases, list)
+    if payload["ok"]:
+        copilot = payload["copilot"]
+        assert isinstance(copilot, dict)
+        print(f"Copilot '{copilot['id']}' passed validate, prepare, dev, and test.")
+    else:
+        print(f"copilot: check failed during {payload['failedPhase']}", file=sys.stderr)
+    for phase in phases:
+        assert isinstance(phase, dict)
+        print(
+            f"  {phase['name']}: {phase['state']} ({phase['durationMs']} ms)",
+            file=sys.stdout if payload["ok"] else sys.stderr,
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="copilot")
     subparsers = parser.add_subparsers(dest="resource", required=True)
@@ -469,7 +723,19 @@ def main(argv: list[str] | None = None) -> int:
     init_copilot = subparsers.add_parser("init")
     init_copilot.add_argument("path", type=Path)
     init_copilot.add_argument("--name", required=True)
+    init_copilot.add_argument(
+        "--template",
+        choices=tuple(COPILOT_TEMPLATE_FILES),
+        default="single-agent",
+    )
     init_copilot.add_argument("--json", action="store_true")
+
+    tool = subparsers.add_parser("tool")
+    tool_subparsers = tool.add_subparsers(dest="tool_action", required=True)
+    init_tool = tool_subparsers.add_parser("init")
+    init_tool.add_argument("path", type=Path)
+    init_tool.add_argument("--name", required=True)
+    init_tool.add_argument("--json", action="store_true")
 
     validate_copilot = subparsers.add_parser("validate")
     validate_copilot.add_argument("source_root", type=Path)
@@ -502,6 +768,28 @@ def main(argv: list[str] | None = None) -> int:
     test_copilot.add_argument("--timeout-seconds", type=float, default=45.0)
     test_copilot.add_argument("--json", action="store_true")
 
+    check_copilot = subparsers.add_parser("check")
+    check_copilot.add_argument("source_root", type=Path)
+    check_copilot.add_argument("--workspace", type=Path)
+    check_copilot.add_argument("--manifest", type=Path, default=Path("copilot.toml"))
+    check_copilot.add_argument("--tool-registry-root", type=Path)
+    check_copilot.add_argument("--codex-bin", type=Path)
+    check_copilot.add_argument(
+        "--tool-env",
+        "--tool-environment-root",
+        dest="tool_environment_root",
+        type=Path,
+    )
+    check_copilot.add_argument(
+        "--build-store",
+        "--build-store-root",
+        dest="build_store_root",
+        type=Path,
+    )
+    check_copilot.add_argument("--case", dest="case_id")
+    check_copilot.add_argument("--timeout-seconds", type=float, default=45.0)
+    check_copilot.add_argument("--json", action="store_true")
+
     prepare_copilot = subparsers.add_parser("prepare")
     prepare_copilot.add_argument("source_root", type=Path)
     prepare_copilot.add_argument("--manifest", type=Path, default=Path("copilot.toml"))
@@ -520,10 +808,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.resource == "init":
-            _init_copilot(args.path, args.name)
+            _init_copilot(args.path, args.name, args.template)
             manifest = Path("copilot.toml")
             summary = validate_copilot_package(args.path, manifest)
             _print_copilot_summary(summary, manifest=manifest, as_json=args.json)
+            return 0
+        if args.resource == "tool" and args.tool_action == "init":
+            payload = _init_tool(args.path, args.name)
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                tool_payload = payload["tool"]
+                assert isinstance(tool_payload, dict)
+                print(f"Tool package '{tool_payload['id']}' is valid.")
+                print(f"  MCP servers: {len(tool_payload['serverIds'])}")
             return 0
         if args.resource == "validate":
             summary = validate_copilot_package(
@@ -550,6 +848,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             _print_test_result(payload, as_json=args.json)
             return 0
+        if args.resource == "check":
+            status, payload = _run_check(args)
+            _print_check_result(payload, as_json=args.json)
+            return status
         if args.resource == "prepare":
             _print_prepare_result(_run_prepare(args), as_json=args.json)
             return 0

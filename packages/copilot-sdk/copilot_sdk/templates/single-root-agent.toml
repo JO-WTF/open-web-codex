@@ -1,0 +1,19 @@
+name = "__ROOT_AGENT_ID__"
+description = "Handle __DISPLAY_NAME__ work directly with the declared typed Tool."
+developer_instructions = """
+Act as the __DISPLAY_NAME__ Root Agent. Follow the __ROOT_SKILL__ Skill, call the declared Tool directly, and do not create child Agents.
+"""
+
+[features]
+multi_agent = false
+
+[[skills.config]]
+name = "__ROOT_SKILL__"
+enabled = true
+
+[plugins.__TOOL_ID__]
+enabled = true
+
+[plugins.__TOOL_ID__.mcp_servers.__TOOL_ID__]
+omit_tools_from = ["direct"]
+default_tools_approval_mode = "approve"

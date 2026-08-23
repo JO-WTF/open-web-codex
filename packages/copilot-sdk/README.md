@@ -6,26 +6,54 @@ Copilot SDK 提供一个面向开发者的最小源码入口：创建和静态�
 
 ## 开始使用
 
-需要 Python 3.11 或更高版本。在仓库根目录安装当前 checkout：
+需要 Python 3.11 或更高版本。仓库内开发优先使用统一入口；`--help` 不创建环境，其余命令由
+唯一 bootstrap owner 准备隔离 editable SDK 环境：
 
 ```bash
-python3 -m pip install -e packages/copilot-provider-sdk -e packages/copilot-sdk
+./scripts/copilot.sh --help
 ```
 
-创建一个新的 Copilot 源码目录：
+创建一个默认的单 Agent Copilot，Root 直接调用 typed Tool：
 
 ```bash
-copilot init ./scratch/example-copilot --name example-copilot
+./scripts/copilot.sh init ./scratch/example-copilot --name example-copilot
+```
+
+需要 Root→worker 原生协作拓扑时显式选择多 Agent 模板：
+
+```bash
+./scripts/copilot.sh init ./scratch/example-team --name example-team \
+  --template multi-agent
 ```
 
 验证该目录：
 
 ```bash
-copilot validate ./scratch/example-copilot
+./scripts/copilot.sh validate ./scratch/example-copilot
 ```
 
-`init` 生成可以立即通过静态验证的最小组合；这不表示它已经安装到 Profile，或已经具备
-生产安装或模型验收。
+`init` 的 `--template` 只接受 `single-agent` 或 `multi-agent`，默认前者。两种模板都生成
+业务中性的 typed FastMCP Tool 和一条本地确定性 Runtime 用例，可以立即通过静态验证；这不
+表示它已经安装到生产 Profile，或已经通过生产模型验收。
+
+一次运行完整的 `validate → prepare → dev → test`，首个失败阶段会立即停止：
+
+```bash
+./scripts/copilot.sh check ./scratch/example-copilot --json
+```
+
+`check` 可显式传入 `--workspace`、`--manifest`、`--tool-env`、`--timeout-seconds` 和
+`--case`。未给出 Workspace 或 Tool output 时使用自动清理的临时目录；共享 build store 保持
+可复用。输出只包含有界 phase、时长、组合摘要和 typed failure，不写 Platform prepared root。
+
+创建一个不自动接线到任何 Role/manifest 的根级共享 Tool 包：
+
+```bash
+./scripts/copilot.sh tool init ./tools/example-analysis --name example-analysis
+```
+
+生成物包含严格 `tool.toml`/`runtime.toml`、Python `src/` package、SHA-256 hash lock、typed
+FastMCP Tool、实现测试和 README；默认不依赖 Provider SDK。
 
 ## 隔离开发探针
 
@@ -68,7 +96,7 @@ copilot test ./scratch/example-copilot --workspace "$PWD"
 只运行一个用例：
 
 ```bash
-copilot test ./scratch/example-copilot --workspace "$PWD" --case native-worker-health
+copilot test ./scratch/example-copilot --workspace "$PWD" --case native-root-analysis
 ```
 
 每个用例使用独立的临时 Profile、durable Thread 和本地确定性 Responses fixture，但执行真实
@@ -137,8 +165,9 @@ copilot validate copilots/warehouse-network
 
 当前交付没有生产 Profile 安装、真实生产模型质量验收、readiness 持久化/聚合或 Web 创作体验。
 `dev` 是无模型 discovery gate；`test` 是使用本地确定性 Provider 的原生正常链 gate。两者都
-不是安装链。CLI 只提供 `init`、`validate`、`prepare`、`dev` 和 `test`；Tool source 的唯一
-运行声明是 `runtime.toml`，不提供独立 Tool package、source Plugin/MCP transport 或 launcher 入口。
+不是安装链。CLI 提供 `init`、`tool init`、`validate`、`prepare`、`dev`、`test` 和 `check`；
+Tool source 的唯一运行声明是 `runtime.toml`，不生成 source Plugin/MCP transport 或 launcher。
+`tool init` 只创建共享 Tool source，不修改任何 Copilot Role 或 manifest。
 
 Settings 中的 Agents 管理 Codex Runtime Role；它不是 Copilot 创建、安装或 readiness 页面。
 

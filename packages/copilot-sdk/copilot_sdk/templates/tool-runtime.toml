@@ -8,5 +8,5 @@ lock = "requirements.lock"
 
 [[servers]]
 id = "__TOOL_ID__"
-entry = { kind = "python-module", dependency = "python", module = "server" }
+entry = { kind = "python-module", dependency = "python", module = "__PYTHON_PACKAGE__.server" }
 args = []

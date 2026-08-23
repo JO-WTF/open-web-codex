@@ -489,8 +489,8 @@ copilot_tool_registry_root="$repo_root/tools"
 copilot_prepared_root="$data_dir/tool-environments"
 copilot_build_store_root="$data_dir/tool-builds"
 copilot_sdk_environment_root="$data_dir/sdk-environments/copilot"
-copilot_sdk_python="$copilot_sdk_environment_root/bin/python"
-copilot_sdk_source_marker="$copilot_sdk_environment_root/source-fingerprint"
+copilot_sdk_bootstrap="$script_dir/copilot-sdk-bootstrap.sh"
+copilot_sdk_python=""
 
 if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
   if [[ ! -f "$master_key_file" ]]; then
@@ -714,29 +714,18 @@ build_stale_codex_runtime_components() {
   fi
 }
 
+bootstrap_copilot_sdk() {
+  copilot_sdk_python="$(
+    "$copilot_sdk_bootstrap" --environment-root "$copilot_sdk_environment_root"
+  )"
+  [[ "$copilot_sdk_python" == /* && -x "$copilot_sdk_python" ]] || {
+    error "Copilot SDK bootstrap returned an invalid Python executable"
+    return 1
+  }
+}
+
 prepare_copilot_environment() {
   local package_root="$1" environment_root="$2"
-  local expected_fingerprint installed_fingerprint=""
-  expected_fingerprint="$(
-    "$python_cmd" -c \
-      'import hashlib, pathlib, sys; h=hashlib.sha256(); [(h.update(str((source := pathlib.Path(p)).resolve()).encode()), h.update(bytes([0])), h.update(source.read_bytes())) for p in sys.argv[1:]]; print(h.hexdigest())' \
-      "$repo_root/packages/copilot-provider-sdk/pyproject.toml" \
-      "$repo_root/packages/copilot-sdk/pyproject.toml"
-  )"
-  if [[ -r "$copilot_sdk_source_marker" ]]; then
-    IFS= read -r installed_fingerprint <"$copilot_sdk_source_marker" || true
-  fi
-  if [[ ! -x "$copilot_sdk_python" || "$installed_fingerprint" != "$expected_fingerprint" ]]; then
-    if [[ ! -x "$copilot_sdk_python" ]]; then
-      "$python_cmd" -m venv "$copilot_sdk_environment_root"
-    fi
-    "$copilot_sdk_python" -m pip install --disable-pip-version-check \
-      -e "$repo_root/packages/copilot-provider-sdk" \
-      -e "$repo_root/packages/copilot-sdk"
-    printf '%s\n' "$expected_fingerprint" >"$copilot_sdk_source_marker"
-  fi
-  "$copilot_sdk_python" -c \
-    'import importlib.metadata as m; assert m.version("open-web-codex-provider-sdk").startswith("0.1."); assert m.version("open-web-codex-copilot-sdk").startswith("0.1.")'
   "$copilot_sdk_python" -m copilot_sdk prepare "$package_root" \
     --tool-registry-root "$copilot_tool_registry_root" \
     --output-root "$environment_root" \
@@ -837,6 +826,7 @@ if [[ "$codex_mode" == "real" ]]; then
     [[ -x "$code_mode_host_bin" ]] || { error "Codex code-mode host is missing: $code_mode_host_bin"; exit 1; }
     export CODEX_CODE_MODE_HOST_PATH="$code_mode_host_bin"
   fi
+  run_step "Copilot SDK" bootstrap_copilot_sdk
   run_step "Copilot environments" prepare_copilot_environments
 fi
 

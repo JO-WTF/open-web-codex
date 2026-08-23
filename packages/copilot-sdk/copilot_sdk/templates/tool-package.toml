@@ -1,0 +1,3 @@
+schema_version = 1
+id = "__TOOL_PACKAGE_ID__"
+runtime = "runtime.toml"

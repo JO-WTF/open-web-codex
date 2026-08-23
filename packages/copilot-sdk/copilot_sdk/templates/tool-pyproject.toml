@@ -3,10 +3,19 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "__TOOL_DIR__"
+name = "__TOOL_PACKAGE_ID__"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = ["mcp==1.27.1"]
 
-[tool.setuptools]
-py-modules = ["server"]
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

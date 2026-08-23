@@ -13,9 +13,12 @@ grep -F -- 'copilot_tool_registry_root="$repo_root/tools"' "$launcher" >/dev/nul
 grep -F -- 'copilot_prepared_root="$data_dir/tool-environments"' "$launcher" >/dev/null
 grep -F -- 'copilot_build_store_root="$data_dir/tool-builds"' "$launcher" >/dev/null
 grep -F -- 'copilot_sdk_environment_root="$data_dir/sdk-environments/copilot"' "$launcher" >/dev/null
-grep -F -- '-e "$repo_root/packages/copilot-provider-sdk"' "$launcher" >/dev/null
-grep -F -- '-e "$repo_root/packages/copilot-sdk"' "$launcher" >/dev/null
-grep -F -- 'source := pathlib.Path(p)).resolve()' "$launcher" >/dev/null
+grep -F -- 'copilot_sdk_bootstrap="$script_dir/copilot-sdk-bootstrap.sh"' "$launcher" >/dev/null
+grep -F -- '"$copilot_sdk_bootstrap" --environment-root "$copilot_sdk_environment_root"' "$launcher" >/dev/null
+[[ "$(grep -c -- 'bootstrap_copilot_sdk' "$launcher")" == "2" ]]
+! grep -F -- '-m pip install' "$launcher" >/dev/null
+! grep -F -- '-m venv' "$launcher" >/dev/null
+! grep -F -- 'source-fingerprint' "$launcher" >/dev/null
 grep -F -- '"$copilot_sdk_python" -m copilot_sdk prepare "$package_root"' "$launcher" >/dev/null
 grep -F -- '--tool-registry-root "$copilot_tool_registry_root"' "$launcher" >/dev/null
 grep -F -- '--output-root "$environment_root"' "$launcher" >/dev/null
@@ -29,6 +32,12 @@ from pathlib import Path
 import sys
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
+bootstrap_start = text.index("bootstrap_copilot_sdk()")
+prepare_start = text.index("prepare_copilot_environment()")
+prepare_end = text.index("\nprepare_copilot_environments()", prepare_start)
+prepare_body = text[prepare_start:prepare_end]
+assert "copilot_sdk_bootstrap" not in prepare_body
+assert "pip install" not in prepare_body
 start = text.index("prepare_copilot_environments()")
 loop_end = text.index("done < <(find \"$copilots_root\"", start)
 gc = text.index('copilot_sdk gc-builds', start)

@@ -1,0 +1,36 @@
+schema_version = 1
+id = "__ID__"
+display_name = "__DISPLAY_NAME__"
+
+[root]
+skill = "__ROOT_SKILL__"
+task_skills = "none"
+
+[[skills]]
+id = "__ROOT_SKILL__"
+path = "skills/__ROOT_SKILL__"
+
+[[skills]]
+id = "__CHILD_SKILL__"
+path = "skills/__CHILD_SKILL__"
+
+[[agents]]
+id = "__CHILD_AGENT_ID__"
+role = "agents/__CHILD_AGENT_ID__.toml"
+
+[[tools]]
+id = "__TOOL_ID__"
+root = "tools/__TOOL_DIR__"
+runtime = "tools/__TOOL_DIR__/runtime.toml"
+
+[[tests]]
+id = "native-worker-analysis"
+prompt = "Delegate one sample record analysis and return the worker's exact typed result."
+target = { kind = "agent", agent = "__CHILD_AGENT_ID__" }
+tool = "__TOOL_ID__"
+server = "__TOOL_ID__"
+tool_name = "analyze_record"
+arguments = { record_id = "sample", value = 7 }
+
+[tests.expect]
+structured_content = { status = "ok", record_id = "sample", value = 7 }

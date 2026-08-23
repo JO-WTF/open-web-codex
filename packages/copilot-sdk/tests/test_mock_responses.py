@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from copilot_sdk.mock_responses import (
+    ACCEPTANCE_FORK_TURNS,
     _has_child_task_envelope,
     _has_user_prompt,
     classify_request,
@@ -10,7 +11,7 @@ from copilot_sdk.mock_responses import (
 
 
 class MockResponsesRoutingTests(unittest.TestCase):
-    def test_acceptance_spawn_uses_fresh_role_context(self) -> None:
+    def test_acceptance_spawn_keeps_one_turn_for_selected_capability_context(self) -> None:
         from copilot_sdk.mock_responses import _call
 
         item = _call(
@@ -20,12 +21,12 @@ class MockResponsesRoutingTests(unittest.TestCase):
                 "task_name": "acceptance_worker",
                 "message": "child task",
                 "agent_type": "worker",
-                "fork_turns": "none",
+                "fork_turns": ACCEPTANCE_FORK_TURNS,
             },
             namespace="collaboration",
         )
 
-        self.assertIn('"fork_turns":"none"', item["arguments"])
+        self.assertIn('"fork_turns":"1"', item["arguments"])
 
     def test_instructions_do_not_match_root_prompt(self) -> None:
         body = {
