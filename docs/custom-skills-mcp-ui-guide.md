@@ -201,14 +201,23 @@ root = "tools/geo-tools"
 runtime = "tools/geo-tools/runtime.toml"
 ```
 
+上面是 Copilot 包内的本地 Tool。需要被多个 Copilot 复用的 Tool 必须放在根级 `tools/` 注册表，
+提供严格 `tool.toml`，manifest 只按 package 引用：
+
+```toml
+[[tools]]
+id = "geo_tools"
+package = "geo-tools"
+```
+
 Role 源码只在 `[plugins.geo_tools.mcp_servers.geo_tools]` 下声明 server allowlist 与审批
 policy，不写 transport。Tool source 也不写 `.codex-plugin/plugin.json`、`.mcp.json`、安装脚本
 或 launcher；这些都是 SDK 编译出的临时 Runtime projection，不是作者事实。
 
-`copilot validate` 校验 Skill、Role、Tool runtime 与测试引用；`copilot prepare` 在调用者给定的
-外置 output root 准备依赖并写入内部 `prepared-tools.v1.json`。SDK `dev`/`test` 从 descriptor
-生成一次性 selected capability roots；Platform local startup 只调用一次相同 prepare，然后由
-Server 在当前 Profile 下解析 typed env binding 并投影 Role-local MCP。不要通过以下方式绕过：
+仓库内统一使用 `./scripts/copilot.sh`。`validate` 校验 Skill、Role、Tool runtime 与测试引用；
+`check` 依次完成 validate、外置依赖准备、真实 Runtime discovery 与本地确定性测试。Platform
+local startup 使用同一准备合同，然后由 Server 在当前 Profile 下解析 typed env binding 并投影
+Role-local MCP。不要通过以下方式绕过：
 
 - 扫描 Tool 目录猜测语言、依赖或 server。
 - 让 WebApp、Tool 或 Runtime launch 写 Profile 配置或安装依赖。
@@ -651,16 +660,15 @@ python3 codex/codex-rs/skills/src/assets/samples/skill-creator/scripts/quick_val
 
 ### 7.2 MCP 单元与启动 Smoke
 
-地图参考命令：
+仓网参考门：
 
 ```bash
-cd tools/warehouse-network-maps
-PYTHONPATH=. python3 -m unittest discover -s tests -v
-
-cd ../..
-PYTHONPATH=packages/copilot-sdk python3 -m copilot_sdk prepare copilots/warehouse-network \
-  --output-root "$PWD/.local/open-web-codex/copilot-environment"
+./scripts/copilot.sh check ./copilots/warehouse-network \
+  --workspace "$PWD"
 ```
+
+这个统一入口会为共享 Tool 注入受信任 registry，并为内部 prepare 同时提供 output 与 build
+store；不要用 `PYTHONPATH` 或缺少 `--build-store-root` 的裸 SDK 命令重建另一条环境链。
 
 单元测试使用 fake HTTP，不应访问付费 Provider。至少覆盖：
 
@@ -735,7 +743,7 @@ SDK projection、MCP 和 elicitation 边界。
 8. 在明暗主题、窄屏和超大屏下检查弹窗/面板。
 9. 让 Provider API 返回错误或断网，确认不会永久 in-progress。
 
-先以 `copilot dev` 验证 discovery，再以 `copilot test` 验证本地确定性正常链；真实 Provider、
+先以 `./scripts/copilot.sh check` 验证 discovery 与本地确定性正常链；真实 Provider、
 Credential elicitation 和 Web map-card 仍需从真实 Task 入口单独验收。测试 Key 只放在进程环境
 或 Secret Store，不提交到仓库、日志、Prompt 或测试快照。
 

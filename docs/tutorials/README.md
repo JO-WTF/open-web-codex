@@ -77,5 +77,6 @@
 ## 需要开发自己的 Copilot？
 
 这套教程面向使用者。要基于平台开发仓网或其他领域 Copilot，请阅读
-[开发一个仓网 Copilot](warehouse-copilot-developer-tutorial.md)；命令参数速查见
-[Copilot 开发者快速开始](copilot-developer-quickstart.md)。
+[Copilot 开发者中心](../developers/copilot/README.md)。第一次开发从
+[30 分钟做出第一个 Copilot](../developers/copilot/first-copilot.md)开始；维护仓网进入
+[开发仓网 Copilot](../developers/copilot/warehouse-copilot.md)。

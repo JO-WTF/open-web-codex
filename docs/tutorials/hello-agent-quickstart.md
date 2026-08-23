@@ -1,12 +1,22 @@
 # Hello Agent：第一次真实 Tool 调用
 
+> **适合谁**：想学习 Codex 原生 Plugin，而不是创建可选择 Copilot 包的开发者
+> **预计时间**：10–15 分钟
+> **前置条件**：本地 Web 可用，当前仓库 Workspace 已授权
+> **完成结果**：标准 Task 通过原生 Plugin 真实调用 `hello_writer.say_hello`
+
+本页走的是**原生 Plugin 路线**：`.codex-plugin/plugin.json` + Skill + MCP，由 Standard Task
+发现。它不使用 `copilot.toml`，也不会在 Copilot 选择列表创建包。若目标是开发一个可选择、可
+`check`/`sync` 的 Copilot，请改从
+[30 分钟做出第一个 Copilot](../developers/copilot/first-copilot.md)开始，不要混用两条装配路线。
+
 本篇目标很小：在 Web 中创建一个普通 Thread，让 Codex 真实调用
 `hello_writer.say_hello`，而不是直接凭模型生成一句问候。
 
 预计用时 10–15 分钟。你会创建一个 Thread，并产生一次模型调用；不会发布
 Supervisor、修改业务数据或访问外部系统。
 
-返回[教程总入口](../multi-agent-development-tutorial.md)。
+返回[Copilot 开发者中心](../developers/copilot/README.md)。
 
 ## 完成后的结果
 
@@ -194,4 +204,4 @@ python3 \
 - [ ] 能解释 Agent、Skill、Tool 和业务函数的区别；
 - [ ] 能解释为什么这个 Tool 可以免逐次审批，但其他高风险操作仍可能需要审批。
 
-接下来阅读[开发一个仓网 Copilot](warehouse-copilot-developer-tutorial.md)。
+接下来阅读[开发仓网 Copilot](../developers/copilot/warehouse-copilot.md)。

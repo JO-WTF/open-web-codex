@@ -45,6 +45,11 @@
 
 ### 扩展指南、仓网教程与开发者入口
 
+- [Copilot 开发者中心](developers/copilot/README.md)：仓库内部第一次开发 Copilot 的唯一入口；
+  统一使用 `./scripts/copilot.sh`，先完成业务中性的单 Agent，再进入真实仓网。
+  - [30 分钟做出第一个 Copilot](developers/copilot/first-copilot.md)
+  - [开发仓网 Copilot](developers/copilot/warehouse-copilot.md)
+  - [测试与排错](developers/copilot/testing-and-troubleshooting.md)
 - [领域 Agent 扩展架构](domain-agent-extension-architecture.md)
 - [Skills、MCP 与自定义 UI 扩展](custom-skills-mcp-ui-guide.md)
 - [仓网 Copilot 新手教程](multi-agent-development-tutorial.md)：从上传数据开始，完成
@@ -56,16 +61,8 @@
   - [评估新增 Balikpapan 仓](tutorials/indonesia-network-03-two-level-cost.md)
   - [找出达到 90% 的最少新增仓](tutorials/indonesia-network-04-optimization-map.md)
   - [审批与故障恢复](tutorials/approvals-and-recovery.md)
-- [开发一个仓网 Copilot](tutorials/warehouse-copilot-developer-tutorial.md)：面向开发者的完整
-  路径：从业务边界、共享领域 Tool、Skill、Role 和 `copilot.toml`，走到 SDK 验证和 Web
-  真实验收。
-- [Copilot 开发者快速开始](tutorials/copilot-developer-quickstart.md)：命令速查；当前
-  `copilot init` / `validate` / `prepare` / `dev` / `test` 源码入口；SDK 从显式 runtime manifest
-  和 hash lock 准备外置 Tool 环境，`dev` 在隔离 Profile 中验证 Skill 与 MCP Server discovery，
-  `test` 用本地确定性 Provider 验证单条原生 Supervisor/Role/MCP 正常链。它们不证明真实生产
-  模型质量、生产 Profile 安装、Marketplace 或多用户 readiness。
 - [Hello Agent：第一次真实 Tool 调用](tutorials/hello-agent-quickstart.md)：开发者练习，不是
-  仓网使用前置条件。
+  仓网使用前置条件；它演示原生 Plugin 路线，不是 Copilot SDK 包。
 
 扩展指南和教程不能重新定义 Profile、Workspace、Artifact、Agent Definition、Runtime Role
 等核心术语。仓网教程只描述当前已验证的使用流程；历史原型和已移除的发布流程只作为明确
