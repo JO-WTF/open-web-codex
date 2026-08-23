@@ -264,6 +264,14 @@ pub(crate) struct ThreadArchiveEventParams {
     pub(crate) thread_id: String,
     pub(crate) action: ThreadArchiveAction,
     pub(crate) occurred_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) app_server_client: Option<CodexAppServerClientMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) runtime: Option<CodexRuntimeMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) thread_source: Option<ThreadSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) parent_thread_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1441,7 +1449,7 @@ pub(crate) fn subagent_thread_started_event_request(
         runtime: current_runtime_metadata(),
         model: input.model,
         ephemeral: input.ephemeral,
-        thread_source: Some(ThreadSource::Subagent),
+        thread_source: input.thread_source,
         initialization_mode: ThreadInitializationMode::New,
         subagent_source: Some(subagent_source_name(&input.subagent_source)),
         parent_thread_id: input.parent_thread_id,
