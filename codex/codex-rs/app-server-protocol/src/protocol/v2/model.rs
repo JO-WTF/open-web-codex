@@ -101,6 +101,8 @@ pub struct ModelProviderSummary {
 pub struct ModelProviderListResponse {
     pub data: Vec<ModelProviderSummary>,
     pub current_provider_id: String,
+    /// Exact model selected in the current Profile configuration; null when unset.
+    pub current_model_id: Option<String>,
 }
 
 /// Requests a fresh model catalog from one configured Provider.

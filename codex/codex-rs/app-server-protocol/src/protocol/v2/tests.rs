@@ -89,6 +89,34 @@ fn external_agent_config_detect_response_defaults_connectors_for_older_servers()
 }
 
 #[test]
+fn model_provider_list_response_serializes_a_nullable_current_model_id() {
+    let unset = ModelProviderListResponse {
+        data: Vec::new(),
+        current_provider_id: "configured".to_string(),
+        current_model_id: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&unset).expect("serialize Provider list"),
+        json!({
+            "data": [],
+            "currentProviderId": "configured",
+            "currentModelId": null,
+        })
+    );
+
+    let selected: ModelProviderListResponse = serde_json::from_value(json!({
+        "data": [],
+        "currentProviderId": "configured",
+        "currentModelId": "configured-model",
+    }))
+    .expect("deserialize Provider list");
+    assert_eq!(
+        selected.current_model_id.as_deref(),
+        Some("configured-model")
+    );
+}
+
+#[test]
 fn thread_background_terminals_list_response_round_trips_foreign_paths() {
     for (uri, expected_cwd) in [
         ("file:///home/alice/repo", "/home/alice/repo"),

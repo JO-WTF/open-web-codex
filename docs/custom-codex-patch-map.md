@@ -80,8 +80,10 @@ safe-default semantics。
 `codex-api/src/{endpoint/{models.rs,session.rs},lib.rs}`；
 `login/src/auth/default_client.rs`；`model-provider/src/{models_endpoint.rs,lib.rs}`。
 
-**Typed contract.** `modelProvider/list` 和 `modelProvider/models/list` 只由 Runtime config
-registry 解析 Provider；请求者不能提交 URL 或凭据。fresh catalog 严格接受 bounded rich/OpenAI
+**Typed contract.** `modelProvider/list` 只由 latest Runtime config registry 解析 Provider，
+按配置顺序返回每个 `models` 和 `model_count`，并返回 typed nullable `currentModelId`；它不做 fresh
+fetch、不写 cache/selection，也不投影 auth/query/header。`modelProvider/models/list` 的请求者不能
+提交 URL 或凭据，fresh catalog 严格接受 bounded rich/OpenAI
 `/models`，以 body-free `NotFound`、`RateLimited`、`Upstream`、`InvalidJson`、timeout 等分类
 返回；不切换 current Provider，不写 `ModelsManager`/cache，不改变 Thread/Turn。Provider list 和
 capabilities 投影显式 `supportsFunctionTools`，并保留 typed
@@ -93,7 +95,7 @@ capabilities 投影显式 `supportsFunctionTools`，并保留 typed
 **验证门。** `./scripts/test-codex.sh -p codex-login default_client`、
 `-p codex-model-provider fresh_catalog`、`-p codex-app-server model_provider_list`、
 `-p codex-app-server model_provider_models_list`、`-p codex-app-server-protocol`；重新生成并检查
-protocol Schema/TypeScript。
+protocol Schema/TypeScript，以及 real app-server smoke。
 
 **退出条件。** 上游提供等价的 Provider-scoped fresh catalog、capability API、typed error 与
 preserving no-request-logging route client。

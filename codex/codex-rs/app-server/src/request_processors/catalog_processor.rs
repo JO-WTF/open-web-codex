@@ -257,11 +257,23 @@ impl CatalogRequestProcessor {
                     supports_function_tools: provider.supports_function_tools,
                     kind,
                     is_current: id == &config.model_provider_id,
-                    model_count: 0,
+                    model_count: provider.models.len(),
                     can_edit: !is_built_in,
                     can_delete: !is_built_in && id != &config.model_provider_id,
                     can_fetch_models: !is_built_in,
-                    models: Vec::new(),
+                    models: provider
+                        .models
+                        .iter()
+                        .map(|model| ModelProviderModelSummary {
+                            model_id: model.model_id.clone(),
+                            model_name: model.model_name.clone(),
+                            max_token_len: model.max_token_len,
+                            max_output_tokens: model.max_output_tokens,
+                            show_in_picker: model.show_in_picker,
+                            context_window: model.context_window,
+                            supports_search_tool: model.supports_search_tool,
+                        })
+                        .collect(),
                 }
             })
             .collect::<Vec<_>>();
@@ -270,6 +282,7 @@ impl CatalogRequestProcessor {
             ModelProviderListResponse {
                 data: providers,
                 current_provider_id: config.model_provider_id,
+                current_model_id: config.model.clone(),
             }
             .into(),
         ))

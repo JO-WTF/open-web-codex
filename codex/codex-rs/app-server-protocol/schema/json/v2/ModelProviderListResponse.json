@@ -125,6 +125,13 @@
     }
   },
   "properties": {
+    "currentModelId": {
+      "description": "Exact model selected in the current Profile configuration; null when unset.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "currentProviderId": {
       "type": "string"
     },

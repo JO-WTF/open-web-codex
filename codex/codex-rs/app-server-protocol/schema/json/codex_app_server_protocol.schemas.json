@@ -14697,6 +14697,13 @@
       "ModelProviderListResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "currentModelId": {
+            "description": "Exact model selected in the current Profile configuration; null when unset.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "currentProviderId": {
             "type": "string"
           },
