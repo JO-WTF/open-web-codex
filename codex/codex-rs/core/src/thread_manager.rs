@@ -1027,7 +1027,7 @@ impl ThreadManager {
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
         config = self
             .state
-            .prepare_resumed_config(config, &session_source, &initial_history)
+            .prepare_resumed_config(config, &initial_history)
             .await?;
         let agent_control = self.agent_control_for_config(&config);
         if let InitialHistory::Resumed(resumed) = &initial_history
@@ -1715,7 +1715,7 @@ impl ThreadManagerState {
             inherited_exec_policy,
         } = options;
         let config = self
-            .prepare_resumed_config(config, &session_source, &initial_history)
+            .prepare_resumed_config(config, &initial_history)
             .await?;
         let client_mcp_extensions = self.client_mcp_extensions_for_child(parent_thread_id).await;
         let thread_source = initial_history.get_resumed_thread_source();
@@ -1743,7 +1743,6 @@ impl ThreadManagerState {
     async fn prepare_resumed_config(
         &self,
         mut config: Config,
-        session_source: &SessionSource,
         initial_history: &InitialHistory,
     ) -> CodexResult<Config> {
         if let InitialHistory::Resumed(resumed) = initial_history {
@@ -1774,7 +1773,7 @@ impl ThreadManagerState {
                 config.model_reasoning_effort = Some(reasoning_effort);
             }
         }
-        if let Some(role_name) = session_source.get_agent_role() {
+        if let Some(role_name) = resumed_v1_thread_spawn_role(initial_history) {
             reapply_role_to_config_for_child_resume(&mut config, &role_name)
                 .await
                 .map_err(CodexErr::InvalidRequest)?;
@@ -2072,6 +2071,26 @@ impl ThreadManagerState {
             .map(|thread| thread.session.services.rollout_thread_trace.clone())
             .unwrap_or_else(codex_rollout_trace::ThreadTraceContext::disabled)
     }
+}
+
+fn resumed_v1_thread_spawn_role(initial_history: &InitialHistory) -> Option<String> {
+    if !matches!(initial_history, InitialHistory::Resumed(_))
+        || resolve_multi_agent_version(initial_history, /*inherited_multi_agent_version*/ None)
+            != Some(MultiAgentVersion::V1)
+    {
+        return None;
+    }
+    let (
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            agent_role: Some(role_name),
+            ..
+        }),
+        _,
+    ) = initial_history.get_resumed_session_sources()?
+    else {
+        return None;
+    };
+    Some(role_name)
 }
 
 fn stored_thread_to_initial_history(

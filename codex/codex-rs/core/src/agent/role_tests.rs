@@ -191,6 +191,176 @@ args = []
 }
 
 #[tokio::test]
+async fn managed_role_fresh_and_v1_resume_share_exact_owned_projection() {
+    let (home, config) = test_config_with_cli_overrides(vec![(
+        "agents.resource-reader.runtime_mcp_projection".to_string(),
+        TomlValue::Boolean(true),
+    )])
+    .await;
+    let baseline_model_instructions = config
+        .config_layer_stack
+        .effective_config()
+        .get("model_instructions_file")
+        .cloned();
+    let baseline_environment_context = config
+        .config_layer_stack
+        .effective_config()
+        .get("include_environment_context")
+        .cloned();
+    let role_path = write_role_config(
+        &home,
+        "resource-reader.toml",
+        r#"instructions = "Read only provider-owned resources."
+developer_instructions = "Use the exact resource reference."
+include_permissions_instructions = false
+include_apps_instructions = false
+include_collaboration_mode_instructions = false
+include_environment_context = false
+model_instructions_file = "must-not-project.md"
+
+[features]
+shell_tool = false
+multi_agent_v2 = false
+
+[[skills.config]]
+name = "resource-reader"
+enabled = true
+
+[mcp_servers.role_resources]
+command = "/bin/echo"
+args = []
+"#,
+    )
+    .await;
+    let role = AgentRoleConfig {
+        description: None,
+        config_file: Some(role_path),
+        nickname_candidates: None,
+    };
+    let mut fresh = config.clone();
+    fresh
+        .agent_roles
+        .insert("resource-reader".to_string(), role.clone());
+    let mut resumed = config;
+    resumed
+        .agent_roles
+        .insert("resource-reader".to_string(), role);
+
+    apply_role_to_config(&mut fresh, Some("resource-reader"))
+        .await
+        .expect("fresh managed Role should apply");
+    reapply_role_to_config_for_child_resume(&mut resumed, "resource-reader")
+        .await
+        .expect("V1 managed Role should reapply");
+
+    assert_eq!(fresh.developer_instructions, resumed.developer_instructions);
+    assert_eq!(fresh.mcp_servers, resumed.mcp_servers);
+    for key in [
+        "instructions",
+        "include_permissions_instructions",
+        "include_apps_instructions",
+        "include_collaboration_mode_instructions",
+        "features",
+        "skills",
+    ] {
+        assert_eq!(
+            fresh.config_layer_stack.effective_config().get(key),
+            resumed.config_layer_stack.effective_config().get(key),
+            "fresh and V1 resume must share Role-owned `{key}`",
+        );
+    }
+    assert_eq!(
+        resumed
+            .config_layer_stack
+            .effective_config()
+            .get("model_instructions_file"),
+        baseline_model_instructions.as_ref(),
+    );
+    assert_eq!(
+        resumed
+            .config_layer_stack
+            .effective_config()
+            .get("include_environment_context"),
+        baseline_environment_context.as_ref(),
+    );
+}
+
+#[tokio::test]
+async fn managed_role_rejects_true_raw_include_flags() {
+    let (home, mut config) = test_config_with_cli_overrides(vec![(
+        "agents.resource-reader.runtime_mcp_projection".to_string(),
+        TomlValue::Boolean(true),
+    )])
+    .await;
+    let role_path = write_role_config(
+        &home,
+        "resource-reader.toml",
+        r#"include_apps_instructions = true
+
+[mcp_servers.role_resources]
+command = "/bin/echo"
+args = []
+"#,
+    )
+    .await;
+    config.agent_roles.insert(
+        "resource-reader".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    assert_eq!(
+        apply_role_to_config(&mut config, Some("resource-reader"))
+            .await
+            .expect_err("managed Role must not expand instruction surfaces"),
+        AGENT_TYPE_UNAVAILABLE_ERROR
+    );
+}
+
+#[tokio::test]
+async fn managed_role_reapply_preserves_exec_policy_ignore_setting() {
+    let (home, mut config) = test_config_with_cli_overrides(vec![(
+        "agents.resource-reader.runtime_mcp_projection".to_string(),
+        TomlValue::Boolean(true),
+    )])
+    .await;
+    config.config_layer_stack = config
+        .config_layer_stack
+        .clone()
+        .with_user_and_project_exec_policy_rules_ignored(true);
+    let role_path = write_role_config(
+        &home,
+        "resource-reader.toml",
+        r#"[mcp_servers.role_resources]
+command = "/bin/echo"
+args = []
+"#,
+    )
+    .await;
+    config.agent_roles.insert(
+        "resource-reader".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    reapply_role_to_config_for_child_resume(&mut config, "resource-reader")
+        .await
+        .expect("managed Role should reapply");
+
+    assert!(
+        config
+            .config_layer_stack
+            .ignore_user_and_project_exec_policy_rules()
+    );
+}
+
+#[tokio::test]
 async fn apply_role_restores_managed_role_mcp_projection() {
     let (home, mut config) = test_config_with_cli_overrides(vec![(
         "agents.managed-resource-reader.runtime_mcp_projection".to_string(),

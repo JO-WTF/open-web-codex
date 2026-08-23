@@ -713,9 +713,9 @@ pub struct AgentRoleToml {
     /// Candidate nicknames for agents spawned with this role.
     pub nickname_candidates: Option<Vec<String>>,
 
-    /// Runtime-owned Role metadata. Only trusted server-supplied session config may enable
-    /// the full package Role projection; ordinary Profile and Workspace declarations default
-    /// to the bounded Role projection.
+    /// Runtime-owned Role metadata. In addition to bounded upstream Role overrides, only
+    /// trusted server-supplied session config may enable package-owned instructions, skill
+    /// selection, and MCP projection; Profile and Workspace declarations cannot expand it.
     pub runtime_mcp_projection: Option<bool>,
 }
 

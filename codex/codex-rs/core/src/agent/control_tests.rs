@@ -691,10 +691,33 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 
 #[tokio::test]
 async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
-    let (home, mut config) = test_config().await;
+    let (home, mut config) = test_config_with_cli_overrides(vec![(
+        "agents.resource-reader.runtime_mcp_projection".to_string(),
+        TomlValue::Boolean(true),
+    )])
+    .await;
     let _ = config.features.enable(Feature::MultiAgentV2);
     let _ = config.features.enable(Feature::Sqlite);
     config.model = Some("gpt-5.6-sol".to_string());
+    let role_path = home.path().join("resource-reader.toml");
+    std::fs::write(
+        &role_path,
+        r#"developer_instructions = "Read provider-owned resources."
+
+[mcp_servers.role_resources]
+command = "/bin/echo"
+args = []
+"#,
+    )
+    .expect("write role config");
+    config.agent_roles.insert(
+        "resource-reader".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
     let harness = AgentControlHarness::new_with_config(home, config).await;
     let (parent_thread_id, _parent_thread) = harness.start_paginated_thread().await;
     let agent_path = AgentPath::try_from("/root/worker").expect("agent path");
@@ -710,7 +733,7 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
                 depth: 1,
                 agent_path: Some(agent_path.clone()),
                 agent_nickname: None,
-                agent_role: None,
+                agent_role: Some("resource-reader".to_string()),
             })),
             SpawnAgentOptions {
                 parent_thread_id: Some(parent_thread_id),
@@ -797,6 +820,23 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
             harness.config.model_provider.clone()
         ),
         "residency reload must preserve the worker provider instead of inheriting its sender's provider",
+    );
+    let reloaded_config = reloaded_child.session.get_config().await;
+    assert!(
+        reloaded_config
+            .mcp_servers
+            .get()
+            .contains_key("role_resources"),
+        "trusted V2 Role rehydration must restore the Role MCP inventory",
+    );
+    assert_eq!(
+        reloaded_config
+            .config_layer_stack
+            .all_layers_low_to_high()
+            .filter(|layer| layer.config.get("mcp_servers").is_some())
+            .count(),
+        1,
+        "V2 rehydration must apply the Role projection exactly once",
     );
 
     let communication = InterAgentCommunication::new(

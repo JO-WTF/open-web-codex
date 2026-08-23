@@ -143,13 +143,22 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cold_resumed_v2_child_reads_resource_from_role_mcp_server() -> Result<()> {
+async fn cold_resumed_v1_child_reads_resource_from_role_mcp_server() -> Result<()> {
+    assert_cold_resumed_v1_child_role_mcp(true).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cold_resumed_v1_child_cannot_expand_role_mcp_without_session_flag() -> Result<()> {
+    assert_cold_resumed_v1_child_role_mcp(false).await
+}
+
+async fn assert_cold_resumed_v1_child_role_mcp(runtime_mcp_projection: bool) -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let (apps_server_url, _apps_server_calls, apps_server_handle) =
         start_resource_apps_mcp_server().await?;
     let codex_home = TempDir::new()?;
     MockResponsesConfig::new(&responses_server.uri())
-        .with_approval_policy("untrusted")
+        .with_approval_policy("on-request")
         .write(codex_home.path())?;
     let agents_dir = codex_home.path().join("agents");
     std::fs::create_dir_all(&agents_dir)?;
@@ -194,9 +203,8 @@ required = true
     )?;
     let path = rollout_path(codex_home.path(), filename_ts, &child_thread_id);
     let mut session_meta = read_session_meta_line(&path).await?;
-    session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V2);
+    session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V1);
     append_rollout_item_to_path(&path, &RolloutItem::SessionMeta(session_meta)).await?;
-
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
@@ -207,25 +215,45 @@ required = true
             thread_id: child_thread_id.clone(),
             path: Some(path),
             exclude_turns: true,
+            config: runtime_mcp_projection.then(|| {
+                std::collections::HashMap::from([(
+                    "agents.resource_reader.runtime_mcp_projection".to_string(),
+                    serde_json::json!(true),
+                )])
+            }),
             ..Default::default()
         })
         .await?;
     let _: codex_app_server_protocol::ThreadResumeResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(resume_id)).await??;
 
-    let read_response: McpResourceReadResponse = mcp
-        .request(|request_id| ClientRequest::McpResourceRead {
-            request_id,
-            params: McpResourceReadParams {
-                thread_id: Some(child_thread_id),
-                origin_call_id: None,
-                server: "role_resources".to_string(),
-                uri: TEST_RESOURCE_URI.to_string(),
-                connector_id: None,
-            },
-        })
-        .await?;
-    assert_eq!(read_response, expected_resource_read_response());
+    let resource_read_params = McpResourceReadParams {
+        thread_id: Some(child_thread_id),
+        origin_call_id: None,
+        server: "role_resources".to_string(),
+        uri: TEST_RESOURCE_URI.to_string(),
+        connector_id: None,
+    };
+    if runtime_mcp_projection {
+        let read_response: McpResourceReadResponse = mcp
+            .request(|request_id| ClientRequest::McpResourceRead {
+                request_id,
+                params: resource_read_params,
+            })
+            .await?;
+        assert_eq!(read_response, expected_resource_read_response());
+    } else {
+        let request_id = mcp
+            .send_mcp_resource_read_request(resource_read_params)
+            .await?;
+        let error = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        assert_eq!(error.error.code, -32603);
+        assert!(error.error.message.contains("role_resources"));
+    }
 
     apps_server_handle.abort();
     let _ = apps_server_handle.await;

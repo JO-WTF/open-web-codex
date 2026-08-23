@@ -233,7 +233,8 @@ fn role_overrides_from_config(
                     | Feature::Personality
                     | Feature::Plugins
                     | Feature::MemoryTool
-                    | Feature::RequestPermissionsTool),
+                    | Feature::RequestPermissionsTool
+                    | Feature::MultiAgentV2),
                 ) = feature_for_key(&key)
             {
                 overrides.features.insert(feature.key().to_string(), false);
@@ -267,19 +268,25 @@ fn merge_role_owned_layers(
         let Some(source) = source_role_layer_toml.as_table() else {
             return Err(anyhow!("loaded Role layer must be a TOML table"));
         };
-        for key in [
-            "mcp_servers",
-            "skills",
-            "instructions",
-            "model_instructions_file",
-            "include_permissions_instructions",
-            "include_apps_instructions",
-            "include_collaboration_mode_instructions",
-            "include_environment_context",
-        ] {
+        for key in ["mcp_servers", "skills", "instructions"] {
             if let Some(value) = source.get(key) {
                 projected.insert(key.to_string(), value.clone());
             }
+        }
+        for key in [
+            "include_permissions_instructions",
+            "include_apps_instructions",
+            "include_collaboration_mode_instructions",
+        ] {
+            let Some(value) = source.get(key) else {
+                continue;
+            };
+            if value.as_bool() != Some(false) {
+                return Err(anyhow!(
+                    "managed Role `{key}` must be false when runtime_mcp_projection is enabled"
+                ));
+            }
+            projected.insert(key.to_string(), value.clone());
         }
     }
     Ok(role_layer_toml)
@@ -435,8 +442,7 @@ mod reload {
         let preserve_current_service_tier = role_layer_toml.get("service_tier").is_none();
         let preserve_current_reasoning_effort =
             role_layer_toml.get("model_reasoning_effort").is_none();
-        let preserve_current_base_instructions = role_layer_toml.get("instructions").is_none()
-            && role_layer_toml.get("model_instructions_file").is_none();
+        let preserve_current_base_instructions = role_layer_toml.get("instructions").is_none();
         let config_layer_stack = build_config_layer_stack(config, &role_layer_toml)?;
         let merged_config = deserialize_config_toml_with_base(
             config_layer_stack.effective_config(),
@@ -489,7 +495,12 @@ mod reload {
             layers,
             config.config_layer_stack.requirements().clone(),
             config.config_layer_stack.requirements_toml().clone(),
-        )?)
+        )?
+        .with_user_and_project_exec_policy_rules_ignored(
+            config
+                .config_layer_stack
+                .ignore_user_and_project_exec_policy_rules(),
+        ))
     }
 }
 
