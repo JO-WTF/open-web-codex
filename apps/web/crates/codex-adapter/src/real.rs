@@ -165,6 +165,16 @@ fn turn_start_params(
     let object = params
         .as_object_mut()
         .expect("turn/start params are an object");
+    if let Some(client_user_message_id) = options
+        .client_user_message_id
+        .as_ref()
+        .filter(|value| !value.is_empty())
+    {
+        object.insert(
+            "clientUserMessageId".to_string(),
+            json!(client_user_message_id),
+        );
+    }
     if let Some(effort) = options
         .effort
         .as_ref()
@@ -1945,6 +1955,7 @@ mod tests {
             "/runner/workspace",
             true,
             &TurnOptions {
+                client_user_message_id: Some("client-message-1".to_string()),
                 effort: Some("high".to_string()),
                 service_tier: Some("fast".to_string()),
                 ..TurnOptions::default()
@@ -1952,6 +1963,7 @@ mod tests {
         );
         assert_eq!(params["effort"], "high");
         assert_eq!(params["serviceTier"], "fast");
+        assert_eq!(params["clientUserMessageId"], "client-message-1");
         assert!(params.get("model").is_none());
         assert!(params.get("modelProvider").is_none());
     }

@@ -39,11 +39,38 @@ describe("mergeWebThreadHistory", () => {
     ]);
   });
 
-  it("does not duplicate an optimistic user message already persisted", () => {
+  it("merges an optimistic user message with its official client identity", () => {
     expect(mergeWebThreadHistory(
-      [{ id: "persisted", level: "user", text: "New request" }],
-      [{ id: "optimistic", level: "user", text: "New request" }],
+      [{
+        id: "persisted",
+        level: "user",
+        text: "New request",
+        clientMessageId: "client-message-1",
+      }],
+      [{
+        id: "optimistic",
+        level: "user",
+        text: "New request",
+        clientMessageId: "client-message-1",
+      }],
     )).toHaveLength(1);
+  });
+
+  it("keeps consecutive equal user text with distinct client identities", () => {
+    expect(mergeWebThreadHistory(
+      [{
+        id: "item-1",
+        level: "user",
+        text: "Continue",
+        clientMessageId: "client-message-1",
+      }],
+      [{
+        id: "item-2",
+        level: "user",
+        text: "Continue",
+        clientMessageId: "client-message-2",
+      }],
+    )).toHaveLength(2);
   });
 
   it("merges a live assistant projection with persisted history by runtime item id", () => {
@@ -104,33 +131,6 @@ describe("mergeWebThreadHistory", () => {
     }]);
   });
 
-  it("merges a live approval with its Server-projected historical approval", () => {
-    expect(mergeWebThreadHistory(
-      [{
-        id: "approval-history",
-        level: "info",
-        text: "Allow map tool?",
-        kind: "approval",
-        approvalRequestId: "approval-1",
-        approvalStatus: "resolved",
-      }],
-      [{
-        id: "approval-live",
-        level: "info",
-        text: "Allow map tool?",
-        kind: "approval",
-        approvalRequestId: "approval-1",
-        approvalStatus: "pending",
-      }],
-    )).toEqual([{
-      id: "approval-history",
-      level: "info",
-      text: "Allow map tool?",
-      kind: "approval",
-      approvalRequestId: "approval-1",
-      approvalStatus: "resolved",
-    }]);
-  });
 });
 
 describe("appendTerminalInteractionOutput", () => {
@@ -160,6 +160,20 @@ describe("buildWebThreadHistory", () => {
     expect(result.map((entry) => entry.turnDurationMs)).toEqual([48_318, 48_318]);
   });
 
+  it("projects the official user client identity into the browser log", () => {
+    const result = buildWebThreadHistory({
+      turns: [{
+        items: [{
+          id: "user-1",
+          type: "userMessage",
+          clientId: "client-message-1",
+          content: [{ type: "text", text: "Continue" }],
+        }],
+      }],
+    }, () => "unused");
+    expect(result[0]?.clientMessageId).toBe("client-message-1");
+  });
+
   it("derives a Turn duration from official start and completion timestamps", () => {
     expect(threadTurnDurationMs({
       startedAt: 1_786_540_197,
@@ -178,67 +192,6 @@ describe("buildWebThreadHistory", () => {
         }],
       }],
     }, () => "unused")).toEqual([]);
-  });
-
-  it("restores Server-projected approvals in Turn item order", () => {
-    const result = buildWebThreadHistory({
-      turns: [{
-        items: [
-          {
-            id: "tool-1",
-            type: "mcpToolCall",
-            server: "map_utils",
-            tool: "batch_geocode",
-            status: "completed",
-          },
-          {
-            id: "approval-1",
-            type: "platformApproval",
-            text: "Allow batch_geocode?",
-            approvalRequestId: "request-1",
-            approvalStatus: "resolved",
-            approvalTool: "batch_geocode",
-          },
-          {
-            id: "reply-1",
-            type: "agentMessage",
-            text: "Coordinates loaded.",
-            phase: "commentary",
-          },
-        ],
-      }],
-    }, () => "unused");
-
-    expect(result.map((entry) => entry.id)).toEqual([
-      "tool-1",
-      "approval-1",
-      "reply-1",
-    ]);
-    expect(result[1]).toMatchObject({
-      kind: "approval",
-      approvalRequestId: "request-1",
-      approvalStatus: "resolved",
-      approvalTool: "batch_geocode",
-    });
-  });
-
-  it.each([
-    ["accepted", "accepted"],
-    ["declined", "declined"],
-    ["answered", "answered"],
-  ] as const)("restores the %s approval outcome without collapsing it to resolved", (status, expected) => {
-    const [entry] = buildWebThreadHistory({
-      turns: [{
-        items: [{
-          id: `approval-${status}`,
-          type: "platformApproval",
-          text: "Approval response",
-          approvalStatus: status,
-        }],
-      }],
-    }, () => "unused");
-
-    expect(entry.approvalStatus).toBe(expected);
   });
 
   it("unwraps nested gateway and app-server result envelopes", () => {

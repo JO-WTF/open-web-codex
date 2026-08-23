@@ -373,6 +373,7 @@ pub async fn send_message(
             )),
         ));
     }
+    let client_user_message_id = normalize_client_user_message_id(&req.client_user_message_id)?;
     require_runtime_profile(&state.db, &auth, &profile.runtime_key).await?;
 
     // Resolve the server-owned workspace; the browser never supplies a path.
@@ -471,6 +472,7 @@ pub async fn send_message(
             &thread_id,
             &message_text,
             &TurnOptions {
+                client_user_message_id: Some(client_user_message_id.clone()),
                 effort: req.effort,
                 service_tier: req.service_tier,
                 access_mode: req.access_mode,
@@ -562,6 +564,7 @@ pub async fn send_message(
         status,
         thread_id,
         turn_id,
+        client_user_message_id,
         thread_name,
     }))
 }
@@ -769,6 +772,25 @@ fn normalize_thread_model_settings(
     Ok((provider_id.to_string(), model_id.to_string()))
 }
 
+fn normalize_client_user_message_id(
+    client_user_message_id: &str,
+) -> Result<String, (StatusCode, Json<PlatformError>)> {
+    const MAX_CLIENT_USER_MESSAGE_ID_BYTES: usize = 128;
+    let invalid = client_user_message_id.is_empty()
+        || client_user_message_id.len() > MAX_CLIENT_USER_MESSAGE_ID_BYTES
+        || client_user_message_id.trim() != client_user_message_id
+        || client_user_message_id.chars().any(char::is_control);
+    if invalid {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(PlatformError::bad_request(
+                "client user message id is invalid",
+            )),
+        ));
+    }
+    Ok(client_user_message_id.to_string())
+}
+
 fn suggested_thread_name(current_name: &str, message: &str) -> Option<String> {
     if !matches!(current_name.trim(), "Thread" | "New Agent") {
         return None;
@@ -808,7 +830,8 @@ fn database_error(_: sqlx::Error) -> (StatusCode, Json<PlatformError>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_thread_model_settings, suggested_thread_name, update_materialized_thread_model,
+        normalize_client_user_message_id, normalize_thread_model_settings, suggested_thread_name,
+        update_materialized_thread_model,
     };
     use open_web_codex_adapter::fake::FakeCodexAdapter;
     use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter};
@@ -826,6 +849,23 @@ mod tests {
         assert!(
             normalize_thread_model_settings("provider".to_string(), "\n".to_string(),).is_err()
         );
+    }
+
+    #[test]
+    fn client_user_message_id_requires_a_bounded_non_control_identity() {
+        assert_eq!(
+            normalize_client_user_message_id("client-message-1").unwrap(),
+            "client-message-1"
+        );
+        let oversized = "x".repeat(129);
+        for invalid in [
+            "",
+            " client-message",
+            "client-message\n",
+            oversized.as_str(),
+        ] {
+            assert!(normalize_client_user_message_id(invalid).is_err());
+        }
     }
 
     #[tokio::test]

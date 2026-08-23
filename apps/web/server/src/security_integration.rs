@@ -757,7 +757,11 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
             "POST",
             &format!("/api/tasks/{completed_followup_task_id}/messages"),
             &first_token,
-            json!({ "text": "continue after completion", "images": [] }),
+            json!({
+                "text": "continue after completion",
+                "clientUserMessageId": "completed-followup-client-message",
+                "images": []
+            }),
         ),
     )
     .await;

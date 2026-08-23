@@ -60,6 +60,7 @@ export type AgentMessagePhase = "commentary" | "final_answer";
 
 export type LogEntry = {
   id: string;
+  clientMessageId?: string;
   level: "event" | "error" | "info" | "user" | "assistant" | "system";
   text: string;
   messagePhase?: AgentMessagePhase;
@@ -2422,9 +2423,10 @@ export default function WebApp() {
     targetWorkspaceId = activeWorkspaceId,
     targetThreadId = activeThreadId,
     mapCardRef: string | null = null,
+    clientUserMessageId = createBrowserId("user-message"),
   ) => {
     if (!targetWorkspaceId || !targetThreadId || !text.trim()) return false;
-    appendLog("user", text);
+    appendLog("user", text, { clientMessageId: clientUserMessageId }, clientUserMessageId);
     setThinking(true);
     setTurnStartedAt(Date.now());
     setThreadStatus("running");
@@ -2436,6 +2438,7 @@ export default function WebApp() {
         targetThreadId,
         text,
         mapCardRef,
+        clientUserMessageId,
       );
       const payload = unwrapWebRpcResult(response);
       const record = payload && typeof payload === "object"
@@ -2492,7 +2495,12 @@ export default function WebApp() {
       if (text) {
         setQueuedFollowUps((previous) => [
           ...previous,
-          { id: newLogId(), text, mapCardRef: selectedMapCardRef },
+          {
+            id: newLogId(),
+            clientUserMessageId: createBrowserId("user-message"),
+            text,
+            mapCardRef: selectedMapCardRef,
+          },
         ]);
       }
       return;
@@ -2553,6 +2561,7 @@ export default function WebApp() {
       activeWorkspaceId,
       activeThreadId,
       next.mapCardRef ?? null,
+      next.clientUserMessageId,
     ).finally(() => {
       queueDispatching.current = false;
     });

@@ -3,6 +3,7 @@ import Trash2 from "lucide-react/dist/esm/icons/trash-2";
 
 export type QueuedFollowUp = {
   id: string;
+  clientUserMessageId: string;
   text: string;
   mapCardRef?: string | null;
 };

@@ -876,18 +876,24 @@ export class CodexMonitorWebClient {
     _workspaceId: string,
     threadId: string,
     text: string,
-    mapCardRef?: string | null,
+    mapCardRef: string | null,
+    clientUserMessageId: string,
   ) {
     const context = await this.findThreadContext(threadId);
     this.selectedRunByWorkspace.set(context.workspaceId, context.runId);
     const response = await this.platform.sendMessage(context.taskId, text, {
+      clientUserMessageId,
       mapCardRef,
     });
     return {
       status: response.status,
       threadId: response.thread_id,
       threadName: response.thread_name ?? null,
-      turn: { id: response.turn_id, status: "inProgress" },
+      turn: {
+        id: response.turn_id,
+        status: "inProgress",
+        clientUserMessageId: response.clientUserMessageId,
+      },
     };
   }
 

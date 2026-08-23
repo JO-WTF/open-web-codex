@@ -512,6 +512,7 @@ describe("WebApp direct Server client", () => {
           status: "sent",
           thread_id: "thread-1",
           turn_id: "turn-1",
+          clientUserMessageId: "client-message-1",
           thread_name: "Show Shanghai on a map",
         });
       }
@@ -525,11 +526,17 @@ describe("WebApp direct Server client", () => {
       project.id,
       "thread-1",
       "Show Shanghai on a map",
+      null,
+      "client-message-1",
     )).resolves.toEqual({
       status: "sent",
       threadId: "thread-1",
       threadName: "Show Shanghai on a map",
-      turn: { id: "turn-1", status: "inProgress" },
+      turn: {
+        id: "turn-1",
+        status: "inProgress",
+        clientUserMessageId: "client-message-1",
+      },
     });
   });
 

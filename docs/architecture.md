@@ -32,7 +32,7 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 
 | 事实 | 当前 owner | 当前实现状态 |
 | --- | --- | --- |
-| Thread、Turn、Item、上下文、Agent 调度 | Codex Runtime | Runtime 是权威 owner；已物化 Thread 的实际 Provider/model 属于 official Thread settings，不由 Profile 默认值或 Task 字段覆盖。当前 Adapter/Server/Browser 仍叠加本地 history mode、approval overlay 和 live/history merge，其中 Browser 会按相同用户文本去重，尚未收敛为 official Item/client identity 的纯投影 |
+| Thread、Turn、Item、上下文、Agent 调度 | Codex Runtime | Runtime 是权威 owner；已物化 Thread 的实际 Provider/model 属于 official Thread settings，不由 Profile 默认值或 Task 字段覆盖。Platform 只为授权和 exact producer `item_id` Artifact 附着投影 canonical history，不重写 Agent/Tool 文本或注入 approval transcript。Browser 每次普通用户发送生成有界 `clientUserMessageId`，Runtime canonical `userMessage.clientId` 回到 Browser 后只按 official Item ID 或相同 client identity 合并 optimistic/live/history，绝不按文本猜重 |
 | Skill、Plugin、MCP、Tool 执行 | Codex Runtime | Runtime 执行；每个 Copilot 包声明一个小型常驻 Root Skill、可选 Root Agent config、可发现任务 Skill、原生 child Role 与 MCP policy。Adapter 每个 Root Turn 只显式选择 Root Skill 的完整正文；`[root].task_skills` 显式决定该 Root Thread 是否在 Runtime Catalog 发现任务 Skill，child Role 的 scope 由其原生 Role config 决定。启用的任务 Skill 通过 Runtime Catalog 注入 name、description、可选 short-description 和 locator；Host 文件型 Skill 只有命中后才按精确 locator 打开正文及其 references。选中的 Capability Root 与 Role 启用的 MCP server 是不可扩大的权限上限；server 内所有已声明 Tool 都可用，但一律省略初始 `direct` surface，使 Runtime 原生 `tool_search` 只按已授权元数据检索。ToolSearch 仍由 Runtime 原生搜索、注册与分派；Chat bridge 编码当前 Runtime 生成的 canonical `Prompt.tools`，并在 wire_api=chat 下把 canonical history 中已完成的 client `ToolSearchOutput` 配对为 exact namespace/name reverse target 与 request-scoped function schema；该 projection 不修改 canonical `Prompt.tools`，相同 target/schema 稳定去重，失败、取消和孤立结果不产生目标，Core ToolRouter 仍是最终执行权限，Responses transport 完全不受影响。新 Turn 或 resume 只在所需 Tool 未出现在当前 request 时重新搜索；历史已加载且当前 request 可见的 Tool 直接复用。对 `wire_api = "chat"` Provider，Provider 配置/可信目录必须显式声明 `supports_function_tools`；缺失能力在 Core tool planning 以 typed ProviderFunctionToolsUnsupported 终止，ToolSearch 仍只以模型级 `ModelInfo.supports_search_tool` 为事实。Retained Chat bridge 把原生 client ToolSearch 映射为普通 function call，并保持 Runtime 搜索、审批、Tool identity、registry 分派与 namespace collision owner。根级 Tool 包用 `tool.toml`/`runtime.toml`、直接项目 manifest/hash lock 与领域代码声明运行需要；多个独立 Copilot 可引用同一个 Tool package，但彼此没有引用或通信。SDK generic provisioner 在 Runtime 启动前于 Profile/Tool/Workspace 外准备环境并产出内部 descriptor；Runtime 启动与用户对话期间不安装依赖。产品路径不扫描 cwd/Workspace 或按 Prompt 猜 Copilot |
 | Profile 进程与 `CODEX_HOME` | Profile Host | 单 Profile 进程已存在；应用发现的 active Copilot 包在冷启动前共同收敛各自 managed Skill 与 child Role destination。Root Agent source 只生成 package-keyed Thread config，不安装成 child Role。其他 Skill、Role 和 `config.toml` 不覆盖；阶段三 Atom 2a 已删除 Browser whole-file Profile writer、Agent TOML/config mutation 和自建 Prompt 目录，不读取、迁移或删除既有 Profile 文件。进程 `HOME`/`USERPROFILE` 与 neutral cwd 均按 Profile Host 隔离；Server 仍有显式宿主认证导入路径 |
 | Provider 定义、模型目录与 Profile 默认选择 | Codex Profile config + Runtime；Platform 只保存密文 Secret，并传递 Browser catalog 投影 | `config/batchWrite` 持久化 Runtime 配置；`modelProvider/list` 是目录、当前 Provider 与 required-nullable `currentModelId` 的唯一返回来源。Platform 不读写或覆盖 `profile_provider_definitions`、Task pair 或 `models.default_selection`：migration 70/71 都只允许空的旧状态删除，含旧数据的开发库必须显式重建。Runtime 的 `supports_function_tools` 与 `ModelProviderInfo.models` 都是显式 typed 配置事实，Browser/Platform 收到任何缺失 Provider/model 必填字段的 catalog 都拒绝整个响应；隐藏模型只在显示层过滤，不会选取首个模型。Platform 对可编辑 Provider 保留产品规则：保存边界按 Chat 写 true、Responses 写 false；Browser 不再提交该冗余字段，Runtime 也不按 transport 名推断。模型级 `supportsSearchTool` 仍按 exact `model_id` 由 Runtime 配置持久化；refresh 和单模型更新只操作 Runtime 完整模型目录，成功后安排安全边界 Runtime refresh。新 Thread 不传 pair，Runtime 使用 Profile 当前默认创建；普通 Turn 也不注入 pair。已物化 Thread 只由官方 settings 拥有：Platform 先无 override `thread/resume` 读取实际 provider/model，同 Provider 才调用 `thread/settings/update {model}` 并再次 resume 确认；跨 Provider 返回 `requiresNewThread`，Browser 在同 Workspace/Project 建新 Task/Thread，旧 Thread 不变。 |
@@ -333,17 +333,17 @@ Runtime 与共享 build store，`sync` 通过完整 `check` 后把冷重启交�
 
 1. Profile Runtime 的 HOME 与 process cwd 已隔离，但 Server 仍可默认导入宿主认证；未来
    多用户身份隔离尚未成立。
-2. 当前 history overlay 按 Tool 名称或 approval message 推断插入位置，Browser 又以相同用户
-   文本合并 optimistic/live/history 消息；这些启发式在 Runtime exact Item ID 之外形成第二历史
-   关联规则，连续相同消息会被误合并。Codex 的 paginated history 仍遵循当前 upstream
-   contract；本地不再保留 legacy response-tool/history materialization seam。
+2. completed Thread 的 follow-up 仍会把已完成 Run 改回 `running`，而 archive、interrupt、
+   scheduler 与 event projection 也会竞争写入 Run/Task 状态；这是下一 Run lifecycle 原子，
+   不能借 Thread history projection 或 Browser optimistic 状态掩盖。Codex 的 paginated history
+   仍遵循当前 upstream contract；本地不再保留 legacy response-tool/history materialization seam。
 3. `run_events` 的 sequence 和 run/thread/turn/item provenance 是合理的持久投影，但当前
    `project_item` 会把未统一限长的 agent text、reasoning、command output、diff 与 Tool result
    同时写入 PostgreSQL 和 WebSocket，且 unknown Runtime method 仍可能被 Browser JSON summary
    放入对话；当前没有 event retention/prune owner。一次真实长 Run 观察到事件 delta 写放大，
    pending approval replay 仍从 sequence 0 分页扫描；它们是性能 backlog，不是阶段一正常链门。
 这些都是当前事实，不是应继续兼容的接口，也不是已经完成的阶段一正常链前置。后续按 owner
-处理 Browser legacy、完整 Thread/history/lease、approval replay、event retention 和多用户隔离；
+处理 Browser legacy、Run lifecycle/lease、approval replay、event retention 和多用户隔离；
 不再把它们插回已经通过的仓网正常路径。
 阶段一边界由 [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md)、
 [ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) 与仓网当前

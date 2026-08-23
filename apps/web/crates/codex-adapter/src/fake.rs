@@ -340,7 +340,7 @@ impl CodexAdapter for FakeCodexAdapter {
         workspace: &AuthorizedWorkspace,
         thread_id: &str,
         text: &str,
-        _options: &TurnOptions,
+        options: &TurnOptions,
     ) -> Result<Value, AdapterError> {
         tracing::info!(
             workspace = %workspace.id,
@@ -359,6 +359,7 @@ impl CodexAdapter for FakeCodexAdapter {
         Ok(json!({
             "status": "sent",
             "turnId": format!("turn-{}", Uuid::now_v7()),
+            "clientUserMessageId": options.client_user_message_id,
         }))
     }
 
@@ -723,9 +724,15 @@ mod tests {
                 &owner_workspace,
                 "completed-thread",
                 "continue",
-                &TurnOptions::default(),
+                &TurnOptions {
+                    client_user_message_id: Some("client-message-1".to_string()),
+                    ..TurnOptions::default()
+                },
             )
             .await
+            .map(|result| {
+                assert_eq!(result["clientUserMessageId"], "client-message-1");
+            })
             .expect("exact Workspace may continue the seeded Thread");
 
         let wrong_workspace_send = adapter

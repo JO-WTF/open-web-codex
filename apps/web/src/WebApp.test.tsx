@@ -725,6 +725,7 @@ describe("WebApp workspace-first messaging", () => {
       "thread-new",
       "Start from this workspace",
       null,
+      expect.any(String),
     ));
     expect(client.startThread.mock.invocationCallOrder[0]).toBeLessThan(
       client.sendUserMessage.mock.invocationCallOrder[0],

@@ -103,6 +103,9 @@ pub struct ProfileLoginStatus {
 
 #[derive(Debug, Clone, Default)]
 pub struct TurnOptions {
+    /// Browser-generated stable identity for a normal user message. The
+    /// Platform validates it before this typed adapter boundary.
+    pub client_user_message_id: Option<String>,
     pub effort: Option<String>,
     pub service_tier: Option<String>,
     pub access_mode: Option<String>,

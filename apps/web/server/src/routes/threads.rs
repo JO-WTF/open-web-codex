@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
@@ -210,12 +210,9 @@ pub async fn list_turns(
         .list_thread_turns(&context.workspace, &context.thread_id)
         .await
         .map_err(runtime_error)?;
-    let overlay = load_history_overlay(&state, run_id).await?;
     let mut projected = Vec::with_capacity(turns.len());
     for turn in &turns {
-        let mut turn = project_turn_with_refs(turn, &state, run_id).await?;
-        overlay.apply(&mut turn);
-        projected.push(turn);
+        projected.push(project_turn_with_refs(turn, &state, run_id).await?);
     }
     Ok(Json(projected))
 }
@@ -235,12 +232,9 @@ pub async fn list_agent_turns(
         .list_thread_turns(&context.workspace, &context.thread_id)
         .await
         .map_err(runtime_error)?;
-    let overlay = load_history_overlay(&state, run_id).await?;
     let mut projected = Vec::with_capacity(turns.len());
     for turn in &turns {
-        let mut turn = project_turn_with_refs(turn, &state, run_id).await?;
-        overlay.apply(&mut turn);
-        projected.push(turn);
+        projected.push(project_turn_with_refs(turn, &state, run_id).await?);
     }
     Ok(Json(projected))
 }
@@ -593,7 +587,6 @@ async fn project_turn_with_refs(
         .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string))
         .collect::<Vec<_>>();
     let artifacts_by_item = persisted_artifacts_by_item(state, run_id, &item_ids).await?;
-    let agent_messages_by_item = persisted_agent_messages_by_item(state, run_id, &item_ids).await?;
     for item in &mut turn.items {
         if let Some(item_id) = item.get("id").and_then(Value::as_str) {
             if let Some(artifacts) = artifacts_by_item.get(item_id) {
@@ -611,15 +604,6 @@ async fn project_turn_with_refs(
         if item.get("type").and_then(Value::as_str) != Some("agentMessage") {
             continue;
         }
-        if let Some(text) = item
-            .get("id")
-            .and_then(Value::as_str)
-            .and_then(|item_id| agent_messages_by_item.get(item_id))
-        {
-            item.as_object_mut()
-                .expect("projected item must be an object")
-                .insert("text".to_string(), Value::String(text.to_string()));
-        }
         let Some(text) = item.get("text").and_then(Value::as_str) else {
             continue;
         };
@@ -633,39 +617,6 @@ async fn project_turn_with_refs(
         }
     }
     Ok(turn)
-}
-
-async fn persisted_agent_messages_by_item(
-    state: &AppState,
-    run_id: Uuid,
-    item_ids: &[String],
-) -> Result<HashMap<String, String>, ApiError> {
-    if item_ids.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let rows = sqlx::query(
-        "SELECT DISTINCT ON (item_id) item_id, payload #>> '{data,text}' AS text \
-         FROM run_events \
-         WHERE run_id = $1 \
-           AND event_type = 'codex.item.completed' \
-           AND item_id = ANY($2) \
-           AND payload #>> '{itemType}' = 'agentMessage' \
-         ORDER BY item_id, sequence DESC",
-    )
-    .bind(run_id)
-    .bind(item_ids)
-    .fetch_all(&state.db)
-    .await
-    .map_err(database_error)?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| {
-            Some((
-                row.get::<Option<String>, _>("item_id")?,
-                row.get::<Option<String>, _>("text")?,
-            ))
-        })
-        .collect())
 }
 
 async fn persisted_artifacts_by_item(
@@ -711,243 +662,6 @@ async fn persisted_artifacts_by_item(
             .push(artifact);
     }
     Ok(by_item)
-}
-
-#[derive(Default)]
-struct ThreadHistoryOverlay {
-    item_sequences: HashMap<String, i64>,
-    approvals_by_turn: HashMap<String, Vec<ApprovalOverlay>>,
-}
-
-struct ApprovalOverlay {
-    sequence: i64,
-    tool: Option<String>,
-    item: serde_json::Value,
-}
-
-impl ThreadHistoryOverlay {
-    fn apply(&self, turn: &mut ThreadHistoryTurn) {
-        if let Some(approvals) = self.approvals_by_turn.get(&turn.id) {
-            for approval in approvals {
-                let insert_at = approval
-                    .tool
-                    .as_deref()
-                    .and_then(|tool| {
-                        turn.items
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, item)| {
-                                item.get("type").and_then(serde_json::Value::as_str)
-                                    == Some("mcpToolCall")
-                                    && item.get("tool").and_then(serde_json::Value::as_str)
-                                        == Some(tool)
-                                    && item
-                                        .get("id")
-                                        .and_then(serde_json::Value::as_str)
-                                        .and_then(|id| self.item_sequences.get(id))
-                                        .is_some_and(|item_sequence| {
-                                            *item_sequence <= approval.sequence
-                                        })
-                            })
-                            .map(|(index, _)| index)
-                            .last()
-                            .map(|tool_index| {
-                                let mut insert_at = tool_index + 1;
-                                while turn.items.get(insert_at).is_some_and(|item| {
-                                    item.get("type").and_then(serde_json::Value::as_str)
-                                        == Some("platformApproval")
-                                        && item
-                                            .get("approvalTool")
-                                            .and_then(serde_json::Value::as_str)
-                                            == Some(tool)
-                                }) {
-                                    insert_at += 1;
-                                }
-                                insert_at
-                            })
-                    })
-                    .unwrap_or_else(|| {
-                        turn.items
-                            .iter()
-                            .position(|item| {
-                                item.get("id")
-                                    .and_then(serde_json::Value::as_str)
-                                    .and_then(|id| self.item_sequences.get(id))
-                                    .is_some_and(|item_sequence| *item_sequence > approval.sequence)
-                            })
-                            .unwrap_or(turn.items.len())
-                    });
-                turn.items.insert(insert_at, approval.item.clone());
-            }
-        }
-    }
-}
-
-async fn load_history_overlay(
-    state: &AppState,
-    run_id: Uuid,
-) -> Result<ThreadHistoryOverlay, ApiError> {
-    let rows = sqlx::query(
-        "SELECT events.sequence, events.event_type, events.turn_id, \
-                events.item_id, events.payload, approvals.state AS approval_state \
-         FROM run_events events \
-         LEFT JOIN approvals ON approvals.run_id = events.run_id \
-           AND approvals.id::text = events.payload #>> '{data,approvalId}' \
-         WHERE events.run_id = $1 AND events.event_type IN ( \
-           'codex.item.started', 'codex.item.completed', \
-           'platform.approval.requested', 'platform.approval.resolved' \
-         ) ORDER BY events.sequence",
-    )
-    .bind(run_id)
-    .fetch_all(&state.db)
-    .await
-    .map_err(database_error)?;
-
-    let resolved: HashSet<String> = rows
-        .iter()
-        .filter(|row| row.get::<String, _>("event_type") == "platform.approval.resolved")
-        .filter_map(|row| {
-            row.get::<serde_json::Value, _>("payload")
-                .pointer("/data/requestId")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        })
-        .collect();
-    let mut overlay = ThreadHistoryOverlay::default();
-    for row in rows {
-        let sequence: i64 = row.get("sequence");
-        let event_type: String = row.get("event_type");
-        if matches!(
-            event_type.as_str(),
-            "codex.item.started" | "codex.item.completed"
-        ) {
-            if let Some(item_id) = row.get::<Option<String>, _>("item_id") {
-                overlay.item_sequences.entry(item_id).or_insert(sequence);
-            }
-            continue;
-        }
-        if event_type != "platform.approval.requested" {
-            continue;
-        }
-        let Some(turn_id) = row.get::<Option<String>, _>("turn_id") else {
-            continue;
-        };
-        let payload: serde_json::Value = row.get("payload");
-        if payload
-            .pointer("/data/requestMethod")
-            .and_then(serde_json::Value::as_str)
-            == Some("item/tool/requestUserInput")
-        {
-            // User input is rendered from the run-scoped durable input queue.
-            // Do not reinsert it as a generic approval item in the transcript.
-            continue;
-        }
-        let Some(approval_id) = payload
-            .pointer("/data/approvalId")
-            .and_then(serde_json::Value::as_str)
-        else {
-            continue;
-        };
-        let request = payload
-            .pointer("/data/requestParams")
-            .and_then(serde_json::Value::as_object);
-        let text = request
-            .and_then(|request| request.get("message").or_else(|| request.get("reason")))
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or("Approval requested");
-        let requested_tool = requested_tool_name(request);
-        let approval_status = row
-            .get::<Option<String>, _>("approval_state")
-            .as_deref()
-            .and_then(public_approval_status)
-            .unwrap_or_else(|| {
-                if resolved.contains(approval_id) {
-                    "resolved"
-                } else {
-                    "pending"
-                }
-            });
-        let mut approval = serde_json::Map::from_iter([
-            (
-                "id".to_string(),
-                serde_json::Value::String(format!("approval-{approval_id}")),
-            ),
-            (
-                "type".to_string(),
-                serde_json::Value::String("platformApproval".to_string()),
-            ),
-            (
-                "text".to_string(),
-                serde_json::Value::String(text.to_string()),
-            ),
-            (
-                "approvalRequestId".to_string(),
-                serde_json::Value::String(approval_id.to_string()),
-            ),
-            (
-                "approvalStatus".to_string(),
-                serde_json::Value::String(approval_status.to_string()),
-            ),
-        ]);
-        if let Some(tool) = &requested_tool {
-            approval.insert(
-                "approvalTool".to_string(),
-                serde_json::Value::String(tool.clone()),
-            );
-        }
-        for (source, target) in [
-            ("mode", "approvalMode"),
-            ("credentialKind", "approvalCredentialKind"),
-        ] {
-            if let Some(value) = request.and_then(|request| request.get(source)) {
-                approval.insert(target.to_string(), value.clone());
-            }
-        }
-        overlay
-            .approvals_by_turn
-            .entry(turn_id)
-            .or_default()
-            .push(ApprovalOverlay {
-                sequence,
-                tool: requested_tool,
-                item: serde_json::Value::Object(approval),
-            });
-    }
-    for approvals in overlay.approvals_by_turn.values_mut() {
-        approvals.sort_by_key(|approval| approval.sequence);
-    }
-    Ok(overlay)
-}
-
-fn public_approval_status(state: &str) -> Option<&'static str> {
-    match state {
-        "pending" | "dispatching" | "delivery_unknown" => Some("pending"),
-        "approved" => Some("accepted"),
-        "rejected" => Some("declined"),
-        "answered" => Some("answered"),
-        "cancelled" => Some("cancelled"),
-        _ => None,
-    }
-}
-
-fn requested_tool_name(
-    request: Option<&serde_json::Map<String, serde_json::Value>>,
-) -> Option<String> {
-    let request = request?;
-    for field in ["tool", "toolName"] {
-        if let Some(value) = request.get(field).and_then(serde_json::Value::as_str) {
-            let value = value.trim();
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
-        }
-    }
-    let message = request.get("message").and_then(serde_json::Value::as_str)?;
-    let marker = "tool \\\"";
-    let start = message.find(marker)? + marker.len();
-    let tool = message[start..].split('"').next()?.trim();
-    (!tool.is_empty()).then(|| tool.to_string())
 }
 
 async fn audit(
@@ -1011,13 +725,8 @@ fn database_error(_: sqlx::Error) -> ApiError {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        mcp_resource_bytes, project_turn, public_approval_status, valid_geojson_root,
-        ApprovalOverlay, ThreadHistoryOverlay,
-    };
-    use open_web_codex_platform_contracts::ThreadHistoryTurn;
+    use super::{mcp_resource_bytes, project_turn, valid_geojson_root};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[test]
     fn projects_authoritative_history_without_runtime_only_fields() {
@@ -1042,6 +751,22 @@ mod tests {
         let encoded = value.to_string();
         assert!(!encoded.contains("/private/server/workspace"));
         assert!(!encoded.contains("secret"));
+    }
+
+    #[test]
+    fn projects_the_official_user_message_client_identity() {
+        let projected = project_turn(&json!({
+            "id": "turn-1",
+            "status": "completed",
+            "items": [{
+                "id": "item-1",
+                "type": "userMessage",
+                "clientId": "client-message-1",
+                "content": [{ "type": "text", "text": "continue" }]
+            }]
+        }))
+        .expect("valid Turn projection");
+        assert_eq!(projected.items[0]["clientId"], "client-message-1");
     }
 
     #[test]
@@ -1205,74 +930,5 @@ mod tests {
         assert!(valid_geojson_root(&value));
         assert!(mcp_resource_bytes(&json!({"contents": []}), uri).is_err());
         assert!(!valid_geojson_root(&json!({"type": "Table"})));
-    }
-
-    #[test]
-    fn maps_durable_approval_states_to_browser_outcomes() {
-        assert_eq!(public_approval_status("approved"), Some("accepted"));
-        assert_eq!(public_approval_status("rejected"), Some("declined"));
-        assert_eq!(public_approval_status("answered"), Some("answered"));
-        assert_eq!(public_approval_status("cancelled"), Some("cancelled"));
-        assert_eq!(public_approval_status("dispatching"), Some("pending"));
-    }
-
-    #[test]
-    fn inserts_platform_approvals_at_their_runtime_sequence() {
-        let mut turn = ThreadHistoryTurn {
-            id: "turn-1".to_string(),
-            status: "completed".to_string(),
-            items: vec![
-                json!({ "id": "user", "type": "userMessage" }),
-                json!({ "id": "tool-1", "type": "mcpToolCall", "tool": "batch_geocode" }),
-                json!({ "id": "message", "type": "agentMessage" }),
-                json!({ "id": "tool-2", "type": "mcpToolCall", "tool": "distance_matrix" }),
-            ],
-            error: None,
-            started_at: None,
-            completed_at: None,
-            duration_ms: None,
-        };
-        let overlay = ThreadHistoryOverlay {
-            item_sequences: HashMap::from([
-                ("user".to_string(), 10),
-                ("tool-1".to_string(), 20),
-                ("message".to_string(), 40),
-                ("tool-2".to_string(), 50),
-            ]),
-            approvals_by_turn: HashMap::from([(
-                "turn-1".to_string(),
-                vec![
-                    ApprovalOverlay {
-                        sequence: 30,
-                        tool: Some("batch_geocode".to_string()),
-                        item: json!({ "id": "approval-1", "type": "platformApproval", "approvalTool": "batch_geocode" }),
-                    },
-                    ApprovalOverlay {
-                        sequence: 60,
-                        tool: Some("distance_matrix".to_string()),
-                        item: json!({ "id": "approval-2", "type": "platformApproval", "approvalTool": "distance_matrix" }),
-                    },
-                ],
-            )]),
-        };
-
-        overlay.apply(&mut turn);
-
-        let ids: Vec<_> = turn
-            .items
-            .iter()
-            .filter_map(|item| item.get("id").and_then(serde_json::Value::as_str))
-            .collect();
-        assert_eq!(
-            ids,
-            [
-                "user",
-                "tool-1",
-                "approval-1",
-                "message",
-                "tool-2",
-                "approval-2"
-            ]
-        );
     }
 }

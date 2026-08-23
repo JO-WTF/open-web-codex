@@ -11,7 +11,10 @@ describe("FollowUpQueue", () => {
     const onDelete = vi.fn();
     render(
       <FollowUpQueue
-        items={[{ id: "q1", text: "Add a stop button" }, { id: "q2", text: "Then update tests" }]}
+        items={[
+          { id: "q1", clientUserMessageId: "client-message-1", text: "Add a stop button" },
+          { id: "q2", clientUserMessageId: "client-message-2", text: "Then update tests" },
+        ]}
         canSteer
         steeringId={null}
         onSteer={onSteer}

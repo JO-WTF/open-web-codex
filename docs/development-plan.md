@@ -5,10 +5,10 @@
 | 文档性质 | 当前与下一里程碑的执行计划 |
 | 更新日期 | 2026-08-24 |
 | 当前阶段 | 阶段三：回归 Codex Runtime owner 并清理并行实现 |
-| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统、Browser Workspace Preferences、独立 Terminal、本地 Usage、Fake 生产运行模式、Provider 定义/模型目录数据库镜像、Task/global model pair 和每 Turn pair override；Codex 六个最小 seam 已代码收敛，验证矩阵待执行 |
+| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统、Browser Workspace Preferences、独立 Terminal、本地 Usage、Fake 生产运行模式、Provider 定义/模型目录数据库镜像、Task/global model pair 和每 Turn pair override；C1 以 exact Workspace-bound Fake fixture 覆盖 completed Thread follow-up，C2 已收敛 canonical history 与 client message identity；Codex 六个最小 seam 已代码收敛，验证矩阵待执行 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018/019/024/025 为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
-| 阶段三后续 | 执行六个 retained seam 的 focused/schema/app-server/product 验证；处理 Run/Thread 状态和 history/event 投影 |
+| 阶段三后续 | 执行六个 retained seam 的 focused/schema/app-server/product 验证；处理 Run/Thread 终态与 bounded event 投影 |
 
 本文记录阶段一已完成的正常业务主链、仍有效的边界和后续工作。用户心智统一为：
 
@@ -58,9 +58,9 @@ Atom 2b 已完成：
 
 本阶段每个已删除认证 route 都由代表性 authenticated 404 negative assertions 与 active-source rg
 覆盖；官方 typed approval 与 Thread 路径继续通过，Web/Rust/no-desktop 门全绿。Atom 2b 的本地
-PostgreSQL fresh-schema retired-table 门已通过；完整 ignored 跨租户门仍在既有 completed Thread
-follow-up 请求处返回 `502` 而非 `200`。该失败归入后续 Run/Thread owner Atom，Atom 2b 没有用
-Preferences fallback、重试或放宽断言掩盖它。
+PostgreSQL fresh-schema retired-table 门已通过；C1 令 ignored 跨租户 fixture 显式 seed 同一授权
+Workspace 的 persisted Fake Thread，不再以“找不到 Fake Thread”制造 502。该完整门仍需 disposable
+PostgreSQL 环境复验；没有用 Preferences fallback、重试或放宽断言掩盖任何 Runtime 错误。
 
 Atom 3 已完成：
 
@@ -82,7 +82,8 @@ Atom 4 已完成：
     Workspace 动作与最新 Agent 入口保留。Runtime Thread token、`/profile/rate-limits`、Profile
     account/login 和 `provider_call_metrics` 保留。
 16. 认证 404 assertion 与 active-source rg 覆盖删除；Browser legacy API 至此清完。Fake 部署模式不属于
-    Browser legacy，已由随后 Atom 5 处理；既有 completed Thread follow-up `502` 不重试、不掩盖。
+    Browser legacy，已由随后 Atom 5 处理；completed Thread follow-up 只通过 exact fixture binding
+    复现，不引入路由 fallback。
 
 Atom 5 已完成：
 
@@ -91,8 +92,8 @@ Atom 5 已完成：
     真实 Copilot/delivery source。
 18. `run-local`、`deploy`、状态文件、help 与当前 runbook 不再接受或记录 Fake 模式；Fake adapter/provider
     保留为测试直接构造的依赖，不启动 Fake 产品 Server。
-19. 无 Browser/API/schema 合同变化；生产冷启动缺外部服务时明确失败，不回退 Fake。既有 completed
-    Thread follow-up `502` 不重试、不掩盖。
+19. 无 Browser/API/schema 合同变化；生产冷启动缺外部服务时明确失败，不回退 Fake。测试 Fake 的
+    completed Thread 只能由显式、Workspace-bound fixture seed 建立，不能由 send 自动创建。
 
 ## 0A. 阶段二已完成基线：Copilot SDK、Task 选包与单 Profile 多包组合
 
@@ -503,7 +504,7 @@ Item 验收，不把后续模型误选低层 Tool 或求解失败伪装成地图
 只在完整 Data→Network→12h 基线→Balikpapan 增仓时效变化率→map canonical 链实际完成时计为通过。
 
 后续 backlog 继续遵守已确认边界：official Thread/Turn/Item/history 是唯一会话事实；Provider 重复 owner、
-Task creation selection、Run lease/history overlay 与
+Task creation selection、Run lease/bounded event 与
 physical-cwd join 必须按 owner 原子收敛，但不得再次插到上述仓网关键路径之前。
 
 阶段二已把领域无关的 ResourceRef/schema/codec/bounds/error/store/runtime/Workspace file

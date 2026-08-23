@@ -1051,6 +1051,8 @@ pub struct ResourceReferenceSummary {
 pub struct SendMessageRequest {
     #[serde(default)]
     pub text: String,
+    #[serde(rename = "clientUserMessageId")]
+    pub client_user_message_id: String,
     #[serde(default)]
     pub effort: Option<String>,
     #[serde(default)]
@@ -1080,8 +1082,29 @@ pub struct SendMessageResponse {
     pub status: String,
     pub thread_id: String,
     pub turn_id: String,
+    #[serde(rename = "clientUserMessageId")]
+    pub client_user_message_id: String,
     #[serde(default)]
     pub thread_name: Option<String>,
+}
+
+#[cfg(test)]
+mod send_message_contract_tests {
+    use super::SendMessageRequest;
+    use serde_json::json;
+
+    #[test]
+    fn send_message_requires_a_client_user_message_id() {
+        assert!(serde_json::from_value::<SendMessageRequest>(json!({
+            "text": "continue",
+            "clientUserMessageId": "client-message-1"
+        }))
+        .is_ok());
+        assert!(serde_json::from_value::<SendMessageRequest>(json!({
+            "text": "continue"
+        }))
+        .is_err());
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

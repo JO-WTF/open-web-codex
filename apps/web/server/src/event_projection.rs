@@ -2061,7 +2061,7 @@ pub(crate) fn project_item(item: &Map<String, Value>) -> Value {
     }
 
     let fields: &[&str] = match item_type.as_str() {
-        "userMessage" => &["content"],
+        "userMessage" => &["clientId", "content"],
         "hookPrompt" => &["fragments"],
         "agentMessage" => &["text"],
         "plan" => &["text"],
@@ -2100,7 +2100,12 @@ pub(crate) fn project_item(item: &Map<String, Value>) -> Value {
     };
     for key in fields {
         if let Some(value) = item.get(*key) {
-            let projected_value = if item_type == "agentMessage" && *key == "text" {
+            let projected_value = if item_type == "userMessage" && *key == "clientId" {
+                let Some(client_id) = bounded_sanitized_text(value, "clientId", 128) else {
+                    continue;
+                };
+                Value::String(client_id)
+            } else if item_type == "agentMessage" && *key == "text" {
                 redact_agent_markdown_value(value)
             } else {
                 sanitize_value(value, key)
@@ -4813,5 +4818,30 @@ mod tests {
             150
         );
         assert!(!event.payload.to_string().contains("[redacted]"));
+    }
+
+    #[test]
+    fn projects_only_a_bounded_user_message_client_identity() {
+        let valid = project_item(
+            json!({
+                "type": "userMessage",
+                "clientId": "client-message-1",
+                "content": [{"type": "text", "text": "continue"}],
+            })
+            .as_object()
+            .expect("Runtime Item object"),
+        );
+        assert_eq!(valid["clientId"], "client-message-1");
+
+        let invalid = project_item(
+            json!({
+                "type": "userMessage",
+                "clientId": "bad\nidentity",
+                "content": [{"type": "text", "text": "continue"}],
+            })
+            .as_object()
+            .expect("Runtime Item object"),
+        );
+        assert!(invalid.get("clientId").is_none());
     }
 }

@@ -619,6 +619,7 @@ export class PlatformClient {
     taskId: string,
     text: string,
     options: {
+      clientUserMessageId: string;
       effort?: string | null;
       serviceTier?: string | null;
       accessMode?: string | null;
@@ -626,12 +627,13 @@ export class PlatformClient {
       mapCardRef?: string | null;
       selectedResources?: ExplicitResourceSelection[];
       collaborationMode?: Record<string, unknown> | null;
-    } = {},
+    },
   ) {
     return this.request<{
       status: string;
       thread_id: string;
       turn_id: string;
+      clientUserMessageId: string;
       thread_name?: string | null;
     }>(
       `/api/tasks/${encodeURIComponent(taskId)}/messages`,
@@ -639,6 +641,7 @@ export class PlatformClient {
         method: "POST",
         body: JSON.stringify({
           text,
+          clientUserMessageId: options.clientUserMessageId,
           effort: options.effort ?? null,
           service_tier: options.serviceTier ?? null,
           access_mode: options.accessMode ?? null,

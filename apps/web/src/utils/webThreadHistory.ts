@@ -1,7 +1,6 @@
 import type { AgentMessagePhase, LogEntry } from "../WebApp";
 import { stripLeadingProviderSentinel } from "./providerText";
 import { parseInlineVisualizationArtifact } from "./replyCards";
-import { parseApprovalStatus } from "./approvalStatus";
 import {
   collabAgentAction,
   collabBriefDescription,
@@ -150,10 +149,9 @@ export function mergeWebThreadHistory(history: LogEntry[], live: LogEntry[]): Lo
     const stableIndex = merged.findIndex((candidate) =>
       candidate.id === entry.id
       || (
-        candidate.kind === "approval"
-        && entry.kind === "approval"
-        && candidate.approvalRequestId !== undefined
-        && candidate.approvalRequestId === entry.approvalRequestId
+        candidate.clientMessageId !== undefined
+        && candidate.clientMessageId !== ""
+        && candidate.clientMessageId === entry.clientMessageId
       ));
     if (stableIndex >= 0) {
       const historical = merged[stableIndex];
@@ -180,12 +178,6 @@ export function mergeWebThreadHistory(history: LogEntry[], live: LogEntry[]): Lo
       };
       continue;
     }
-    const lastMerged = merged[merged.length - 1];
-    const echoedUserIndex = entry.level === "user" && lastMerged?.level === "user"
-      && lastMerged.text === entry.text
-      ? merged.length - 1
-      : -1;
-    if (echoedUserIndex >= 0) continue;
     merged.push(entry);
   }
   return merged.slice(-200);
@@ -234,7 +226,12 @@ export function webLogEntryFromThreadItem(
     } : null;
   }
   const text = messageText(item);
-  if (type === "userMessage") return text ? { id, level: "user", text } : null;
+  if (type === "userMessage") return text ? {
+    id,
+    level: "user",
+    text,
+    clientMessageId: asText(item.clientId) || undefined,
+  } : null;
   if (type === "agentMessage") {
     const cleanText = stripLeadingProviderSentinel(text);
     const inlineArtifacts = Array.isArray(item.inlineArtifacts)
@@ -250,20 +247,6 @@ export function webLogEntryFromThreadItem(
       messagePhase: agentMessagePhase(item.phase),
       inlineArtifacts: inlineArtifacts.length ? inlineArtifacts : undefined,
     } : null;
-  }
-  if (type === "platformApproval") {
-    const approvalStatus = parseApprovalStatus(item.approvalStatus);
-    return {
-      id,
-      level: "info",
-      text: asText(item.text) || "Approval requested",
-      kind: "approval",
-      approvalRequestId: asText(item.approvalRequestId) || undefined,
-      approvalStatus: approvalStatus ?? "resolved",
-      approvalMode: asText(item.approvalMode) || undefined,
-      approvalCredentialKind: item.approvalCredentialKind === "maps" ? "maps" : undefined,
-      approvalTool: asText(item.approvalTool) || undefined,
-    };
   }
   if (type === "hookPrompt") {
     const fragments = Array.isArray(item.fragments)
