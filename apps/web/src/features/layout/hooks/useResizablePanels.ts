@@ -6,7 +6,6 @@ const STORAGE_KEY_RIGHT_PANEL = "codexmonitor.rightPanelWidth";
 const STORAGE_KEY_CHAT_DIFF_SPLIT_POSITION_PERCENT =
   "codexmonitor.chatDiffSplitPositionPercent";
 const STORAGE_KEY_PLAN_PANEL = "codexmonitor.planPanelHeight";
-const STORAGE_KEY_TERMINAL_PANEL = "codexmonitor.terminalPanelHeight";
 const STORAGE_KEY_DEBUG_PANEL = "codexmonitor.debugPanelHeight";
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 420;
@@ -16,15 +15,12 @@ const MIN_RIGHT_PANEL_WIDTH = 270;
 const MAX_RIGHT_PANEL_WIDTH = 420;
 const MIN_PLAN_PANEL_HEIGHT = 140;
 const MAX_PLAN_PANEL_HEIGHT = 420;
-const MIN_TERMINAL_PANEL_HEIGHT = 140;
-const MAX_TERMINAL_PANEL_HEIGHT = 480;
 const MIN_DEBUG_PANEL_HEIGHT = 120;
 const MAX_DEBUG_PANEL_HEIGHT = 420;
 const DEFAULT_SIDEBAR_WIDTH = 280;
 const DEFAULT_CHAT_DIFF_SPLIT_POSITION_PERCENT = 50;
 const DEFAULT_RIGHT_PANEL_WIDTH = 230;
 const DEFAULT_PLAN_PANEL_HEIGHT = 220;
-const DEFAULT_TERMINAL_PANEL_HEIGHT = 220;
 const DEFAULT_DEBUG_PANEL_HEIGHT = 180;
 
 type ResizeState = {
@@ -33,7 +29,6 @@ type ResizeState = {
     | "right-panel"
     | "chat-diff-split"
     | "plan-panel"
-    | "terminal-panel"
     | "debug-panel";
   startX: number;
   startY: number;
@@ -54,7 +49,6 @@ const CSS_VAR_MAP: Record<
     unit: "%",
   },
   "plan-panel": { prop: "--plan-panel-height", unit: "px" },
-  "terminal-panel": { prop: "--terminal-panel-height", unit: "px" },
   "debug-panel": { prop: "--debug-panel-height", unit: "px" },
 };
 
@@ -117,14 +111,6 @@ export function useResizablePanels() {
       MAX_PLAN_PANEL_HEIGHT,
     ),
   );
-  const [terminalPanelHeight, setTerminalPanelHeight] = useState(() =>
-    readStoredWidth(
-      STORAGE_KEY_TERMINAL_PANEL,
-      DEFAULT_TERMINAL_PANEL_HEIGHT,
-      MIN_TERMINAL_PANEL_HEIGHT,
-      MAX_TERMINAL_PANEL_HEIGHT,
-    ),
-  );
   const [debugPanelHeight, setDebugPanelHeight] = useState(() =>
     readStoredWidth(
       STORAGE_KEY_DEBUG_PANEL,
@@ -162,13 +148,6 @@ export function useResizablePanels() {
       String(planPanelHeight),
     );
   }, [planPanelHeight]);
-
-  useEffect(() => {
-    window.localStorage.setItem(
-      STORAGE_KEY_TERMINAL_PANEL,
-      String(terminalPanelHeight),
-    );
-  }, [terminalPanelHeight]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -215,13 +194,6 @@ export function useResizablePanels() {
           MIN_PLAN_PANEL_HEIGHT,
           MAX_PLAN_PANEL_HEIGHT,
         );
-      } else if (resize.type === "terminal-panel") {
-        const delta = event.clientY - resize.startY;
-        next = clamp(
-          resize.startHeight - delta,
-          MIN_TERMINAL_PANEL_HEIGHT,
-          MAX_TERMINAL_PANEL_HEIGHT,
-        );
       } else {
         const delta = event.clientY - resize.startY;
         next = clamp(
@@ -255,9 +227,6 @@ export function useResizablePanels() {
             break;
           case "plan-panel":
             setPlanPanelHeight(finalValue);
-            break;
-          case "terminal-panel":
-            setTerminalPanelHeight(finalValue);
             break;
           case "debug-panel":
             setDebugPanelHeight(finalValue);
@@ -355,24 +324,6 @@ export function useResizablePanels() {
     [planPanelHeight, rightPanelWidth],
   );
 
-  const onTerminalPanelResizeStart = useCallback(
-    (event: ReactMouseEvent) => {
-      event.preventDefault();
-
-      resizeRef.current = {
-        type: "terminal-panel",
-        startX: event.clientX,
-        startY: event.clientY,
-        startWidth: rightPanelWidth,
-        startHeight: terminalPanelHeight,
-      };
-      document.body.style.cursor = "row-resize";
-      document.body.style.userSelect = "none";
-      setIsResizing(true);
-    },
-    [rightPanelWidth, terminalPanelHeight],
-  );
-
   const onDebugPanelResizeStart = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
@@ -397,14 +348,12 @@ export function useResizablePanels() {
     sidebarWidth,
     rightPanelWidth,
     planPanelHeight,
-    terminalPanelHeight,
     debugPanelHeight,
     onSidebarResizeStart,
     chatDiffSplitPositionPercent,
     onChatDiffSplitPositionResizeStart,
     onRightPanelResizeStart,
     onPlanPanelResizeStart,
-    onTerminalPanelResizeStart,
     onDebugPanelResizeStart,
   };
 }

@@ -24,7 +24,6 @@ import "./styles/diff-viewer.css";
 import "./styles/file-tree.css";
 import "./styles/panel-tabs.css";
 import "./styles/debug.css";
-import "./styles/terminal.css";
 import "./styles/plan.css";
 import "./styles/about.css";
 import "./styles/tabbar.css";

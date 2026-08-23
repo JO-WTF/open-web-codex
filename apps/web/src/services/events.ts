@@ -8,17 +8,6 @@ import type {
 
 export type Unsubscribe = () => void;
 
-export type TerminalOutputEvent = {
-  workspaceId: string;
-  terminalId: string;
-  data: string;
-};
-
-export type TerminalExitEvent = {
-  workspaceId: string;
-  terminalId: string;
-};
-
 type SubscriptionOptions = {
   onError?: (error: unknown) => void;
 };
@@ -89,8 +78,6 @@ function createEventHub<T>(eventName: string) {
 const appServerHub = createEventHub<AppServerEvent>("app-server-event");
 const dictationDownloadHub = createEventHub<DictationModelStatus>("dictation-download");
 const dictationEventHub = createEventHub<DictationEvent>("dictation-event");
-const terminalOutputHub = createEventHub<TerminalOutputEvent>("terminal-output");
-const terminalExitHub = createEventHub<TerminalExitEvent>("terminal-exit");
 const updaterCheckHub = createEventHub<void>("updater-check");
 const trayOpenThreadHub = createEventHub<TrayOpenThreadPayload>("tray-open-thread");
 const menuNewAgentHub = createEventHub<void>("menu-new-agent");
@@ -102,7 +89,6 @@ const menuOpenSettingsHub = createEventHub<void>("menu-open-settings");
 const menuToggleProjectsSidebarHub = createEventHub<void>("menu-toggle-projects-sidebar");
 const menuToggleGitSidebarHub = createEventHub<void>("menu-toggle-git-sidebar");
 const menuToggleDebugPanelHub = createEventHub<void>("menu-toggle-debug-panel");
-const menuToggleTerminalHub = createEventHub<void>("menu-toggle-terminal");
 const menuNextAgentHub = createEventHub<void>("menu-next-agent");
 const menuPrevAgentHub = createEventHub<void>("menu-prev-agent");
 const menuNextWorkspaceHub = createEventHub<void>("menu-next-workspace");
@@ -137,20 +123,6 @@ export function subscribeDictationEvents(
   options?: SubscriptionOptions,
 ): Unsubscribe {
   return dictationEventHub.subscribe(onEvent, options);
-}
-
-export function subscribeTerminalOutput(
-  onEvent: (event: TerminalOutputEvent) => void,
-  options?: SubscriptionOptions,
-): Unsubscribe {
-  return terminalOutputHub.subscribe(onEvent, options);
-}
-
-export function subscribeTerminalExit(
-  onEvent: (event: TerminalExitEvent) => void,
-  options?: SubscriptionOptions,
-): Unsubscribe {
-  return terminalExitHub.subscribe(onEvent, options);
 }
 
 export function subscribeUpdaterCheck(
@@ -248,15 +220,6 @@ export function subscribeMenuToggleDebugPanel(
   options?: SubscriptionOptions,
 ): Unsubscribe {
   return menuToggleDebugPanelHub.subscribe(() => {
-    onEvent();
-  }, options);
-}
-
-export function subscribeMenuToggleTerminal(
-  onEvent: () => void,
-  options?: SubscriptionOptions,
-): Unsubscribe {
-  return menuToggleTerminalHub.subscribe(() => {
     onEvent();
   }, options);
 }

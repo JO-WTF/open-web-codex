@@ -123,7 +123,6 @@ type UseMainAppLayoutSurfacesArgs = {
   handleOpenThreadLink: LayoutNodesOptions["primary"]["messagesProps"]["onOpenThreadLink"];
   handleSelectOpenAppId: MainHeaderProps["onSelectOpenAppId"];
   handleCopyThread: MainHeaderProps["onCopyThread"];
-  handleToggleTerminalWithFocus: MainHeaderProps["onToggleTerminal"];
   models: ComposerProps["models"];
   selectedModelId: ComposerProps["selectedModelId"];
   onSelectModel: ComposerProps["onSelectModel"];
@@ -176,19 +175,11 @@ type UseMainAppLayoutSurfacesArgs = {
   confirmCustom: ComposerProps["onReviewPromptConfirmCustom"];
   handleComposerSendWithDraftStart: ComposerProps["onSend"];
   interruptTurn: () => void;
-  terminalOpen: boolean;
   debugOpen: boolean;
   debugEntries: LayoutNodesOptions["secondary"]["debugPanelProps"]["entries"];
-  terminalTabs: LayoutNodesOptions["secondary"]["terminalDockProps"]["terminals"];
-  activeTerminalId: LayoutNodesOptions["secondary"]["terminalDockProps"]["activeTerminalId"];
-  onSelectTerminal: LayoutNodesOptions["secondary"]["terminalDockProps"]["onSelectTerminal"];
-  onNewTerminal: LayoutNodesOptions["secondary"]["terminalDockProps"]["onNewTerminal"];
-  onCloseTerminal: LayoutNodesOptions["secondary"]["terminalDockProps"]["onCloseTerminal"];
-  terminalState: LayoutNodesOptions["secondary"]["terminalState"];
   onClearDebug: () => void;
   onCopyDebug: () => void;
   onResizeDebug: LayoutNodesOptions["secondary"]["debugPanelProps"]["onResizeStart"];
-  onResizeTerminal: LayoutNodesOptions["secondary"]["terminalDockProps"]["onResizeStart"];
   isCompact: boolean;
   isPhone: boolean;
   activeTab: LayoutNodesOptions["primary"]["tabBarProps"]["activeTab"];
@@ -279,7 +270,6 @@ function buildPrimarySurface({
   handleOpenThreadLink,
   handleSelectOpenAppId,
   handleCopyThread,
-  handleToggleTerminalWithFocus,
   models,
   selectedModelId,
   onSelectModel,
@@ -332,7 +322,6 @@ function buildPrimarySurface({
   confirmCustom,
   handleComposerSendWithDraftStart,
   interruptTurn,
-  terminalOpen,
   isCompact,
   activeTab,
   setActiveTab,
@@ -594,9 +583,6 @@ function buildPrimarySurface({
           onCreateBranch: gitState.handleCreateBranch,
           canCopyThread: activeItems.length > 0,
           onCopyThread: handleCopyThread,
-          onToggleTerminal: handleToggleTerminalWithFocus,
-          isTerminalOpen: terminalOpen,
-          showTerminalButton: !isCompact,
           showWorkspaceTools: !isCompact,
           extraActionsNode: displayNodes.mainHeaderActionsNode,
         }
@@ -795,19 +781,11 @@ function buildSecondarySurface({
   activePlan,
   composerWorkspaceState,
   gitState,
-  terminalOpen,
   debugOpen,
   debugEntries,
-  terminalTabs,
-  activeTerminalId,
-  onSelectTerminal,
-  onNewTerminal,
-  onCloseTerminal,
-  terminalState,
   onClearDebug,
   onCopyDebug,
   onResizeDebug,
-  onResizeTerminal,
   isPhone,
   setActiveTab,
 }: MainAppLayoutSurfacesContext): LayoutNodesOptions["secondary"] {
@@ -816,16 +794,6 @@ function buildSecondarySurface({
       plan: activePlan,
       isProcessing: composerWorkspaceState.isProcessing,
     },
-    terminalDockProps: {
-      isOpen: terminalOpen,
-      terminals: terminalTabs,
-      activeTerminalId,
-      onSelectTerminal,
-      onNewTerminal,
-      onCloseTerminal,
-      onResizeStart: onResizeTerminal,
-    },
-    terminalState,
     debugPanelProps: {
       entries: debugEntries,
       isOpen: debugOpen,
@@ -931,7 +899,6 @@ export function useMainAppLayoutSurfaces({
   handleOpenThreadLink,
   handleSelectOpenAppId,
   handleCopyThread,
-  handleToggleTerminalWithFocus,
   models,
   selectedModelId,
   onSelectModel,
@@ -984,19 +951,11 @@ export function useMainAppLayoutSurfaces({
   confirmCustom,
   handleComposerSendWithDraftStart,
   interruptTurn,
-  terminalOpen,
   debugOpen,
   debugEntries,
-  terminalTabs,
-  activeTerminalId,
-  onSelectTerminal,
-  onNewTerminal,
-  onCloseTerminal,
-  terminalState,
   onClearDebug,
   onCopyDebug,
   onResizeDebug,
-  onResizeTerminal,
   isCompact,
   isPhone,
   activeTab,
@@ -1086,7 +1045,6 @@ export function useMainAppLayoutSurfaces({
     handleOpenThreadLink,
     handleSelectOpenAppId,
     handleCopyThread,
-    handleToggleTerminalWithFocus,
     models,
     selectedModelId,
     onSelectModel,
@@ -1139,19 +1097,11 @@ export function useMainAppLayoutSurfaces({
     confirmCustom,
     handleComposerSendWithDraftStart,
     interruptTurn,
-    terminalOpen,
     debugOpen,
     debugEntries,
-    terminalTabs,
-    activeTerminalId,
-    onSelectTerminal,
-    onNewTerminal,
-    onCloseTerminal,
-    terminalState,
     onClearDebug,
     onCopyDebug,
     onResizeDebug,
-    onResizeTerminal,
     isCompact,
     isPhone,
     activeTab,

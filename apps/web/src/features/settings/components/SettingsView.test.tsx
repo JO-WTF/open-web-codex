@@ -85,7 +85,6 @@ const baseSettings: AppSettings = {
   toggleGitSidebarShortcut: null,
   branchSwitcherShortcut: null,
   toggleDebugPanelShortcut: null,
-  toggleTerminalShortcut: null,
   cycleAgentNextShortcut: null,
   cycleAgentPrevShortcut: null,
   cycleWorkspaceNextShortcut: null,
@@ -1591,7 +1590,7 @@ describe("SettingsView Shortcuts", () => {
     );
 
     const searchInput = screen.getByLabelText("Search shortcuts");
-    expect(screen.getByText("Toggle terminal panel")).toBeTruthy();
+    expect(screen.getByText("Toggle debug panel")).toBeTruthy();
     expect(screen.getByText("Cycle model")).toBeTruthy();
 
     await act(async () => {
@@ -1599,7 +1598,7 @@ describe("SettingsView Shortcuts", () => {
     });
     await waitFor(() => {
       expect(screen.getByText("Next workspace")).toBeTruthy();
-      expect(screen.queryByText("Toggle terminal panel")).toBeNull();
+      expect(screen.queryByText("Toggle debug panel")).toBeNull();
     });
 
     await act(async () => {
@@ -1615,7 +1614,7 @@ describe("SettingsView Shortcuts", () => {
     });
     await waitFor(() => {
       expect(screen.getByText("Cycle model")).toBeTruthy();
-      expect(screen.queryByText("Toggle terminal panel")).toBeNull();
+      expect(screen.queryByText("Toggle debug panel")).toBeNull();
     });
 
     await act(async () => {
@@ -1629,7 +1628,7 @@ describe("SettingsView Shortcuts", () => {
       fireEvent.click(screen.getByRole("button", { name: "Clear" }));
     });
     await waitFor(() => {
-      expect(screen.getByText("Toggle terminal panel")).toBeTruthy();
+      expect(screen.getByText("Toggle debug panel")).toBeTruthy();
       expect(screen.queryByText('No shortcuts match "no-such-shortcut".')).toBeNull();
     });
   });

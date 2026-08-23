@@ -72,7 +72,6 @@ type DesktopLayoutProps = {
   gitDiffPanelNode: ReactNode;
   planPanelNode: ReactNode;
   composerNode: ReactNode;
-  terminalDockNode: ReactNode;
   debugPanelNode: ReactNode;
   hasActivePlan: boolean;
   onSidebarResizeStart: (event: MouseEvent<HTMLDivElement>) => void;
@@ -99,7 +98,6 @@ export function DesktopLayout({
   gitDiffPanelNode,
   planPanelNode,
   composerNode,
-  terminalDockNode,
   debugPanelNode,
   hasActivePlan,
   onSidebarResizeStart,
@@ -237,7 +235,6 @@ export function DesktopLayout({
               />
               <div className="right-panel-bottom">{planPanelNode}</div>
             </div>
-            {terminalDockNode}
             {debugPanelNode}
           </>
         )}

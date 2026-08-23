@@ -17,7 +17,6 @@ pub mod runs;
 pub mod runtime_agents;
 pub mod sessions;
 pub mod tasks;
-pub mod terminals;
 pub mod threads;
 pub mod workspaces;
 
@@ -293,22 +292,6 @@ pub fn router(
         .route(
             "/workspaces/{id}/apply",
             axum::routing::post(workspaces::apply_workspace),
-        )
-        .route(
-            "/workspaces/{id}/terminals",
-            axum::routing::post(terminals::open),
-        )
-        .route(
-            "/workspaces/{id}/terminals/{terminal_id}/write",
-            axum::routing::post(terminals::write),
-        )
-        .route(
-            "/workspaces/{id}/terminals/{terminal_id}/resize",
-            axum::routing::post(terminals::resize),
-        )
-        .route(
-            "/workspaces/{id}/terminals/{terminal_id}",
-            axum::routing::delete(terminals::close),
         )
         .route("/workspaces/{id}/log", axum::routing::get(workspaces::log))
         .route(

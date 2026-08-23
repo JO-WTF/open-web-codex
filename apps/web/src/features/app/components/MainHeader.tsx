@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Check from "lucide-react/dist/esm/icons/check";
 import Copy from "lucide-react/dist/esm/icons/copy";
-import Terminal from "lucide-react/dist/esm/icons/terminal";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { BranchInfo, OpenAppTarget, WorkspaceInfo } from "../../../types";
 import type { ReactNode } from "react";
@@ -33,9 +32,6 @@ type MainHeaderProps = {
   onCreateBranch: (name: string) => Promise<void> | void;
   canCopyThread?: boolean;
   onCopyThread?: () => void | Promise<void>;
-  onToggleTerminal: () => void;
-  isTerminalOpen: boolean;
-  showTerminalButton?: boolean;
   showWorkspaceTools?: boolean;
   extraActionsNode?: ReactNode;
   worktreeRename?: {
@@ -75,9 +71,6 @@ export function MainHeader({
   onCreateBranch,
   canCopyThread = false,
   onCopyThread,
-  onToggleTerminal,
-  isTerminalOpen,
-  showTerminalButton = true,
   showWorkspaceTools = true,
   extraActionsNode,
   worktreeRename,
@@ -461,20 +454,6 @@ export function MainHeader({
             iconById={openAppIconById}
           />
         ) : null}
-        {showTerminalButton && (
-          <button
-            type="button"
-            className={`ghost main-header-action ds-tooltip-trigger${isTerminalOpen ? " is-active" : ""}`}
-            onClick={onToggleTerminal}
-            data-tauri-drag-region="false"
-            aria-label="Toggle terminal panel"
-            title="Terminal"
-            data-tooltip="Terminal"
-            data-tooltip-placement="bottom"
-          >
-            <Terminal size={14} aria-hidden />
-          </button>
-        )}
         <button
           type="button"
           className={`ghost main-header-action ds-tooltip-trigger${copyFeedback ? " is-copied" : ""}`}

@@ -95,7 +95,6 @@ export const buildShortcutDrafts = (appSettings: AppSettings): ShortcutDrafts =>
   gitSidebar: appSettings.toggleGitSidebarShortcut ?? "",
   branchSwitcher: appSettings.branchSwitcherShortcut ?? "",
   debugPanel: appSettings.toggleDebugPanelShortcut ?? "",
-  terminal: appSettings.toggleTerminalShortcut ?? "",
   cycleAgentNext: appSettings.cycleAgentNextShortcut ?? "",
   cycleAgentPrev: appSettings.cycleAgentPrevShortcut ?? "",
   cycleWorkspaceNext: appSettings.cycleWorkspaceNextShortcut ?? "",

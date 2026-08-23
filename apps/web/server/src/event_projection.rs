@@ -133,9 +133,6 @@ pub async fn persist_frame_with_deliveries(
     deliveries: &DeliveryRegistry,
     native_visualizations: Option<&NativeVisualizationMaterializer>,
 ) -> Result<Option<LiveProjection>, String> {
-    if let Some(projection) = persist_terminal_frame(data, db).await? {
-        return Ok(Some(projection));
-    }
     let Some(mut event) = project_frame_with_deliveries(data, deliveries)? else {
         return Ok(None);
     };
@@ -499,134 +496,6 @@ fn first_token_ms(value: &Value) -> Option<i64> {
     token_number(value, &["firstTokenMs", "first_token_ms"])
 }
 
-async fn persist_terminal_frame(
-    data: &[u8],
-    db: &PgPool,
-) -> Result<Option<LiveProjection>, String> {
-    let Some(message) = internal_message(data)? else {
-        return Ok(None);
-    };
-    let method = message
-        .get("method")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !matches!(
-        method,
-        "command/exec/outputDelta" | "platform/terminalExited"
-    ) {
-        return Ok(None);
-    }
-    let params = message
-        .get("params")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    let Some(process_id) = string_field(&params, "processId") else {
-        return Ok(None);
-    };
-    let mut transaction = db
-        .begin()
-        .await
-        .map_err(|error| format!("terminal event transaction error: {error}"))?;
-    let session = sqlx::query(
-        "SELECT session.terminal_id, session.workspace_id, session.run_id, \
-                session.organization_id, run.codex_thread_id \
-         FROM terminal_sessions session JOIN runs run ON run.id = session.run_id \
-         WHERE session.process_id = $1",
-    )
-    .bind(&process_id)
-    .fetch_optional(&mut *transaction)
-    .await
-    .map_err(|error| format!("terminal session lookup error: {error}"))?;
-    let Some(session) = session else {
-        return Ok(None);
-    };
-    let terminal_id: String = session.get("terminal_id");
-    let workspace_id: Uuid = session.get("workspace_id");
-    let run_id: Uuid = session.get("run_id");
-    let organization_id: Uuid = session.get("organization_id");
-    let thread_id: Option<String> = session.get("codex_thread_id");
-    let (event_type, payload) =
-        if method == "command/exec/outputDelta" {
-            let encoded = params
-                .get("deltaBase64")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let mut decoded = BASE64
-                .decode(encoded)
-                .map_err(|_| "terminal output was not valid base64".to_string())?;
-            decoded.truncate(256 * 1024);
-            (
-                "terminal.output",
-                json!({
-                    "schemaVersion": PROJECTION_VERSION,
-                    "workspaceId": workspace_id,
-                    "terminalId": terminal_id,
-                    "data": String::from_utf8_lossy(&decoded),
-                }),
-            )
-        } else {
-            sqlx::query(
-            "UPDATE terminal_sessions SET state = CASE WHEN $2 THEN 'failed' ELSE 'closed' END, \
-                                          updated_at = now() WHERE process_id = $1",
-        )
-        .bind(&process_id)
-        .bind(params.get("failed").and_then(Value::as_bool).unwrap_or(false))
-        .execute(&mut *transaction)
-        .await
-        .map_err(|error| format!("terminal exit update error: {error}"))?;
-            (
-                "terminal.exit",
-                json!({
-                    "schemaVersion": PROJECTION_VERSION,
-                    "workspaceId": workspace_id,
-                    "terminalId": terminal_id,
-                    "exitCode": params.get("exitCode").cloned().unwrap_or(Value::Null),
-                }),
-            )
-        };
-    let persisted = sqlx::query(
-        "INSERT INTO run_events \
-         (run_id, event_type, projection_version, thread_id, payload) \
-         VALUES ($1, $2, $3, $4, $5) RETURNING id, sequence, created_at",
-    )
-    .bind(run_id)
-    .bind(event_type)
-    .bind(PROJECTION_VERSION)
-    .bind(&thread_id)
-    .bind(&payload)
-    .fetch_one(&mut *transaction)
-    .await
-    .map_err(|error| format!("terminal event insert error: {error}"))?;
-    transaction
-        .commit()
-        .await
-        .map_err(|error| format!("terminal event commit error: {error}"))?;
-    let public = RunEvent {
-        id: persisted.get("id"),
-        sequence: persisted.get("sequence"),
-        run_id,
-        event_type: event_type.to_string(),
-        projection_version: PROJECTION_VERSION,
-        thread_id,
-        turn_id: None,
-        item_id: None,
-        payload,
-        created_at: persisted.get("created_at"),
-    };
-    let payload = serde_json::to_vec(&json!({
-        "type": "run.event",
-        "version": 1,
-        "event": public,
-    }))
-    .map_err(|error| format!("terminal live projection encoding error: {error}"))?;
-    Ok(Some(LiveProjection {
-        organization_id,
-        payload,
-        pending_artifact_ids: Vec::new(),
-    }))
-}
-
 fn project_frame_with_deliveries(
     data: &[u8],
     deliveries: &DeliveryRegistry,
@@ -812,10 +681,6 @@ fn internal_frame(data: &[u8]) -> Result<Option<InternalFrame>, String> {
         message,
         thread_identity,
     }))
-}
-
-fn internal_message(data: &[u8]) -> Result<Option<Map<String, Value>>, String> {
-    Ok(internal_frame(data)?.map(|frame| frame.message))
 }
 
 fn classify_method(method: &str) -> (&'static str, &'static str) {
@@ -5052,6 +4917,3 @@ mod tests {
         assert!(!event.payload.to_string().contains("[redacted]"));
     }
 }
-
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;

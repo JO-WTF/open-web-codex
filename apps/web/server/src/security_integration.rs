@@ -82,6 +82,7 @@ async fn task_creation_binds_only_an_authorized_project_workspace() {
         "supervisor_definitions",
         "profile_capabilities",
         "browser_workspace_preferences",
+        "terminal_sessions",
     ] {
         let relation: Option<String> = sqlx::query_scalar("SELECT to_regclass($1)::text")
             .bind(retired_table)
@@ -94,7 +95,6 @@ async fn task_creation_binds_only_an_authorized_project_workspace() {
         "provider_call_metrics",
         "runtime_agent_projections",
         "runtime_agent_execution_projections",
-        "terminal_sessions",
     ] {
         let relation: Option<String> = sqlx::query_scalar("SELECT to_regclass($1)::text")
             .bind(retained_table)
@@ -314,6 +314,18 @@ async fn task_creation_binds_only_an_authorized_project_workspace() {
     .await;
     assert_eq!(loaded.0, StatusCode::OK);
     assert_eq!(loaded.1["workspace_id"], workspace_id.to_string());
+
+    let retired_terminal_route = app
+        .clone()
+        .oneshot(authenticated_json(
+            "POST",
+            &format!("/api/workspaces/{workspace_id}/terminals"),
+            token,
+            json!({"terminal_id": "legacy-terminal", "cols": 80, "rows": 24}),
+        ))
+        .await
+        .expect("retired Terminal route response");
+    assert_eq!(retired_terminal_route.status(), StatusCode::NOT_FOUND);
 
     let retired_run_contract = app
         .clone()

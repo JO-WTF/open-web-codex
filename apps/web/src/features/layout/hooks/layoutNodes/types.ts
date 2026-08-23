@@ -13,8 +13,6 @@ import { Home } from "../../../home/components/Home";
 import { Messages } from "../../../messages/components/Messages";
 import { ErrorToasts } from "../../../notifications/components/ErrorToasts";
 import { PlanPanel } from "../../../plan/components/PlanPanel";
-import { TerminalDock } from "../../../terminal/components/TerminalDock";
-import type { TerminalSessionState } from "../../../terminal/hooks/useTerminalSession";
 import { UpdateToast } from "../../../update/components/UpdateToast";
 
 export type WorktreeRenameState = {
@@ -68,8 +66,6 @@ export type LayoutGitSurface = {
 
 export type LayoutSecondarySurface = {
   planPanelProps: ComponentProps<typeof PlanPanel>;
-  terminalDockProps: Omit<ComponentProps<typeof TerminalDock>, "terminalNode">;
-  terminalState: TerminalSessionState | null;
   debugPanelProps: ComponentProps<typeof DebugPanel>;
   compactNavProps: {
     onGoProjects: () => void;
@@ -104,7 +100,6 @@ export type LayoutNodesResult = {
   planPanelNode: ReactNode;
   debugPanelNode: ReactNode;
   debugPanelFullNode: ReactNode;
-  terminalDockNode: ReactNode;
   compactEmptyCodexNode: ReactNode;
   compactEmptyGitNode: ReactNode;
   compactGitBackNode: ReactNode;

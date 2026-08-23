@@ -220,7 +220,6 @@ export type AppSettings = {
   toggleGitSidebarShortcut: string | null;
   branchSwitcherShortcut: string | null;
   toggleDebugPanelShortcut: string | null;
-  toggleTerminalShortcut: string | null;
   cycleAgentNextShortcut: string | null;
   cycleAgentPrevShortcut: string | null;
   cycleWorkspaceNextShortcut: string | null;
@@ -627,8 +626,6 @@ export type DebugEntry = {
   label: string;
   payload?: unknown;
 };
-
-export type TerminalStatus = "idle" | "connecting" | "ready" | "error";
 
 export type DictationModelState = "missing" | "downloading" | "ready" | "error";
 

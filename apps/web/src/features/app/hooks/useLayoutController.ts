@@ -5,17 +5,13 @@ import { usePanelVisibility } from "../../layout/hooks/usePanelVisibility";
 import { usePanelShortcuts } from "../../layout/hooks/usePanelShortcuts";
 
 export function useLayoutController({
-  activeWorkspaceId,
   setActiveTab,
   setDebugOpen,
   toggleDebugPanelShortcut,
-  toggleTerminalShortcut,
 }: {
-  activeWorkspaceId: string | null;
   setActiveTab: (tab: "home" | "projects" | "codex" | "git" | "log") => void;
   setDebugOpen: (value: boolean | ((prev: boolean) => boolean)) => void;
   toggleDebugPanelShortcut: string | null;
-  toggleTerminalShortcut: string | null;
 }) {
   const {
     appRef,
@@ -28,8 +24,6 @@ export function useLayoutController({
     onRightPanelResizeStart,
     planPanelHeight,
     onPlanPanelResizeStart,
-    terminalPanelHeight,
-    onTerminalPanelResizeStart,
     debugPanelHeight,
     onDebugPanelResizeStart,
   } = useResizablePanels();
@@ -49,23 +43,16 @@ export function useLayoutController({
   } = useSidebarToggles({ isCompact });
 
   const {
-    terminalOpen,
     onToggleDebug: handleDebugClick,
-    onToggleTerminal: handleToggleTerminal,
-    openTerminal,
-    closeTerminal,
   } = usePanelVisibility({
     isCompact,
-    activeWorkspaceId,
     setActiveTab,
     setDebugOpen,
   });
 
   usePanelShortcuts({
     toggleDebugPanelShortcut,
-    toggleTerminalShortcut,
     onToggleDebug: handleDebugClick,
-    onToggleTerminal: handleToggleTerminal,
   });
 
   return {
@@ -79,13 +66,11 @@ export function useLayoutController({
     rightPanelWidth,
     chatDiffSplitPositionPercent,
     planPanelHeight,
-    terminalPanelHeight,
     debugPanelHeight,
     onSidebarResizeStart,
     onChatDiffSplitPositionResizeStart,
     onRightPanelResizeStart,
     onPlanPanelResizeStart,
-    onTerminalPanelResizeStart,
     onDebugPanelResizeStart,
     sidebarCollapsed,
     rightPanelCollapsed,
@@ -93,10 +78,6 @@ export function useLayoutController({
     expandSidebar,
     collapseRightPanel,
     expandRightPanel,
-    terminalOpen,
     handleDebugClick,
-    handleToggleTerminal,
-    openTerminal,
-    closeTerminal,
   };
 }

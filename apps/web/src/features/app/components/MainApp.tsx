@@ -32,7 +32,6 @@ import { useThreadRows } from "@app/hooks/useThreadRows";
 import { useInterruptShortcut } from "@app/hooks/useInterruptShortcut";
 import { useArchiveShortcut } from "@app/hooks/useArchiveShortcut";
 import { useCopyThread } from "@threads/hooks/useCopyThread";
-import { useTerminalController } from "@/features/terminal/hooks/useTerminalController";
 import { useMobileServerSetup } from "@/features/mobile/hooks/useMobileServerSetup";
 import { useMainAppModals } from "@app/hooks/useMainAppModals";
 import { useMainAppDisplayNodes } from "@app/hooks/useMainAppDisplayNodes";
@@ -205,8 +204,6 @@ export default function MainApp() {
     onRightPanelResizeStart,
     planPanelHeight,
     onPlanPanelResizeStart,
-    terminalPanelHeight,
-    onTerminalPanelResizeStart,
     debugPanelHeight,
     onDebugPanelResizeStart,
     isCompact,
@@ -218,16 +215,11 @@ export default function MainApp() {
     expandSidebar,
     collapseRightPanel,
     expandRightPanel,
-    terminalOpen,
     handleDebugClick,
-    handleToggleTerminal,
-    closeTerminal: closeTerminalPanel,
   } = useLayoutController({
-    activeWorkspaceId,
     setActiveTab,
     setDebugOpen,
     toggleDebugPanelShortcut: appSettings.toggleDebugPanelShortcut,
-    toggleTerminalShortcut: appSettings.toggleTerminalShortcut,
   });
   const sidebarToggleProps = {
     isCompact,
@@ -751,37 +743,6 @@ export default function MainApp() {
     }
   }, [activeWorkspace, openRenameWorktreePrompt]);
 
-  const {
-    terminalTabs,
-    activeTerminalId,
-    onSelectTerminal,
-    onNewTerminal,
-    onCloseTerminal,
-    terminalState,
-    requestTerminalFocus,
-  } = useTerminalController({
-    activeWorkspaceId,
-    activeWorkspace,
-    terminalOpen,
-    onCloseTerminalPanel: closeTerminalPanel,
-    onDebug: addDebugEntry,
-  });
-
-  const handleToggleTerminalWithFocus = useCallback(() => {
-    if (!activeWorkspaceId) {
-      return;
-    }
-    if (!terminalOpen) {
-      requestTerminalFocus();
-    }
-    handleToggleTerminal();
-  }, [
-    activeWorkspaceId,
-    handleToggleTerminal,
-    requestTerminalFocus,
-    terminalOpen,
-  ]);
-
   const { exitDiffView, selectWorkspace, selectHome } = useWorkspaceSelection({
     workspaces,
     isCompact,
@@ -1261,7 +1222,6 @@ export default function MainApp() {
     chatDiffSplitPositionPercent,
     rightPanelWidth,
     planPanelHeight,
-    terminalPanelHeight,
     debugPanelHeight,
     appSettings,
   });
@@ -1313,7 +1273,6 @@ export default function MainApp() {
       onAddWorktreeAgent: handleAddWorktreeAgent,
       onAddCloneAgent: handleAddCloneAgent,
       onToggleDebug: handleDebugClick,
-      onToggleTerminal: handleToggleTerminalWithFocus,
       sidebarCollapsed,
       rightPanelCollapsed,
       onExpandSidebar: expandSidebar,
@@ -1535,7 +1494,6 @@ export default function MainApp() {
     handleOpenThreadLink,
     handleSelectOpenAppId,
     handleCopyThread,
-    handleToggleTerminalWithFocus,
     models,
     selectedModelId,
     onSelectModel: handleSelectModel,
@@ -1587,19 +1545,11 @@ export default function MainApp() {
     confirmCustom,
     handleComposerSendWithDraftStart,
     interruptTurn,
-    terminalOpen,
     debugOpen,
     debugEntries,
-    terminalTabs,
-    activeTerminalId,
-    onSelectTerminal,
-    onNewTerminal,
-    onCloseTerminal,
-    terminalState,
     onClearDebug: clearDebugEntries,
     onCopyDebug: handleCopyDebug,
     onResizeDebug: onDebugPanelResizeStart,
-    onResizeTerminal: onTerminalPanelResizeStart,
     isCompact,
     isPhone,
     activeTab,
@@ -1636,7 +1586,6 @@ export default function MainApp() {
     planPanelNode,
     debugPanelNode,
     debugPanelFullNode,
-    terminalDockNode,
     compactEmptyCodexNode,
     compactEmptyGitNode,
     compactGitBackNode,
@@ -1697,7 +1646,6 @@ export default function MainApp() {
       planPanelNode,
       debugPanelNode,
       debugPanelFullNode,
-      terminalDockNode,
       compactEmptyCodexNode,
       compactEmptyGitNode,
       compactGitBackNode,

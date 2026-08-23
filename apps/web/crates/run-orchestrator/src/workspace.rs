@@ -318,18 +318,6 @@ impl RunOrchestrator {
                 "remove child Workspaces before removing their parent".to_string(),
             ));
         }
-        let active_terminals: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM terminal_sessions \
-             WHERE workspace_id = $1 AND state IN ('starting', 'running', 'closing'))",
-        )
-        .bind(request.workspace_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if active_terminals {
-            return Err(RunOrchestratorError::Conflict(
-                "Workspace still has an active terminal session".to_string(),
-            ));
-        }
         let updated = sqlx::query(
             "UPDATE workspaces SET state = 'removing', updated_at = now() \
              WHERE id = $1 AND organization_id = $2 \

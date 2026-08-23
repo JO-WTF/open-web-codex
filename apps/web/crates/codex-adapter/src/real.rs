@@ -1,6 +1,4 @@
 use async_trait::async_trait;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
 use open_web_codex_profile_host::{ProfileHost, ProfileHostConfig, ProfileHostState};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -173,7 +171,6 @@ pub struct RealCodexAdapter {
     thread_history_modes: Arc<RwLock<HashMap<String, bool>>>,
     active_login_id: Arc<RwLock<Option<String>>>,
     login_statuses: Arc<RwLock<HashMap<String, ProfileLoginStatus>>>,
-    terminal_workspaces: Arc<RwLock<HashMap<String, AuthorizedWorkspace>>>,
     runtime_instance: Arc<Mutex<Option<uuid::Uuid>>>,
     local_events: broadcast::Sender<Value>,
     root_executions: BTreeMap<String, ResolvedRootExecution>,
@@ -275,7 +272,6 @@ impl RealCodexAdapter {
             thread_history_modes: Arc::new(RwLock::new(HashMap::new())),
             active_login_id: Arc::new(RwLock::new(None)),
             login_statuses: Arc::new(RwLock::new(HashMap::new())),
-            terminal_workspaces: Arc::new(RwLock::new(HashMap::new())),
             runtime_instance: Arc::new(Mutex::new(None)),
             local_events,
             root_executions: resolved_executions,
@@ -339,7 +335,6 @@ impl RealCodexAdapter {
         if runtime_instance.as_ref() != Some(&current) {
             self.thread_workspaces.write().await.clear();
             self.child_thread_identities.write().await.clear();
-            self.terminal_workspaces.write().await.clear();
             *runtime_instance = Some(current);
         }
         Ok(runtime_instance)
@@ -442,7 +437,6 @@ impl RealCodexAdapter {
         if runtime.as_ref() != Some(&current) {
             self.thread_workspaces.write().await.clear();
             self.child_thread_identities.write().await.clear();
-            self.terminal_workspaces.write().await.clear();
             *runtime = Some(current);
             return Ok(false);
         }
@@ -1229,117 +1223,6 @@ impl CodexAdapter for RealCodexAdapter {
             .map_err(Into::into)
     }
 
-    async fn open_terminal(
-        &self,
-        workspace: &AuthorizedWorkspace,
-        process_id: &str,
-        cols: u16,
-        rows: u16,
-    ) -> Result<(), AdapterError> {
-        let root = self.authorized_root(workspace)?;
-        if process_id.trim().is_empty() || cols == 0 || rows == 0 {
-            return Err(AdapterError::Internal(
-                "terminal process id and non-zero size are required".to_string(),
-            ));
-        }
-        self.terminal_workspaces
-            .write()
-            .await
-            .insert(process_id.to_string(), workspace.clone());
-        let host = self.host.clone();
-        let terminal_workspaces = self.terminal_workspaces.clone();
-        let local_events = self.local_events.clone();
-        let process_id = process_id.to_string();
-        let workspace_id = workspace.id.clone();
-        tokio::spawn(async move {
-            let result = host
-                .request_long_running(
-                    "command/exec",
-                    json!({
-                        "command": terminal_command(),
-                        "processId": process_id,
-                        "tty": true,
-                        "streamStdin": true,
-                        "streamStdoutStderr": true,
-                        "disableOutputCap": true,
-                        "disableTimeout": true,
-                        "cwd": root,
-                        "size": { "cols": cols, "rows": rows },
-                        "permissionProfile": ":workspace",
-                    }),
-                )
-                .await;
-            terminal_workspaces.write().await.remove(&process_id);
-            let (exit_code, error) = match result {
-                Ok(value) => (value.get("exitCode").and_then(Value::as_i64), None),
-                Err(error) => (None, Some(error.to_string())),
-            };
-            let _ = local_events.send(json!({
-                "method": "platform/terminalExited",
-                "params": {
-                    "processId": process_id,
-                    "workspaceId": workspace_id,
-                    "exitCode": exit_code,
-                    "failed": error.is_some(),
-                }
-            }));
-        });
-        Ok(())
-    }
-
-    async fn write_terminal(
-        &self,
-        workspace: &AuthorizedWorkspace,
-        process_id: &str,
-        data: &str,
-    ) -> Result<(), AdapterError> {
-        self.require_terminal(workspace, process_id).await?;
-        self.host
-            .request(
-                "command/exec/write",
-                json!({
-                    "processId": process_id,
-                    "deltaBase64": BASE64.encode(data.as_bytes()),
-                }),
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn resize_terminal(
-        &self,
-        workspace: &AuthorizedWorkspace,
-        process_id: &str,
-        cols: u16,
-        rows: u16,
-    ) -> Result<(), AdapterError> {
-        self.require_terminal(workspace, process_id).await?;
-        if cols == 0 || rows == 0 {
-            return Err(AdapterError::Internal(
-                "terminal size must be non-zero".to_string(),
-            ));
-        }
-        self.host
-            .request(
-                "command/exec/resize",
-                json!({ "processId": process_id, "size": { "cols": cols, "rows": rows } }),
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn close_terminal(
-        &self,
-        workspace: &AuthorizedWorkspace,
-        process_id: &str,
-    ) -> Result<(), AdapterError> {
-        self.require_terminal(workspace, process_id).await?;
-        self.host
-            .request("command/exec/terminate", json!({ "processId": process_id }))
-            .await?;
-        Ok(())
-    }
-
     async fn subscribe_events(&self, sender: UnboundedSender<Vec<u8>>) -> Result<(), AdapterError> {
         let mut receiver = self.host.subscribe();
         let mut local_receiver = self.local_events.subscribe();
@@ -1370,14 +1253,6 @@ impl CodexAdapter for RealCodexAdapter {
                     let thread_identity = self.inherit_child_thread_workspace(&message).await?;
                     let workspace_id = if let Some(workspace_id) = message_workspace_id(&message) {
                         workspace_id.to_string()
-                    } else if let Some(process_id) = message_process_id(&message) {
-                        self.terminal_workspaces
-                            .read()
-                            .await
-                            .get(process_id)
-                            .map(|workspace| workspace.id.as_str())
-                            .unwrap_or(&self.workspace_id)
-                            .to_string()
                     } else {
                         match message_thread_id(&message) {
                             Some(thread_id) => self
@@ -1569,26 +1444,6 @@ impl RealCodexAdapter {
         let authorized_root = self.authorized_root(&parent_workspace)?;
         parse_runtime_thread_identity(thread, child_thread_id, &authorized_root)
     }
-
-    async fn require_terminal(
-        &self,
-        workspace: &AuthorizedWorkspace,
-        process_id: &str,
-    ) -> Result<(), AdapterError> {
-        self.authorized_root(workspace)?;
-        let bound = self
-            .terminal_workspaces
-            .read()
-            .await
-            .get(process_id)
-            .cloned();
-        if bound.as_ref() != Some(workspace) {
-            return Err(AdapterError::Rpc(
-                "terminal is not bound to the authorized workspace".to_string(),
-            ));
-        }
-        Ok(())
-    }
 }
 
 fn thread_spawn_parent_thread_id(
@@ -1696,20 +1551,6 @@ fn parse_runtime_thread_identity(
     }))
 }
 
-fn terminal_command() -> Vec<String> {
-    #[cfg(windows)]
-    {
-        vec!["powershell.exe".to_string(), "-NoLogo".to_string()]
-    }
-    #[cfg(not(windows))]
-    {
-        vec![
-            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
-            "-l".to_string(),
-        ]
-    }
-}
-
 fn message_thread_id(message: &Value) -> Option<&str> {
     message
         .pointer("/params/threadId")
@@ -1725,10 +1566,6 @@ fn message_parent_thread_id(message: &Value) -> Option<&str> {
         .or_else(|| message.pointer("/params/thread/source/subAgent/thread_spawn/parent_thread_id"))
         .or_else(|| message.pointer("/params/thread/source/subAgent/threadSpawn/parentThreadId"))
         .and_then(Value::as_str)
-}
-
-fn message_process_id(message: &Value) -> Option<&str> {
-    message.pointer("/params/processId").and_then(Value::as_str)
 }
 
 fn message_workspace_id(message: &Value) -> Option<&str> {

@@ -309,35 +309,6 @@ pub trait CodexAdapter: Send + Sync {
         target: ReviewTarget,
     ) -> Result<Value, AdapterError>;
 
-    async fn open_terminal(
-        &self,
-        workspace: &AuthorizedWorkspace,
-        process_id: &str,
-        cols: u16,
-        rows: u16,
-    ) -> Result<(), AdapterError>;
-
-    async fn write_terminal(
-        &self,
-        workspace: &AuthorizedWorkspace,
-        process_id: &str,
-        data: &str,
-    ) -> Result<(), AdapterError>;
-
-    async fn resize_terminal(
-        &self,
-        workspace: &AuthorizedWorkspace,
-        process_id: &str,
-        cols: u16,
-        rows: u16,
-    ) -> Result<(), AdapterError>;
-
-    async fn close_terminal(
-        &self,
-        workspace: &AuthorizedWorkspace,
-        process_id: &str,
-    ) -> Result<(), AdapterError>;
-
     /// Subscribe to the internal app-server event stream. The implementor sends
     /// frames through `sender` and returns when the subscription ends.
     async fn subscribe_events(

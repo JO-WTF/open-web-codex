@@ -3,16 +3,12 @@ import { matchesShortcut } from "../../../utils/shortcuts";
 
 type UsePanelShortcutsOptions = {
   toggleDebugPanelShortcut: string | null;
-  toggleTerminalShortcut: string | null;
   onToggleDebug: () => void;
-  onToggleTerminal: () => void;
 };
 
 export function usePanelShortcuts({
   toggleDebugPanelShortcut,
-  toggleTerminalShortcut,
   onToggleDebug,
-  onToggleTerminal,
 }: UsePanelShortcutsOptions) {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -32,12 +28,8 @@ export function usePanelShortcuts({
         onToggleDebug();
         return;
       }
-      if (matchesShortcut(event, toggleTerminalShortcut)) {
-        event.preventDefault();
-        onToggleTerminal();
-      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onToggleDebug, onToggleTerminal, toggleDebugPanelShortcut, toggleTerminalShortcut]);
+  }, [onToggleDebug, toggleDebugPanelShortcut]);
 }

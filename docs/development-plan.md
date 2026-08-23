@@ -5,10 +5,10 @@
 | 文档性质 | 当前与下一里程碑的执行计划 |
 | 更新日期 | 2026-08-23 |
 | 当前阶段 | 阶段三：回归 Codex Runtime owner 并清理并行实现 |
-| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三 Atom 2b 已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统和 Browser Workspace Preferences |
+| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三 Atom 2b 已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统和 Browser Workspace Preferences，Atom 3 已删除独立 Terminal |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018/019/024/025 为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
-| 阶段三后续 | 先清理剩余 Browser legacy API；再收敛 Provider/model owner、Run/Thread 状态和 history/event 投影；Codex upstream 同步与 seam 收敛独立作为最后步骤 |
+| 阶段三后续 | 先清理 Browser legacy 中剩余的 Usage；再收敛 Provider/model owner、Run/Thread 状态和 history/event 投影；Codex upstream 同步与 seam 收敛独立作为最后步骤 |
 
 本文记录阶段一已完成的正常业务主链、仍有效的边界和后续工作。用户心智统一为：
 
@@ -53,14 +53,26 @@ Atom 2b 已完成：
 9. Sidebar 工作区卡片折叠只保留当前页面的本地交互状态；工作区列表来自 Workspace owner，
    clone 归属使用其 typed `parentId`。旧 App 不再保存工作区顺序、分组、折叠或 Git root 投影；
    Server `/workspaces/{id}/git-roots` 与 GitRuntime typed 能力保留，等待未来现役 WebApp 设计。
-10. 当前迁移删除 `browser_workspace_preferences` 表；不读取、迁移或删除任何用户 Profile 文件，
-    `terminal_sessions`、Terminal 和 Usage owner 均留给后续独立 Atom。
+10. 当前迁移删除 `browser_workspace_preferences` 表；不读取、迁移或删除任何用户 Profile 文件。
+    Terminal owner 已由随后 Atom 3 删除，Usage owner 留给后续独立 Atom。
 
 本阶段每个已删除认证 route 都由代表性 authenticated 404 negative assertions 与 active-source rg
 覆盖；官方 typed approval 与 Thread 路径继续通过，Web/Rust/no-desktop 门全绿。Atom 2b 的本地
 PostgreSQL fresh-schema retired-table 门已通过；完整 ignored 跨租户门仍在既有 completed Thread
 follow-up 请求处返回 `502` 而非 `200`。该失败归入后续 Run/Thread owner Atom，Atom 2b 没有用
 Preferences fallback、重试或放宽断言掩盖它。
+
+Atom 3 已完成：
+
+11. 删除 `/workspaces/{id}/terminals*`、Terminal contract、Adapter 的独立 `command/exec` shell、
+    `terminal_sessions`、`terminal.output`/`terminal.exit` 特殊投影、旧 App Terminal/xterm 面板和
+    只为该面服务的快捷键与样式。Codex Runtime Thread 内的 `commandExecution`、输出、terminal
+    interaction 与审批链不变。
+12. migration 69 只删除旧 `terminal_sessions` 表；已有旧 Terminal session 行随表删除，不读取、
+    迁移或重新解释它们。Workspace 删除仍检查 active Run、child Workspace 等现役约束，但不再检查
+    已不存在的 Terminal session。
+13. fresh-schema retired-table gate 和认证 404 route assertion 覆盖删除；不为同 Workspace 多 Task
+    或 fork 新建 Terminal→Run selector。Usage owner 仍留给下一独立 Atom。
 
 ## 0A. 阶段二已完成基线：Copilot SDK、Task 选包与单 Profile 多包组合
 
@@ -470,8 +482,8 @@ Item 验收，不把后续模型误选低层 Tool 或求解失败伪装成地图
 连续两次通过；真实 Provider 仍可能因模型未作出下一结构化调用或触发审批而 typed 终止，完整真实门
 只在完整 Data→Network→12h 基线→Balikpapan 增仓时效变化率→map canonical 链实际完成时计为通过。
 
-后续 backlog 继续遵守已确认边界：official Thread/Turn/Item/history 是唯一会话事实；Browser legacy、
-Terminal/Usage、Provider 重复 owner、Task creation selection、Run lease/history overlay 与
+后续 backlog 继续遵守已确认边界：official Thread/Turn/Item/history 是唯一会话事实；Browser legacy 中
+剩余的 Usage、Provider 重复 owner、Task creation selection、Run lease/history overlay 与
 physical-cwd join 必须按 owner 原子收敛，但不得再次插到上述仓网关键路径之前。
 
 阶段二已把领域无关的 ResourceRef/schema/codec/bounds/error/store/runtime/Workspace file

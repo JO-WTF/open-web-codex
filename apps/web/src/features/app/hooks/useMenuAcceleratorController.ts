@@ -35,10 +35,6 @@ export function useMenuAcceleratorController({ appSettings, onDebug }: Params) {
         shortcut: appSettings.toggleDebugPanelShortcut,
       },
       {
-        id: "view_toggle_terminal",
-        shortcut: appSettings.toggleTerminalShortcut,
-      },
-      {
         id: "view_next_agent",
         shortcut: appSettings.cycleAgentNextShortcut,
       },
@@ -89,7 +85,6 @@ export function useMenuAcceleratorController({ appSettings, onDebug }: Params) {
       appSettings.toggleGitSidebarShortcut,
       appSettings.toggleDebugPanelShortcut,
       appSettings.toggleProjectsSidebarShortcut,
-      appSettings.toggleTerminalShortcut,
     ],
   );
 

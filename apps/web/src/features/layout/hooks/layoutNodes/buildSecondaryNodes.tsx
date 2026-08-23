@@ -1,7 +1,5 @@
 import { DebugPanel } from "../../../debug/components/DebugPanel";
 import { PlanPanel } from "../../../plan/components/PlanPanel";
-import { TerminalDock } from "../../../terminal/components/TerminalDock";
-import { TerminalPanel } from "../../../terminal/components/TerminalPanel";
 import type {
   LayoutNodesResult,
   LayoutSecondarySurface,
@@ -14,25 +12,10 @@ type SecondaryLayoutNodes = Pick<
   | "planPanelNode"
   | "debugPanelNode"
   | "debugPanelFullNode"
-  | "terminalDockNode"
   | "compactEmptyCodexNode"
   | "compactEmptyGitNode"
   | "compactGitBackNode"
 >;
-
-function buildTerminalPanelNode(terminalState: SecondaryLayoutNodesOptions["terminalState"]) {
-  if (!terminalState) {
-    return null;
-  }
-
-  return (
-    <TerminalPanel
-      containerRef={terminalState.containerRef}
-      status={terminalState.status}
-      message={terminalState.message}
-    />
-  );
-}
 
 function buildDebugPanels(debugPanelProps: SecondaryLayoutNodesOptions["debugPanelProps"]) {
   const debugPanelNode = <DebugPanel {...debugPanelProps} />;
@@ -97,15 +80,6 @@ function buildCompactGitBackNode(
 
 export function buildSecondaryNodes(options: SecondaryLayoutNodesOptions): SecondaryLayoutNodes {
   const planPanelNode = <PlanPanel {...options.planPanelProps} />;
-  const terminalPanelNode = buildTerminalPanelNode(options.terminalState);
-
-  const terminalDockNode = (
-    <TerminalDock
-      {...options.terminalDockProps}
-      terminalNode={terminalPanelNode}
-    />
-  );
-
   const { debugPanelNode, debugPanelFullNode } = buildDebugPanels(options.debugPanelProps);
 
   const compactEmptyCodexNode = buildCompactEmptyNode({
@@ -126,7 +100,6 @@ export function buildSecondaryNodes(options: SecondaryLayoutNodesOptions): Secon
     planPanelNode,
     debugPanelNode,
     debugPanelFullNode,
-    terminalDockNode,
     compactEmptyCodexNode,
     compactEmptyGitNode,
     compactGitBackNode,

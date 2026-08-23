@@ -4,8 +4,6 @@ use std::sync::Arc;
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use base64::Engine;
 use chrono::Utc;
 use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
@@ -457,91 +455,6 @@ impl CodexAdapter for FakeCodexAdapter {
             "turn": { "id": format!("review-{}", Uuid::now_v7()), "status": "inProgress" },
             "reviewThreadId": thread_id,
         }))
-    }
-
-    async fn open_terminal(
-        &self,
-        workspace: &AuthorizedWorkspace,
-        process_id: &str,
-        _cols: u16,
-        _rows: u16,
-    ) -> Result<(), AdapterError> {
-        self.emit(json!({
-            "method": "app-server-event",
-            "params": {
-                "workspace_id": workspace.id,
-                "message": {
-                    "method": "command/exec/outputDelta",
-                    "params": {
-                        "processId": process_id,
-                        "stream": "stdout",
-                        "deltaBase64": BASE64.encode(b"fake-shell$ "),
-                        "capReached": false,
-                    },
-                },
-            },
-        }))
-        .await;
-        Ok(())
-    }
-
-    async fn write_terminal(
-        &self,
-        workspace: &AuthorizedWorkspace,
-        process_id: &str,
-        data: &str,
-    ) -> Result<(), AdapterError> {
-        self.emit(json!({
-            "method": "app-server-event",
-            "params": {
-                "workspace_id": workspace.id,
-                "message": {
-                    "method": "command/exec/outputDelta",
-                    "params": {
-                        "processId": process_id,
-                        "stream": "stdout",
-                        "deltaBase64": BASE64.encode(data.as_bytes()),
-                        "capReached": false,
-                    },
-                },
-            },
-        }))
-        .await;
-        Ok(())
-    }
-
-    async fn resize_terminal(
-        &self,
-        _workspace: &AuthorizedWorkspace,
-        _process_id: &str,
-        _cols: u16,
-        _rows: u16,
-    ) -> Result<(), AdapterError> {
-        Ok(())
-    }
-
-    async fn close_terminal(
-        &self,
-        workspace: &AuthorizedWorkspace,
-        process_id: &str,
-    ) -> Result<(), AdapterError> {
-        self.emit(json!({
-            "method": "app-server-event",
-            "params": {
-                "workspace_id": workspace.id,
-                "message": {
-                    "method": "platform/terminalExited",
-                    "params": {
-                        "processId": process_id,
-                        "workspaceId": workspace.id,
-                        "exitCode": 0,
-                        "failed": false,
-                    },
-                },
-            },
-        }))
-        .await;
-        Ok(())
     }
 
     async fn subscribe_events(&self, sender: UnboundedSender<Vec<u8>>) -> Result<(), AdapterError> {

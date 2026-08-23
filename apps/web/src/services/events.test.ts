@@ -7,7 +7,6 @@ import {
   subscribeMenuCycleCollaborationMode,
   subscribeMenuCycleModel,
   subscribeMenuNewAgent,
-  subscribeTerminalOutput,
 } from "./events";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -118,7 +117,7 @@ describe("events subscriptions", () => {
     vi.mocked(listen).mockRejectedValueOnce(error);
 
     const onError = vi.fn();
-    const cleanup = subscribeTerminalOutput(() => {}, { onError });
+    const cleanup = subscribeMenuNewAgent(() => {}, { onError });
 
     await Promise.resolve();
     await Promise.resolve();

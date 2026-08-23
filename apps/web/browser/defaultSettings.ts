@@ -28,7 +28,6 @@ export const defaultAppSettings: AppSettings = {
   toggleGitSidebarShortcut: `${primary}+shift+g`,
   branchSwitcherShortcut: `${primary}+shift+b`,
   toggleDebugPanelShortcut: `${primary}+shift+d`,
-  toggleTerminalShortcut: `${primary}+shift+t`,
   cycleAgentNextShortcut: isMac ? "cmd+ctrl+down" : "ctrl+alt+down",
   cycleAgentPrevShortcut: isMac ? "cmd+ctrl+up" : "ctrl+alt+up",
   cycleWorkspaceNextShortcut: isMac ? "cmd+shift+down" : "ctrl+alt+shift+down",

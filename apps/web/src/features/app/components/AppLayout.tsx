@@ -32,7 +32,6 @@ type AppLayoutProps = {
   planPanelNode: ReactNode;
   debugPanelNode: ReactNode;
   debugPanelFullNode: ReactNode;
-  terminalDockNode: ReactNode;
   compactEmptyCodexNode: ReactNode;
   compactEmptyGitNode: ReactNode;
   compactGitBackNode: ReactNode;
@@ -71,7 +70,6 @@ export const AppLayout = memo(function AppLayout({
   planPanelNode,
   debugPanelNode,
   debugPanelFullNode,
-  terminalDockNode,
   compactEmptyCodexNode,
   compactEmptyGitNode,
   compactGitBackNode,
@@ -149,7 +147,6 @@ export const AppLayout = memo(function AppLayout({
       gitDiffPanelNode={gitDiffPanelNode}
       planPanelNode={planPanelNode}
       composerNode={composerNode}
-      terminalDockNode={terminalDockNode}
       debugPanelNode={debugPanelNode}
       hasActivePlan={hasActivePlan}
       onSidebarResizeStart={onSidebarResizeStart}

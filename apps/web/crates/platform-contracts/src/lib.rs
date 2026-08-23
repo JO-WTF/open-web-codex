@@ -787,24 +787,6 @@ pub struct RenameWorkspaceUpstreamRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OpenTerminalRequest {
-    pub terminal_id: String,
-    pub cols: u16,
-    pub rows: u16,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WriteTerminalRequest {
-    pub data: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResizeTerminalRequest {
-    pub cols: u16,
-    pub rows: u16,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceBranch {
     pub name: String,

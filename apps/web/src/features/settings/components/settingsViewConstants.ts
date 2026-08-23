@@ -103,7 +103,6 @@ export const SHORTCUT_DRAFT_KEY_BY_SETTING: Record<
   toggleGitSidebarShortcut: "gitSidebar",
   branchSwitcherShortcut: "branchSwitcher",
   toggleDebugPanelShortcut: "debugPanel",
-  toggleTerminalShortcut: "terminal",
   cycleAgentNextShortcut: "cycleAgentNext",
   cycleAgentPrevShortcut: "cycleAgentPrev",
   cycleWorkspaceNextShortcut: "cycleWorkspaceNext",

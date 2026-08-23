@@ -944,37 +944,6 @@ export class PlatformClient {
     );
   }
 
-  openTerminal(workspaceId: string, terminalId: string, cols: number, rows: number) {
-    return this.request<{ id: string }>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/terminals`,
-      {
-        method: "POST",
-        body: JSON.stringify({ terminal_id: terminalId, cols, rows }),
-      },
-    );
-  }
-
-  writeTerminal(workspaceId: string, terminalId: string, data: string) {
-    return this.request<{ status: string }>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/terminals/${encodeURIComponent(terminalId)}/write`,
-      { method: "POST", body: JSON.stringify({ data }) },
-    );
-  }
-
-  resizeTerminal(workspaceId: string, terminalId: string, cols: number, rows: number) {
-    return this.request<{ status: string }>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/terminals/${encodeURIComponent(terminalId)}/resize`,
-      { method: "POST", body: JSON.stringify({ cols, rows }) },
-    );
-  }
-
-  closeTerminal(workspaceId: string, terminalId: string) {
-    return this.request<{ status: string }>(
-      `/api/workspaces/${encodeURIComponent(workspaceId)}/terminals/${encodeURIComponent(terminalId)}`,
-      { method: "DELETE" },
-    );
-  }
-
   workspaceLog(workspaceId: string, limit = 40) {
     const query = new URLSearchParams({ limit: String(limit) });
     return this.request<WorkspaceLog>(
