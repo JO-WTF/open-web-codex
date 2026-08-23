@@ -11,7 +11,6 @@ export const SETTINGS_SECTION_IDS = [
   "open-apps",
   "git",
   "server",
-  "agents",
 ] as const;
 
 export const SETTINGS_EXTRA_SECTION_IDS = ["codex", "features"] as const;

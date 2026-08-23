@@ -162,23 +162,6 @@ fn thread_resume_params(
     Ok(params)
 }
 
-fn agent_core_batch_write_params(
-    multi_agent_enabled: bool,
-    max_threads: u32,
-    max_depth: u32,
-) -> Value {
-    json!({
-        "edits": [
-            { "keyPath": "features.multi_agent", "value": multi_agent_enabled, "mergeStrategy": "replace" },
-            { "keyPath": "agents.max_concurrent_threads_per_session", "value": max_threads, "mergeStrategy": "replace" },
-            { "keyPath": "agents.max_depth", "value": max_depth, "mergeStrategy": "replace" }
-        ],
-        "filePath": null,
-        "expectedVersion": null,
-        "reloadUserConfig": true
-    })
-}
-
 /// Adapter backed directly by a native Profile Host and Codex app-server
 /// JSONL connection without an intermediate local gateway.
 pub struct RealCodexAdapter {
@@ -1059,10 +1042,6 @@ impl CodexAdapter for RealCodexAdapter {
                     json!({ "cwds": [root], "forceReload": force_reload }),
                 )
             }
-            ProfileQuery::Config => (
-                "config/read",
-                json!({ "includeLayers": false, "cwd": null }),
-            ),
         };
         self.host.request(method, params).await.map_err(Into::into)
     }
@@ -1076,84 +1055,6 @@ impl CodexAdapter for RealCodexAdapter {
                     .request(
                         "experimentalFeature/enablement/set",
                         json!({ "enablement": enablement }),
-                    )
-                    .await
-                    .map_err(Into::into)
-            }
-            ProfileMutation::SetAgentCore {
-                multi_agent_enabled,
-                max_threads,
-                max_depth,
-            } => {
-                self.host
-                    .request(
-                        "config/batchWrite",
-                        agent_core_batch_write_params(
-                            multi_agent_enabled,
-                            max_threads,
-                            max_depth,
-                        ),
-                    )
-                    .await
-                    .map_err(Into::into)
-            }
-            ProfileMutation::SetAgentDefinition {
-                original_name,
-                name,
-                description,
-                config_file,
-            } => {
-                let mut definition = serde_json::Map::new();
-                if let Some(description) = description {
-                    definition.insert("description".to_string(), json!(description));
-                }
-                definition.insert("config_file".to_string(), json!(config_file));
-                let definition = Value::Object(definition);
-                if let Some(original_name) = original_name.filter(|value| value != &name) {
-                    self.host
-                        .request(
-                            "config/batchWrite",
-                            json!({
-                                "edits": [
-                                    { "keyPath": format!("agents.{original_name}"), "value": Value::Null, "mergeStrategy": "replace" },
-                                    { "keyPath": format!("agents.{name}"), "value": definition, "mergeStrategy": "replace" }
-                                ],
-                                "filePath": null,
-                                "expectedVersion": null,
-                                "reloadUserConfig": true
-                            }),
-                        )
-                        .await
-                        .map_err(Into::into)
-                } else {
-                    self.host
-                        .request(
-                            "config/batchWrite",
-                            json!({
-                                "edits": [
-                                    { "keyPath": format!("agents.{name}"), "value": definition, "mergeStrategy": "replace" }
-                                ],
-                                "filePath": null,
-                                "expectedVersion": null,
-                                "reloadUserConfig": true
-                            }),
-                        )
-                        .await
-                        .map_err(Into::into)
-                }
-            }
-            ProfileMutation::RemoveAgentDefinition { name } => {
-                self.host
-                    .request(
-                        "config/batchWrite",
-                        json!({
-                            "edits": [
-                                { "keyPath": format!("agents.{name}"), "value": Value::Null, "mergeStrategy": "replace" }
-                            ],
-                            "filePath": null,
-                            "expectedVersion": null,
-                            "reloadUserConfig": true
-                        }),
                     )
                     .await
                     .map_err(Into::into)
@@ -1986,13 +1887,13 @@ fn app_server_event_frame_with_identity(
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_core_batch_write_params, app_server_event_frame,
-        app_server_event_frame_with_identity, cached_thread_identity_sidecar,
-        codex_bubblewrap_is_unavailable, codex_sandbox_disabled_by_environment,
-        is_authorized_workspace_root, login_completion, message_parent_thread_id,
-        message_thread_id, parse_runtime_thread_identity, resolve_root_skill_selections,
-        thread_resume_params, thread_spawn_parent_thread_id, thread_start_params,
-        turn_sandbox_policy, RealCodexAdapter, RootExecutionConfig, ThreadSkillConfig,
+        app_server_event_frame, app_server_event_frame_with_identity,
+        cached_thread_identity_sidecar, codex_bubblewrap_is_unavailable,
+        codex_sandbox_disabled_by_environment, is_authorized_workspace_root, login_completion,
+        message_parent_thread_id, message_thread_id, parse_runtime_thread_identity,
+        resolve_root_skill_selections, thread_resume_params, thread_spawn_parent_thread_id,
+        thread_start_params, turn_sandbox_policy, RealCodexAdapter, RootExecutionConfig,
+        ThreadSkillConfig,
     };
     use crate::{AdapterError, RuntimeThreadIdentity, RuntimeThreadIdentitySidecar};
     use serde_json::{json, Value};
@@ -2348,20 +2249,6 @@ mod tests {
             })),
             Some("thread-1")
         );
-    }
-
-    #[test]
-    fn writes_the_canonical_runtime_agent_concurrency_key() {
-        let params = agent_core_batch_write_params(true, 2, 1);
-
-        assert_eq!(
-            params["edits"][1]["keyPath"],
-            "agents.max_concurrent_threads_per_session"
-        );
-        assert!(params
-            .to_string()
-            .contains("agents.max_concurrent_threads_per_session"));
-        assert!(!params.to_string().contains("agents.max_threads"));
     }
 
     #[test]

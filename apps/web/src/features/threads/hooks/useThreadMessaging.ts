@@ -5,7 +5,6 @@ import type {
   AppMention,
   ComposerSendIntent,
   RateLimitSnapshot,
-  CustomPromptOption,
   DebugEntry,
   ReviewTarget,
   SendMessageResult,
@@ -21,7 +20,6 @@ import {
   getAppsList as getAppsListService,
   listMcpServerStatus as listMcpServerStatusService,
 } from "@services/tauri";
-import { expandCustomPromptText } from "@utils/customPrompts";
 import {
   asString,
   extractReviewThreadId,
@@ -53,7 +51,6 @@ type UseThreadMessagingOptions = {
   onSelectServiceTier?: (tier: ServiceTier | null | undefined) => void;
   reviewDeliveryMode?: "inline" | "detached";
   steerEnabled: boolean;
-  customPrompts: CustomPromptOption[];
   ensureWorkspaceRuntimeCodexArgs?: (
     workspaceId: string,
     threadId: string | null,
@@ -107,7 +104,6 @@ export function useThreadMessaging({
   onSelectServiceTier,
   reviewDeliveryMode = "inline",
   steerEnabled,
-  customPrompts,
   ensureWorkspaceRuntimeCodexArgs,
   shouldPreflightRuntimeCodexArgsForSend,
   threadStatusById,
@@ -143,16 +139,7 @@ export function useThreadMessaging({
       if (!messageText && images.length === 0) {
         return { status: "blocked" };
       }
-      let finalText = messageText;
-      if (!options?.skipPromptExpansion) {
-        const promptExpansion = expandCustomPromptText(messageText, customPrompts);
-        if (promptExpansion && "error" in promptExpansion) {
-          pushThreadErrorMessage(threadId, promptExpansion.error);
-          safeMessageActivity();
-          return { status: "blocked" };
-        }
-        finalText = promptExpansion?.expanded ?? messageText;
-      }
+      const finalText = messageText;
       const isProcessing = threadStatusById[threadId]?.isProcessing ?? false;
       const activeTurnId = activeTurnIdByThread[threadId] ?? null;
       const {
@@ -342,7 +329,6 @@ export function useThreadMessaging({
     [
       accessMode,
       collaborationMode,
-      customPrompts,
       dispatch,
       effort,
       serviceTier,
@@ -376,41 +362,18 @@ export function useThreadMessaging({
       if (!messageText && images.length === 0) {
         return { status: "blocked" };
       }
-      const promptExpansion = expandCustomPromptText(messageText, customPrompts);
-      if (promptExpansion && "error" in promptExpansion) {
-        if (activeThreadId) {
-          pushThreadErrorMessage(activeThreadId, promptExpansion.error);
-          safeMessageActivity();
-        } else {
-          onDebug?.({
-            id: `${Date.now()}-client-prompt-expand-error`,
-            timestamp: Date.now(),
-            source: "error",
-            label: "prompt/expand error",
-            payload: promptExpansion.error,
-          });
-        }
-        return { status: "blocked" };
-      }
-      const finalText = promptExpansion?.expanded ?? messageText;
       const threadId = await ensureThreadForActiveWorkspace();
       if (!threadId) {
         return { status: "blocked" };
       }
-      return sendMessageToThread(activeWorkspace, threadId, finalText, images, {
-        skipPromptExpansion: true,
+      return sendMessageToThread(activeWorkspace, threadId, messageText, images, {
         appMentions,
         sendIntent: options?.sendIntent,
       });
     },
     [
-      activeThreadId,
       activeWorkspace,
-      customPrompts,
       ensureThreadForActiveWorkspace,
-      onDebug,
-      pushThreadErrorMessage,
-      safeMessageActivity,
       sendMessageToThread,
     ],
   );

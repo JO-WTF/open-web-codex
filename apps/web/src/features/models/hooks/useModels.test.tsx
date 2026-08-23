@@ -2,12 +2,11 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "../../../types";
-import { getConfigModel, getModelList } from "../../../services/tauri";
+import { getModelList } from "../../../services/tauri";
 import { useModels } from "./useModels";
 
 vi.mock("../../../services/tauri", () => ({
   getModelList: vi.fn(),
-  getConfigModel: vi.fn(),
 }));
 
 const workspace: WorkspaceInfo = {
@@ -23,7 +22,7 @@ describe("useModels", () => {
     vi.clearAllMocks();
   });
 
-  it("adds the config model when it is missing from model/list", async () => {
+  it("keeps the selection empty when the catalog has no default model", async () => {
     vi.mocked(getModelList).mockResolvedValueOnce({
       result: {
         data: [
@@ -33,29 +32,23 @@ describe("useModels", () => {
             displayName: "GPT-5.1",
             supportedReasoningEfforts: [],
             defaultReasoningEffort: null,
-            isDefault: true,
+            isDefault: false,
           },
         ],
       },
     });
-    vi.mocked(getConfigModel).mockResolvedValueOnce("custom-model");
-
     const { result } = renderHook(() =>
       useModels({ activeWorkspace: workspace }),
     );
 
     await waitFor(() => expect(result.current.models.length).toBeGreaterThan(0));
 
-    expect(getConfigModel).toHaveBeenCalledWith("workspace-1");
-    expect(result.current.models[0]).toMatchObject({
-      id: "custom-model",
-      model: "custom-model",
-    });
-    expect(result.current.selectedModel?.model).toBe("custom-model");
+    expect(result.current.models[0]?.model).toBe("gpt-5.1");
+    expect(result.current.selectedModel).toBeNull();
     expect(result.current.reasoningSupported).toBe(false);
   });
 
-  it("prefers the provider entry when the config model matches by slug", async () => {
+  it("selects only the model marked as default by the Provider catalog", async () => {
     vi.mocked(getModelList).mockResolvedValueOnce({
       result: {
         data: [
@@ -68,13 +61,11 @@ describe("useModels", () => {
               { reasoningEffort: "high", description: "High" },
             ],
             defaultReasoningEffort: "medium",
-            isDefault: false,
+            isDefault: true,
           },
         ],
       },
     });
-    vi.mocked(getConfigModel).mockResolvedValueOnce("custom-model");
-
     const { result } = renderHook(() =>
       useModels({ activeWorkspace: workspace }),
     );
@@ -101,16 +92,23 @@ describe("useModels", () => {
             defaultReasoningEffort: "medium",
             isDefault: true,
           },
+          {
+            id: "custom-model",
+            model: "custom-model",
+            displayName: "Custom",
+            supportedReasoningEfforts: [],
+            defaultReasoningEffort: null,
+            isDefault: false,
+          },
         ],
       },
     });
-    vi.mocked(getConfigModel).mockResolvedValueOnce("custom-model");
 
     const { result } = renderHook(() =>
       useModels({ activeWorkspace: workspace }),
     );
 
-    await waitFor(() => expect(result.current.models.length).toBeGreaterThan(1));
+    await waitFor(() => expect(result.current.models).toHaveLength(2));
 
     act(() => {
       result.current.setSelectedEffort("high");

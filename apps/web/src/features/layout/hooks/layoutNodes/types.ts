@@ -13,7 +13,6 @@ import { Home } from "../../../home/components/Home";
 import { Messages } from "../../../messages/components/Messages";
 import { ErrorToasts } from "../../../notifications/components/ErrorToasts";
 import { PlanPanel } from "../../../plan/components/PlanPanel";
-import { PromptPanel } from "../../../prompts/components/PromptPanel";
 import { TerminalDock } from "../../../terminal/components/TerminalDock";
 import type { TerminalSessionState } from "../../../terminal/hooks/useTerminalSession";
 import { UpdateToast } from "../../../update/components/UpdateToast";
@@ -57,7 +56,6 @@ export type LayoutPrimarySurface = {
 export type LayoutGitSurface = {
   filePanelMode: ComponentProps<typeof GitDiffPanel>["filePanelMode"];
   fileTreeProps: ComponentProps<typeof FileTreePanel> | null;
-  promptPanelProps: ComponentProps<typeof PromptPanel>;
   gitDiffPanelProps: ComponentProps<typeof GitDiffPanel>;
   gitDiffViewerProps: ComponentProps<typeof GitDiffViewer>;
   diffViewProps: {

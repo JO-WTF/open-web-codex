@@ -10,7 +10,6 @@ import { clampThreadName } from "@threads/utils/threadNaming";
 import { formatRelativeTime } from "@utils/time";
 
 export type SendMessageOptions = {
-  skipPromptExpansion?: boolean;
   model?: string | null;
   effort?: string | null;
   serviceTier?: ServiceTier | null | undefined;

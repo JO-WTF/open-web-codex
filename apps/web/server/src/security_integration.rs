@@ -2036,6 +2036,79 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .await;
     assert_eq!(removed_approval_rule_writer.0, StatusCode::NOT_FOUND);
 
+    let removed_profile_file_read = call(
+        &app,
+        authenticated("GET", "/api/profile/files/config", &first_token),
+    )
+    .await;
+    assert_eq!(removed_profile_file_read.0, StatusCode::NOT_FOUND);
+    let removed_profile_file_write = call(
+        &app,
+        authenticated_json(
+            "PUT",
+            "/api/profile/files/agents",
+            &first_token,
+            json!({"content": "ignored"}),
+        ),
+    )
+    .await;
+    assert_eq!(removed_profile_file_write.0, StatusCode::NOT_FOUND);
+    let removed_profile_agents = call(
+        &app,
+        authenticated("GET", "/api/profile/agents", &first_token),
+    )
+    .await;
+    assert_eq!(removed_profile_agents.0, StatusCode::NOT_FOUND);
+    let removed_profile_agent_settings = call(
+        &app,
+        authenticated_json(
+            "PUT",
+            "/api/profile/agents/settings",
+            &first_token,
+            json!({"multiAgentEnabled": true, "maxThreads": 4, "maxDepth": 3}),
+        ),
+    )
+    .await;
+    assert_eq!(removed_profile_agent_settings.0, StatusCode::NOT_FOUND);
+    let removed_profile_agent_config = call(
+        &app,
+        authenticated_json(
+            "PUT",
+            "/api/profile/agents/researcher/config",
+            &first_token,
+            json!({"content": "model = \"ignored\""}),
+        ),
+    )
+    .await;
+    assert_eq!(removed_profile_agent_config.0, StatusCode::NOT_FOUND);
+    let removed_profile_config_model = call(
+        &app,
+        authenticated("GET", "/api/profile/config/model", &first_token),
+    )
+    .await;
+    assert_eq!(removed_profile_config_model.0, StatusCode::NOT_FOUND);
+    let removed_profile_prompts = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/profile/prompts?runId={first_run_id}"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(removed_profile_prompts.0, StatusCode::NOT_FOUND);
+    let removed_profile_prompt_move = call(
+        &app,
+        authenticated_json(
+            "POST",
+            "/api/profile/prompts/move",
+            &first_token,
+            json!({"runId": first_run_id, "path": "global:test", "scope": "workspace"}),
+        ),
+    )
+    .await;
+    assert_eq!(removed_profile_prompt_move.0, StatusCode::NOT_FOUND);
+
     let switched = call(
         &app,
         authenticated_json(

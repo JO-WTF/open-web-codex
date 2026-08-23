@@ -5,7 +5,7 @@
 | 文档性质 | 当前与下一里程碑的执行计划 |
 | 更新日期 | 2026-08-23 |
 | 当前阶段 | 阶段三：回归 Codex Runtime owner 并清理并行实现 |
-| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三 Atom 1 已删除 hidden generation、永久 approval rule writer 和 generic adapter RPC 三条旁路 |
+| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三 Atom 2a 已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018/019/024/025 为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
 | 阶段三后续 | 先清理剩余 Browser legacy API；再收敛 Provider/model owner、Run/Thread 状态和 history/event 投影；Codex upstream 同步与 seam 收敛独立作为最后步骤 |
@@ -21,7 +21,7 @@ Resource ref 复用中间数据。保存什么、读取什么、怎样复用、�
 
 ## 0. 阶段三当前切片：Runtime owner 收敛
 
-阶段三不新增第二套 Runtime，也不以兼容接口保留已经确认的旧旁路。当前 Atom 1 已完成：
+阶段三不新增第二套 Runtime，也不以兼容接口保留已经确认的旧旁路。Atom 1 已完成：
 
 1. 删除 `/runs/{id}/generate`、Platform generation prompts、Adapter `generate_text`、隐藏 Thread
    event suppression 和对应 Browser 自动标题、自动提交信息、自动 Agent 描述入口。需要模型工作的
@@ -31,11 +31,22 @@ Resource ref 复用中间数据。保存什么、读取什么、怎样复用、�
    Profile rules 文件不在本切片中读取、修改或删除。
 3. 删除 `CodexAdapter::rpc(method, Value)` 和 Real/Fake 字符串 dispatch；Platform 只通过 typed
    Thread/Turn 方法调用 Runtime，Fake 也直接实现同一 typed trait。
-4. 本切片不修改 Provider、Run lifecycle/history、Terminal、Usage、Prompts、Profile writer、
-   Codex subtree 或数据库 schema。下一原子片按 owner 单独处理，不在本次删除中引入 fallback。
+4. Atom 1 没有修改 Provider、Run lifecycle/history、Terminal、Usage、Prompts、Profile writer、
+   Codex subtree 或数据库 schema。
 
-验收要求是源码无生产引用、删除的两个认证 route 返回 404、官方 typed approval 与 Thread 路径
-继续通过，Web/Rust/no-desktop 门全绿。
+Atom 2a 已完成：
+
+5. 删除 `/profile/files/{agents|config}`、Browser-managed `/profile/agents*`、`/profile/config/model`
+   fallback 及其 DTO、Adapter mutation、facade、Settings UI 和测试。Provider catalog 缺
+   `currentModelId` 时保持未选择，不读取 config 或猜默认模型。
+6. 删除 `/profile/prompts*`、Platform Prompt 目录扫描/frontmatter/move 与旧 Prompt panel、composer
+   expansion、DTO/client/facade/tests；既有 Profile Agent、AGENTS、config 和 prompt 文件均未读取、
+   迁移或删除。
+7. 保留 `/workspaces/{id}/agents`、official `/profile/features`、`/profile/skills`、`/profile/apps`
+   以及 Copilot package-managed Role/Skill startup seed；不新增 Studio 替代品。
+
+本阶段每个已删除认证 route 都由代表性 authenticated 404 negative assertions 与 active-source rg
+覆盖；官方 typed approval 与 Thread 路径继续通过，Web/Rust/no-desktop 门全绿。
 
 ## 0A. 阶段二已完成基线：Copilot SDK、Task 选包与单 Profile 多包组合
 
@@ -446,7 +457,7 @@ Item 验收，不把后续模型误选低层 Tool 或求解失败伪装成地图
 只在完整 Data→Network→12h 基线→Balikpapan 增仓时效变化率→map canonical 链实际完成时计为通过。
 
 后续 backlog 继续遵守已确认边界：official Thread/Turn/Item/history 是唯一会话事实；Browser legacy、
-Terminal/Usage/prompts、Provider 重复 owner、Task creation selection、Run lease/history overlay 与
+Terminal/Usage/Preferences、Provider 重复 owner、Task creation selection、Run lease/history overlay 与
 physical-cwd join 必须按 owner 原子收敛，但不得再次插到上述仓网关键路径之前。
 
 阶段二已把领域无关的 ResourceRef/schema/codec/bounds/error/store/runtime/Workspace file

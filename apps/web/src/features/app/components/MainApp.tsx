@@ -11,7 +11,6 @@ import { useCollaborationModes } from "@/features/collaboration/hooks/useCollabo
 import { useCollaborationModeSelection } from "@/features/collaboration/hooks/useCollaborationModeSelection";
 import { useSkills } from "@/features/skills/hooks/useSkills";
 import { useApps } from "@/features/apps/hooks/useApps";
-import { useCustomPrompts } from "@/features/prompts/hooks/useCustomPrompts";
 import { useBranchSwitcherShortcut } from "@/features/git/hooks/useBranchSwitcherShortcut";
 import { useRenameWorktreePrompt } from "@/features/workspaces/hooks/useRenameWorktreePrompt";
 import { useLayoutController } from "@app/hooks/useLayoutController";
@@ -40,7 +39,6 @@ import { useWorktreeSetupScript } from "@app/hooks/useWorktreeSetupScript";
 import { useMobileServerSetup } from "@/features/mobile/hooks/useMobileServerSetup";
 import { useMainAppModals } from "@app/hooks/useMainAppModals";
 import { useMainAppDisplayNodes } from "@app/hooks/useMainAppDisplayNodes";
-import { useMainAppPromptActions } from "@app/hooks/useMainAppPromptActions";
 import { useMainAppShellProps } from "@app/hooks/useMainAppShellProps";
 import { useMainAppSidebarMenuOrchestration } from "@app/hooks/useMainAppSidebarMenuOrchestration";
 import { useMainAppSettingsActions } from "@app/hooks/useMainAppSettingsActions";
@@ -387,15 +385,6 @@ export default function MainApp() {
     onFocusComposer: () => composerInputRef.current?.focus(),
   });
   const { skills } = useSkills({ activeWorkspace, onDebug: addDebugEntry });
-  const {
-    prompts,
-    createPrompt,
-    updatePrompt,
-    deletePrompt,
-    movePrompt,
-    getWorkspacePromptsDir,
-    getGlobalPromptsDir,
-  } = useCustomPrompts({ activeWorkspace, onDebug: addDebugEntry });
   const resolvedModel = selectedModel?.model ?? null;
   const resolvedEffort = reasoningSupported ? selectedEffort : null;
 
@@ -502,7 +491,6 @@ export default function MainApp() {
     chatHistoryScrollbackItems: appSettingsLoading
       ? null
       : appSettings.chatHistoryScrollbackItems,
-    customPrompts: prompts,
     onMessageActivity: handleThreadMessageActivity,
     threadSortKey: threadListSortKey,
     onThreadCodexMetadataDetected: handleThreadCodexMetadataDetected,
@@ -1185,19 +1173,6 @@ export default function MainApp() {
     refresh: refreshAgentMd,
     save: saveAgentMd,
   } = agentMdState;
-  const promptActions = useMainAppPromptActions({
-    activeWorkspace,
-    connectWorkspace,
-    startThreadForWorkspace,
-    sendUserMessageToThread,
-    alertError,
-    createPrompt,
-    updatePrompt,
-    deletePrompt,
-    movePrompt,
-    getWorkspacePromptsDir,
-    getGlobalPromptsDir,
-  });
   const worktreeState = useMainAppWorktreeState({
     activeWorkspace,
     workspacesById,
@@ -1530,7 +1505,6 @@ export default function MainApp() {
           skills,
           appsEnabled: appSettings.experimentalAppsEnabled,
           apps,
-          prompts,
           files,
           onFileAutocompleteActiveChange: setFileAutocompleteActive,
           dictationEnabled: appSettings.dictationEnabled && dictationReady,
@@ -1633,7 +1607,6 @@ export default function MainApp() {
     gitState,
     selectedServiceTier: selectedServiceTier ?? null,
     composerWorkspaceState,
-    promptActions,
     worktreeState,
     sidebarHandlers: sidebarMenuOrchestration,
     displayNodes,
@@ -1702,7 +1675,6 @@ export default function MainApp() {
     onSelectAccessMode: handleSelectAccessMode,
     skills,
     apps,
-    prompts,
     composerInputRef,
     composerEditorSettings,
     composerEditorExpanded,

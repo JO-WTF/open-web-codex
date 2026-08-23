@@ -9,7 +9,6 @@ import {
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type {
   AppOption,
-  CustomPromptOption,
   DictationSessionState,
   DictationTranscript,
   ModelOption,
@@ -70,7 +69,6 @@ type WorkspaceHomeProps = {
   skills: SkillOption[];
   appsEnabled: boolean;
   apps: AppOption[];
-  prompts: CustomPromptOption[];
   files: string[];
   dictationEnabled: boolean;
   dictationState: DictationSessionState;
@@ -133,7 +131,6 @@ export function WorkspaceHome({
   skills,
   appsEnabled,
   apps,
-  prompts,
   files,
   dictationEnabled,
   dictationState,
@@ -195,7 +192,6 @@ export function WorkspaceHome({
     appsEnabled,
     skills,
     apps,
-    prompts,
     files,
     textareaRef,
     setText: onPromptChange,

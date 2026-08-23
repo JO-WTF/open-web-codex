@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DebugEntry, ModelOption, WorkspaceInfo } from "../../../types";
-import { getConfigModel, getModelList } from "../../../services/tauri";
+import { getModelList } from "../../../services/tauri";
 import {
   normalizeEffortValue,
   parseModelListResponse,
@@ -13,8 +13,6 @@ type UseModelsOptions = {
   preferredEffort?: string | null;
   selectionKey?: string | null;
 };
-
-const CONFIG_MODEL_DESCRIPTION = "Configured in CODEX_HOME/config.toml";
 
 const findModelByIdOrModel = (
   models: ModelOption[],
@@ -30,11 +28,8 @@ const findModelByIdOrModel = (
   );
 };
 
-const pickDefaultModel = (models: ModelOption[], configModel: string | null) =>
-  findModelByIdOrModel(models, configModel) ??
-  models.find((model) => model.isDefault) ??
-  models[0] ??
-  null;
+const pickDefaultModel = (models: ModelOption[]) =>
+  models.find((model) => model.isDefault) ?? null;
 
 export function useModels({
   activeWorkspace,
@@ -44,7 +39,6 @@ export function useModels({
   selectionKey = null,
 }: UseModelsOptions) {
   const [models, setModels] = useState<ModelOption[]>([]);
-  const [configModel, setConfigModel] = useState<string | null>(null);
   const [selectedModelId, setSelectedModelIdState] = useState<string | null>(null);
   const [selectedEffort, setSelectedEffortState] = useState<string | null>(null);
   const lastFetchedWorkspaceId = useRef<string | null>(null);
@@ -73,7 +67,6 @@ export function useModels({
     hasUserSelectedModel.current = false;
     hasUserSelectedEffort.current = false;
     lastWorkspaceId.current = workspaceId;
-    setConfigModel(null);
   }, [workspaceId]);
 
   useEffect(() => {
@@ -160,38 +153,17 @@ export function useModels({
       payload: { workspaceId },
     });
     try {
-      const [modelListResult, configModelResult] = await Promise.allSettled([
-        getModelList(workspaceId),
-        getConfigModel(workspaceId),
-      ]);
-      const configModelFromConfig =
-        configModelResult.status === "fulfilled"
-          ? configModelResult.value
-          : null;
-      if (configModelResult.status === "rejected") {
-        onDebug?.({
-          id: `${Date.now()}-client-config-model-error`,
-          timestamp: Date.now(),
-          source: "error",
-          label: "config/model error",
-          payload:
-            configModelResult.reason instanceof Error
-              ? configModelResult.reason.message
-              : String(configModelResult.reason),
-        });
-      }
-      const response =
-        modelListResult.status === "fulfilled" ? modelListResult.value : null;
-      if (modelListResult.status === "rejected") {
+      let response: unknown = null;
+      try {
+        response = await getModelList(workspaceId);
+      } catch (error) {
         onDebug?.({
           id: `${Date.now()}-client-model-list-error`,
           timestamp: Date.now(),
           source: "error",
           label: "model/list error",
           payload:
-            modelListResult.reason instanceof Error
-              ? modelListResult.reason.message
-              : String(modelListResult.reason),
+            error instanceof Error ? error.message : String(error),
         });
       }
       onDebug?.({
@@ -201,32 +173,10 @@ export function useModels({
         label: "model/list response",
         payload: response,
       });
-      setConfigModel(configModelFromConfig);
-      const dataFromServer: ModelOption[] = parseModelListResponse(response);
-      const data = (() => {
-        if (!configModelFromConfig) {
-          return dataFromServer;
-        }
-        const hasConfigModel = dataFromServer.some(
-          (model) => model.model === configModelFromConfig,
-        );
-        if (hasConfigModel) {
-          return dataFromServer;
-        }
-        const configOption: ModelOption = {
-          id: configModelFromConfig,
-          model: configModelFromConfig,
-          displayName: `${configModelFromConfig} (config)`,
-          description: CONFIG_MODEL_DESCRIPTION,
-          supportedReasoningEfforts: [],
-          defaultReasoningEffort: null,
-          isDefault: false,
-        };
-        return [configOption, ...dataFromServer];
-      })();
+      const data: ModelOption[] = parseModelListResponse(response);
       setModels(data);
       lastFetchedWorkspaceId.current = workspaceId;
-      const defaultModel = pickDefaultModel(data, configModelFromConfig);
+      const defaultModel = pickDefaultModel(data);
       const existingSelection = findModelByIdOrModel(data, selectedModelId);
       if (selectedModelId && !existingSelection) {
         hasUserSelectedModel.current = false;
@@ -295,7 +245,7 @@ export function useModels({
       return;
     }
     const preferredSelection = findModelByIdOrModel(models, preferredModelId);
-    const defaultModel = pickDefaultModel(models, configModel);
+    const defaultModel = pickDefaultModel(models);
     const existingSelection = findModelByIdOrModel(models, selectedModelId);
     if (selectedModelId && !existingSelection) {
       hasUserSelectedModel.current = false;
@@ -318,7 +268,6 @@ export function useModels({
       setSelectedEffortState(nextEffort);
     }
   }, [
-    configModel,
     models,
     preferredModelId,
     selectedEffort,

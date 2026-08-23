@@ -1239,14 +1239,6 @@ async function ensureCopilotActive() {
   return target;
 }
 
-async function enableMultiAgent() {
-  const settings = await api("/profile/agents/settings", {
-    method: "PUT",
-    body: { multiAgentEnabled: true, maxThreads: 4, maxDepth: 3 },
-  });
-  assert.equal(settings.multiAgentEnabled ?? settings.multi_agent_enabled, true);
-}
-
 async function configureModelToolSearch(providerIdValue) {
   const refreshed = await api(
     "/providers/" + encodeURIComponent(providerIdValue) + "/models/refresh",
@@ -1295,12 +1287,6 @@ async function configureModelToolSearch(providerIdValue) {
         : null,
     });
   }
-  const profileConfig = await api("/profile/files/config");
-  const runtimeConfigCapability =
-    typeof profileConfig.content === "string" &&
-    profileConfig.content.includes(`model_id = "${model}"`) &&
-    profileConfig.content.includes("supports_search_tool = true");
-  log("[CONFIG CAPABILITY] " + JSON.stringify({ runtime_config_capability: runtimeConfigCapability }));
   return {
     originalModel: refreshedModel,
     configuredModel,
@@ -2578,7 +2564,6 @@ async function main() {
   try {
     const version = await ensureAuthenticated();
     await ensureCopilotActive();
-    if (!isSingleAgentScenario) await enableMultiAgent();
     provider = await configureTemporaryProvider();
     taskProviderId = provider.id;
     state.proxy.bindExactProviderModel(provider.id, model);

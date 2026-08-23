@@ -34,39 +34,6 @@ struct FakeState {
     threads: Vec<MockThread>,
     /// Events queued by RPC handlers (e.g. thread/started).
     pending_events: Vec<Value>,
-    /// Effective Profile configuration returned by the typed config/read path.
-    profile_config: Value,
-}
-
-fn default_profile_config() -> Value {
-    json!({
-        "features": { "multi_agent": true },
-        "agents": {
-            "enabled": true,
-            "max_concurrent_threads_per_session": 6,
-            "max_depth": 1,
-        },
-    })
-}
-
-fn fake_config_read(profile_config: &Value) -> Value {
-    json!({
-        "config": profile_config,
-        "origins": {},
-        "layers": [],
-    })
-}
-fn fake_profile_section_mut<'a>(
-    config: &'a mut Value,
-    section: &str,
-) -> &'a mut serde_json::Map<String, Value> {
-    config
-        .as_object_mut()
-        .expect("fake Profile config is an object")
-        .entry(section.to_string())
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-        .expect("fake Profile config section is an object")
 }
 
 /// In-memory Codex adapter that simulates workspace, thread and event flows.
@@ -92,7 +59,6 @@ impl FakeCodexAdapter {
                 workspaces: vec![],
                 threads: vec![],
                 pending_events: vec![],
-                profile_config: default_profile_config(),
             })),
             active_login_id: Arc::new(Mutex::new(None)),
             login_statuses: Arc::new(Mutex::new(HashMap::new())),
@@ -377,51 +343,12 @@ impl CodexAdapter for FakeCodexAdapter {
                 Ok(json!({ "data": [], "nextCursor": null }))
             }
             ProfileQuery::Skills { .. } => Ok(json!({ "data": [] })),
-            ProfileQuery::Config => {
-                let state = self.state.lock().await;
-                Ok(fake_config_read(&state.profile_config))
-            }
         }
     }
 
     async fn mutate_profile(&self, mutation: ProfileMutation) -> Result<Value, AdapterError> {
-        let mut state = self.state.lock().await;
         match mutation {
             ProfileMutation::SetExperimentalFeature { .. } => {}
-            ProfileMutation::SetAgentCore {
-                multi_agent_enabled,
-                max_threads,
-                max_depth,
-            } => {
-                fake_profile_section_mut(&mut state.profile_config, "features")
-                    .insert("multi_agent".to_string(), json!(multi_agent_enabled));
-                let agents = fake_profile_section_mut(&mut state.profile_config, "agents");
-                agents.insert(
-                    "max_concurrent_threads_per_session".to_string(),
-                    json!(max_threads),
-                );
-                agents.insert("max_depth".to_string(), json!(max_depth));
-            }
-            ProfileMutation::SetAgentDefinition {
-                original_name,
-                name,
-                description,
-                config_file,
-            } => {
-                let agents = fake_profile_section_mut(&mut state.profile_config, "agents");
-                if let Some(original_name) = original_name.filter(|original| original != &name) {
-                    agents.remove(&original_name);
-                }
-                let mut definition = serde_json::Map::new();
-                if let Some(description) = description {
-                    definition.insert("description".to_string(), json!(description));
-                }
-                definition.insert("config_file".to_string(), json!(config_file));
-                agents.insert(name, Value::Object(definition));
-            }
-            ProfileMutation::RemoveAgentDefinition { name } => {
-                fake_profile_section_mut(&mut state.profile_config, "agents").remove(&name);
-            }
         }
         Ok(json!({ "status": "ok" }))
     }

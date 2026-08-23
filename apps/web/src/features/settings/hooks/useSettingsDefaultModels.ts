@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ModelOption, WorkspaceInfo } from "@/types";
-import { connectWorkspace, getConfigModel, getModelList } from "@services/tauri";
+import { connectWorkspace, getModelList } from "@services/tauri";
 import { parseModelListResponse } from "@/features/models/utils/modelListResponse";
 
 type SettingsDefaultModelsState = {
@@ -16,8 +16,6 @@ const EMPTY_STATE: SettingsDefaultModelsState = {
   error: null,
   connectedWorkspaceCount: 0,
 };
-
-const CONFIG_MODEL_DESCRIPTION = "Configured in CODEX_HOME/config.toml";
 
 const parseGptVersionScore = (slug: string): number | null => {
   const match = /^gpt-(\d+)(?:\.(\d+))?(?:\.(\d+))?/i.exec(slug.trim());
@@ -97,10 +95,12 @@ export function useSettingsDefaultModels(projects: WorkspaceInfo[]) {
         return;
       }
 
-      const [modelListResult, configModelResult] = await Promise.allSettled([
-        canReadModelList ? getModelList(sourceWorkspaceId) : Promise.resolve(null),
-        getConfigModel(sourceWorkspaceId),
-      ]);
+      const modelListResult = await Promise.resolve(
+        canReadModelList ? getModelList(sourceWorkspaceId) : null,
+      ).then(
+        (value) => ({ status: "fulfilled" as const, value }),
+        (reason) => ({ status: "rejected" as const, reason }),
+      );
       if (requestId !== requestIdRef.current) {
         return;
       }
@@ -112,40 +112,8 @@ export function useSettingsDefaultModels(projects: WorkspaceInfo[]) {
             : String(modelListResult.reason);
         errors.push(`${sourceWorkspaceName}: ${message}`);
       }
-      if (configModelResult.status === "rejected") {
-        const message =
-          configModelResult.reason instanceof Error
-            ? configModelResult.reason.message
-            : String(configModelResult.reason);
-        errors.push(`${sourceWorkspaceName}: ${message}`);
-      }
-
-      const modelsFromList = parseModelListResponse(
+      const models = parseModelListResponse(
         modelListResult.status === "fulfilled" ? modelListResult.value : null,
-      );
-      const configModel =
-        configModelResult.status === "fulfilled" ? configModelResult.value : null;
-      const hasConfigModel = Boolean(
-        configModel &&
-          modelsFromList.some(
-            (model) => model.model === configModel || model.id === configModel,
-          ),
-      );
-      const models = (
-        hasConfigModel || !configModel
-          ? modelsFromList
-          : [
-              {
-                id: configModel,
-                model: configModel,
-                displayName: `${configModel} (config)`,
-                description: CONFIG_MODEL_DESCRIPTION,
-                supportedReasoningEfforts: [],
-                defaultReasoningEffort: null,
-                isDefault: false,
-              },
-              ...modelsFromList,
-            ]
       ).sort(compareModelsByLatest);
       setState({
         models,

@@ -25,8 +25,8 @@ describe("PanelTabs", () => {
     fireEvent.keyDown(tabs[1], { key: "ArrowRight" });
 
     await waitFor(() => {
-      expect(tabs[2].getAttribute("aria-selected")).toBe("true");
-      expect(document.activeElement).toBe(tabs[2]);
+      expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(tabs[0]);
     });
   });
 });

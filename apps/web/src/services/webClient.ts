@@ -807,18 +807,12 @@ export class CodexMonitorWebClient {
     providerId?: string | null,
     preferredModelId?: string | null,
   ) {
-    const [catalog, config] = providerId
-      ? [await this.platform.listProviders(), null]
-      : await Promise.all([
-        this.platform.listProviders(),
-        this.platform.getConfigModel(),
-      ]);
+    const catalog = await this.platform.listProviders();
     const selectedProviderId = providerId ?? catalog.currentProviderId;
     const provider = catalog.data.find((entry) => entry.id === selectedProviderId);
     const visibleModels = (provider?.models ?? []).filter((model) => model.showInPicker !== false);
     const configuredModel = preferredModelId?.trim()
       || (selectedProviderId === catalog.currentProviderId ? catalog.currentModelId?.trim() : null)
-      || config?.model?.trim()
       || null;
     if (configuredModel) {
       const selectedIndex = visibleModels.findIndex((model) => model.modelId === configuredModel);
@@ -827,14 +821,14 @@ export class CodexMonitorWebClient {
       }
     }
     return {
-      data: visibleModels.map((model, index) => ({
+      data: visibleModels.map((model) => ({
         id: model.modelId,
         model: model.modelId,
         displayName: model.modelName ?? model.modelId,
         description: "",
         supportedReasoningEfforts: [],
         defaultReasoningEffort: null,
-        isDefault: configuredModel ? model.modelId === configuredModel : index === 0,
+        isDefault: configuredModel ? model.modelId === configuredModel : false,
       })),
     };
   }

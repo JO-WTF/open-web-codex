@@ -23,7 +23,6 @@ import "./styles/diff.css";
 import "./styles/diff-viewer.css";
 import "./styles/file-tree.css";
 import "./styles/panel-tabs.css";
-import "./styles/prompts.css";
 import "./styles/debug.css";
 import "./styles/terminal.css";
 import "./styles/plan.css";

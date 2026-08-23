@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import * as Sentry from "@sentry/react";
 import type {
   CollabAgentRef,
-  CustomPromptOption,
   DebugEntry,
   ServiceTier,
   ThreadListSortKey,
@@ -56,7 +55,6 @@ type UseThreadsOptions = {
   reviewDeliveryMode?: "inline" | "detached";
   steerEnabled?: boolean;
   chatHistoryScrollbackItems?: number | null;
-  customPrompts?: CustomPromptOption[];
   onMessageActivity?: () => void;
   threadSortKey?: ThreadListSortKey;
   onThreadCodexMetadataDetected?: (
@@ -86,7 +84,6 @@ export function useThreads({
   reviewDeliveryMode = "inline",
   steerEnabled = false,
   chatHistoryScrollbackItems,
-  customPrompts = [],
   onMessageActivity,
   threadSortKey = "updated_at",
   onThreadCodexMetadataDetected,
@@ -754,7 +751,6 @@ export function useThreads({
     onSelectServiceTier,
     reviewDeliveryMode,
     steerEnabled,
-    customPrompts,
     ensureWorkspaceRuntimeCodexArgs,
     shouldPreflightRuntimeCodexArgsForSend,
     threadStatusById: state.threadStatusById,

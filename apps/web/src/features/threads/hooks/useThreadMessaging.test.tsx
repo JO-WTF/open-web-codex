@@ -109,7 +109,6 @@ describe("useThreadMessaging telemetry", () => {
         collaborationMode: null,
         reviewDeliveryMode: "inline",
         steerEnabled: false,
-        customPrompts: [],
         ensureWorkspaceRuntimeCodexArgs,
         threadStatusById: {},
         activeTurnIdByThread: {},
@@ -169,7 +168,6 @@ describe("useThreadMessaging telemetry", () => {
         collaborationMode: null,
         reviewDeliveryMode: "inline",
         steerEnabled: false,
-        customPrompts: [],
         threadStatusById: {},
         activeTurnIdByThread: {},
         rateLimitsByWorkspace: {},
@@ -219,7 +217,6 @@ describe("useThreadMessaging telemetry", () => {
         collaborationMode: null,
         reviewDeliveryMode: "inline",
         steerEnabled: false,
-        customPrompts: [],
         threadStatusById: {},
         activeTurnIdByThread: {},
         rateLimitsByWorkspace: {},
@@ -267,7 +264,6 @@ describe("useThreadMessaging telemetry", () => {
         collaborationMode: null,
         reviewDeliveryMode: "inline",
         steerEnabled: false,
-        customPrompts: [],
         threadStatusById: {},
         activeTurnIdByThread: {},
         rateLimitsByWorkspace: {},
@@ -315,7 +311,6 @@ describe("useThreadMessaging telemetry", () => {
         collaborationMode: null,
         reviewDeliveryMode: "inline",
         steerEnabled: false,
-        customPrompts: [],
         threadStatusById: {},
         activeTurnIdByThread: {},
         rateLimitsByWorkspace: {},
@@ -364,7 +359,6 @@ describe("useThreadMessaging telemetry", () => {
         onSelectServiceTier,
         reviewDeliveryMode: "inline",
         steerEnabled: false,
-        customPrompts: [],
         threadStatusById: {},
         activeTurnIdByThread: {},
         rateLimitsByWorkspace: {},
@@ -411,7 +405,6 @@ describe("useThreadMessaging telemetry", () => {
         collaborationMode: null,
         reviewDeliveryMode: "inline",
         steerEnabled: true,
-        customPrompts: [],
         ensureWorkspaceRuntimeCodexArgs,
         threadStatusById: {
           "thread-1": {
@@ -485,7 +478,6 @@ describe("useThreadMessaging telemetry", () => {
         collaborationMode: null,
         reviewDeliveryMode: "inline",
         steerEnabled: true,
-        customPrompts: [],
         threadStatusById: {
           "thread-1": {
             isProcessing: true,
@@ -556,7 +548,6 @@ describe("useThreadMessaging telemetry", () => {
         collaborationMode: null,
         reviewDeliveryMode: "inline",
         steerEnabled: true,
-        customPrompts: [],
         threadStatusById: {
           "thread-1": {
             isProcessing: true,
@@ -627,7 +618,6 @@ describe("useThreadMessaging telemetry", () => {
         collaborationMode: null,
         reviewDeliveryMode: "inline",
         steerEnabled: true,
-        customPrompts: [],
         threadStatusById: {
           "thread-1": {
             isProcessing: true,
@@ -693,7 +683,6 @@ describe("useThreadMessaging telemetry", () => {
         collaborationMode: null,
         reviewDeliveryMode: "detached",
         steerEnabled: false,
-        customPrompts: [],
         threadStatusById: {},
         activeTurnIdByThread: {},
         rateLimitsByWorkspace: {},
@@ -747,7 +736,6 @@ describe("useThreadMessaging telemetry", () => {
         collaborationMode: null,
         reviewDeliveryMode: "detached",
         steerEnabled: false,
-        customPrompts: [],
         threadStatusById: {},
         activeTurnIdByThread: {},
         rateLimitsByWorkspace: {},

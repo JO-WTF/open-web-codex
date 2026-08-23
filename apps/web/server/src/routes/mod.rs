@@ -140,44 +140,6 @@ pub fn router(
             "/profile/features/{name}",
             axum::routing::put(profile_content::set_experimental_feature),
         )
-        .route(
-            "/profile/files/{kind}",
-            axum::routing::get(profile_content::read_profile_file)
-                .put(profile_content::write_profile_file),
-        )
-        .route(
-            "/profile/agents",
-            axum::routing::get(profile_content::get_agents).post(profile_content::create_agent),
-        )
-        .route(
-            "/profile/config/model",
-            axum::routing::get(profile_content::get_config_model),
-        )
-        .route(
-            "/profile/agents/settings",
-            axum::routing::put(profile_content::set_agents_core),
-        )
-        .route(
-            "/profile/agents/{name}",
-            axum::routing::patch(profile_content::update_agent)
-                .delete(profile_content::delete_agent),
-        )
-        .route(
-            "/profile/agents/{name}/config",
-            axum::routing::get(profile_content::read_agent_config)
-                .put(profile_content::write_agent_config),
-        )
-        .route(
-            "/profile/prompts",
-            axum::routing::get(profile_content::list_prompts)
-                .post(profile_content::create_prompt)
-                .put(profile_content::update_prompt)
-                .delete(profile_content::delete_prompt),
-        )
-        .route(
-            "/profile/prompts/move",
-            axum::routing::post(profile_content::move_prompt),
-        )
         .route("/approvals", axum::routing::get(approvals::list_pending))
         .route(
             "/runs/{id}/approval-requests",

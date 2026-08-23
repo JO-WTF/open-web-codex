@@ -6,7 +6,6 @@ import { REMOTE_THREAD_POLL_INTERVAL_MS } from "@app/hooks/useRemoteThreadRefres
 import type { useMainAppComposerWorkspaceState } from "@app/hooks/useMainAppComposerWorkspaceState";
 import type { useMainAppDisplayNodes } from "@app/hooks/useMainAppDisplayNodes";
 import type { useMainAppGitState } from "@app/hooks/useMainAppGitState";
-import type { useMainAppPromptActions } from "@app/hooks/useMainAppPromptActions";
 import type { useMainAppSidebarMenuOrchestration } from "@app/hooks/useMainAppSidebarMenuOrchestration";
 import type { useMainAppWorktreeState } from "@app/hooks/useMainAppWorktreeState";
 import type { LayoutNodesOptions } from "@/features/layout/hooks/layoutNodes/types";
@@ -81,7 +80,6 @@ type UseMainAppLayoutSurfacesArgs = {
   onUsageWorkspaceChange: LayoutNodesOptions["primary"]["homeProps"]["onUsageWorkspaceChange"];
   gitState: ReturnType<typeof useMainAppGitState>;
   composerWorkspaceState: ReturnType<typeof useMainAppComposerWorkspaceState>;
-  promptActions: ReturnType<typeof useMainAppPromptActions>;
   worktreeState: ReturnType<typeof useMainAppWorktreeState>;
   sidebarHandlers: ReturnType<typeof useMainAppSidebarMenuOrchestration>;
   displayNodes: ReturnType<typeof useMainAppDisplayNodes>;
@@ -159,7 +157,6 @@ type UseMainAppLayoutSurfacesArgs = {
   onSelectAccessMode: ComposerProps["onSelectAccessMode"];
   skills: ComposerProps["skills"];
   apps: ComposerProps["apps"];
-  prompts: ComposerProps["prompts"];
   composerInputRef: RefObject<HTMLTextAreaElement | null>;
   composerEditorSettings: ComposerEditorSettings;
   composerEditorExpanded: boolean;
@@ -319,7 +316,6 @@ function buildPrimarySurface({
   onSelectAccessMode,
   skills,
   apps,
-  prompts,
   composerInputRef,
   composerEditorSettings,
   composerEditorExpanded,
@@ -514,7 +510,6 @@ function buildPrimarySurface({
           skills,
           appsEnabled: appSettings.experimentalAppsEnabled,
           apps,
-          prompts,
           files: composerWorkspaceState.files,
           textareaRef: composerInputRef,
           historyKey: activeWorkspace?.id ?? null,
@@ -668,14 +663,12 @@ function buildGitSurface({
   activeWorkspace,
   gitState,
   composerWorkspaceState,
-  promptActions,
   worktreeState,
   pullRequestComposer,
   openAppIconById,
   openInitGitRepoPrompt,
   startUncommittedReview,
   handleSelectOpenAppId,
-  prompts,
   isPhone,
 }: MainAppLayoutSurfacesContext): LayoutNodesOptions["git"] {
   return {
@@ -702,21 +695,6 @@ function buildGitSurface({
           onSelectOpenAppId: handleSelectOpenAppId,
         }
       : null,
-    promptPanelProps: {
-      prompts,
-      workspacePath: activeWorkspace?.path ?? null,
-      filePanelMode: gitState.filePanelMode,
-      onFilePanelModeChange: gitState.setFilePanelMode,
-      onSendPrompt: composerWorkspaceState.handleSendPrompt,
-      onSendPromptToNewAgent: promptActions.handleSendPromptToNewAgent,
-      onCreatePrompt: promptActions.handleCreatePrompt,
-      onUpdatePrompt: promptActions.handleUpdatePrompt,
-      onDeletePrompt: promptActions.handleDeletePrompt,
-      onMovePrompt: promptActions.handleMovePrompt,
-      onRevealWorkspacePrompts: promptActions.handleRevealWorkspacePrompts,
-      onRevealGeneralPrompts: promptActions.handleRevealGeneralPrompts,
-      canRevealGeneralPrompts: Boolean(activeWorkspace),
-    },
     gitDiffPanelProps: {
       workspaceId: activeWorkspace?.id ?? null,
       workspacePath: activeWorkspace?.path ?? null,
@@ -981,7 +959,6 @@ export function useMainAppLayoutSurfaces({
   onUsageWorkspaceChange,
   gitState,
   composerWorkspaceState,
-  promptActions,
   worktreeState,
   sidebarHandlers,
   displayNodes,
@@ -1022,7 +999,6 @@ export function useMainAppLayoutSurfaces({
   onSelectAccessMode,
   skills,
   apps,
-  prompts,
   composerInputRef,
   composerEditorSettings,
   composerEditorExpanded,
@@ -1141,7 +1117,6 @@ export function useMainAppLayoutSurfaces({
     onUsageWorkspaceChange,
     gitState,
     composerWorkspaceState,
-    promptActions,
     worktreeState,
     sidebarHandlers,
     displayNodes,
@@ -1182,7 +1157,6 @@ export function useMainAppLayoutSurfaces({
     onSelectAccessMode,
     skills,
     apps,
-    prompts,
     composerInputRef,
     composerEditorSettings,
     composerEditorExpanded,

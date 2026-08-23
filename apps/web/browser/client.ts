@@ -22,9 +22,6 @@ import type {
   WorkspaceBranch,
   WorkspaceLog,
   WorkspaceCommitDiff,
-  ProfileTextFile,
-  AgentsSettings,
-  PromptEntry,
   GitHubIssues,
   GitHubPullRequests,
   GitHubPullRequestDiff,
@@ -1149,102 +1146,6 @@ export class PlatformClient {
       `/api/profile/features/${encodeURIComponent(name)}`,
       { method: "PUT", body: JSON.stringify({ enabled }) },
     );
-  }
-
-  readProfileFile(kind: "agents" | "config") {
-    return this.request<ProfileTextFile>(`/api/profile/files/${kind}`);
-  }
-
-  writeProfileFile(kind: "agents" | "config", content: string) {
-    return this.request<{ status: string }>(`/api/profile/files/${kind}`, {
-      method: "PUT",
-      body: JSON.stringify({ content }),
-    });
-  }
-
-  getAgents() {
-    return this.request<AgentsSettings>("/api/profile/agents");
-  }
-
-  getConfigModel() {
-    return this.request<{ model: string | null }>("/api/profile/config/model");
-  }
-
-  setAgentsCore(input: {
-    multiAgentEnabled: boolean;
-    maxThreads: number;
-    maxDepth: number;
-  }) {
-    return this.request<AgentsSettings>("/api/profile/agents/settings", {
-      method: "PUT",
-      body: JSON.stringify(input),
-    });
-  }
-
-  createAgent(input: Record<string, unknown>) {
-    return this.request<AgentsSettings>("/api/profile/agents", {
-      method: "POST",
-      body: JSON.stringify(input),
-    });
-  }
-
-  updateAgent(originalName: string, input: Record<string, unknown>) {
-    return this.request<AgentsSettings>(`/api/profile/agents/${encodeURIComponent(originalName)}`, {
-      method: "PATCH",
-      body: JSON.stringify(input),
-    });
-  }
-
-  deleteAgent(name: string, deleteManagedFile: boolean) {
-    const query = new URLSearchParams({ deleteManagedFile: String(deleteManagedFile) });
-    return this.request<AgentsSettings>(
-      `/api/profile/agents/${encodeURIComponent(name)}?${query.toString()}`,
-      { method: "DELETE" },
-    );
-  }
-
-  readAgentConfig(name: string) {
-    return this.request<string>(`/api/profile/agents/${encodeURIComponent(name)}/config`);
-  }
-
-  writeAgentConfig(name: string, content: string) {
-    return this.request<{ status: string }>(
-      `/api/profile/agents/${encodeURIComponent(name)}/config`,
-      { method: "PUT", body: JSON.stringify({ content }) },
-    );
-  }
-
-  listPrompts(runId: string) {
-    const query = new URLSearchParams({ runId });
-    return this.request<PromptEntry[]>(`/api/profile/prompts?${query.toString()}`);
-  }
-
-  createPrompt(input: Record<string, unknown>) {
-    return this.request<PromptEntry>("/api/profile/prompts", {
-      method: "POST",
-      body: JSON.stringify(input),
-    });
-  }
-
-  updatePrompt(input: Record<string, unknown>) {
-    return this.request<PromptEntry>("/api/profile/prompts", {
-      method: "PUT",
-      body: JSON.stringify(input),
-    });
-  }
-
-  deletePrompt(input: Record<string, unknown>) {
-    return this.request<{ status: string }>("/api/profile/prompts", {
-      method: "DELETE",
-      body: JSON.stringify(input),
-    });
-  }
-
-  movePrompt(input: Record<string, unknown>) {
-    return this.request<PromptEntry>("/api/profile/prompts/move", {
-      method: "POST",
-      body: JSON.stringify(input),
-    });
   }
 
   private profileList(

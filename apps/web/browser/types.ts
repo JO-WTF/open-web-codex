@@ -576,12 +576,6 @@ export type ModelSelection = {
   modelId: string;
 };
 
-export type ProfileTextFile = {
-  exists: boolean;
-  content: string;
-  truncated: boolean;
-};
-
 export type ProfileLoginStart = { loginId: string; authUrl: string };
 export type ProfileLoginCancel = { canceled: boolean; status: string };
 export type ProfileLoginStatus = {
@@ -604,33 +598,6 @@ export type MapsConfiguration = {
   mapboxAccessToken: string | null;
   canConfigure: boolean;
   updatedAt: string | null;
-};
-
-export type AgentSummary = {
-  name: string;
-  description: string | null;
-  developerInstructions: string | null;
-  configFile: string;
-  resolvedPath: string;
-  managedByApp: boolean;
-  fileExists: boolean;
-};
-
-export type AgentsSettings = {
-  configPath: string;
-  multiAgentEnabled: boolean;
-  maxThreads: number;
-  maxDepth: number;
-  agents: AgentSummary[];
-};
-
-export type PromptEntry = {
-  name: string;
-  path: string;
-  description: string | null;
-  argumentHint: string | null;
-  content: string;
-  scope: "workspace" | "global";
 };
 
 export type GitHubIssue = {

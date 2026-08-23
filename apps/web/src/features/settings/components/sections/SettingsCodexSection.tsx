@@ -11,7 +11,6 @@ import {
   SettingsSection,
   SettingsToggleRow,
 } from "@/features/design-system/components/settings/SettingsPrimitives";
-import { FileEditorCard } from "@/features/shared/components/FileEditorCard";
 
 type SettingsCodexSectionProps = {
   appSettings: AppSettings;
@@ -33,32 +32,12 @@ type SettingsCodexSectionProps = {
     status: "idle" | "running" | "done";
     result: CodexUpdateResult | null;
   };
-  globalAgentsMeta: string;
-  globalAgentsError: string | null;
-  globalAgentsContent: string;
-  globalAgentsLoading: boolean;
-  globalAgentsRefreshDisabled: boolean;
-  globalAgentsSaveDisabled: boolean;
-  globalAgentsSaveLabel: string;
-  globalConfigMeta: string;
-  globalConfigError: string | null;
-  globalConfigContent: string;
-  globalConfigLoading: boolean;
-  globalConfigRefreshDisabled: boolean;
-  globalConfigSaveDisabled: boolean;
-  globalConfigSaveLabel: string;
   onSetCodexPathDraft: Dispatch<SetStateAction<string>>;
   onSetCodexArgsDraft: Dispatch<SetStateAction<string>>;
-  onSetGlobalAgentsContent: (value: string) => void;
-  onSetGlobalConfigContent: (value: string) => void;
   onBrowseCodex: () => Promise<void>;
   onSaveCodexSettings: () => Promise<void>;
   onRunDoctor: () => Promise<void>;
   onRunCodexUpdate: () => Promise<void>;
-  onRefreshGlobalAgents: () => void;
-  onSaveGlobalAgents: () => void;
-  onRefreshGlobalConfig: () => void;
-  onSaveGlobalConfig: () => void;
 };
 
 const DEFAULT_REASONING_EFFORT = "medium";
@@ -119,32 +98,12 @@ export function SettingsCodexSection({
   isSavingSettings,
   doctorState,
   codexUpdateState,
-  globalAgentsMeta,
-  globalAgentsError,
-  globalAgentsContent,
-  globalAgentsLoading,
-  globalAgentsRefreshDisabled,
-  globalAgentsSaveDisabled,
-  globalAgentsSaveLabel,
-  globalConfigMeta,
-  globalConfigError,
-  globalConfigContent,
-  globalConfigLoading,
-  globalConfigRefreshDisabled,
-  globalConfigSaveDisabled,
-  globalConfigSaveLabel,
   onSetCodexPathDraft,
   onSetCodexArgsDraft,
-  onSetGlobalAgentsContent,
-  onSetGlobalConfigContent,
   onBrowseCodex,
   onSaveCodexSettings,
   onRunDoctor,
   onRunCodexUpdate,
-  onRefreshGlobalAgents,
-  onSaveGlobalAgents,
-  onRefreshGlobalConfig,
-  onSaveGlobalConfig,
 }: SettingsCodexSectionProps) {
   const latestModelSlug = defaultModels[0]?.model ?? null;
   const savedModelSlug = useMemo(
@@ -523,67 +482,6 @@ export function SettingsCodexSection({
         </div>
       </div>
 
-      <FileEditorCard
-        title="Global AGENTS.md"
-        meta={globalAgentsMeta}
-        error={globalAgentsError}
-        value={globalAgentsContent}
-        placeholder="Add global instructions for Codex agents…"
-        disabled={globalAgentsLoading}
-        refreshDisabled={globalAgentsRefreshDisabled}
-        saveDisabled={globalAgentsSaveDisabled}
-        saveLabel={globalAgentsSaveLabel}
-        onChange={onSetGlobalAgentsContent}
-        onRefresh={onRefreshGlobalAgents}
-        onSave={onSaveGlobalAgents}
-        helpText={
-          <>
-            Stored at <code>~/.codex/AGENTS.md</code>.
-          </>
-        }
-        classNames={{
-          container: "settings-field settings-agents",
-          header: "settings-agents-header",
-          title: "settings-field-label",
-          actions: "settings-agents-actions",
-          meta: "settings-help settings-help-inline",
-          iconButton: "ghost settings-icon-button",
-          error: "settings-agents-error",
-          textarea: "settings-agents-textarea",
-          help: "settings-help",
-        }}
-      />
-
-      <FileEditorCard
-        title="Global config.toml"
-        meta={globalConfigMeta}
-        error={globalConfigError}
-        value={globalConfigContent}
-        placeholder="Edit the global Codex config.toml…"
-        disabled={globalConfigLoading}
-        refreshDisabled={globalConfigRefreshDisabled}
-        saveDisabled={globalConfigSaveDisabled}
-        saveLabel={globalConfigSaveLabel}
-        onChange={onSetGlobalConfigContent}
-        onRefresh={onRefreshGlobalConfig}
-        onSave={onSaveGlobalConfig}
-        helpText={
-          <>
-            Stored at <code>~/.codex/config.toml</code>.
-          </>
-        }
-        classNames={{
-          container: "settings-field settings-agents",
-          header: "settings-agents-header",
-          title: "settings-field-label",
-          actions: "settings-agents-actions",
-          meta: "settings-help settings-help-inline",
-          iconButton: "ghost settings-icon-button",
-          error: "settings-agents-error",
-          textarea: "settings-agents-textarea",
-          help: "settings-help",
-        }}
-      />
     </SettingsSection>
   );
 }

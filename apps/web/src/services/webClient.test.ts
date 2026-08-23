@@ -770,12 +770,13 @@ describe("WebApp direct Server client", () => {
     ]);
   });
 
-  it("uses the configured visible Provider model as the WebApp default", async () => {
+  it("uses the current Provider catalog model as the WebApp default", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));
       if (url.pathname === "/api/providers") {
         return json({
           currentProviderId: "provider-1",
+          currentModelId: "configured",
           data: [{
             id: "provider-1",
             name: "Provider",
@@ -791,7 +792,6 @@ describe("WebApp direct Server client", () => {
           }],
         });
       }
-      if (url.pathname === "/api/profile/config/model") return json({ model: "configured" });
       throw new Error(`Unexpected Server request: ${url.pathname}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -803,6 +803,41 @@ describe("WebApp direct Server client", () => {
         expect.objectContaining({ model: "first", isDefault: false }),
       ],
     });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps model selection empty when the Provider catalog has no current model", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/providers") {
+        return json({
+          currentProviderId: "provider-1",
+          data: [{
+            id: "provider-1",
+            name: "Provider",
+            wireApi: "responses",
+            kind: "custom",
+            isCurrent: true,
+            modelCount: 2,
+            models: [
+              { modelId: "first", showInPicker: true },
+              { modelId: "second", showInPicker: true },
+            ],
+          }],
+        });
+      }
+      throw new Error(`Unexpected Server request: ${url.pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await expect(client.listModels(project.id)).resolves.toEqual({
+      data: [
+        expect.objectContaining({ model: "first", isDefault: false }),
+        expect.objectContaining({ model: "second", isDefault: false }),
+      ],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("reads a Thread Provider catalog without reading or changing the global model selection", async () => {

@@ -11,7 +11,6 @@ import type {
   AppOption,
   ComposerSendIntent,
   ComposerEditorSettings,
-  CustomPromptOption,
   DictationTranscript,
   FollowUpMessageBehavior,
   QueuedMessage,
@@ -78,7 +77,6 @@ type ComposerProps = {
   onSelectAccessMode: (mode: "read-only" | "current" | "full-access") => void;
   skills: { name: string; description?: string }[];
   apps: AppOption[];
-  prompts: CustomPromptOption[];
   files: string[];
   contextUsage?: ThreadTokenUsage | null;
   queuedMessages?: QueuedMessage[];
@@ -187,7 +185,6 @@ export const Composer = memo(function Composer({
   onSelectAccessMode,
   skills,
   apps,
-  prompts,
   files,
   contextUsage = null,
   queuedMessages = [],
@@ -319,7 +316,6 @@ export const Composer = memo(function Composer({
     appsEnabled,
     skills,
     apps,
-    prompts,
     files,
     textareaRef,
     setText: setComposerText,

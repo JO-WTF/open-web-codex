@@ -660,15 +660,6 @@ export type AppOption = {
   distributionChannel?: string | null;
 };
 
-export type CustomPromptOption = {
-  name: string;
-  path: string;
-  description?: string;
-  argumentHint?: string;
-  content: string;
-  scope?: "workspace" | "global";
-};
-
 export type BranchInfo = {
   name: string;
   lastCommit: number;

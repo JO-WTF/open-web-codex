@@ -47,7 +47,6 @@ function ComposerHarness({ initialText = "", editorSettings }: HarnessProps) {
       onSelectAccessMode={() => {}}
       skills={[]}
       apps={[]}
-      prompts={[]}
       files={[]}
       draftText={draftText}
       onDraftChange={setDraftText}

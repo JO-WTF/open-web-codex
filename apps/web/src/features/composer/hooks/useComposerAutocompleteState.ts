@@ -1,14 +1,8 @@
 import { useCallback, useMemo } from "react";
 import type { AutocompleteItem } from "./useComposerAutocomplete";
 import { useComposerAutocomplete } from "./useComposerAutocomplete";
-import type { AppOption, CustomPromptOption } from "../../../types";
+import type { AppOption } from "../../../types";
 import { connectorMentionSlug } from "../../apps/utils/appMentions";
-import {
-  buildPromptInsertText,
-  findNextPromptArgCursor,
-  findPromptArgRangeAtCursor,
-  getPromptArgumentHint,
-} from "../../../utils/customPrompts";
 import { isComposingEvent } from "../../../utils/keys";
 
 type Skill = { name: string; description?: string };
@@ -19,7 +13,6 @@ type UseComposerAutocompleteStateArgs = {
   appsEnabled: boolean;
   skills: Skill[];
   apps: AppOption[];
-  prompts: CustomPromptOption[];
   files: string[];
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   setText: (next: string) => void;
@@ -77,7 +70,6 @@ export function useComposerAutocompleteState({
   appsEnabled,
   skills,
   apps,
-  prompts,
   files,
   textareaRef,
   setText,
@@ -126,25 +118,6 @@ export function useComposerAutocompleteState({
           })()
         : [],
     [fileTriggerActive, files, selectionStart, text],
-  );
-
-  const promptItems = useMemo<AutocompleteItem[]>(
-    () =>
-      prompts
-        .filter((prompt) => prompt.name)
-        .map((prompt) => {
-          const insert = buildPromptInsertText(prompt);
-          return {
-            id: `prompt:${prompt.name}`,
-            label: `prompts:${prompt.name}`,
-            description: prompt.description,
-            hint: getPromptArgumentHint(prompt),
-            insertText: insert.text,
-            cursorOffset: insert.cursorOffset,
-            group: "Prompts" as const,
-          };
-        }),
-    [prompts],
   );
 
   const slashCommandItems = useMemo<AutocompleteItem[]>(() => {
@@ -211,18 +184,13 @@ export function useComposerAutocompleteState({
     return commands.sort((a, b) => a.label.localeCompare(b.label));
   }, [appsEnabled]);
 
-  const slashItems = useMemo<AutocompleteItem[]>(
-    () => [...slashCommandItems, ...promptItems],
-    [promptItems, slashCommandItems],
-  );
-
   const triggers = useMemo(
     () => [
-      { trigger: "/", items: slashItems },
+      { trigger: "/", items: slashCommandItems },
       { trigger: "$", items: skillItems },
       { trigger: "@", items: fileItems },
     ],
-    [fileItems, skillItems, slashItems],
+    [fileItems, skillItems, slashCommandItems],
   );
 
   const {
@@ -249,9 +217,6 @@ export function useComposerAutocompleteState({
       }
       const triggerIndex = Math.max(0, autocompleteRange.start - 1);
       const triggerChar = text[triggerIndex] ?? "";
-      const cursor = selectionStart ?? autocompleteRange.end;
-      const promptRange =
-        triggerChar === "@" ? findPromptArgRangeAtCursor(text, cursor) : null;
       const before =
         triggerChar === "@"
           ? text.slice(0, triggerIndex)
@@ -261,11 +226,7 @@ export function useComposerAutocompleteState({
       const actualInsert = triggerChar === "@"
         ? insert.replace(/^@+/, "")
         : insert;
-      const needsSpace = promptRange
-        ? false
-        : after.length === 0
-          ? true
-          : !/^\s/.test(after);
+      const needsSpace = after.length === 0 ? true : !/^\s/.test(after);
       const nextText = `${before}${actualInsert}${needsSpace ? " " : ""}${after}`;
       setText(nextText);
       onItemApplied?.(item, { triggerChar, insertedText: actualInsert });
@@ -358,22 +319,6 @@ export function useComposerAutocompleteState({
           return;
         }
       }
-      if (event.key === "Tab") {
-        const cursor = selectionStart ?? text.length;
-        const nextCursor = findNextPromptArgCursor(text, cursor);
-        if (nextCursor !== null) {
-          event.preventDefault();
-          requestAnimationFrame(() => {
-            const textarea = textareaRef.current;
-            if (!textarea) {
-              return;
-            }
-            textarea.focus();
-            textarea.setSelectionRange(nextCursor, nextCursor);
-            setSelectionStart(nextCursor);
-          });
-        }
-      }
     },
     [
       applyAutocomplete,
@@ -383,10 +328,6 @@ export function useComposerAutocompleteState({
       highlightIndex,
       isAutocompleteOpen,
       moveHighlight,
-      selectionStart,
-      setSelectionStart,
-      text,
-      textareaRef,
     ],
   );
 

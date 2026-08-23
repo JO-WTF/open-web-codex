@@ -79,7 +79,6 @@ function ComposerHarness({
       onSelectAccessMode={() => {}}
       skills={[]}
       apps={apps}
-      prompts={[]}
       files={[]}
       draftText={draftText}
       onDraftChange={setDraftText}

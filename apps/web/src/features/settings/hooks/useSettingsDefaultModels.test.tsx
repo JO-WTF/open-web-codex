@@ -2,17 +2,15 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInfo } from "@/types";
-import { connectWorkspace, getConfigModel, getModelList } from "@services/tauri";
+import { connectWorkspace, getModelList } from "@services/tauri";
 import { useSettingsDefaultModels } from "./useSettingsDefaultModels";
 
 vi.mock("@services/tauri", () => ({
   connectWorkspace: vi.fn(),
-  getConfigModel: vi.fn(),
   getModelList: vi.fn(),
 }));
 
 const connectWorkspaceMock = vi.mocked(connectWorkspace);
-const getConfigModelMock = vi.mocked(getConfigModel);
 const getModelListMock = vi.mocked(getModelList);
 
 function workspace(id: string, connected = true): WorkspaceInfo {
@@ -61,7 +59,6 @@ describe("useSettingsDefaultModels", () => {
   it("invalidates in-flight results when workspace list becomes empty", async () => {
     const pending = deferred<any>();
     getModelListMock.mockReturnValueOnce(pending.promise);
-    getConfigModelMock.mockResolvedValueOnce(null);
 
     const { result, rerender } = renderHook(
       ({ projects }: { projects: WorkspaceInfo[] }) => useSettingsDefaultModels(projects),
@@ -100,7 +97,6 @@ describe("useSettingsDefaultModels", () => {
     getModelListMock
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
-    getConfigModelMock.mockResolvedValue(null);
 
     const { result, rerender } = renderHook(
       ({ projects }: { projects: WorkspaceInfo[] }) => useSettingsDefaultModels(projects),
@@ -140,7 +136,6 @@ describe("useSettingsDefaultModels", () => {
 
   it("uses the first workspace as the model source even when disconnected", async () => {
     connectWorkspaceMock.mockResolvedValueOnce(undefined);
-    getConfigModelMock.mockResolvedValueOnce(null);
     getModelListMock.mockResolvedValueOnce(modelListResponse("gpt-5.1"));
 
     const { result } = renderHook(
@@ -160,9 +155,8 @@ describe("useSettingsDefaultModels", () => {
     });
   });
 
-  it("falls back to config model when model list cannot be fetched", async () => {
+  it("reports connection failure without inventing a config model", async () => {
     connectWorkspaceMock.mockRejectedValueOnce(new Error("connect failed"));
-    getConfigModelMock.mockResolvedValueOnce("gpt-5-codex");
 
     const { result } = renderHook(
       ({ projects }: { projects: WorkspaceInfo[] }) => useSettingsDefaultModels(projects),
@@ -174,8 +168,8 @@ describe("useSettingsDefaultModels", () => {
     );
 
     await waitFor(() => {
-      expect(result.current.models[0]?.model).toBe("gpt-5-codex");
-      expect(result.current.models[0]?.displayName).toContain("(config)");
+      expect(result.current.models).toEqual([]);
+      expect(result.current.error).toContain("connect failed");
       expect(getModelListMock).not.toHaveBeenCalled();
     });
   });

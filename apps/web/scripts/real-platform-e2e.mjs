@@ -1191,19 +1191,6 @@ async function configureModelToolSearch() {
   assert.equal(configuredModel?.supportsSearchTool, true);
 }
 
-async function enableMultiAgent() {
-  const settings = await api("/profile/agents/settings", {
-    method: "PUT",
-    body: {
-      multiAgentEnabled: true,
-      maxThreads: 4,
-      maxDepth: 3,
-    },
-  });
-  assert.equal(settings.multiAgentEnabled, true);
-  return settings;
-}
-
 async function cleanupRun(runId) {
   if (!runId) return;
   try {
@@ -1728,7 +1715,6 @@ async function main() {
     await ensureCopilotActive();
     await configureProvider();
     await configureModelToolSearch();
-    await enableMultiAgent();
     log("server=" + version + " fixture_files=" + state.manifest.files.length);
     for (const index of [1, 2]) {
       const started = Date.now();

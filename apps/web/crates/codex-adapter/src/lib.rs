@@ -140,29 +140,11 @@ pub enum ProfileQuery {
         workspace: AuthorizedWorkspace,
         force_reload: bool,
     },
-    Config,
 }
 
 #[derive(Debug, Clone)]
 pub enum ProfileMutation {
-    SetExperimentalFeature {
-        name: String,
-        enabled: bool,
-    },
-    SetAgentCore {
-        multi_agent_enabled: bool,
-        max_threads: u32,
-        max_depth: u32,
-    },
-    SetAgentDefinition {
-        original_name: Option<String>,
-        name: String,
-        description: Option<String>,
-        config_file: String,
-    },
-    RemoveAgentDefinition {
-        name: String,
-    },
+    SetExperimentalFeature { name: String, enabled: bool },
 }
 
 #[derive(Debug, Clone)]

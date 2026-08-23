@@ -119,144 +119,14 @@ export async function getCodexConfigPath(): Promise<string> {
   return invoke<string>("get_codex_config_path");
 }
 
-export type TextFileResponse = {
+export type WorkspaceAgentsFileResponse = {
   exists: boolean;
   content: string;
   truncated: boolean;
 };
 
-export type GlobalAgentsResponse = TextFileResponse;
-export type GlobalCodexConfigResponse = TextFileResponse;
-export type AgentMdResponse = TextFileResponse;
-export type AgentSummary = {
-  name: string;
-  description: string | null;
-  developerInstructions: string | null;
-  configFile: string;
-  resolvedPath: string;
-  managedByApp: boolean;
-  fileExists: boolean;
-};
-
-export type AgentsSettings = {
-  configPath: string;
-  multiAgentEnabled: boolean;
-  maxThreads: number;
-  maxDepth: number;
-  agents: AgentSummary[];
-};
-
-export type SetAgentsCoreInput = {
-  multiAgentEnabled: boolean;
-  maxThreads: number;
-  maxDepth: number;
-};
-
-export type CreateAgentInput = {
-  name: string;
-  description?: string | null;
-  developerInstructions?: string | null;
-  template?: "blank" | string | null;
-  model?: string | null;
-  reasoningEffort?: string | null;
-};
-
-export type UpdateAgentInput = {
-  originalName: string;
-  name: string;
-  description?: string | null;
-  developerInstructions?: string | null;
-  renameManagedFile?: boolean;
-};
-
-export type DeleteAgentInput = {
-  name: string;
-  deleteManagedFile?: boolean;
-};
-
-type FileScope = "workspace" | "global";
-type FileKind = "agents" | "config";
-
-async function fileRead(
-  scope: FileScope,
-  kind: FileKind,
-  workspaceId?: string,
-): Promise<TextFileResponse> {
-  return invoke<TextFileResponse>("file_read", { scope, kind, workspaceId });
-}
-
-async function fileWrite(
-  scope: FileScope,
-  kind: FileKind,
-  content: string,
-  workspaceId?: string,
-): Promise<void> {
-  return invoke("file_write", { scope, kind, workspaceId, content });
-}
-
 export async function readImageAsDataUrl(path: string): Promise<string> {
   return invoke<string>("read_image_as_data_url", { path });
-}
-
-export async function readGlobalAgentsMd(): Promise<GlobalAgentsResponse> {
-  return fileRead("global", "agents");
-}
-
-export async function writeGlobalAgentsMd(content: string): Promise<void> {
-  return fileWrite("global", "agents", content);
-}
-
-export async function readGlobalCodexConfigToml(): Promise<GlobalCodexConfigResponse> {
-  return fileRead("global", "config");
-}
-
-export async function writeGlobalCodexConfigToml(content: string): Promise<void> {
-  return fileWrite("global", "config", content);
-}
-
-export async function getAgentsSettings(): Promise<AgentsSettings> {
-  return invoke<AgentsSettings>("get_agents_settings");
-}
-
-export async function setAgentsCoreSettings(
-  input: SetAgentsCoreInput,
-): Promise<AgentsSettings> {
-  return invoke<AgentsSettings>("set_agents_core_settings", { input });
-}
-
-export async function createAgent(input: CreateAgentInput): Promise<AgentsSettings> {
-  return invoke<AgentsSettings>("create_agent", { input });
-}
-
-export async function updateAgent(input: UpdateAgentInput): Promise<AgentsSettings> {
-  return invoke<AgentsSettings>("update_agent", { input });
-}
-
-export async function deleteAgent(input: DeleteAgentInput): Promise<AgentsSettings> {
-  return invoke<AgentsSettings>("delete_agent", { input });
-}
-
-export async function readAgentConfigToml(agentName: string): Promise<string> {
-  return invoke<string>("read_agent_config_toml", { agentName });
-}
-
-export async function writeAgentConfigToml(
-  agentName: string,
-  content: string,
-): Promise<void> {
-  return invoke("write_agent_config_toml", { agentName, content });
-}
-
-export async function getConfigModel(workspaceId: string): Promise<string | null> {
-  const response = await invoke<{ model?: string | null }>("get_config_model", {
-    workspaceId,
-  });
-  const model = response?.model;
-  if (typeof model !== "string") {
-    return null;
-  }
-  const trimmed = model.trim();
-  return trimmed.length > 0 ? trimmed : null;
 }
 
 export async function addWorkspace(path: string): Promise<WorkspaceInfo> {
@@ -788,73 +658,6 @@ export async function getAppsList(
   return invoke<any>("apps_list", { workspaceId, cursor, limit, threadId });
 }
 
-export async function getPromptsList(workspaceId: string) {
-  return invoke<any>("prompts_list", { workspaceId });
-}
-
-export async function getWorkspacePromptsDir(workspaceId: string) {
-  return invoke<string>("prompts_workspace_dir", { workspaceId });
-}
-
-export async function getGlobalPromptsDir(workspaceId: string) {
-  return invoke<string>("prompts_global_dir", { workspaceId });
-}
-
-export async function createPrompt(
-  workspaceId: string,
-  data: {
-    scope: "workspace" | "global";
-    name: string;
-    description?: string | null;
-    argumentHint?: string | null;
-    content: string;
-  },
-) {
-  return invoke<any>("prompts_create", {
-    workspaceId,
-    scope: data.scope,
-    name: data.name,
-    description: data.description ?? null,
-    argumentHint: data.argumentHint ?? null,
-    content: data.content,
-  });
-}
-
-export async function updatePrompt(
-  workspaceId: string,
-  data: {
-    path: string;
-    name: string;
-    description?: string | null;
-    argumentHint?: string | null;
-    content: string;
-  },
-) {
-  return invoke<any>("prompts_update", {
-    workspaceId,
-    path: data.path,
-    name: data.name,
-    description: data.description ?? null,
-    argumentHint: data.argumentHint ?? null,
-    content: data.content,
-  });
-}
-
-export async function deletePrompt(workspaceId: string, path: string) {
-  return invoke<any>("prompts_delete", { workspaceId, path });
-}
-
-export async function movePrompt(
-  workspaceId: string,
-  data: { path: string; scope: "workspace" | "global" },
-) {
-  return invoke<any>("prompts_move", {
-    workspaceId,
-    path: data.path,
-    scope: data.scope,
-  });
-}
-
 export async function getAppSettings(): Promise<AppSettings> {
   return invoke<AppSettings>("get_app_settings");
 }
@@ -926,12 +729,23 @@ export async function readWorkspaceFile(
   });
 }
 
-export async function readAgentMd(workspaceId: string): Promise<AgentMdResponse> {
-  return fileRead("workspace", "agents", workspaceId);
+export async function readAgentMd(
+  workspaceId: string,
+): Promise<WorkspaceAgentsFileResponse> {
+  return invoke<WorkspaceAgentsFileResponse>("file_read", {
+    scope: "workspace",
+    kind: "agents",
+    workspaceId,
+  });
 }
 
 export async function writeAgentMd(workspaceId: string, content: string): Promise<void> {
-  return fileWrite("workspace", "agents", content, workspaceId);
+  return invoke("file_write", {
+    scope: "workspace",
+    kind: "agents",
+    workspaceId,
+    content,
+  });
 }
 
 export async function listGitBranches(workspaceId: string) {

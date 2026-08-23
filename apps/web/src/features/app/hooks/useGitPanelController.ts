@@ -49,9 +49,7 @@ export function useGitPanelController({
   const [gitDiffViewStyle, setGitDiffViewStyle] = useState<
     "split" | "unified"
   >("split");
-  const [filePanelMode, setFilePanelMode] = useState<
-    "git" | "files" | "prompts"
-  >("git");
+  const [filePanelMode, setFilePanelMode] = useState<"git" | "files">("git");
   const [selectedPullRequest, setSelectedPullRequest] =
     useState<GitHubPullRequest | null>(null);
   const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(

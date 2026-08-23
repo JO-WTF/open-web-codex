@@ -8,7 +8,6 @@ import {
 const DEFAULT_FILES = [
   "src/features/git/components/GitDiffPanel.tsx",
   "src/features/files/components/FileTreePanel.tsx",
-  "src/features/prompts/components/PromptPanel.tsx",
 ];
 
 const PANEL_PRIMITIVE_NAMES = [
@@ -19,16 +18,16 @@ const PANEL_PRIMITIVE_NAMES = [
 ];
 
 function resolvePanelDsClass(token) {
-  if (token === "file-tree-meta" || token === "prompt-panel-meta") {
+  if (token === "file-tree-meta") {
     return "ds-panel-meta";
   }
-  if (token === "file-tree-search" || token === "prompt-panel-search") {
+  if (token === "file-tree-search") {
     return "ds-panel-search";
   }
-  if (token === "file-tree-search-icon" || token === "prompt-panel-search-icon") {
+  if (token === "file-tree-search-icon") {
     return "ds-panel-search-icon";
   }
-  if (token === "file-tree-search-input" || token === "prompt-panel-search-input") {
+  if (token === "file-tree-search-input") {
     return "ds-panel-search-input";
   }
   return null;

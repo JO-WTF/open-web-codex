@@ -15,7 +15,7 @@ use open_web_codex_platform_contracts::{
     WorkspaceCommitDiff, WorkspaceFileChange, WorkspaceFileContent, WorkspaceFileDiff,
     WorkspaceFileUploadResponse, WorkspaceGitRootsQuery, WorkspaceLog, WorkspaceLogEntry,
     WorkspaceLogQuery, WorkspacePathQuery, WorkspacePathRequest, WorkspacePathsRequest,
-    WorkspaceStatus, WriteProfileTextFileRequest,
+    WorkspaceStatus, WriteWorkspaceAgentsFileRequest,
 };
 use open_web_codex_platform_store::AppState;
 use open_web_codex_run_orchestrator::{
@@ -357,7 +357,7 @@ pub async fn write_agents_file(
     auth: AuthenticatedUser,
     Path(workspace_id): Path<Uuid>,
     Extension(git): Extension<Arc<GitRuntime>>,
-    Json(request): Json<WriteProfileTextFileRequest>,
+    Json(request): Json<WriteWorkspaceAgentsFileRequest>,
 ) -> ApiResult<serde_json::Value> {
     let workspace_id = authorized_workspace(&state, &auth, workspace_id, true).await?;
     git.write_agents_md(workspace_id, &request.content)
