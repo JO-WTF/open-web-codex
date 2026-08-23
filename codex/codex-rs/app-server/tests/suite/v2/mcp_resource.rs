@@ -34,12 +34,8 @@ use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
-use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_rollout::RolloutItem;
-use codex_rollout::append_rollout_item_to_path;
-use codex_rollout::read_session_meta_line;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
@@ -202,9 +198,6 @@ required = true
         }),
     )?;
     let path = rollout_path(codex_home.path(), filename_ts, &child_thread_id);
-    let mut session_meta = read_session_meta_line(&path).await?;
-    session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V1);
-    append_rollout_item_to_path(&path, &RolloutItem::SessionMeta(session_meta)).await?;
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
