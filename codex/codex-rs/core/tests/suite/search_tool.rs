@@ -1255,7 +1255,7 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
     let third_request_tools = tool_names(&third_request_body);
     assert!(
         !third_request_tools.iter().any(|name| name == tool_name),
-        "post-tool follow-up should still rely on tool_search_output history, not tool injection: {third_request_tools:?}"
+        "post-tool follow-up should rely on tool_search_output history, not tool injection: {third_request_tools:?}"
     );
 
     Ok(())
