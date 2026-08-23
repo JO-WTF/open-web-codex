@@ -594,7 +594,10 @@ async fn load_config_toml_for_required_layer_raw(
     })?;
     let base_dir = AbsolutePathBuf::from_absolute_path(config_parent)?;
     let toml_file_uri = PathUri::from_abs_path(toml_file);
-    let toml_value = match fs.read_file_text(&toml_file_uri, /*sandbox*/ None).await {
+    let toml_value = match fs
+        .read_file_text(&toml_file_uri, Default::default(), /*sandbox*/ None)
+        .await
+    {
         Ok(contents) => {
             let config: TomlValue = toml::from_str(&contents).map_err(|err| {
                 let config_error =
@@ -685,7 +688,11 @@ pub async fn load_requirements_toml(
 ) -> io::Result<Option<RequirementsLayerEntry>> {
     let requirements_toml_file_uri = PathUri::from_abs_path(requirements_toml_file);
     match fs
-        .read_file_text(&requirements_toml_file_uri, /*sandbox*/ None)
+        .read_file_text(
+            &requirements_toml_file_uri,
+            Default::default(),
+            /*sandbox*/ None,
+        )
         .await
     {
         Ok(contents) => {
@@ -1120,6 +1127,19 @@ fn sanitize_project_config(config: &mut TomlValue) -> Vec<String> {
     {
         ignored_keys.push("features.respect_system_proxy".to_string());
     }
+    // Repository contents must not turn an ordinary key into a permission increase.
+    if let Some(chat) = table
+        .get_mut("tui")
+        .and_then(|tui| tui.get_mut("keymap"))
+        .and_then(|keymap| keymap.get_mut("chat"))
+        .and_then(TomlValue::as_table_mut)
+    {
+        for key in ["previous_permission_mode", "next_permission_mode"] {
+            if chat.remove(key).is_some() {
+                ignored_keys.push(format!("tui.keymap.chat.{key}"));
+            }
+        }
+    }
 
     ignored_keys
 }
@@ -1315,13 +1335,26 @@ async fn find_project_root(
         for marker in project_root_markers {
             let marker_path = ancestor.join(marker);
             let marker_path_uri = PathUri::from_abs_path(&marker_path);
-            if fs
-                .get_metadata(&marker_path_uri, /*sandbox*/ None)
+            let Ok(metadata) = fs
+                .get_metadata(&marker_path_uri, Default::default(), /*sandbox*/ None)
                 .await
-                .is_ok()
+            else {
+                continue;
+            };
+            if marker == ".git"
+                && metadata.is_directory
+                && fs
+                    .get_metadata(
+                        &PathUri::from_abs_path(&marker_path.join("HEAD")),
+                        Default::default(),
+                        /*sandbox*/ None,
+                    )
+                    .await
+                    .is_err()
             {
-                return Ok(ancestor);
+                continue;
             }
+            return Ok(ancestor);
         }
     }
     Ok(cwd.clone())
@@ -1332,7 +1365,10 @@ async fn find_git_checkout_root(
     cwd: &AbsolutePathBuf,
 ) -> Option<AbsolutePathBuf> {
     let cwd_uri = PathUri::from_abs_path(cwd);
-    let base = match fs.get_metadata(&cwd_uri, /*sandbox*/ None).await {
+    let base = match fs
+        .get_metadata(&cwd_uri, Default::default(), /*sandbox*/ None)
+        .await
+    {
         Ok(metadata) if metadata.is_directory => cwd.clone(),
         _ => cwd.parent()?,
     };
@@ -1340,13 +1376,25 @@ async fn find_git_checkout_root(
     for dir in base.ancestors() {
         let dot_git = dir.join(".git");
         let dot_git_uri = PathUri::from_abs_path(&dot_git);
-        if fs
-            .get_metadata(&dot_git_uri, /*sandbox*/ None)
+        let Ok(metadata) = fs
+            .get_metadata(&dot_git_uri, Default::default(), /*sandbox*/ None)
             .await
-            .is_ok()
+        else {
+            continue;
+        };
+        if metadata.is_directory
+            && fs
+                .get_metadata(
+                    &PathUri::from_abs_path(&dot_git.join("HEAD")),
+                    Default::default(),
+                    /*sandbox*/ None,
+                )
+                .await
+                .is_err()
         {
-            return Some(dir);
+            continue;
         }
+        return Some(dir);
     }
     None
 }
@@ -1454,7 +1502,7 @@ async fn discover_project_layers(
         let dot_codex_abs = dir.join(".codex");
         let dot_codex_uri = PathUri::from_abs_path(&dot_codex_abs);
         if !fs
-            .get_metadata(&dot_codex_uri, /*sandbox*/ None)
+            .get_metadata(&dot_codex_uri, Default::default(), /*sandbox*/ None)
             .await
             .map(|metadata| metadata.is_directory)
             .unwrap_or(false)
@@ -1472,7 +1520,10 @@ async fn discover_project_layers(
         }
         let config_file = dot_codex_abs.join(CONFIG_TOML_FILE);
         let config_file_uri = PathUri::from_abs_path(&config_file);
-        match fs.read_file_text(&config_file_uri, /*sandbox*/ None).await {
+        match fs
+            .read_file_text(&config_file_uri, Default::default(), /*sandbox*/ None)
+            .await
+        {
             Ok(contents) => {
                 let config: TomlValue = match toml::from_str(&contents) {
                     Ok(config) => config,
@@ -1584,7 +1635,11 @@ async fn load_root_checkout_project_config(
     let hooks_config_file_uri = PathUri::from_abs_path(&hooks_config_file);
     Ok(
         match fs
-            .read_file_text(&hooks_config_file_uri, /*sandbox*/ None)
+            .read_file_text(
+                &hooks_config_file_uri,
+                Default::default(),
+                /*sandbox*/ None,
+            )
             .await
         {
             Ok(contents) => {

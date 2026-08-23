@@ -1154,6 +1154,20 @@ client_request_definitions! {
         response: v2::McpResourceReadResponse,
     },
 
+    #[experimental("mcpServer/event/stream/start")]
+    McpServerEventStreamStart => "mcpServer/event/stream/start" {
+        params: v2::McpServerEventStreamStartParams,
+        serialization: None,
+        response: v2::McpServerEventStreamStartResponse,
+    },
+
+    #[experimental("mcpServer/event/stream/stop")]
+    McpServerEventStreamStop => "mcpServer/event/stream/stop" {
+        params: v2::McpServerEventStreamStopParams,
+        serialization: None,
+        response: v2::McpServerEventStreamStopResponse,
+    },
+
     McpServerToolCall => "mcpServer/tool/call" {
         params: v2::McpServerToolCallParams,
         serialization: thread_id(params.thread_id),
@@ -1875,6 +1889,8 @@ server_notification_definitions! {
     McpToolCallProgress => "item/mcpToolCall/progress" (v2::McpToolCallProgressNotification),
     McpServerOauthLoginCompleted => "mcpServer/oauthLogin/completed" (v2::McpServerOauthLoginCompletedNotification),
     McpServerStatusUpdated => "mcpServer/startupStatus/updated" (v2::McpServerStatusUpdatedNotification),
+    #[experimental("mcpServer/event/stream/notification")]
+    McpServerEventStream => "mcpServer/event/stream/notification" (v2::McpServerEventStreamNotification),
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
     AppListUpdated => "app/list/updated" (v2::AppListUpdatedNotification),
@@ -2929,7 +2945,9 @@ mod tests {
             turn_id: Some("turn_123".to_string()),
             server_name: "codex_apps".to_string(),
             request: v2::McpServerElicitationRequest::Form {
-                meta: None,
+                meta: Some(json!({
+                    "suggestion_id": "request_plugin_install_install-github"
+                })),
                 message: "Allow this request?".to_string(),
                 requested_schema,
             },
@@ -2948,7 +2966,9 @@ mod tests {
                     "turnId": "turn_123",
                     "serverName": "codex_apps",
                     "mode": "form",
-                    "_meta": null,
+                    "_meta": {
+                        "suggestion_id": "request_plugin_install_install-github"
+                    },
                     "message": "Allow this request?",
                     "requestedSchema": {
                         "type": "object",

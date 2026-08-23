@@ -1092,25 +1092,31 @@ async fn cli_main(
     let open_agents_overview = matches!(&subcommand, Some(Subcommand::Agents(_)));
     match subcommand {
         None | Some(Subcommand::Agents(_)) => {
+            prepend_config_flags(
+                &mut interactive.config_overrides,
+                root_config_overrides.clone(),
+            );
             if open_agents_overview {
-                if !root_config_overrides.raw_overrides.is_empty()
-                    || root_strict_config
-                    || interactive.prompt.is_some()
-                    || !interactive.images.is_empty()
-                    || interactive.model.is_some()
-                    || interactive.oss
-                    || interactive.oss_provider.is_some()
-                    || interactive.config_profile_v2.is_some()
-                    || interactive.sandbox_mode.is_some()
-                    || interactive.dangerously_bypass_approvals_and_sandbox
-                    || interactive.bypass_hook_trust
-                    || interactive.cwd.is_some() && root_remote.is_none()
-                    || !interactive.add_dir.is_empty()
-                    || interactive.approval_policy.is_some()
-                    || interactive.web_search
+                if interactive.prompt.is_some() || !interactive.images.is_empty() {
+                    anyhow::bail!("`codex agents` does not accept an initial prompt or images");
+                }
+                if root_remote.is_some()
+                    && (interactive.oss
+                        || interactive.oss_provider.is_some()
+                        || !interactive.add_dir.is_empty()
+                        || interactive
+                            .config_overrides
+                            .parse_overrides()
+                            .map_err(anyhow::Error::msg)?
+                            .iter()
+                            .any(|(key, value)| {
+                                key == "sandbox_workspace_write.writable_roots"
+                                    || (key == "sandbox_workspace_write"
+                                        && value.get("writable_roots").is_some())
+                            }))
                 {
                     anyhow::bail!(
-                        "`codex agents` cannot attach to shared sessions with invocation-specific configuration overrides"
+                        "`codex agents` cannot apply local provider or additional-directory overrides to a remote server"
                     );
                 }
                 if is_workload_identity_selected() {
@@ -1128,10 +1134,6 @@ async fn cli_main(
                 }
                 interactive.agents_overview = true;
             }
-            prepend_config_flags(
-                &mut interactive.config_overrides,
-                root_config_overrides.clone(),
-            );
             let exit_info = run_interactive_tui(
                 interactive,
                 root_remote.clone(),
@@ -1179,6 +1181,9 @@ async fn cli_main(
             codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
         }
         Some(Subcommand::McpServer(McpServerCommand { strict_config })) => {
+            eprintln!(
+                "warning: `codex mcp-server` is deprecated and will be removed in a future release."
+            );
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
                 root_remote_auth_token_env.as_deref(),
@@ -2795,6 +2800,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         strict_config,
         approval_policy,
         web_search,
+        no_alt_screen,
         prompt,
         mut config_overrides,
         ..
@@ -2814,6 +2820,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     if web_search {
         interactive.web_search = true;
     }
+    interactive.no_alt_screen |= no_alt_screen;
     if strict_config {
         interactive.strict_config = true;
     }
@@ -3770,6 +3777,18 @@ mod tests {
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn resume_and_fork_preserve_no_alt_screen() {
+        for (command, finalize) in [
+            ("resume", finalize_resume_from_args as fn(&[&str]) -> TuiCli),
+            ("fork", finalize_fork_from_args as fn(&[&str]) -> TuiCli),
+        ] {
+            assert!(finalize(&["codex", command, "--no-alt-screen"]).no_alt_screen);
+            assert!(finalize(&["codex", "--no-alt-screen", command]).no_alt_screen);
+            assert!(!finalize(&["codex", command]).no_alt_screen);
+        }
     }
 
     #[test]

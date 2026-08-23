@@ -9,11 +9,12 @@ use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_api::TransportError;
 use codex_api::is_azure_responses_provider;
-use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::default_client::RESIDENCY_HEADER_NAME;
+use codex_login::default_client::ResidencyRequirement;
+use codex_login::default_client::read_default_client_residency_requirement;
 use codex_model_provider_info::ModelProviderInfo;
-use codex_model_provider_info::WireApi;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -21,6 +22,7 @@ use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
 use codex_protocol::openai_models::ModelsResponse;
+use http::HeaderValue;
 
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
 use crate::auth::ProviderAuthScope;
@@ -29,17 +31,22 @@ use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
 use crate::models_endpoint::OpenAiModelsEndpoint;
-use crate::models_endpoint::ProviderModelSummary;
-use crate::models_endpoint::ProviderModelsError;
+
+pub(crate) fn enforce_managed_residency(provider: &mut Provider) {
+    if let Some(requirement) = read_default_client_residency_requirement() {
+        let value = match requirement {
+            ResidencyRequirement::Us => HeaderValue::from_static("us"),
+        };
+        provider.headers.insert(RESIDENCY_HEADER_NAME, value);
+    }
+}
 
 /// Remote context-compaction protocols supported by a model provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteCompactionSupport {
     /// The provider does not support remote compaction.
     Unsupported,
-    /// The provider supports only the dedicated `/v1/responses/compact` endpoint.
-    V1,
-    /// The provider supports both the dedicated endpoint and `compaction_trigger` items.
+    /// The provider supports `compaction_trigger` items over the Responses endpoint.
     V2,
 }
 
@@ -50,8 +57,6 @@ pub enum RemoteCompactionSupport {
 /// that the active provider marks unsupported here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderCapabilities {
-    /// Whether the active Provider accepts function-tool calls on its wire.
-    pub function_tools: bool,
     pub namespace_tools: bool,
     pub image_generation: bool,
     pub web_search: bool,
@@ -62,12 +67,11 @@ pub struct ProviderCapabilities {
 impl Default for ProviderCapabilities {
     fn default() -> Self {
         Self {
-            function_tools: false,
             namespace_tools: true,
             image_generation: true,
             web_search: true,
             external_web_access: true,
-            remote_compaction: RemoteCompactionSupport::V2,
+            remote_compaction: RemoteCompactionSupport::Unsupported,
         }
     }
 }
@@ -210,8 +214,11 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     fn api_provider(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Provider>> {
         Box::pin(async move {
             let auth = self.auth().await;
-            self.info()
-                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))
+            let mut provider = self
+                .info()
+                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+            enforce_managed_residency(&mut provider);
+            Ok(provider)
         })
     }
 
@@ -282,17 +289,6 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         drop(cache);
         self.models_manager_without_cache(config_model_catalog)
     }
-
-    /// Fetches a fresh Provider-owned model catalog without touching the
-    /// Thread model manager or its cache.
-    fn list_models_fresh(
-        &self,
-        client_version: &str,
-        http_client_factory: HttpClientFactory,
-    ) -> ModelProviderFuture<'_, Result<Vec<ProviderModelSummary>, ProviderModelsError>> {
-        let _ = (client_version, http_client_factory);
-        Box::pin(async { Err(ProviderModelsError::NotFound) })
-    }
 }
 
 pub type ModelProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -351,17 +347,10 @@ impl ModelProvider for ConfiguredModelProvider {
             RemoteCompactionSupport::Unsupported
         };
 
-        let mut capabilities = ProviderCapabilities {
-            function_tools: self.info.supports_function_tools,
+        ProviderCapabilities {
             remote_compaction,
             ..ProviderCapabilities::default()
-        };
-        if self.info.wire_api == WireApi::Chat {
-            // Hosted web search is a Responses-only tool. Chat keeps function and namespace
-            // calling, but must not advertise a tool the Chat wire cannot encode.
-            capabilities.web_search = false;
         }
-        capabilities
     }
 
     fn approval_review_preferred_model(&self) -> &'static str {
@@ -446,21 +435,19 @@ impl ModelProvider for ConfiguredModelProvider {
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
         match config_model_catalog {
-            Some(model_catalog) => Arc::new(StaticModelsManager::new_with_model_configs(
+            Some(model_catalog) => Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,
-                self.info.models.clone(),
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new_with_model_configs(
+                Arc::new(OpenAiModelsManager::new(
                     codex_home,
                     endpoint,
                     self.auth_manager.clone(),
-                    self.info.models.clone(),
                 ))
             }
         }
@@ -471,20 +458,18 @@ impl ModelProvider for ConfiguredModelProvider {
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
         match config_model_catalog {
-            Some(model_catalog) => Arc::new(StaticModelsManager::new_with_model_configs(
+            Some(model_catalog) => Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,
-                self.info.models.clone(),
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new_without_cache_with_model_configs(
+                Arc::new(OpenAiModelsManager::new_without_cache(
                     endpoint,
                     self.auth_manager.clone(),
-                    self.info.models.clone(),
                 ))
             }
         }
@@ -496,37 +481,22 @@ impl ModelProvider for ConfiguredModelProvider {
         cache: Arc<dyn ModelsCache>,
     ) -> SharedModelsManager {
         match config_model_catalog {
-            Some(model_catalog) => Arc::new(StaticModelsManager::new_with_model_configs(
+            Some(model_catalog) => Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,
-                self.info.models.clone(),
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new_with_cache_and_model_configs(
+                Arc::new(OpenAiModelsManager::new_with_cache(
                     cache,
                     endpoint,
                     self.auth_manager.clone(),
-                    self.info.models.clone(),
                 ))
             }
         }
-    }
-
-    fn list_models_fresh(
-        &self,
-        client_version: &str,
-        http_client_factory: HttpClientFactory,
-    ) -> ModelProviderFuture<'_, Result<Vec<ProviderModelSummary>, ProviderModelsError>> {
-        let client_version = client_version.to_string();
-        Box::pin(async move {
-            OpenAiModelsEndpoint::new(self.info.clone(), self.auth_manager.clone())
-                .list_model_catalog(&client_version, http_client_factory)
-                .await
-        })
     }
 }
 
@@ -549,6 +519,7 @@ mod tests {
     use codex_protocol::openai_models::ModelInfo;
     use codex_protocol::openai_models::ModelsResponse;
     use codex_protocol::protocol::SessionSource;
+    use codex_utils_redacted_string::RedactedString;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use wiremock::Mock;
@@ -593,8 +564,6 @@ mod tests {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
-            supports_function_tools: false,
-            models: Vec::new(),
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -659,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_provider_uses_default_capabilities() {
+    fn openai_provider_enables_remote_compaction() {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             /*auth_manager*/ None,
@@ -668,33 +637,10 @@ mod tests {
         assert_eq!(
             provider.capabilities(),
             ProviderCapabilities {
-                function_tools: true,
+                remote_compaction: RemoteCompactionSupport::V2,
                 ..ProviderCapabilities::default()
             }
         );
-    }
-
-    #[test]
-    fn configured_chat_provider_disables_hosted_web_search() {
-        let mut provider_info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
-        provider_info.wire_api = WireApi::Chat;
-        provider_info.supports_function_tools = true;
-
-        let provider = create_model_provider(provider_info, /*auth_manager*/ None);
-
-        assert!(!provider.capabilities().web_search);
-        assert!(ProviderCapabilities::default().web_search);
-    }
-
-    #[test]
-    fn configured_chat_provider_requires_explicit_function_tool_capability() {
-        let mut provider_info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
-        provider_info.wire_api = WireApi::Chat;
-        provider_info.supports_function_tools = false;
-
-        let provider = create_model_provider(provider_info, /*auth_manager*/ None);
-
-        assert!(!provider.capabilities().function_tools);
     }
 
     #[test]
@@ -876,7 +822,7 @@ mod tests {
                         "--skip",
                         counter.to_str().expect("counter path should be UTF-8"),
                     ]
-                    .map(str::to_string),
+                    .map(RedactedString::from),
                 ),
                 timeout_ms: NonZeroU64::new(10_000).expect("timeout should be non-zero"),
             }),
@@ -1224,7 +1170,7 @@ mod tests {
             .await;
 
         let mut provider_info = provider_for(server.uri());
-        provider_info.experimental_bearer_token = Some("provider-token".to_string());
+        provider_info.experimental_bearer_token = Some("provider-token".into());
         let provider = create_model_provider(
             provider_info,
             Some(AuthManager::from_auth_for_testing(

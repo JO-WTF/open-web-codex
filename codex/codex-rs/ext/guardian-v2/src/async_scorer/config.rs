@@ -31,8 +31,11 @@ pub(crate) struct GuardianV2Config {
     pub(crate) max_tool_call_lag: usize,
     pub(crate) reasoning_effort: ReasoningEffort,
     pub(crate) max_action_tokens: usize,
-    pub(crate) max_classifier_instruction_tokens: usize,
+    /// No truncation limit is applied unless local or model configuration supplies one.
+    pub(crate) max_classifier_instruction_tokens: Option<usize>,
+    pub(crate) reuse_parent_compaction: bool,
     pub(crate) max_parent_compaction_tokens: usize,
+    pub(crate) sandboxed_exec_commands: bool,
     pub(crate) transcript: TranscriptConfig,
 }
 
@@ -73,6 +76,9 @@ impl GuardianV2Config {
                     .review_threshold_basis_points
                     .map(|basis_points| f64::from(basis_points) / 10_000.0)
             });
+            configured.max_tool_call_lag = configured
+                .max_tool_call_lag
+                .or(model_defaults.max_tool_call_lag);
             configured.reasoning_effort = configured
                 .reasoning_effort
                 .or_else(|| model_defaults.reasoning_effort.clone());
@@ -82,6 +88,9 @@ impl GuardianV2Config {
             configured.max_classifier_instruction_tokens = configured
                 .max_classifier_instruction_tokens
                 .or(model_defaults.max_classifier_instruction_tokens);
+            configured.reuse_parent_compaction = configured
+                .reuse_parent_compaction
+                .or(model_defaults.reuse_parent_compaction);
             configured.max_parent_compaction_tokens = configured
                 .max_parent_compaction_tokens
                 .or(model_defaults.max_parent_compaction_tokens);
@@ -107,6 +116,9 @@ impl GuardianV2Config {
                             .collect::<Result<Vec<_>, _>>()?,
                     );
                 }
+                transcript.include_images = transcript
+                    .include_images
+                    .or(model_transcript.include_images);
                 transcript.max_message_entry_tokens = transcript
                     .max_message_entry_tokens
                     .or(model_transcript.max_message_entry_tokens);
@@ -149,11 +161,10 @@ impl GuardianV2Config {
             DEFAULT_MODEL_CONTEXT_ITEM_TOKENS,
             "max_action_tokens",
         )?;
-        let max_classifier_instruction_tokens = bounded_tokens(
-            configured.max_classifier_instruction_tokens,
-            DEFAULT_MODEL_CONTEXT_ITEM_TOKENS,
-            "max_classifier_instruction_tokens",
-        )?;
+        let max_classifier_instruction_tokens = configured
+            .max_classifier_instruction_tokens
+            .map(|tokens| bounded_tokens(Some(tokens), tokens, "max_classifier_instruction_tokens"))
+            .transpose()?;
         let max_parent_compaction_tokens = bounded_tokens(
             configured.max_parent_compaction_tokens,
             DEFAULT_PARENT_COMPACTION_TOKENS,
@@ -211,20 +222,9 @@ impl GuardianV2Config {
 
         Ok(Self {
             local_overrides: configured.clone(),
-            classifier_instructions: {
-                let template = configured
-                    .classifier_instructions
-                    .as_deref()
-                    .unwrap_or(DEFAULT_CLASSIFIER_INSTRUCTIONS);
-                if template.contains("{{ tenant_policy_config }}") {
-                    // Preserve the placeholder until the actual policy is available.
-                    // The final rendered instruction is bounded before sampling.
-                    template.to_owned()
-                } else {
-                    // Preserve the existing rendering behavior of legacy prompts.
-                    truncate_entry(template, max_classifier_instruction_tokens)
-                }
-            },
+            classifier_instructions: configured
+                .classifier_instructions
+                .unwrap_or_else(|| DEFAULT_CLASSIFIER_INSTRUCTIONS.to_owned()),
             review_threshold,
             max_tool_call_lag: configured
                 .max_tool_call_lag
@@ -232,7 +232,13 @@ impl GuardianV2Config {
             reasoning_effort: configured.reasoning_effort.unwrap_or(ReasoningEffort::Low),
             max_action_tokens,
             max_classifier_instruction_tokens,
+            reuse_parent_compaction: configured.reuse_parent_compaction.unwrap_or(true),
             max_parent_compaction_tokens,
+            sandboxed_exec_commands: configured
+                .review_scope
+                .as_ref()
+                .and_then(|review_scope| review_scope.sandboxed_exec_commands)
+                .unwrap_or(false),
             transcript: TranscriptConfig {
                 sources: transcript_config
                     .and_then(|transcript| transcript.sources.clone())
@@ -264,7 +270,10 @@ impl GuardianV2Config {
                 self.classifier_instructions
             )
         };
-        truncate_entry(&instructions, self.max_classifier_instruction_tokens)
+        match self.max_classifier_instruction_tokens {
+            Some(max_tokens) => truncate_entry(&instructions, max_tokens),
+            None => instructions,
+        }
     }
 }
 

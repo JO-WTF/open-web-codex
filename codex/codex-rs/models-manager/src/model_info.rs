@@ -149,7 +149,7 @@ pub(crate) fn model_info_from_slug_without_warning(slug: &str) -> ModelInfo {
         description: None,
         default_reasoning_level: None,
         supported_reasoning_levels: Vec::new(),
-        shell_type: ConfigShellToolType::Default,
+        shell_type: ConfigShellToolType::UnifiedExec,
         visibility: ModelVisibility::None,
         supported_in_api: true,
         priority: 99,

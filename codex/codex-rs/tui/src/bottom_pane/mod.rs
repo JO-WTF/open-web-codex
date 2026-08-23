@@ -933,18 +933,6 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    /// Applies the externally decided Plan-mode nudge visibility to the footer presentation.
-    pub(crate) fn set_plan_mode_nudge_visible(&mut self, visible: bool) {
-        if self.composer.set_plan_mode_nudge_visible(visible) {
-            self.request_redraw();
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn plan_mode_nudge_visible(&self) -> bool {
-        self.composer.plan_mode_nudge_visible()
-    }
-
     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
         self.composer.set_remote_image_urls(urls);
         self.request_redraw();
@@ -1380,7 +1368,6 @@ impl BottomPane {
         self.composer.is_empty()
     }
 
-    #[cfg(test)]
     pub(crate) fn composer_is_vim_enabled(&self) -> bool {
         self.composer.is_vim_enabled()
     }
@@ -1453,6 +1440,15 @@ impl BottomPane {
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.push_view(view);
+    }
+
+    /// Show a text prompt with the composer's current editing preferences.
+    pub(crate) fn show_text_prompt(&mut self, mut view: custom_prompt_view::CustomPromptView) {
+        view.set_keymap_bindings(&self.keymap);
+        if self.composer_is_vim_enabled() {
+            view.enable_vim_in_insert_mode();
+        }
+        self.push_view(Box::new(view));
     }
 
     /// Called when the agent requests user approval.

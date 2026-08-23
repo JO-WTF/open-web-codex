@@ -22,6 +22,8 @@ use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::MCP_APP_UI_EXTENSION_ID;
 use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
@@ -872,6 +874,87 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
     assert!(report.submit_failed.is_empty());
     assert!(report.timed_out.is_empty());
     assert!(manager.list_thread_ids().await.is_empty());
+}
+
+#[tokio::test]
+async fn spawn_internal_session_preserves_parent_lineage_without_forking_history() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let parent = manager
+        .start_thread(StartThreadOptions {
+            metrics_service_name: Some("codex_work_desktop".to_string()),
+            ..StartThreadOptions::new(config.clone())
+        })
+        .await
+        .expect("start parent thread");
+    let reviewer = manager
+        .spawn_internal_session(
+            parent.thread_id,
+            StartThreadOptions {
+                session_source: Some(SessionSource::Internal(InternalSessionSource::Guardian)),
+                initial_history: InitialHistory::Forked(vec![RolloutItem::ResponseItem(
+                    user_msg("parent history must not be inherited").into(),
+                )]),
+                environments: Some(Vec::new()),
+                ..StartThreadOptions::new(config)
+            },
+        )
+        .await
+        .expect("start internal reviewer");
+    let reviewer_config = reviewer.thread.config_snapshot().await;
+
+    assert_eq!(
+        reviewer.session_configured.session_id,
+        parent.session_configured.session_id
+    );
+    assert!(std::ptr::eq(
+        reviewer
+            .thread
+            .session
+            .services
+            .agent_control
+            .rollout_budget(),
+        parent
+            .thread
+            .session
+            .services
+            .agent_control
+            .rollout_budget(),
+    ));
+    assert_eq!(reviewer_config.parent_thread_id, Some(parent.thread_id));
+    assert_eq!(reviewer_config.forked_from_thread_id, None);
+    assert_eq!(reviewer_config.originator, "codex_work_desktop");
+    assert_eq!(
+        reviewer.session_configured.parent_thread_id,
+        Some(parent.thread_id)
+    );
+    assert_eq!(reviewer.session_configured.forked_from_id, None);
+    assert_eq!(manager.list_thread_ids().await, vec![parent.thread_id]);
+    assert!(manager.get_thread(reviewer.thread_id).await.is_err());
+    assert!(
+        reviewer
+            .thread
+            .session
+            .clone_history()
+            .await
+            .raw_items()
+            .next()
+            .is_none()
+    );
+
+    manager
+        .shutdown_all_threads_bounded(Duration::from_secs(10))
+        .await;
 }
 
 #[tokio::test]
@@ -2072,19 +2155,27 @@ fn interrupted_snapshot_is_not_mid_turn() {
 
 #[test]
 fn multi_agent_v2_interrupted_marker_uses_developer_input_message() {
-    let marker = developer_interrupted_marker();
-
-    let ResponseItem::Message { role, content, .. } = marker else {
-        panic!("expected interrupted marker to be a message");
-    };
-    assert_eq!(role, "developer");
-    assert!(
-        matches!(
-            content.as_slice(),
-            [ContentItem::InputText { text }]
-                if text.contains(crate::context::TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE)
-        ),
-        "expected interrupted marker to use developer InputText content"
+    assert_eq!(
+        developer_interrupted_marker(),
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!(
+                    "<turn_aborted>\n{}\n</turn_aborted>",
+                    crate::context::TurnAborted::INTERRUPTED_DEVELOPER_GUIDANCE
+                ),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: Some(
+                InternalChatMessageMetadataPassthrough {
+                    content_item_kinds: Some(vec![ContentItemKind(
+                        "generic.turn_aborted".to_string()
+                    )]),
+                    ..Default::default()
+                }
+            ),
+        }
     );
 }
 

@@ -58,7 +58,7 @@ query_params = { api-version = "2025-04-01-preview" }
         supports_function_tools: false,
         models: Vec::new(),
         query_params: Some(maplit::hashmap! {
-            "api-version".to_string() => "2025-04-01-preview".to_string(),
+            "api-version".to_string() => "2025-04-01-preview".into(),
         }),
         http_headers: None,
         env_http_headers: None,
@@ -98,7 +98,7 @@ supports_standalone_web_search = true
         models: Vec::new(),
         query_params: None,
         http_headers: Some(maplit::hashmap! {
-            "X-Example-Header".to_string() => "example-value".to_string(),
+            "X-Example-Header".to_string() => "example-value".into(),
         }),
         env_http_headers: Some(maplit::hashmap! {
             "X-Example-Env-Header".to_string() => "EXAMPLE_ENV_VAR".to_string(),
@@ -206,7 +206,7 @@ fn test_header_auth_uses_chatgpt_codex_base_url() {
 fn test_uses_openai_actor_authorization() {
     let mut provider = ModelProviderInfo {
         http_headers: Some(maplit::hashmap! {
-            "X-OpenAI-Actor-Authorization".to_string() => "actor-token".to_string(),
+            "X-OpenAI-Actor-Authorization".to_string() => "actor-token".into(),
         }),
         ..ModelProviderInfo::default()
     };
@@ -216,12 +216,12 @@ fn test_uses_openai_actor_authorization() {
     assert!(!provider.uses_openai_actor_authorization());
 
     provider.http_headers = Some(maplit::hashmap! {
-        OPENAI_ACTOR_AUTHORIZATION_HEADER.to_string() => "  ".to_string(),
+        OPENAI_ACTOR_AUTHORIZATION_HEADER.to_string() => "  ".into(),
     });
     assert!(!provider.uses_openai_actor_authorization());
 
     provider.http_headers = Some(maplit::hashmap! {
-        OPENAI_ACTOR_AUTHORIZATION_HEADER.to_string() => "actor-token".to_string(),
+        OPENAI_ACTOR_AUTHORIZATION_HEADER.to_string() => "actor-token".into(),
     });
     provider.requires_openai_auth = true;
     assert!(!provider.uses_openai_actor_authorization());
@@ -247,7 +247,7 @@ args = ["--format=text"]
         provider.auth,
         Some(ModelProviderAuthInfo {
             command: "./scripts/print-token".to_string(),
-            args: vec!["--format=text".to_string()],
+            args: vec!["--format=text".into()],
             timeout_ms: NonZeroU64::new(5_000).unwrap(),
             refresh_interval_ms: 300_000,
             cwd: AbsolutePathBuf::resolve_path_against_base(".", base_dir.path()),
@@ -279,11 +279,7 @@ args = ["login", "--profile", "codex-bedrock"]
             region: Some("us-west-2".to_string()),
             auth_refresh: Some(AwsAuthRefreshConfig {
                 command: "aws".to_string(),
-                args: vec![
-                    "login".to_string(),
-                    "--profile".to_string(),
-                    "codex-bedrock".to_string(),
-                ],
+                args: vec!["login".into(), "--profile".into(), "codex-bedrock".into()],
                 timeout_ms: NonZeroU64::new(300_000).expect("timeout should be non-zero"),
             }),
         })
@@ -312,7 +308,7 @@ fn test_create_amazon_bedrock_provider() {
             query_params: None,
             http_headers: Some(maplit::hashmap! {
                 AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string() =>
-                    AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_VALUE.to_string(),
+                    AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_VALUE.into(),
             }),
             env_http_headers: None,
             request_max_retries: None,
@@ -370,7 +366,7 @@ fn test_create_amazon_bedrock_runtime_provider_with_aws_configuration() {
 fn provider_auth_for_test() -> ModelProviderAuthInfo {
     ModelProviderAuthInfo {
         command: "token-fetcher".to_string(),
-        args: vec!["fetch".to_string()],
+        args: vec!["fetch".into()],
         timeout_ms: NonZeroU64::new(5_000).expect("timeout should be non-zero"),
         refresh_interval_ms: 300_000,
         cwd: std::env::current_dir()
@@ -458,11 +454,7 @@ fn test_merge_configured_model_providers_adds_custom_provider() {
 fn test_merge_configured_model_providers_applies_amazon_bedrock_aws_override() {
     let auth_refresh = AwsAuthRefreshConfig {
         command: "aws".to_string(),
-        args: vec![
-            "login".to_string(),
-            "--profile".to_string(),
-            "codex-bedrock".to_string(),
-        ],
+        args: vec!["login".into(), "--profile".into(), "codex-bedrock".into()],
         timeout_ms: NonZeroU64::new(10_000).expect("timeout should be non-zero"),
     };
     let configured_model_providers = std::collections::HashMap::from([(
@@ -541,7 +533,7 @@ fn test_merge_configured_model_providers_applies_amazon_bedrock_transport_overri
                 auth_refresh: None,
             }),
             http_headers: Some(maplit::hashmap! {
-                "x-example-header".to_string() => "value".to_string(),
+                "x-example-header".to_string() => "value".into(),
             }),
             ..ModelProviderInfo::default()
         },
@@ -561,7 +553,7 @@ fn test_merge_configured_model_providers_applies_amazon_bedrock_transport_overri
     expected_provider
         .http_headers
         .get_or_insert_default()
-        .insert("x-example-header".to_string(), "value".to_string());
+        .insert("x-example-header".to_string(), "value".into());
 
     assert_eq!(
         merge_configured_model_providers(

@@ -5,8 +5,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_api::AgentIdentityTelemetry;
-use codex_api::ModelsCatalog;
-use codex_api::ModelsCatalogError;
 use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -15,12 +13,13 @@ use codex_api::auth_header_telemetry;
 use codex_api::map_api_error;
 use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
+use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthEnvTelemetry;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::collect_auth_env_telemetry;
-use codex_login::default_client::create_client_for_route_without_request_logging_async;
+use codex_login::default_client::create_client_for_route_async;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
@@ -29,40 +28,16 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CoreResult;
 use codex_protocol::openai_models::ModelInfo;
 use codex_response_debug_context::extract_response_debug_context;
+use codex_response_debug_context::telemetry_transport_error_message;
 use http::HeaderMap;
 use tokio::time::timeout;
 
 use crate::auth::agent_identity_telemetry;
 use crate::auth::resolve_provider_auth;
+use crate::provider::enforce_managed_residency;
 
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
-
-/// Sanitized model metadata returned by a Provider-owned catalog request.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderModelSummary {
-    pub model_id: String,
-    pub model_name: Option<String>,
-    pub max_token_len: Option<i64>,
-    pub max_output_tokens: Option<i64>,
-    pub show_in_picker: bool,
-    pub context_window: Option<i64>,
-    pub supports_search_tool: bool,
-}
-
-/// Body-free failure classification for a Provider-owned catalog request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderModelsError {
-    Authentication,
-    NotFound,
-    RateLimited,
-    Upstream,
-    Timeout,
-    Network,
-    InvalidJson,
-    IncompatibleSchema,
-    EmptyCatalog,
-}
 
 /// Provider-owned OpenAI-compatible `/models` endpoint.
 #[derive(Debug)]
@@ -107,7 +82,8 @@ impl OpenAiModelsEndpoint {
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
         let auth = self.auth().await;
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
-        let api_provider = self.provider_info.to_api_provider(auth_mode)?;
+        let mut api_provider = self.provider_info.to_api_provider(auth_mode)?;
+        enforce_managed_residency(&mut api_provider);
         let api_auth = resolve_provider_auth(auth.as_ref(), &self.provider_info)?;
         let request_url =
             ModelsClient::<ReqwestTransport>::request_url(&api_provider, client_version);
@@ -123,7 +99,6 @@ impl OpenAiModelsEndpoint {
             auth_header_name: auth_telemetry.name,
             agent_identity_telemetry,
             auth_env: self.auth_env(),
-            include_response_debug: true,
         });
         timeout(MODELS_REFRESH_TIMEOUT, async {
             let transport = self
@@ -141,139 +116,12 @@ impl OpenAiModelsEndpoint {
         .map_err(|_| CodexErr::Timeout)?
     }
 
-    pub(crate) async fn list_model_catalog(
-        &self,
-        client_version: &str,
-        http_client_factory: HttpClientFactory,
-    ) -> Result<Vec<ProviderModelSummary>, ProviderModelsError> {
-        let auth = self.auth().await;
-        let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
-        let api_provider = self
-            .provider_info
-            .to_api_provider(auth_mode)
-            .map_err(|_| ProviderModelsError::NotFound)?;
-        let api_auth = resolve_provider_auth(auth.as_ref(), &self.provider_info)
-            .map_err(|_| ProviderModelsError::Authentication)?;
-        let request_url =
-            ModelsClient::<ReqwestTransport>::request_url(&api_provider, client_version);
-        if !valid_models_request_url(&request_url) {
-            return Err(ProviderModelsError::NotFound);
-        }
-        let auth_telemetry = auth_header_telemetry(api_auth.as_ref());
-        let agent_identity_telemetry = if let Some(CodexAuth::AgentIdentity(auth)) = auth.as_ref() {
-            Some(agent_identity_telemetry(auth))
-        } else {
-            None
-        };
-        let request_telemetry = Arc::new(ModelsRequestTelemetry {
-            auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
-            auth_header_attached: auth_telemetry.attached,
-            auth_header_name: auth_telemetry.name,
-            agent_identity_telemetry,
-            auth_env: self.auth_env(),
-            include_response_debug: false,
-        });
-        let request_telemetry_for_transport: Arc<dyn RequestTelemetry> = request_telemetry.clone();
-        let catalog_result = timeout(MODELS_REFRESH_TIMEOUT, async {
-            let transport = self
-                .transport_builder
-                .build(http_client_factory, request_url.clone())
-                .await
-                .map_err(|_| ProviderModelsError::Network)?;
-            let client = ModelsClient::new(transport, api_provider, api_auth)
-                .with_telemetry(Some(request_telemetry_for_transport));
-            client
-                .list_models_catalog(request_url, HeaderMap::new())
-                .await
-                .map_err(provider_models_error_from_catalog)
-        })
-        .await
-        .map_err(|_| ProviderModelsError::Timeout)
-        .and_then(|result| result);
-
-        request_telemetry.record_catalog_result(catalog_result.as_ref().map(|_| ()));
-        let catalog = catalog_result?;
-
-        let mut summaries: Vec<ProviderModelSummary> = match catalog {
-            ModelsCatalog::Rich(models) => models
-                .into_iter()
-                .map(provider_model_summary_from_rich)
-                .collect(),
-            ModelsCatalog::OpenAiCompatible(model_ids) => model_ids
-                .into_iter()
-                .map(|model_id| ProviderModelSummary {
-                    model_id,
-                    model_name: None,
-                    max_token_len: None,
-                    max_output_tokens: None,
-                    show_in_picker: true,
-                    context_window: None,
-                    supports_search_tool: false,
-                })
-                .collect(),
-        };
-        for model in &mut summaries {
-            model.supports_search_tool = self
-                .provider_info
-                .models
-                .iter()
-                .find(|config| config.model_id == model.model_id)
-                .is_some_and(|config| config.supports_search_tool);
-        }
-        Ok(summaries)
-    }
-
     fn auth_env(&self) -> AuthEnvTelemetry {
         let codex_api_key_env_enabled = self
             .auth_manager
             .as_ref()
             .is_some_and(|auth_manager| auth_manager.codex_api_key_env_enabled());
         collect_auth_env_telemetry(&self.provider_info, codex_api_key_env_enabled)
-    }
-}
-
-fn provider_models_error_from_catalog(error: ModelsCatalogError) -> ProviderModelsError {
-    match error {
-        ModelsCatalogError::Authentication => ProviderModelsError::Authentication,
-        ModelsCatalogError::NotFound => ProviderModelsError::NotFound,
-        ModelsCatalogError::RateLimited => ProviderModelsError::RateLimited,
-        ModelsCatalogError::Upstream => ProviderModelsError::Upstream,
-        ModelsCatalogError::Timeout => ProviderModelsError::Timeout,
-        ModelsCatalogError::Network => ProviderModelsError::Network,
-        ModelsCatalogError::InvalidJson => ProviderModelsError::InvalidJson,
-        ModelsCatalogError::IncompatibleSchema => ProviderModelsError::IncompatibleSchema,
-        ModelsCatalogError::EmptyCatalog => ProviderModelsError::EmptyCatalog,
-    }
-}
-
-fn valid_models_request_url(request_url: &str) -> bool {
-    let Ok(uri) = request_url.parse::<http::Uri>() else {
-        return false;
-    };
-    matches!(uri.scheme_str(), Some("http") | Some("https")) && uri.authority().is_some()
-}
-
-fn provider_model_summary_from_rich(
-    model: codex_protocol::openai_models::ModelInfo,
-) -> ProviderModelSummary {
-    let context_window = model.resolved_context_window().filter(|window| *window > 0);
-    let max_token_len = matches!(
-        model.truncation_policy.mode,
-        codex_protocol::openai_models::TruncationMode::Tokens
-    )
-    .then_some(model.truncation_policy.limit)
-    .filter(|limit| *limit > 0);
-    ProviderModelSummary {
-        model_id: model.slug,
-        model_name: Some(model.display_name),
-        max_token_len,
-        max_output_tokens: None,
-        show_in_picker: matches!(
-            model.visibility,
-            codex_protocol::openai_models::ModelVisibility::List
-        ) && model.supported_in_api,
-        context_window,
-        supports_search_tool: false,
     }
 }
 
@@ -323,13 +171,9 @@ impl ModelsTransportBuilder for RouteAwareModelsTransportBuilder {
         request_url: String,
     ) -> ModelsTransportFuture<'_> {
         Box::pin(async move {
-            let client = create_client_for_route_without_request_logging_async(
-                http_client_factory,
-                request_url,
-                codex_http_client::ClientRouteClass::Api,
-            )
-            .await?;
-            Ok(ReqwestTransport::from_http_client(client))
+            create_client_for_route_async(http_client_factory, request_url, ClientRouteClass::Api)
+                .await
+                .map(ReqwestTransport::from_http_client)
         })
     }
 }
@@ -341,62 +185,6 @@ struct ModelsRequestTelemetry {
     auth_header_name: Option<&'static str>,
     agent_identity_telemetry: Option<AgentIdentityTelemetry>,
     auth_env: AuthEnvTelemetry,
-    include_response_debug: bool,
-}
-
-impl ModelsRequestTelemetry {
-    fn response_debug_context(
-        &self,
-        error: Option<&TransportError>,
-    ) -> codex_response_debug_context::ResponseDebugContext {
-        if self.include_response_debug {
-            error
-                .map(extract_response_debug_context)
-                .unwrap_or_default()
-        } else {
-            Default::default()
-        }
-    }
-
-    fn record_catalog_result(&self, result: Result<(), &ProviderModelsError>) {
-        let (success, error_category) = match result {
-            Ok(()) => (true, None),
-            Err(error) => (false, Some(provider_models_error_category(*error))),
-        };
-        tracing::event!(
-            target: "codex_otel.trace_safe",
-            tracing::Level::INFO,
-            event.name = "codex.model_catalog",
-            endpoint = MODELS_ENDPOINT,
-            success = success,
-            error.category = error_category,
-        );
-    }
-}
-
-fn provider_models_error_category(error: ProviderModelsError) -> &'static str {
-    match error {
-        ProviderModelsError::Authentication => "authentication",
-        ProviderModelsError::NotFound => "not_found",
-        ProviderModelsError::RateLimited => "rate_limited",
-        ProviderModelsError::Upstream => "upstream",
-        ProviderModelsError::Timeout => "timeout",
-        ProviderModelsError::Network => "network",
-        ProviderModelsError::InvalidJson => "invalid_json",
-        ProviderModelsError::IncompatibleSchema => "incompatible_schema",
-        ProviderModelsError::EmptyCatalog => "empty_catalog",
-    }
-}
-
-fn models_transport_error_category(error: &TransportError) -> &'static str {
-    match error {
-        TransportError::Http { .. } => "http",
-        TransportError::RetryLimit => "retry_limit",
-        TransportError::Timeout => "timeout",
-        TransportError::Connection(_) => "connection",
-        TransportError::Network(_) => "network",
-        TransportError::Build(_) => "build",
-    }
 }
 
 impl RequestTelemetry for ModelsRequestTelemetry {
@@ -408,8 +196,10 @@ impl RequestTelemetry for ModelsRequestTelemetry {
         duration: Duration,
     ) {
         let success = status.is_some_and(|code| code.is_success()) && error.is_none();
-        let error_category = error.map(models_transport_error_category);
-        let response_debug = self.response_debug_context(error);
+        let error_message = error.map(telemetry_transport_error_message);
+        let response_debug = error
+            .map(extract_response_debug_context)
+            .unwrap_or_default();
         let status = status.map(|status| status.as_u16());
         tracing::event!(
             target: "codex_otel.log_only",
@@ -418,7 +208,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             duration_ms = %duration.as_millis(),
             http.response.status_code = status,
             success = success,
-            error.category = error_category,
+            error.message = error_message.as_deref(),
             attempt = attempt,
             endpoint = MODELS_ENDPOINT,
             auth.header_attached = self.auth_header_attached,
@@ -444,7 +234,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             duration_ms = %duration.as_millis(),
             http.response.status_code = status,
             success = success,
-            error.category = error_category,
+            error.message = error_message.as_deref(),
             attempt = attempt,
             endpoint = MODELS_ENDPOINT,
             auth.header_attached = self.auth_header_attached,
@@ -487,19 +277,18 @@ impl RequestTelemetry for ModelsRequestTelemetry {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::io::Write;
     use std::num::NonZeroU64;
     use std::sync::Mutex;
 
     use super::*;
     use codex_http_client::OutboundProxyPolicy;
+    use codex_login::default_client::RESIDENCY_HEADER_NAME;
+    use codex_login::default_client::ResidencyRequirement;
     use codex_login::default_client::create_client;
+    use codex_login::default_client::set_default_client_residency_requirement;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::openai_models::ModelsResponse;
     use pretty_assertions::assert_eq;
-    use serde_json::json;
-    use tracing_subscriber::layer::SubscriberExt;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -507,39 +296,6 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::matchers::path;
     use wiremock::matchers::query_param;
-
-    #[derive(Clone)]
-    struct TestLogWriter {
-        buffer: Arc<Mutex<Vec<u8>>>,
-    }
-
-    struct TestLogSink {
-        buffer: Arc<Mutex<Vec<u8>>>,
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TestLogWriter {
-        type Writer = TestLogSink;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            TestLogSink {
-                buffer: Arc::clone(&self.buffer),
-            }
-        }
-    }
-
-    impl Write for TestLogSink {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            self.buffer
-                .lock()
-                .expect("telemetry log buffer lock")
-                .extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
 
     #[derive(Debug)]
     struct RecordingTransportBuilder {
@@ -600,39 +356,6 @@ mod tests {
         assert!(!endpoint.has_command_auth());
     }
 
-    fn rich_model() -> ModelInfo {
-        serde_json::from_value(json!({
-            "slug": "gpt-test",
-            "display_name": "gpt-test",
-            "description": "desc",
-            "default_reasoning_level": "medium",
-            "supported_reasoning_levels": [{"effort": "low", "description": "low"}],
-            "shell_type": "shell_command",
-            "visibility": "list",
-            "supported_in_api": true,
-            "priority": 1,
-            "support_verbosity": false,
-            "default_verbosity": null,
-            "apply_patch_tool_type": null,
-            "truncation_policy": {"mode": "tokens", "limit": 10_000},
-            "supports_parallel_tool_calls": false,
-            "supports_image_detail_original": false,
-            "context_window": 272_000,
-            "experimental_supported_tools": [],
-        }))
-        .expect("rich model fixture should deserialize")
-    }
-
-    #[test]
-    fn rich_summary_copies_display_name_without_normalizing() {
-        let mut model = rich_model();
-        model.display_name = "  Display Name  ".to_string();
-        assert_eq!(
-            provider_model_summary_from_rich(model).model_name,
-            Some("  Display Name  ".to_string())
-        );
-    }
-
     #[tokio::test]
     async fn model_request_uses_request_time_proxy_policy_and_exact_url() {
         let server = MockServer::start().await;
@@ -675,198 +398,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fresh_catalog_accepts_compatible_shape_and_attaches_provider_auth() {
+    async fn model_discovery_enforces_managed_residency_over_provider_headers() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/models"))
-            .and(header("authorization", "Bearer provider-secret"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": [{"id": "compatible-model"}]
-            })))
+            .and(header(RESIDENCY_HEADER_NAME, "us"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(ModelsResponse { models: Vec::new() }),
+            )
             .expect(1)
             .mount(&server)
             .await;
 
         let mut provider_info = ModelProviderInfo::create_openai_provider(Some(server.uri()));
-        provider_info.experimental_bearer_token = Some("provider-secret".to_string());
-        provider_info.request_max_retries = Some(0);
-        let endpoint = OpenAiModelsEndpoint::new(provider_info, None);
-
-        let models = endpoint
-            .list_model_catalog(
-                "0.0.0",
-                HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
-            )
-            .await
-            .expect("compatible catalog should succeed");
-
-        assert_eq!(
-            models,
-            vec![ProviderModelSummary {
-                model_id: "compatible-model".to_string(),
-                model_name: None,
-                max_token_len: None,
-                max_output_tokens: None,
-                show_in_picker: true,
-                context_window: None,
-                supports_search_tool: false,
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn fresh_catalog_maps_invalid_base_url_to_not_found() {
-        let provider_info =
-            ModelProviderInfo::create_openai_provider(Some("not a valid absolute URL".to_string()));
-        let endpoint = OpenAiModelsEndpoint::new(provider_info, None);
-
-        let error = endpoint
-            .list_model_catalog(
-                "0.0.0",
-                HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
-            )
-            .await
-            .expect_err("invalid base URL should be rejected before transport");
-
-        assert_eq!(error, ProviderModelsError::NotFound);
-    }
-
-    #[tokio::test]
-    async fn fresh_catalog_maps_http_failures_without_response_details() {
-        let cases = [
-            (401, ProviderModelsError::Authentication),
-            (403, ProviderModelsError::Authentication),
-            (404, ProviderModelsError::NotFound),
-            (429, ProviderModelsError::RateLimited),
-            (408, ProviderModelsError::Timeout),
-            (504, ProviderModelsError::Timeout),
-            (500, ProviderModelsError::Upstream),
-            (400, ProviderModelsError::Upstream),
-        ];
-        for (status, expected) in cases {
-            let server = MockServer::start().await;
-            Mock::given(method("GET"))
-                .and(path("/models"))
-                .respond_with(
-                    ResponseTemplate::new(status)
-                        .set_body_string("authorization=provider-secret url=https://secret.test"),
-                )
-                .mount(&server)
-                .await;
-            let mut provider_info = ModelProviderInfo::create_openai_provider(Some(server.uri()));
-            provider_info.experimental_bearer_token = Some("provider-secret".to_string());
-            provider_info.request_max_retries = Some(0);
-            let endpoint = OpenAiModelsEndpoint::new(provider_info, None);
-
-            let error = endpoint
-                .list_model_catalog(
-                    "0.0.0",
-                    HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
-                )
-                .await
-                .expect_err("HTTP error should be classified");
-
-            assert_eq!(error, expected);
-            assert!(!format!("{error:?}").contains("provider-secret"));
-            assert!(!format!("{error:?}").contains("secret.test"));
-        }
-    }
-
-    #[tokio::test]
-    async fn fresh_catalog_rejects_an_oversized_http_body_before_buffering_it() {
-        let server = MockServer::start().await;
-        let oversized_body = vec![b'x'; 1024 * 1024 + 1];
-        Mock::given(method("GET"))
-            .and(path("/models"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(oversized_body))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let mut provider_info = ModelProviderInfo::create_openai_provider(Some(server.uri()));
-        provider_info.request_max_retries = Some(0);
-        let endpoint = OpenAiModelsEndpoint::new(provider_info, None);
-
-        let error = endpoint
-            .list_model_catalog(
-                "0.0.0",
-                HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
-            )
-            .await
-            .expect_err("oversized catalog should be rejected");
-
-        assert_eq!(error, ProviderModelsError::IncompatibleSchema);
-        assert!(!format!("{error:?}").contains('x'));
-    }
-
-    #[test]
-    fn fresh_catalog_telemetry_exposes_only_typed_categories_and_no_response_debug() {
-        let telemetry = ModelsRequestTelemetry {
-            auth_mode: None,
-            auth_header_attached: false,
-            auth_header_name: None,
-            agent_identity_telemetry: None,
-            auth_env: collect_auth_env_telemetry(
-                &ModelProviderInfo::create_openai_provider(None),
-                false,
-            ),
-            include_response_debug: false,
-        };
-        let mut headers = HeaderMap::new();
-        headers.insert("x-request-id", "response-header-canary".parse().unwrap());
-        let transport = TransportError::Http {
-            status: http::StatusCode::BAD_GATEWAY,
-            url: Some("https://user:credential@example.test/models?canary".to_string()),
-            headers: Some(headers),
-            body: Some("response-body-canary".to_string()),
+        provider_info.http_headers = Some(std::collections::HashMap::from([(
+            RESIDENCY_HEADER_NAME.to_string(),
+            "eu".into(),
+        )]));
+        let endpoint = OpenAiModelsEndpoint {
+            provider_info,
+            auth_manager: None,
+            transport_builder: Arc::new(RecordingTransportBuilder {
+                observed_request: Arc::new(Mutex::new(None)),
+            }),
         };
 
-        let buffer = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::registry().with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_writer(TestLogWriter {
-                    buffer: Arc::clone(&buffer),
-                }),
-        );
-        let _guard = tracing::subscriber::set_default(subscriber);
+        set_default_client_residency_requirement(Some(ResidencyRequirement::Us));
+        endpoint
+            .list_models(
+                "0.0.0",
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            )
+            .await
+            .expect("managed residency model discovery should succeed");
+        set_default_client_residency_requirement(/*enforce_residency*/ None);
 
-        telemetry.on_request(1, None, Some(&transport), Duration::from_millis(1));
-        telemetry.record_catalog_result(Err(&ProviderModelsError::IncompatibleSchema));
-
-        assert_eq!(models_transport_error_category(&transport), "http");
         assert_eq!(
-            models_transport_error_category(&TransportError::Network(
-                "network-url-canary".to_string()
-            )),
-            "network"
+            endpoint
+                .provider_info
+                .http_headers
+                .as_ref()
+                .and_then(|headers| headers.get(RESIDENCY_HEADER_NAME)),
+            Some(&"eu".into())
         );
-        assert_eq!(
-            models_transport_error_category(&TransportError::Build(
-                "build-body-canary".to_string()
-            )),
-            "build"
-        );
-        assert_eq!(
-            telemetry.response_debug_context(Some(&transport)),
-            Default::default()
-        );
-        assert_eq!(
-            provider_models_error_category(ProviderModelsError::IncompatibleSchema),
-            "incompatible_schema"
-        );
-
-        let logs = String::from_utf8(buffer.lock().expect("telemetry log buffer lock").clone())
-            .expect("telemetry logs should be UTF-8");
-        for marker in [
-            "credential@example.test",
-            "canary",
-            "response-header-canary",
-            "response-body-canary",
-            "network-url-canary",
-            "build-body-canary",
-        ] {
-            assert!(!logs.contains(marker), "telemetry leaked marker: {marker}");
-        }
     }
 }
