@@ -1038,17 +1038,6 @@ export class PlatformClient {
       .then((response) => response.data);
   }
 
-  profileUsage(days: number, workspaceId?: string | null) {
-    const query = new URLSearchParams({ days: String(days) });
-    if (workspaceId) query.set("workspaceId", workspaceId);
-    return this.request<{
-      updatedAt: number;
-      days: Array<{ day: string; inputTokens: number; cachedInputTokens: number; outputTokens: number; totalTokens: number; agentTimeMs: number; agentRuns: number }>;
-      totals: { last7DaysTokens: number; last30DaysTokens: number; averageDailyTokens: number; cacheHitRatePercent: number; peakDay: string | null; peakDayTokens: number };
-      topModels: Array<{ model: string; tokens: number; sharePercent: number }>;
-    }>(`/api/profile/usage?${query.toString()}`);
-  }
-
   profileCollaborationModes() {
     return this.request<{ data: Record<string, unknown> }>("/api/profile/collaboration-modes")
       .then((response) => response.data);

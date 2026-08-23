@@ -327,6 +327,13 @@ async fn task_creation_binds_only_an_authorized_project_workspace() {
         .expect("retired Terminal route response");
     assert_eq!(retired_terminal_route.status(), StatusCode::NOT_FOUND);
 
+    let retired_usage_route = app
+        .clone()
+        .oneshot(authenticated("GET", "/api/profile/usage", token))
+        .await
+        .expect("retired usage route response");
+    assert_eq!(retired_usage_route.status(), StatusCode::NOT_FOUND);
+
     let retired_run_contract = app
         .clone()
         .oneshot(authenticated_json(

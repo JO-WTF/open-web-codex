@@ -119,7 +119,6 @@ pub struct TurnOptions {
 pub enum ProfileQuery {
     Account,
     RateLimits,
-    Usage,
     CollaborationModes,
     Apps {
         cursor: Option<String>,

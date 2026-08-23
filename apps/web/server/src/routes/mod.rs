@@ -89,7 +89,6 @@ pub fn router(
             "/profile/rate-limits",
             axum::routing::get(profile::rate_limits),
         )
-        .route("/profile/usage", axum::routing::get(profile::usage))
         .route(
             "/profile/collaboration-modes",
             axum::routing::get(profile::collaboration_modes),

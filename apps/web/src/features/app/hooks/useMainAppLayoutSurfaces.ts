@@ -17,7 +17,6 @@ type GitDiffPanelProps = LayoutNodesOptions["git"]["gitDiffPanelProps"];
 type UseMainAppLayoutSurfacesArgs = {
   appSettings: Pick<
     AppSettings,
-    | "usageShowRemaining"
     | "composerCodeBlockCopyUseModifier"
     | "showMessageFilePath"
     | "openAppTargets"
@@ -55,8 +54,6 @@ type UseMainAppLayoutSurfacesArgs = {
   approvals: LayoutNodesOptions["primary"]["approvalToastsProps"]["approvals"];
   activeRateLimits: SidebarProps["accountRateLimits"];
   activeAccount: SidebarProps["accountInfo"];
-  homeRateLimits: LayoutNodesOptions["primary"]["homeProps"]["accountRateLimits"];
-  homeAccount: LayoutNodesOptions["primary"]["homeProps"]["accountInfo"];
   accountSwitching: SidebarProps["accountSwitching"];
   onSwitchAccount: SidebarProps["onSwitchAccount"];
   onCancelSwitchAccount: SidebarProps["onCancelSwitchAccount"];
@@ -67,15 +64,6 @@ type UseMainAppLayoutSurfacesArgs = {
   activeTokenUsage: ComposerProps["contextUsage"];
   latestAgentRuns: LayoutNodesOptions["primary"]["homeProps"]["latestAgentRuns"];
   isLoadingLatestAgents: LayoutNodesOptions["primary"]["homeProps"]["isLoadingLatestAgents"];
-  localUsageSnapshot: LayoutNodesOptions["primary"]["homeProps"]["localUsageSnapshot"];
-  isLoadingLocalUsage: LayoutNodesOptions["primary"]["homeProps"]["isLoadingLocalUsage"];
-  localUsageError: LayoutNodesOptions["primary"]["homeProps"]["localUsageError"];
-  onRefreshLocalUsage: LayoutNodesOptions["primary"]["homeProps"]["onRefreshLocalUsage"];
-  usageMetric: LayoutNodesOptions["primary"]["homeProps"]["usageMetric"];
-  onUsageMetricChange: LayoutNodesOptions["primary"]["homeProps"]["onUsageMetricChange"];
-  usageWorkspaceId: LayoutNodesOptions["primary"]["homeProps"]["usageWorkspaceId"];
-  usageWorkspaceOptions: LayoutNodesOptions["primary"]["homeProps"]["usageWorkspaceOptions"];
-  onUsageWorkspaceChange: LayoutNodesOptions["primary"]["homeProps"]["onUsageWorkspaceChange"];
   gitState: ReturnType<typeof useMainAppGitState>;
   composerWorkspaceState: ReturnType<typeof useMainAppComposerWorkspaceState>;
   worktreeState: ReturnType<typeof useMainAppWorktreeState>;
@@ -231,8 +219,6 @@ function buildPrimarySurface({
   approvals,
   sidebarRateLimits,
   sidebarAccount,
-  homeRateLimits,
-  homeAccount,
   accountSwitching,
   onSwitchAccount,
   onCancelSwitchAccount,
@@ -242,15 +228,6 @@ function buildPrimarySurface({
   activeTokenUsage,
   latestAgentRuns,
   isLoadingLatestAgents,
-  localUsageSnapshot,
-  isLoadingLocalUsage,
-  localUsageError,
-  onRefreshLocalUsage,
-  usageMetric,
-  onUsageMetricChange,
-  usageWorkspaceId,
-  usageWorkspaceOptions,
-  onUsageWorkspaceChange,
   gitState,
   composerWorkspaceState,
   worktreeState,
@@ -361,7 +338,6 @@ function buildPrimarySurface({
       activeThreadId,
       userInputRequests,
       accountRateLimits: sidebarRateLimits,
-      usageShowRemaining: appSettings.usageShowRemaining,
       accountInfo: sidebarAccount,
       onSwitchAccount,
       onCancelSwitchAccount,
@@ -542,18 +518,6 @@ function buildPrimarySurface({
       onAddWorkspaceFromUrl: openWorkspaceFromUrlPrompt,
       latestAgentRuns,
       isLoadingLatestAgents,
-      localUsageSnapshot,
-      isLoadingLocalUsage,
-      localUsageError,
-      onRefreshLocalUsage,
-      usageMetric,
-      onUsageMetricChange,
-      usageWorkspaceId,
-      usageWorkspaceOptions,
-      onUsageWorkspaceChange,
-      accountRateLimits: homeRateLimits,
-      usageShowRemaining: appSettings.usageShowRemaining,
-      accountInfo: homeAccount,
       onSelectThread: (workspaceId, threadId) => {
         threadNavigation.exitDiffView();
         threadNavigation.clearDraftState();
@@ -857,8 +821,6 @@ export function useMainAppLayoutSurfaces({
   approvals,
   activeRateLimits,
   activeAccount,
-  homeRateLimits,
-  homeAccount,
   accountSwitching,
   onSwitchAccount,
   onCancelSwitchAccount,
@@ -869,15 +831,6 @@ export function useMainAppLayoutSurfaces({
   activeTokenUsage,
   latestAgentRuns,
   isLoadingLatestAgents,
-  localUsageSnapshot,
-  isLoadingLocalUsage,
-  localUsageError,
-  onRefreshLocalUsage,
-  usageMetric,
-  onUsageMetricChange,
-  usageWorkspaceId,
-  usageWorkspaceOptions,
-  onUsageWorkspaceChange,
   gitState,
   composerWorkspaceState,
   worktreeState,
@@ -973,8 +926,8 @@ export function useMainAppLayoutSurfaces({
   showDebugButton,
   handleDebugClick,
 }: UseMainAppLayoutSurfacesArgs): LayoutNodesOptions {
-  const sidebarRateLimits = activeWorkspace ? activeRateLimits : homeRateLimits;
-  const sidebarAccount = activeWorkspace ? activeAccount : homeAccount;
+  const sidebarRateLimits = activeRateLimits;
+  const sidebarAccount = activeAccount;
   const context: MainAppLayoutSurfacesContext = {
     appSettings,
     workspaces,
@@ -1003,8 +956,6 @@ export function useMainAppLayoutSurfaces({
     approvals,
     activeRateLimits,
     activeAccount,
-    homeRateLimits,
-    homeAccount,
     accountSwitching,
     onSwitchAccount,
     onCancelSwitchAccount,
@@ -1015,15 +966,6 @@ export function useMainAppLayoutSurfaces({
     activeTokenUsage,
     latestAgentRuns,
     isLoadingLatestAgents,
-    localUsageSnapshot,
-    isLoadingLocalUsage,
-    localUsageError,
-    onRefreshLocalUsage,
-    usageMetric,
-    onUsageMetricChange,
-    usageWorkspaceId,
-    usageWorkspaceOptions,
-    onUsageWorkspaceChange,
     gitState,
     composerWorkspaceState,
     worktreeState,

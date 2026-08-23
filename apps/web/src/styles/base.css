@@ -272,8 +272,7 @@ button.window-caption-control:focus-visible,
   .worktree-deleting-spinner,
   .sidebar-account-spinner,
   .composer-action-spinner,
-  .compact-codex-refresh-icon.spinning,
-  .home-usage-refresh-icon.spinning {
+  .compact-codex-refresh-icon.spinning {
     animation-duration: var(--ds-spinner-dur) !important;
     animation-iteration-count: infinite !important;
   }

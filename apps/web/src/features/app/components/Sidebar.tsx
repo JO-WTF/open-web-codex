@@ -115,7 +115,6 @@ type SidebarProps = {
   activeThreadId: string | null;
   userInputRequests?: RequestUserInputRequest[];
   accountRateLimits: RateLimitSnapshot | null;
-  usageShowRemaining: boolean;
   accountInfo: AccountSnapshot | null;
   onSwitchAccount: () => void;
   onCancelSwitchAccount: () => void;
@@ -174,7 +173,6 @@ export const Sidebar = memo(function Sidebar({
   activeThreadId,
   userInputRequests = [],
   accountRateLimits,
-  usageShowRemaining,
   accountInfo,
   onSwitchAccount,
   onCancelSwitchAccount,
@@ -253,7 +251,7 @@ export const Sidebar = memo(function Sidebar({
     weeklyResetLabel,
     creditsLabel,
     showWeekly,
-  } = getUsageLabels(accountRateLimits, usageShowRemaining);
+  } = getUsageLabels(accountRateLimits);
   const debouncedQuery = useDebouncedValue(searchQuery, 150);
   const normalizedQuery = debouncedQuery.trim().toLowerCase();
   const isSearchActive = Boolean(normalizedQuery);

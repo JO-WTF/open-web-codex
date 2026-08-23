@@ -1000,7 +1000,6 @@ impl CodexAdapter for RealCodexAdapter {
         let (method, params) = match query {
             ProfileQuery::Account => ("account/read", json!({ "refreshToken": false })),
             ProfileQuery::RateLimits => ("account/rateLimits/read", json!({})),
-            ProfileQuery::Usage => ("account/usage/read", json!({})),
             ProfileQuery::CollaborationModes => ("collaborationMode/list", json!({})),
             ProfileQuery::Apps {
                 cursor,

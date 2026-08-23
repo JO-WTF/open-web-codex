@@ -7,12 +7,10 @@ import type {
   CodexDoctorResult,
   DictationModelStatus,
   DictationSessionState,
-  LocalUsageSnapshot,
   TcpDaemonStatus,
   TailscaleDaemonCommandPreview,
   TailscaleStatus,
   TrayRecentThreadEntry,
-  TraySessionUsage,
   WorkspaceInfo,
   AppMention,
 } from "../types";
@@ -542,17 +540,6 @@ export async function checkoutGitHubPullRequest(
   });
 }
 
-export async function localUsageSnapshot(
-  days?: number,
-  workspacePath?: string | null,
-): Promise<LocalUsageSnapshot> {
-  const payload: { days: number; workspacePath?: string } = { days: days ?? 30 };
-  if (workspacePath) {
-    payload.workspacePath = workspacePath;
-  }
-  return invoke("local_usage_snapshot", payload);
-}
-
 export async function getModelList(workspaceId: string) {
   return invoke<any>("model_list", { workspaceId });
 }
@@ -833,10 +820,6 @@ export async function setThreadName(
 
 export async function setTrayRecentThreads(entries: TrayRecentThreadEntry[]) {
   return invoke<void>("set_tray_recent_threads", { entries });
-}
-
-export async function setTraySessionUsage(usage: TraySessionUsage | null) {
-  return invoke<void>("set_tray_session_usage", { usage });
 }
 
 export type AppBuildType = "debug" | "release";

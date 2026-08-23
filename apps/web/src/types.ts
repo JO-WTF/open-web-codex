@@ -31,11 +31,6 @@ export type TrayRecentThreadEntry = {
   updatedAt: number;
 };
 
-export type TraySessionUsage = {
-  sessionLabel: string;
-  weeklyLabel: string | null;
-};
-
 export type TrayOpenThreadPayload = {
   workspaceId: string;
   threadId: string;
@@ -228,7 +223,6 @@ export type AppSettings = {
   lastComposerReasoningEffort: string | null;
   uiScale: number;
   theme: ThemePreference;
-  usageShowRemaining: boolean;
   showMessageFilePath: boolean;
   chatHistoryScrollbackItems: number | null;
   automaticAppUpdateChecksEnabled: boolean;
@@ -493,38 +487,6 @@ export type ThreadTokenUsage = {
   total: TokenUsageBreakdown;
   last: TokenUsageBreakdown;
   modelContextWindow: number | null;
-};
-
-export type LocalUsageDay = {
-  day: string;
-  inputTokens: number;
-  cachedInputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  agentTimeMs: number;
-  agentRuns: number;
-};
-
-export type LocalUsageTotals = {
-  last7DaysTokens: number;
-  last30DaysTokens: number;
-  averageDailyTokens: number;
-  cacheHitRatePercent: number;
-  peakDay: string | null;
-  peakDayTokens: number;
-};
-
-export type LocalUsageModel = {
-  model: string;
-  tokens: number;
-  sharePercent: number;
-};
-
-export type LocalUsageSnapshot = {
-  updatedAt: number;
-  days: LocalUsageDay[];
-  totals: LocalUsageTotals;
-  topModels: LocalUsageModel[];
 };
 
 export type TurnPlanStepStatus = "pending" | "inProgress" | "completed";

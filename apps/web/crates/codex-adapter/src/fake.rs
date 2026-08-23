@@ -329,10 +329,6 @@ impl CodexAdapter for FakeCodexAdapter {
         match query {
             ProfileQuery::Account => Ok(json!({ "account": null, "requiresOpenaiAuth": false })),
             ProfileQuery::RateLimits => Ok(json!({})),
-            ProfileQuery::Usage => Ok(json!({
-                "summary": { "lifetimeTokens": 0, "peakDailyTokens": 0 },
-                "dailyUsageBuckets": []
-            })),
             ProfileQuery::CollaborationModes => Ok(json!({ "data": [] })),
             ProfileQuery::Apps { .. }
             | ProfileQuery::McpServers { .. }

@@ -1,4 +1,3 @@
-use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use axum::{
@@ -9,9 +8,8 @@ use axum::{
 use open_web_codex_adapter::{AuthorizedWorkspace, CodexAdapter, ProfileQuery};
 use open_web_codex_platform_contracts::error::PlatformError;
 use open_web_codex_platform_contracts::{
-    LocalUsageDay, LocalUsageQuery, LocalUsageSnapshot, LocalUsageTotals, ProfileListQuery,
-    ProfileLoginCancelResponse, ProfileLoginStartResponse, ProfileLoginStatusResponse,
-    ProfileProjection,
+    ProfileListQuery, ProfileLoginCancelResponse, ProfileLoginStartResponse,
+    ProfileLoginStatusResponse, ProfileProjection,
 };
 use open_web_codex_platform_store::AppState;
 use open_web_codex_provider_service::secured::{AuthorizedProviderOperations, ProviderActor};
@@ -43,200 +41,6 @@ pub async fn rate_limits(
 ) -> ApiResult<ProfileProjection> {
     authorize_profile(&state, &auth, &profile).await?;
     query(adapter, ProfileQuery::RateLimits).await
-}
-
-#[derive(Clone, Copy, Default)]
-struct UsageBreakdown {
-    input: u64,
-    cached: u64,
-    output: u64,
-    total: u64,
-}
-
-pub async fn usage(
-    State(state): State<AppState>,
-    auth: AuthenticatedUser,
-    Query(params): Query<LocalUsageQuery>,
-    Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
-    Extension(profile): Extension<RuntimeProfileBinding>,
-) -> ApiResult<LocalUsageSnapshot> {
-    authorize_profile(&state, &auth, &profile).await?;
-    let day_count = params.days.unwrap_or(30).clamp(1, 90);
-    let mut rows = if let Some(workspace_id) = params.workspace_id {
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS( \
-               SELECT 1 FROM workspaces workspace \
-               JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id \
-                 AND workspace_grant.organization_id = workspace.organization_id \
-                 AND workspace_grant.user_id = $3 AND workspace_grant.profile_id = workspace.profile_id \
-               WHERE workspace.id = $1 AND workspace.organization_id = $2 \
-                 AND workspace.state IN ('ready', 'retained') \
-             )",
-        )
-        .bind(workspace_id)
-        .bind(auth.organization_id)
-        .bind(auth.user_id)
-        .fetch_one(&state.db)
-        .await
-        .map_err(database_error)?;
-        if !exists {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(PlatformError::not_found("Usage workspace was not found")),
-            ));
-        }
-        sqlx::query(
-            "SELECT event.run_id, event.event_type, event.created_at, event.payload \
-             FROM run_events event \
-             JOIN runs run ON run.id = event.run_id \
-             JOIN workspaces workspace ON workspace.id = run.workspace_id \
-             WHERE run.organization_id = $1 AND run.requested_by = $2 \
-               AND (workspace.id = $3 OR workspace.group_workspace_id = $3) \
-               AND event.event_type IN ('codex.thread.token_usage.updated', 'codex.turn.completed') \
-             ORDER BY event.run_id, event.created_at LIMIT 100000",
-        )
-        .bind(auth.organization_id)
-        .bind(auth.user_id)
-        .bind(workspace_id)
-        .fetch_all(&state.db)
-        .await
-        .map_err(database_error)?
-    } else {
-        sqlx::query(
-            "SELECT event.run_id, event.event_type, event.created_at, event.payload \
-             FROM run_events event JOIN runs run ON run.id = event.run_id \
-             WHERE run.organization_id = $1 AND run.requested_by = $2 \
-               AND event.event_type IN ('codex.thread.token_usage.updated', 'codex.turn.completed') \
-             ORDER BY event.run_id, event.created_at LIMIT 100000",
-        )
-        .bind(auth.organization_id)
-        .bind(auth.user_id)
-        .fetch_all(&state.db)
-        .await
-        .map_err(database_error)?
-    };
-
-    let mut cumulative: HashMap<Uuid, BTreeMap<String, UsageBreakdown>> = HashMap::new();
-    let mut run_counts: BTreeMap<String, u64> = BTreeMap::new();
-    for row in rows.drain(..) {
-        let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
-        let day = created_at.date_naive().to_string();
-        if row.get::<String, _>("event_type") == "codex.turn.completed" {
-            *run_counts.entry(day).or_default() += 1;
-            continue;
-        }
-        let payload: Value = row.get("payload");
-        let Some(total) = payload.pointer("/data/tokenUsage/total") else {
-            continue;
-        };
-        let breakdown = UsageBreakdown {
-            input: unsigned(total.get("inputTokens")),
-            cached: unsigned(total.get("cachedInputTokens")),
-            output: unsigned(total.get("outputTokens")),
-            total: unsigned(total.get("totalTokens")),
-        };
-        cumulative
-            .entry(row.get("run_id"))
-            .or_default()
-            .insert(day, breakdown);
-    }
-    let mut daily: BTreeMap<String, UsageBreakdown> = BTreeMap::new();
-    for buckets in cumulative.values() {
-        let mut previous = UsageBreakdown::default();
-        for (day, current) in buckets {
-            let entry = daily.entry(day.clone()).or_default();
-            entry.input += counter_delta(current.input, previous.input);
-            entry.cached += counter_delta(current.cached, previous.cached);
-            entry.output += counter_delta(current.output, previous.output);
-            entry.total += counter_delta(current.total, previous.total);
-            previous = *current;
-        }
-    }
-
-    if daily.is_empty() && params.workspace_id.is_none() {
-        if let Ok(fallback) = adapter.query_profile(ProfileQuery::Usage).await {
-            for bucket in fallback
-                .get("dailyUsageBuckets")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                if let (Some(day), Some(tokens)) = (
-                    bucket.get("startDate").and_then(Value::as_str),
-                    bucket.get("tokens").and_then(Value::as_u64),
-                ) {
-                    daily.insert(
-                        day.to_string(),
-                        UsageBreakdown {
-                            total: tokens,
-                            ..UsageBreakdown::default()
-                        },
-                    );
-                }
-            }
-        }
-    }
-    Ok(Json(build_usage_snapshot(day_count, daily, run_counts)))
-}
-
-fn unsigned(value: Option<&Value>) -> u64 {
-    value.and_then(Value::as_u64).unwrap_or(0)
-}
-
-fn counter_delta(current: u64, previous: u64) -> u64 {
-    if current >= previous {
-        current - previous
-    } else {
-        current
-    }
-}
-
-fn build_usage_snapshot(
-    day_count: u32,
-    daily: BTreeMap<String, UsageBreakdown>,
-    run_counts: BTreeMap<String, u64>,
-) -> LocalUsageSnapshot {
-    let today = chrono::Utc::now().date_naive();
-    let start = today - chrono::Duration::days(i64::from(day_count.saturating_sub(1)));
-    let mut days = Vec::with_capacity(day_count as usize);
-    for offset in 0..day_count {
-        let date = start + chrono::Duration::days(i64::from(offset));
-        let day = date.to_string();
-        let usage = daily.get(&day).copied().unwrap_or_default();
-        days.push(LocalUsageDay {
-            day: day.clone(),
-            input_tokens: usage.input,
-            cached_input_tokens: usage.cached,
-            output_tokens: usage.output,
-            total_tokens: usage.total,
-            agent_time_ms: 0,
-            agent_runs: run_counts.get(&day).copied().unwrap_or(0),
-        });
-    }
-    let last30_days_tokens = days.iter().map(|day| day.total_tokens).sum();
-    let last7_days_tokens = days.iter().rev().take(7).map(|day| day.total_tokens).sum();
-    let total_input: u64 = days.iter().map(|day| day.input_tokens).sum();
-    let total_cached: u64 = days.iter().map(|day| day.cached_input_tokens).sum();
-    let peak = days.iter().max_by_key(|day| day.total_tokens);
-    LocalUsageSnapshot {
-        updated_at: chrono::Utc::now().timestamp_millis(),
-        totals: LocalUsageTotals {
-            last7_days_tokens,
-            last30_days_tokens,
-            average_daily_tokens: last30_days_tokens / u64::from(day_count),
-            cache_hit_rate_percent: if total_input == 0 {
-                0.0
-            } else {
-                (total_cached as f64 / total_input as f64) * 100.0
-            },
-            peak_day: peak
-                .filter(|day| day.total_tokens > 0)
-                .map(|day| day.day.clone()),
-            peak_day_tokens: peak.map(|day| day.total_tokens).unwrap_or(0),
-        },
-        days,
-        top_models: Vec::new(),
-    }
 }
 
 pub async fn start_login(
@@ -715,12 +519,9 @@ fn database_error(_error: sqlx::Error) -> (StatusCode, Json<PlatformError>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_usage_snapshot, sanitize_projection, single_profile_summary, UsageBreakdown,
-    };
+    use super::{sanitize_projection, single_profile_summary};
     use crate::routes::RuntimeProfileBinding;
     use serde_json::json;
-    use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -758,31 +559,5 @@ mod tests {
         assert_eq!(summary["hasCodexHome"], true);
         assert!(summary["codexHomeFingerprint"].as_str().is_some());
         assert!(!text.contains("/srv/private/codex-home"));
-    }
-
-    #[test]
-    fn usage_snapshot_preserves_daily_token_breakdown() {
-        let today = chrono::Utc::now().date_naive().to_string();
-        let mut daily = BTreeMap::new();
-        daily.insert(
-            today.clone(),
-            UsageBreakdown {
-                input: 100,
-                cached: 25,
-                output: 50,
-                total: 150,
-            },
-        );
-        let mut runs = BTreeMap::new();
-        runs.insert(today.clone(), 2);
-        let snapshot = build_usage_snapshot(7, daily, runs);
-        let current = snapshot.days.last().unwrap();
-        assert_eq!(current.day, today);
-        assert_eq!(current.input_tokens, 100);
-        assert_eq!(current.cached_input_tokens, 25);
-        assert_eq!(current.output_tokens, 50);
-        assert_eq!(current.agent_runs, 2);
-        assert_eq!(snapshot.totals.last7_days_tokens, 150);
-        assert_eq!(snapshot.totals.peak_day_tokens, 150);
     }
 }

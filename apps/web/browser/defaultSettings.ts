@@ -36,7 +36,6 @@ export const defaultAppSettings: AppSettings = {
   lastComposerReasoningEffort: null,
   uiScale: 1,
   theme: "system",
-  usageShowRemaining: false,
   showMessageFilePath: true,
   chatHistoryScrollbackItems: 200,
   automaticAppUpdateChecksEnabled: false,

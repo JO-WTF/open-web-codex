@@ -304,7 +304,9 @@ Atom 2b 删除 Browser Workspace Preferences、未实际应用的 Runtime 参数
 Workspace `AGENTS.md`、official feature/Skills/Apps 和 Copilot package-managed Role/Skill seed 保留；
 Atom 3 已删除旧的人类 Workspace Terminal：路由、独立 shell、`terminal_sessions`、事件投影、旧 App
 面板和 xterm 依赖均已移除，既有 `terminal_sessions` 行随迁移删除；Codex Runtime 对话内 command/
-shell、输出和审批保持不变。Usage 继续按 owner 作为独立 Atom 清理，不建立兼容 facade。Workspace 固定归属、
+shell、输出和审批保持不变。Atom 4 已删除 `/profile/usage` 的本地近似聚合、官方账户用量 fallback、
+Home/tray 使用量面及其 DTO/client；Runtime Thread token、`/profile/rate-limits` 和
+`provider_call_metrics` 保持。Browser legacy API 至此清完；Fake 部署模式另属下一独立 Atom。Workspace 固定归属、
 GitRuntime 和浏览器会话级布局选择仍由各自现役 owner 保留；旧 App 不再持久化工作区排序、分组、
 折叠或 Git root 投影。
 历史 `check-main-ui-parity` 字节级第二 UI truth 及其手工 SHA/overlay CI gate 已删除；Web 交付

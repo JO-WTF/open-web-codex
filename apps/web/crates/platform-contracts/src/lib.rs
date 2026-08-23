@@ -1004,53 +1004,6 @@ pub struct WorkspaceGitRootsQuery {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LocalUsageQuery {
-    pub days: Option<u32>,
-    pub workspace_id: Option<Uuid>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LocalUsageDay {
-    pub day: String,
-    pub input_tokens: u64,
-    pub cached_input_tokens: u64,
-    pub output_tokens: u64,
-    pub total_tokens: u64,
-    pub agent_time_ms: u64,
-    pub agent_runs: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LocalUsageTotals {
-    pub last7_days_tokens: u64,
-    pub last30_days_tokens: u64,
-    pub average_daily_tokens: u64,
-    pub cache_hit_rate_percent: f64,
-    pub peak_day: Option<String>,
-    pub peak_day_tokens: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LocalUsageModel {
-    pub model: String,
-    pub tokens: u64,
-    pub share_percent: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LocalUsageSnapshot {
-    pub updated_at: i64,
-    pub days: Vec<LocalUsageDay>,
-    pub totals: LocalUsageTotals,
-    pub top_models: Vec<LocalUsageModel>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SetExperimentalFeatureRequest {
     pub enabled: bool,
 }

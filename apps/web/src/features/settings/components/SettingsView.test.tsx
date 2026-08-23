@@ -93,7 +93,6 @@ const baseSettings: AppSettings = {
   lastComposerReasoningEffort: null,
   uiScale: 1,
   theme: "system",
-  usageShowRemaining: false,
   showMessageFilePath: true,
   chatHistoryScrollbackItems: 200,
   automaticAppUpdateChecksEnabled: true,
@@ -360,31 +359,6 @@ describe("SettingsView Display", () => {
     await waitFor(() => {
       expect(onUpdateAppSettings).toHaveBeenCalledWith(
         expect.objectContaining({ theme: "dark" }),
-      );
-    });
-  });
-
-  it("toggles remaining limits display", async () => {
-    const onUpdateAppSettings = vi.fn().mockResolvedValue(undefined);
-    renderDisplaySection({ onUpdateAppSettings });
-
-    const row = screen
-      .getByText("Show remaining Codex limits")
-      .closest(".settings-toggle-row") as HTMLElement | null;
-    if (!row) {
-      throw new Error("Expected remaining limits row");
-    }
-    const toggle = row.querySelector(
-      "button.settings-toggle",
-    ) as HTMLButtonElement | null;
-    if (!toggle) {
-      throw new Error("Expected remaining limits toggle");
-    }
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      expect(onUpdateAppSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ usageShowRemaining: true }),
       );
     });
   });

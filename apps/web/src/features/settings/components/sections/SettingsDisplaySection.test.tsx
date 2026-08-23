@@ -16,7 +16,6 @@ describe("SettingsDisplaySection", () => {
         appSettings={
           ({
             theme: "system",
-            usageShowRemaining: false,
             showMessageFilePath: true,
             chatHistoryScrollbackItems: 200,
             uiFontFamily: "",
@@ -68,7 +67,6 @@ describe("SettingsDisplaySection", () => {
         appSettings={
           ({
             theme: "system",
-            usageShowRemaining: false,
             showMessageFilePath: true,
             chatHistoryScrollbackItems: null,
             uiFontFamily: "",
@@ -126,7 +124,6 @@ describe("SettingsDisplaySection", () => {
         appSettings={
           ({
             theme: "system",
-            usageShowRemaining: false,
             showMessageFilePath: true,
             chatHistoryScrollbackItems: 200,
             uiFontFamily: "",
@@ -175,7 +172,6 @@ describe("SettingsDisplaySection", () => {
         appSettings={
           ({
             theme: "system",
-            usageShowRemaining: false,
             showMessageFilePath: true,
             chatHistoryScrollbackItems: 200,
             uiFontFamily: "",
@@ -234,7 +230,6 @@ describe("SettingsDisplaySection", () => {
         appSettings={
           ({
             theme: "system",
-            usageShowRemaining: false,
             showMessageFilePath: true,
             chatHistoryScrollbackItems: 200,
             uiFontFamily: "",

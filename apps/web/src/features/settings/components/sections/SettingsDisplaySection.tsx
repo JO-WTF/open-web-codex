@@ -189,20 +189,6 @@ export function SettingsDisplaySection({
         </select>
       </div>
       <SettingsToggleRow
-        title="Show remaining Codex limits"
-        subtitle="Display what is left instead of what is used."
-      >
-        <SettingsToggleSwitch
-          pressed={appSettings.usageShowRemaining}
-          onClick={() =>
-            void onUpdateAppSettings({
-              ...appSettings,
-              usageShowRemaining: !appSettings.usageShowRemaining,
-            })
-          }
-        />
-      </SettingsToggleRow>
-      <SettingsToggleRow
         title="Show file path in messages"
         subtitle="Display the parent path next to file links in messages."
       >

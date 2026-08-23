@@ -165,7 +165,6 @@ function buildDefaultSettings(): AppSettings {
     lastComposerReasoningEffort: null,
     uiScale: UI_SCALE_DEFAULT,
     theme: "system",
-    usageShowRemaining: false,
     showMessageFilePath: true,
     chatHistoryScrollbackItems: CHAT_SCROLLBACK_DEFAULT,
     automaticAppUpdateChecksEnabled: true,

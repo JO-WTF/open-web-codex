@@ -43,7 +43,6 @@ import { useMainAppWorktreeState } from "@app/hooks/useMainAppWorktreeState";
 import { useMainAppWorkspaceActions } from "@app/hooks/useMainAppWorkspaceActions";
 import { useMainAppWorkspaceLifecycle } from "@app/hooks/useMainAppWorkspaceLifecycle";
 import { useMainAppMobileThreadRefresh } from "@app/hooks/useMainAppMobileThreadRefresh";
-import { useHomeAccount } from "@app/hooks/useHomeAccount";
 import type {
   ComposerEditorSettings,
   ServiceTier,
@@ -56,7 +55,6 @@ import { useThreadListSortKey } from "@app/hooks/useThreadListSortKey";
 import { useThreadListActions } from "@app/hooks/useThreadListActions";
 import { useRemoteThreadLiveConnection } from "@app/hooks/useRemoteThreadLiveConnection";
 import { useTrayRecentThreads } from "@app/hooks/useTrayRecentThreads";
-import { useTraySessionUsage } from "@app/hooks/useTraySessionUsage";
 import { useTauriEvent } from "@app/hooks/useTauriEvent";
 import { useAppBootstrapOrchestration } from "@app/bootstrap/useAppBootstrapOrchestration";
 import {
@@ -868,20 +866,9 @@ export default function MainApp() {
   const {
     latestAgentRuns,
     isLoadingLatestAgents,
-    usageMetric,
-    setUsageMetric,
-    usageWorkspaceId,
-    setUsageWorkspaceId,
-    usageWorkspaceOptions,
-    localUsageSnapshot,
-    isLoadingLocalUsage,
-    localUsageError,
-    refreshLocalUsage,
   } = useWorkspaceInsightsOrchestration({
     workspaces,
-    workspacesById,
     hasLoaded,
-    showHome,
     threadsByWorkspace,
     lastAgentMessageByThread,
     threadStatusById,
@@ -891,27 +878,9 @@ export default function MainApp() {
   const activeRateLimits = activeWorkspaceId
     ? rateLimitsByWorkspace[activeWorkspaceId] ?? null
     : null;
-  const {
-    homeAccount,
-    homeRateLimits,
-  } = useHomeAccount({
-    showHome,
-    usageWorkspaceId,
-    workspaces,
-    threadsByWorkspace,
-    threadListLoadingByWorkspace,
-    rateLimitsByWorkspace,
-    accountByWorkspace,
-    refreshAccountInfo,
-    refreshAccountRateLimits,
-  });
   const activeTokenUsage = activeThreadId
     ? tokenUsageByThread[activeThreadId] ?? null
     : null;
-  useTraySessionUsage({
-    accountRateLimits: activeRateLimits,
-    showRemaining: appSettings.usageShowRemaining,
-  });
   const activePlan = activeThreadId
     ? planByThread[activeThreadId] ?? null
     : null;
@@ -1380,7 +1349,6 @@ export default function MainApp() {
   const { workspaceHomeNode } = displayNodes;
   const layoutSurfaces = useMainAppLayoutSurfaces({
     appSettings: {
-      usageShowRemaining: appSettings.usageShowRemaining,
       composerCodeBlockCopyUseModifier:
         appSettings.composerCodeBlockCopyUseModifier,
       showMessageFilePath: appSettings.showMessageFilePath,
@@ -1420,8 +1388,6 @@ export default function MainApp() {
     approvals,
     activeRateLimits,
     activeAccount,
-    homeRateLimits,
-    homeAccount,
     accountSwitching,
     onSwitchAccount: handleSwitchAccount,
     onCancelSwitchAccount: handleCancelSwitchAccount,
@@ -1432,17 +1398,6 @@ export default function MainApp() {
     activeTokenUsage,
     latestAgentRuns,
     isLoadingLatestAgents,
-    localUsageSnapshot,
-    isLoadingLocalUsage,
-    localUsageError,
-    onRefreshLocalUsage: () => {
-      refreshLocalUsage()?.catch(() => {});
-    },
-    usageMetric,
-    onUsageMetricChange: setUsageMetric,
-    usageWorkspaceId,
-    usageWorkspaceOptions,
-    onUsageWorkspaceChange: setUsageWorkspaceId,
     gitState,
     selectedServiceTier: selectedServiceTier ?? null,
     composerWorkspaceState,
