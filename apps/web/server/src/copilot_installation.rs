@@ -18,6 +18,12 @@ const MARK_FAILURE_SQL: &str = "UPDATE profile_copilot_installations SET \
          last_failure_kind = $3, last_failure_code = $4, updated_at = now() \
      WHERE profile_id = (SELECT id FROM profiles WHERE runtime_key = $1) \
        AND package_id = $2";
+const MARK_UNAVAILABLE_CLEANED_SQL: &str =
+    "UPDATE profile_copilot_installations SET configured_revision = NULL, \
+         managed_skill_ids = '{}', managed_agent_role_ids = '{}', \
+         last_failure_kind = 'unavailable', last_failure_code = $3, updated_at = now() \
+     WHERE profile_id = (SELECT id FROM profiles WHERE runtime_key = $1) \
+       AND package_id = $2";
 
 #[derive(Debug, Clone)]
 pub(crate) struct CopilotPackageSource {
@@ -185,6 +191,21 @@ pub(crate) struct InstallationRecord {
     last_failure_code: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DeactivationPlan {
+    preserve_unavailable: bool,
+}
+
+fn plan_deactivation(
+    record: Option<&InstallationRecord>,
+    source_available: bool,
+) -> Result<DeactivationPlan, CopilotInstallationError> {
+    record.ok_or(CopilotInstallationError::NotFound)?;
+    Ok(DeactivationPlan {
+        preserve_unavailable: !source_available,
+    })
+}
+
 #[derive(Clone)]
 pub(crate) struct CopilotInstallationStore {
     db: PgPool,
@@ -322,6 +343,20 @@ impl CopilotInstallationStore {
         Ok(())
     }
 
+    pub(crate) async fn mark_unavailable_cleaned(
+        &self,
+        package_id: &str,
+        code: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(MARK_UNAVAILABLE_CLEANED_SQL)
+            .bind(&self.runtime_key)
+            .bind(package_id)
+            .bind(code)
+            .execute(&self.db)
+            .await?;
+        Ok(())
+    }
+
     /// The current local/private contract follows the application's registered
     /// source on cold restart. Preserve the last configured revision and owned
     /// destinations until the new source has reconciled successfully.
@@ -387,6 +422,10 @@ enum ColdStartChange {
     },
     Deactivate {
         package_id: String,
+        preserve_unavailable: bool,
+    },
+    CleanUnavailable {
+        package_id: String,
     },
 }
 
@@ -407,8 +446,22 @@ impl ColdStartCompletion {
                         .mark_configured(package_id, Some(revision), skill_ids, role_ids)
                         .await?;
                 }
-                ColdStartChange::Deactivate { package_id } => {
-                    store.mark_configured(package_id, None, &[], &[]).await?;
+                ColdStartChange::Deactivate {
+                    package_id,
+                    preserve_unavailable,
+                } => {
+                    if *preserve_unavailable {
+                        store
+                            .mark_unavailable_cleaned(package_id, "application_source_unavailable")
+                            .await?;
+                    } else {
+                        store.mark_configured(package_id, None, &[], &[]).await?;
+                    }
+                }
+                ColdStartChange::CleanUnavailable { package_id } => {
+                    store
+                        .mark_unavailable_cleaned(package_id, "application_source_unavailable")
+                        .await?;
                 }
             }
         }
@@ -421,11 +474,24 @@ impl ColdStartCompletion {
         code: &str,
     ) -> Result<(), sqlx::Error> {
         for change in &self.changes {
-            let package_id = match change {
+            match change {
+                ColdStartChange::CleanUnavailable { package_id }
+                | ColdStartChange::Deactivate {
+                    package_id,
+                    preserve_unavailable: true,
+                } => {
+                    store
+                        .mark_failure(package_id, "unavailable", "application_source_unavailable")
+                        .await?;
+                }
                 ColdStartChange::Configure { package_id, .. }
-                | ColdStartChange::Deactivate { package_id } => package_id,
-            };
-            store.mark_failure(package_id, "failed", code).await?;
+                | ColdStartChange::Deactivate {
+                    package_id,
+                    preserve_unavailable: false,
+                } => {
+                    store.mark_failure(package_id, "failed", code).await?;
+                }
+            }
         }
         Ok(())
     }
@@ -455,6 +521,9 @@ pub(crate) async fn cold_start_composition(
                         "application_source_unavailable",
                     )
                     .await?;
+                changes.push(ColdStartChange::CleanUnavailable {
+                    package_id: record.package_id.clone(),
+                });
                 continue;
             };
             if source_revision_requires_refresh(&record.source_revision, assets.source_revision()) {
@@ -499,6 +568,7 @@ pub(crate) async fn cold_start_composition(
         } else {
             changes.push(ColdStartChange::Deactivate {
                 package_id: record.package_id.clone(),
+                preserve_unavailable: sources.available(&record.package_id).is_none(),
             });
         }
     }
@@ -627,10 +697,17 @@ impl CopilotInstallationService {
     ) -> Result<CopilotProfileStatus, CopilotInstallationError> {
         let _operation = self.operation.lock().await;
         validate_id(package_id)?;
-        if !self.sources.contains(package_id) {
-            return Err(CopilotInstallationError::NotFound);
-        }
+        let record = self.store.load_package(package_id).await?;
+        let plan = plan_deactivation(
+            record.as_ref(),
+            self.sources.available(package_id).is_some(),
+        )?;
         self.store.deactivate(package_id).await?;
+        if plan.preserve_unavailable {
+            self.store
+                .mark_failure(package_id, "unavailable", "application_source_unavailable")
+                .await?;
+        }
         self.status().await
     }
 
@@ -658,9 +735,10 @@ impl CopilotInstallationService {
         record: InstallationRecord,
         discovery: Option<&SkillDiscovery>,
     ) -> CopilotInstallationSummary {
+        let source_available = self.sources.available(&record.package_id).is_some();
         let configured = record.desired_active
             && record.configured_revision.as_deref() == Some(record.source_revision.as_str())
-            && self.sources.available(&record.package_id).is_some();
+            && source_available;
         let mut discovered = Vec::new();
         let mut state = if let Some(kind) = record.last_failure_kind.as_deref() {
             if kind == "unavailable" {
@@ -668,6 +746,8 @@ impl CopilotInstallationService {
             } else {
                 CopilotInstallationState::Failed
             }
+        } else if !source_available {
+            CopilotInstallationState::Unavailable
         } else if configured {
             CopilotInstallationState::Configured
         } else {
@@ -791,6 +871,54 @@ pub(crate) enum CopilotInstallationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::delivery_contracts::{DeliveryContract, DeliveryKind};
+
+    fn installation_record(
+        desired_active: bool,
+        configured_revision: Option<&str>,
+        managed_skill_ids: &[&str],
+        managed_agent_role_ids: &[&str],
+        failure: Option<(&str, &str)>,
+    ) -> InstallationRecord {
+        InstallationRecord {
+            package_id: "test-package".to_string(),
+            desired_active,
+            source_revision: "a".repeat(64),
+            configured_revision: configured_revision.map(str::to_string),
+            managed_skill_ids: managed_skill_ids
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+            managed_agent_role_ids: managed_agent_role_ids
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+            last_failure_kind: failure.map(|(kind, _)| kind.to_string()),
+            last_failure_code: failure.map(|(_, code)| code.to_string()),
+        }
+    }
+
+    fn lifecycle_delivery_registry() -> DeliveryRegistry {
+        DeliveryRegistry::new(vec![DeliveryContract {
+            id: "lifecycle-card".to_string(),
+            server: "lifecycle_server".to_string(),
+            tool: "publish_lifecycle_card".to_string(),
+            kind: DeliveryKind::InlineGeoJsonMapCard,
+            schema: "map.v3".to_string(),
+            mime_type: "application/vnd.open-web-codex.map-card+json".to_string(),
+            display_name: "Lifecycle card".to_string(),
+        }])
+        .expect("lifecycle delivery registry")
+    }
+
+    fn registry_with_assets(assets: CopilotPackageAssets) -> CopilotSourceRegistry {
+        CopilotSourceRegistry {
+            sources: Arc::new(BTreeMap::from([(
+                assets.id().to_string(),
+                RegisteredSource::Available(Arc::new(assets)),
+            )])),
+        }
+    }
 
     #[test]
     fn official_skill_projection_requires_empty_discovery_errors() {
@@ -869,6 +997,99 @@ mod tests {
         assert!(!MARK_FAILURE_SQL.contains("configured_revision"));
         assert!(!MARK_FAILURE_SQL.contains("managed_skill_ids"));
         assert!(!MARK_FAILURE_SQL.contains("managed_agent_role_ids"));
+    }
+
+    #[test]
+    fn unavailable_cleanup_clears_only_runtime_configuration_after_host_success() {
+        assert!(MARK_UNAVAILABLE_CLEANED_SQL.contains("configured_revision = NULL"));
+        assert!(MARK_UNAVAILABLE_CLEANED_SQL.contains("managed_skill_ids = '{}'"));
+        assert!(MARK_UNAVAILABLE_CLEANED_SQL.contains("managed_agent_role_ids = '{}'"));
+        assert!(MARK_UNAVAILABLE_CLEANED_SQL.contains("last_failure_kind = 'unavailable'"));
+        assert!(!MARK_UNAVAILABLE_CLEANED_SQL.contains("desired_active ="));
+        assert!(!MARK_UNAVAILABLE_CLEANED_SQL.contains("source_revision ="));
+    }
+
+    #[test]
+    fn source_present_and_absent_deactivation_use_persisted_installation_authority() {
+        let record = installation_record(
+            true,
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            &["managed-skill"],
+            &["managed_role"],
+            None,
+        );
+        assert_eq!(
+            plan_deactivation(Some(&record), true).expect("source-present plan"),
+            DeactivationPlan {
+                preserve_unavailable: false,
+            }
+        );
+        assert_eq!(
+            plan_deactivation(Some(&record), false).expect("source-absent plan"),
+            DeactivationPlan {
+                preserve_unavailable: true,
+            }
+        );
+        assert!(matches!(
+            plan_deactivation(None, true),
+            Err(CopilotInstallationError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn source_absence_projects_unavailable_and_restart_required_from_durable_state() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgresql://localhost/open_web_codex")
+            .expect("lazy PostgreSQL pool");
+        let service = CopilotInstallationService::new(
+            CopilotInstallationStore::new(pool, "test-runtime"),
+            CopilotSourceRegistry::default(),
+            None,
+            None,
+        );
+        let configured = service.summary(
+            installation_record(
+                true,
+                Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                &["managed-skill"],
+                &["managed_role"],
+                Some(("unavailable", "application_source_unavailable")),
+            ),
+            None,
+        );
+        assert_eq!(configured.state, CopilotInstallationState::Unavailable);
+        assert!(configured.restart_required);
+        assert_eq!(configured.managed_skill_ids, vec!["managed-skill"]);
+
+        let cleaned_active = service.summary(
+            installation_record(
+                true,
+                None,
+                &[],
+                &[],
+                Some(("unavailable", "application_source_unavailable")),
+            ),
+            None,
+        );
+        assert_eq!(cleaned_active.state, CopilotInstallationState::Unavailable);
+        assert!(cleaned_active.restart_required);
+        assert!(cleaned_active.managed_skill_ids.is_empty());
+
+        let cleaned_inactive = service.summary(
+            installation_record(
+                false,
+                None,
+                &[],
+                &[],
+                Some(("unavailable", "application_source_unavailable")),
+            ),
+            None,
+        );
+        assert_eq!(
+            cleaned_inactive.state,
+            CopilotInstallationState::Unavailable
+        );
+        assert!(!cleaned_inactive.restart_required);
     }
 
     #[test]
@@ -955,15 +1176,174 @@ mod tests {
         assert_eq!(configured.managed_skill_ids, vec!["next-skill"]);
         assert_eq!(configured.managed_agent_role_ids, vec!["next_role"]);
 
-        store.deactivate("test-package").await.expect("deactivate");
-        ColdStartCompletion {
-            changes: vec![ColdStartChange::Deactivate {
-                package_id: "test-package".to_string(),
-            }],
-        }
-        .mark_host_ready(&store)
-        .await
-        .expect("complete deactivation");
+        let profile = tempfile::tempdir().expect("temporary Profile");
+        let missing_sources = CopilotSourceRegistry::default();
+        let missing = cold_start_composition(&store, &missing_sources, profile.path())
+            .await
+            .expect("compose missing source cleanup");
+        assert!(missing.startup_files.is_empty());
+        assert_eq!(missing.removed_startup_files.len(), 2);
+        assert!(missing.root_execution_configs.is_empty());
+        assert!(missing.active_package_ids.is_empty());
+        assert!(missing
+            .deliveries
+            .for_item(
+                json!({"server": "lifecycle_server", "tool": "publish_lifecycle_card"})
+                    .as_object()
+                    .expect("delivery item"),
+            )
+            .is_none());
+        missing
+            .completion
+            .mark_host_failed(&store, "profile_host_start_failed")
+            .await
+            .expect("preserve unavailable cleanup after Host failure");
+        let cleanup_failed = store
+            .load_package("test-package")
+            .await
+            .expect("load cleanup failure")
+            .expect("record");
+        assert_eq!(cleanup_failed.configured_revision.as_deref(), Some(second));
+        assert_eq!(cleanup_failed.managed_skill_ids, vec!["next-skill"]);
+        assert_eq!(cleanup_failed.managed_agent_role_ids, vec!["next_role"]);
+        assert_eq!(
+            cleanup_failed.last_failure_code.as_deref(),
+            Some("application_source_unavailable")
+        );
+        missing
+            .completion
+            .mark_host_ready(&store)
+            .await
+            .expect("complete unavailable cleanup");
+        let cleaned = store
+            .load_package("test-package")
+            .await
+            .expect("load cleaned unavailable record")
+            .expect("record");
+        assert!(cleaned.desired_active);
+        assert!(cleaned.configured_revision.is_none());
+        assert!(cleaned.managed_skill_ids.is_empty());
+        assert!(cleaned.managed_agent_role_ids.is_empty());
+        assert_eq!(
+            cleaned.last_failure_code.as_deref(),
+            Some("application_source_unavailable")
+        );
+
+        let third = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let available_sources = registry_with_assets(CopilotPackageAssets::lifecycle_test_assets(
+            "test-package",
+            third,
+            lifecycle_delivery_registry(),
+        ));
+        let restored = cold_start_composition(&store, &available_sources, profile.path())
+            .await
+            .expect("compose restored source");
+        assert_eq!(restored.startup_files.len(), 1);
+        assert!(restored.removed_startup_files.is_empty());
+        assert_eq!(restored.root_execution_configs.len(), 1);
+        assert_eq!(restored.active_package_ids, vec!["test-package"]);
+        assert!(restored
+            .deliveries
+            .for_item(
+                json!({"server": "lifecycle_server", "tool": "publish_lifecycle_card"})
+                    .as_object()
+                    .expect("delivery item"),
+            )
+            .is_some());
+        restored
+            .completion
+            .mark_host_ready(&store)
+            .await
+            .expect("complete restored source");
+        let restored_record = store
+            .load_package("test-package")
+            .await
+            .expect("load restored record")
+            .expect("record");
+        assert_eq!(restored_record.source_revision, third);
+        assert_eq!(restored_record.configured_revision.as_deref(), Some(third));
+        assert_eq!(restored_record.managed_skill_ids, vec!["lifecycle-root"]);
+        assert!(restored_record.last_failure_code.is_none());
+
+        let absent_service = CopilotInstallationService::new(
+            store.clone(),
+            CopilotSourceRegistry::default(),
+            None,
+            None,
+        );
+        let absent_deactivated = absent_service
+            .deactivate("test-package")
+            .await
+            .expect("deactivate from persisted record without source");
+        let absent_summary = absent_deactivated
+            .installations
+            .into_iter()
+            .find(|installation| installation.package_id == "test-package")
+            .expect("source-absent installation summary");
+        assert!(!absent_summary.active);
+        assert_eq!(absent_summary.state, CopilotInstallationState::Unavailable);
+        assert!(absent_summary.restart_required);
+
+        let absent_cleanup = cold_start_composition(&store, &missing_sources, profile.path())
+            .await
+            .expect("compose source-absent deactivation");
+        assert_eq!(absent_cleanup.removed_startup_files.len(), 1);
+        assert!(absent_cleanup
+            .deliveries
+            .for_item(
+                json!({"server": "lifecycle_server", "tool": "publish_lifecycle_card"})
+                    .as_object()
+                    .expect("delivery item"),
+            )
+            .is_none());
+        absent_cleanup
+            .completion
+            .mark_host_ready(&store)
+            .await
+            .expect("complete source-absent deactivation");
+
+        let available_service =
+            CopilotInstallationService::new(store.clone(), available_sources.clone(), None, None);
+        available_service
+            .activate("test-package")
+            .await
+            .expect("reactivate source-present package");
+        let reconfigured = cold_start_composition(&store, &available_sources, profile.path())
+            .await
+            .expect("compose reactivated source");
+        reconfigured
+            .completion
+            .mark_host_ready(&store)
+            .await
+            .expect("complete reactivation");
+        let present_deactivated = available_service
+            .deactivate("test-package")
+            .await
+            .expect("deactivate source-present package");
+        let present_summary = present_deactivated
+            .installations
+            .into_iter()
+            .find(|installation| installation.package_id == "test-package")
+            .expect("source-present installation summary");
+        assert!(!present_summary.active);
+        assert_eq!(present_summary.state, CopilotInstallationState::Installed);
+        assert!(present_summary.restart_required);
+        let present_cleanup = cold_start_composition(&store, &available_sources, profile.path())
+            .await
+            .expect("compose source-present deactivation");
+        assert!(present_cleanup
+            .deliveries
+            .for_item(
+                json!({"server": "lifecycle_server", "tool": "publish_lifecycle_card"})
+                    .as_object()
+                    .expect("delivery item"),
+            )
+            .is_none());
+        present_cleanup
+            .completion
+            .mark_host_ready(&store)
+            .await
+            .expect("complete source-present deactivation");
         let inactive = store
             .load_package("test-package")
             .await

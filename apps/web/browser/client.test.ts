@@ -79,6 +79,41 @@ describe("PlatformClient", () => {
     });
   });
 
+  it("activates and deactivates Copilots through package-id-only REST calls", async () => {
+    const status = { packages: [], installations: [] };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(status), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(status), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new PlatformClient({
+      baseUrl: "https://platform.test",
+      token: "session-token",
+    });
+
+    await client.activateCopilot("meeting-action-review");
+    await client.deactivateCopilot("meeting-action-review");
+
+    expect(fetchMock.mock.calls.map(([url, init]) => ({
+      url,
+      method: init?.method,
+      body: JSON.parse(String(init?.body)),
+      authorization: (init?.headers as Record<string, string>)?.authorization,
+    }))).toEqual([
+      {
+        url: "https://platform.test/api/profile/copilots/activate",
+        method: "POST",
+        body: { packageId: "meeting-action-review" },
+        authorization: "Bearer session-token",
+      },
+      {
+        url: "https://platform.test/api/profile/copilots/deactivate",
+        method: "POST",
+        body: { packageId: "meeting-action-review" },
+        authorization: "Bearer session-token",
+      },
+    ]);
+  });
+
   it("reads and answers run-scoped MCP forms through the dedicated contract", async () => {
     const pending = [{
       id: "approval-1",

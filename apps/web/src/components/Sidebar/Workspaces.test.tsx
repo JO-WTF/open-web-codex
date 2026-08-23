@@ -62,6 +62,23 @@ describe("Web workspace actions", () => {
     expect(screen.queryByRole("dialog", { name: "Choose a Copilot" })).toBeNull();
   });
 
+  it("opens Copilot management instead of creating a plain task when selection is required", () => {
+    const props = baseProps();
+    const onCopilotUnavailable = vi.fn();
+    render(
+      <Workspaces
+        {...props}
+        copilotSelectionRequired
+        onCopilotUnavailable={onCopilotUnavailable}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "New task in Demo" }));
+
+    expect(onCopilotUnavailable).toHaveBeenCalledTimes(1);
+    expect(props.onStartTask).not.toHaveBeenCalled();
+  });
+
   it("lists independent Copilot packages and starts the selected package", () => {
     const props = baseProps();
     props.copilots = [

@@ -21,12 +21,15 @@ New developer entrypoint for the repository Copilot SDK:
   tool init PATH --name ID
   validate SOURCE
   check SOURCE
+  sync copilots/PACKAGE [--workspace ABS] [--timeout-seconds SEC] [--build]
   dev SOURCE --workspace PATH
   test SOURCE --workspace PATH
 
 This wrapper fixes shared Tool discovery to this repository's trusted tools/
 registry. dev, test, and check use the current checkout's dev-small Codex
-binary and reusable local Tool build store.
+binary and reusable local Tool build store. sync accepts only a direct child of
+the trusted copilots/ root, runs the complete check gate, and then delegates the
+cold restart to run-local.sh.
 EOF
 }
 
@@ -67,7 +70,7 @@ done
 
 runtime_command="0"
 case "$command_name" in
-  dev|test|check) runtime_command="1" ;;
+  dev|test|check|sync) runtime_command="1" ;;
 esac
 if [[ "$runtime_command" == "1" ]]; then
   for argument in "$@"; do
@@ -80,6 +83,99 @@ if [[ "$runtime_command" == "1" ]]; then
   [[ -x "$codex_bin" ]] || {
     fail "codex_binary_missing" "the current checkout's dev-small Codex binary is missing; build the repository Runtime first"
   }
+fi
+
+sync_source=""
+sync_workspace=""
+sync_timeout_seconds=""
+sync_build="0"
+if [[ "$command_name" == "sync" ]]; then
+  shift
+  while (($# > 0)); do
+    case "$1" in
+      --workspace)
+        (($# >= 2)) || fail "invalid_argument" "--workspace requires an absolute path"
+        [[ -z "$sync_workspace" ]] || fail "invalid_argument" "--workspace may be supplied once"
+        sync_workspace="$2"
+        shift
+        ;;
+      --timeout-seconds)
+        (($# >= 2)) || fail "invalid_argument" "--timeout-seconds requires a positive number"
+        [[ -z "$sync_timeout_seconds" ]] || fail "invalid_argument" "--timeout-seconds may be supplied once"
+        sync_timeout_seconds="$2"
+        shift
+        ;;
+      --build)
+        [[ "$sync_build" == "0" ]] || fail "invalid_argument" "--build may be supplied once"
+        sync_build="1"
+        ;;
+      --json)
+        ;;
+      --case|--case=*)
+        fail "invalid_argument" "sync always runs every declared check case"
+        ;;
+      --*)
+        fail "invalid_argument" "unknown sync option: $1"
+        ;;
+      *)
+        [[ -z "$sync_source" ]] || fail "invalid_argument" "sync accepts exactly one Copilot source"
+        sync_source="$1"
+        ;;
+    esac
+    shift
+  done
+  [[ -n "$sync_source" ]] || fail "invalid_argument" "sync requires a Copilot source"
+  if [[ -n "$sync_workspace" ]]; then
+    [[ "$sync_workspace" == /* ]] || fail "invalid_argument" "--workspace must be an absolute path"
+    [[ -d "$sync_workspace" ]] || fail "invalid_argument" "--workspace must name an existing directory"
+  fi
+  if [[ -n "$sync_timeout_seconds" ]]; then
+    python3 - "$sync_timeout_seconds" <<'PY' || fail "invalid_argument" "--timeout-seconds must be a positive number"
+import math
+import sys
+
+try:
+    value = float(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if math.isfinite(value) and value > 0 else 1)
+PY
+  fi
+  sync_source="$(python3 - "$repo_root/copilots" "$sync_source" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+trusted_input = Path(sys.argv[1])
+candidate_input = Path(sys.argv[2])
+if not candidate_input.is_absolute():
+    candidate_input = Path.cwd() / candidate_input
+try:
+    trusted = trusted_input.resolve(strict=True)
+    candidate = candidate_input.resolve(strict=True)
+except OSError:
+    raise SystemExit(1)
+if trusted_input.is_symlink() or candidate_input.is_symlink():
+    raise SystemExit(1)
+if candidate.parent != trusted or not candidate.is_dir():
+    raise SystemExit(1)
+relative = candidate.relative_to(trusted)
+if len(relative.parts) != 1:
+    raise SystemExit(1)
+current = candidate
+while current != trusted:
+    if current.is_symlink():
+        raise SystemExit(1)
+    current = current.parent
+print(os.fspath(candidate))
+PY
+  )" || fail "invalid_source" "sync source must be a non-symlink direct child of the trusted copilots root"
+  [[ -f "$sync_source/copilot.toml" && ! -L "$sync_source/copilot.toml" ]] || {
+    fail "invalid_source" "sync source must contain a regular copilot.toml"
+  }
+  if find "$sync_source" -type l -print -quit | grep -q .; then
+    fail "invalid_source" "sync source must not contain symbolic links"
+  fi
 fi
 
 if [[ "$command_name" == "check" ]]; then
@@ -137,6 +233,129 @@ cat "$bootstrap_log" >&2
 [[ "$sdk_python" == /* && -x "$sdk_python" ]] || {
   fail "sdk_bootstrap_failed" "the Copilot SDK bootstrap returned an invalid Python executable"
 }
+
+if [[ "$command_name" == "sync" ]]; then
+  check_log="$(mktemp "${TMPDIR:-/tmp}/open-web-codex-copilot-sync-check.XXXXXX")"
+  restart_log="$(mktemp "${TMPDIR:-/tmp}/open-web-codex-copilot-sync-restart.XXXXXX")"
+  trap 'rm -f -- "$bootstrap_log" "$check_log" "$restart_log"' EXIT
+  check_args=(
+    -m copilot_sdk check "$sync_source"
+    --tool-registry-root "$tool_registry_root"
+    --codex-bin "$codex_bin"
+    --build-store-root "$build_store_root"
+    --json
+  )
+  if [[ -n "$sync_workspace" ]]; then
+    check_args+=(--workspace "$sync_workspace")
+  fi
+  if [[ -n "$sync_timeout_seconds" ]]; then
+    check_args+=(--timeout-seconds "$sync_timeout_seconds")
+  fi
+  if ! "$sdk_python" "${check_args[@]}" >"$check_log"; then
+    if [[ "$json_requested" == "1" ]]; then
+      python3 - "$check_log" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+try:
+    check = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    check = None
+print(json.dumps({
+    "ok": False,
+    "state": "sync_failed",
+    "error": {
+        "code": "check_failed",
+        "message": "Copilot check failed; the running service was not restarted",
+    },
+    "check": check,
+}, ensure_ascii=False, separators=(",", ":")))
+PY
+    else
+      cat "$check_log" >&2
+      printf 'copilot: check_failed: the running service was not restarted\n' >&2
+    fi
+    exit 2
+  fi
+  readarray_output="$({ python3 - "$check_log" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+copilot = payload.get("copilot")
+package_id = copilot.get("id") if isinstance(copilot, dict) else None
+composition_hash = (
+    copilot.get("compositionDescriptorSha256") if isinstance(copilot, dict) else None
+)
+if payload.get("ok") is not True:
+    raise SystemExit(1)
+if not isinstance(package_id, str) or re.fullmatch(r"[a-z0-9](?:[a-z0-9_-]{0,94}[a-z0-9])?", package_id) is None:
+    raise SystemExit(1)
+if not isinstance(composition_hash, str) or re.fullmatch(r"[0-9a-f]{64}", composition_hash) is None:
+    raise SystemExit(1)
+print(package_id)
+print(composition_hash)
+PY
+  } 2>/dev/null)" || fail "invalid_check_output" "Copilot check returned invalid package identity or composition hash"
+  package_id="${readarray_output%%$'\n'*}"
+  composition_hash="${readarray_output#*$'\n'}"
+  restart_args=(--restart)
+  restart_mode="build"
+  if [[ "$sync_build" == "0" ]]; then
+    restart_args+=(--no-build)
+    restart_mode="no-build"
+  fi
+  if ! "$script_dir/run-local.sh" "${restart_args[@]}" >"$restart_log" 2>&1; then
+    cat "$restart_log" >&2
+    fail "restart_failed" "run-local did not complete the requested cold restart"
+  fi
+  cat "$restart_log" >&2
+  prepared_descriptor="$platform_prepared_root/$package_id/copilot-sdk/prepared-tools.v1.json"
+  if ! python3 - "$prepared_descriptor" "$composition_hash" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+actual = payload.get("compositionDescriptorSha256")
+expected = sys.argv[2]
+if not isinstance(actual, str) or re.fullmatch(r"[0-9a-f]{64}", actual) is None:
+    raise SystemExit(1)
+raise SystemExit(0 if actual == expected else 1)
+PY
+  then
+    fail "composition_hash_mismatch" "the restarted service did not prepare the checked Copilot composition"
+  fi
+  if [[ "$json_requested" == "1" ]]; then
+    python3 - "$package_id" "$composition_hash" "$restart_mode" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "ok": True,
+    "state": "synced",
+    "copilot": {
+        "id": sys.argv[1],
+        "compositionDescriptorSha256": sys.argv[2],
+    },
+    "restart": {"mode": sys.argv[3], "healthy": True},
+}, ensure_ascii=False, separators=(",", ":")))
+PY
+  else
+    printf "Copilot '%s' synced at composition %s.\n" "$package_id" "$composition_hash"
+  fi
+  exit 0
+fi
 
 forwarded=("$@")
 case "$command_name" in

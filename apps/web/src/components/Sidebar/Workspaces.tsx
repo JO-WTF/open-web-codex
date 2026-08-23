@@ -41,6 +41,8 @@ type Props = {
   ) => void;
   onArchiveThread: (workspaceId: string, threadId: string) => void;
   onRemoveWorkspace: (workspaceId: string) => void;
+  copilotSelectionRequired?: boolean;
+  onCopilotUnavailable?: () => void;
 };
 
 export default function Workspaces({
@@ -57,6 +59,8 @@ export default function Workspaces({
   onStartTask,
   onArchiveThread,
   onRemoveWorkspace,
+  copilotSelectionRequired = false,
+  onCopilotUnavailable = () => undefined,
 }: Props) {
   const [createName, setCreateName] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -80,6 +84,10 @@ export default function Workspaces({
 
   const openCopilotPicker = (workspace: WorkspaceInfo) => {
     if (copilots.length === 0) {
+      if (copilotSelectionRequired) {
+        onCopilotUnavailable();
+        return;
+      }
       onStartTask(workspace.id, null);
       return;
     }

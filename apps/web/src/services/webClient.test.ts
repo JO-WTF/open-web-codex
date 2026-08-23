@@ -126,6 +126,33 @@ describe("WebApp direct Server client", () => {
     })]);
   });
 
+  it("keeps Copilot desired-state writes as narrow package-id adapters", async () => {
+    const status = { packages: [], installations: [] };
+    const fetchMock = vi.fn(async () => json(status));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await client.activateCopilot("meeting-action-review");
+    await client.deactivateCopilot("meeting-action-review");
+
+    expect(fetchMock.mock.calls.map(([input, init]) => ({
+      path: new URL(String(input)).pathname,
+      method: init?.method,
+      body: JSON.parse(String(init?.body)),
+    }))).toEqual([
+      {
+        path: "/api/profile/copilots/activate",
+        method: "POST",
+        body: { packageId: "meeting-action-review" },
+      },
+      {
+        path: "/api/profile/copilots/deactivate",
+        method: "POST",
+        body: { packageId: "meeting-action-review" },
+      },
+    ]);
+  });
+
   it("does not expose an interrupted pre-restart Turn as active during recovery", async () => {
     const recoveringRun = {
       ...run,

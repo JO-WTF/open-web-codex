@@ -6,6 +6,7 @@ import {
   type SupervisorOverviewData,
 } from "./services/webClient";
 import type {
+  CopilotProfileStatus,
   McpFormContent,
   McpFormResponseAction,
   PendingMcpFormSummary,
@@ -486,6 +487,9 @@ export default function WebApp() {
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [copilots, setCopilots] = useState<CopilotOption[]>([]);
+  const [copilotStatus, setCopilotStatus] = useState<CopilotProfileStatus | null>(null);
+  const [copilotStatusLoading, setCopilotStatusLoading] = useState(false);
+  const [copilotStatusError, setCopilotStatusError] = useState<string | null>(null);
   const activeThreadModelSelectionRef = useRef<{
     threadId: string;
     providerId: string;
@@ -2038,27 +2042,59 @@ export default function WebApp() {
     }
   }, [appendLog, client]);
 
+  const applyCopilotStatus = useCallback((status: CopilotProfileStatus) => {
+    setCopilotStatus(status);
+    setCopilotStatusError(null);
+    const activePackageIds = new Set(
+      status.installations
+        .filter((installation) => installation.active && !installation.restartRequired)
+        .map((installation) => installation.packageId),
+    );
+    setCopilots(
+      status.packages
+        .filter((candidate) => candidate.available && activePackageIds.has(candidate.packageId))
+        .map((candidate) => ({
+          packageId: candidate.packageId,
+          displayName: candidate.displayName ?? candidate.packageId,
+        })),
+    );
+  }, []);
+
   const refreshCopilots = useCallback(async () => {
+    setCopilotStatusLoading(true);
     try {
       const status = await client.copilotProfileStatus();
-      const activePackageIds = new Set(
-        status.installations
-          .filter((installation) => installation.active && !installation.restartRequired)
-          .map((installation) => installation.packageId),
-      );
-      setCopilots(
-        status.packages
-          .filter((candidate) => candidate.available && activePackageIds.has(candidate.packageId))
-          .map((candidate) => ({
-            packageId: candidate.packageId,
-            displayName: candidate.displayName ?? candidate.packageId,
-          })),
-      );
+      applyCopilotStatus(status);
     } catch (error) {
-      setCopilots([]);
-      appendLog("error", error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setCopilotStatusError(message);
+      appendLog("error", message);
+    } finally {
+      setCopilotStatusLoading(false);
     }
-  }, [appendLog, client]);
+  }, [appendLog, applyCopilotStatus, client]);
+
+  const activateCopilot = useCallback(async (packageId: string) => {
+    setCopilotStatusError(null);
+    try {
+      applyCopilotStatus(await client.activateCopilot(packageId));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCopilotStatusError(message);
+      throw error;
+    }
+  }, [applyCopilotStatus, client]);
+
+  const deactivateCopilot = useCallback(async (packageId: string) => {
+    setCopilotStatusError(null);
+    try {
+      applyCopilotStatus(await client.deactivateCopilot(packageId));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCopilotStatusError(message);
+      throw error;
+    }
+  }, [applyCopilotStatus, client]);
 
   const refreshThreads = useCallback(async (forWorkspaceId?: string) => {
     const wid = forWorkspaceId ?? activeWorkspaceId;
@@ -2998,6 +3034,12 @@ export default function WebApp() {
           theme={theme}
           onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
           onConnectWorkspace={connectWorkspace}
+          copilotStatus={copilotStatus}
+          copilotStatusLoading={copilotStatusLoading}
+          copilotStatusError={copilotStatusError}
+          onRefreshCopilots={refreshCopilots}
+          onActivateCopilot={activateCopilot}
+          onDeactivateCopilot={deactivateCopilot}
         />
       }
     >

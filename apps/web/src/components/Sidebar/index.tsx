@@ -5,7 +5,9 @@ import Moon from "lucide-react/dist/esm/icons/moon";
 import Sun from "lucide-react/dist/esm/icons/sun";
 import X from "lucide-react/dist/esm/icons/x";
 import type { WorkspaceInfo } from "../../types";
+import type { CopilotProfileStatus } from "../../../browser/types";
 import Brand from "./Brand";
+import CopilotManager from "./CopilotManager";
 import Workspaces, { type CopilotOption } from "./Workspaces";
 import McpStatus from "./McpStatus";
 import RateLimitCard from "./RateLimitCard";
@@ -18,6 +20,8 @@ type ThreadInfo = {
   status?: string;
   creationStatus?: "creating" | "failed";
 };
+
+const NOOP_ASYNC = async () => undefined;
 
 type Props = {
   gatewayState: "checking" | "online" | "offline";
@@ -49,6 +53,12 @@ type Props = {
   busy: boolean;
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  copilotStatus?: CopilotProfileStatus | null;
+  copilotStatusLoading?: boolean;
+  copilotStatusError?: string | null;
+  onRefreshCopilots?: () => Promise<void>;
+  onActivateCopilot?: (packageId: string) => Promise<void>;
+  onDeactivateCopilot?: (packageId: string) => Promise<void>;
 };
 
 export default function Sidebar({
@@ -78,6 +88,12 @@ export default function Sidebar({
   busy,
   theme,
   onToggleTheme,
+  copilotStatus = null,
+  copilotStatusLoading = false,
+  copilotStatusError = null,
+  onRefreshCopilots = NOOP_ASYNC,
+  onActivateCopilot = NOOP_ASYNC,
+  onDeactivateCopilot = NOOP_ASYNC,
 }: Props) {
   const [showSettings, setShowSettings] = useState(false);
 
@@ -111,6 +127,10 @@ export default function Sidebar({
           onArchiveThread={onArchiveThread}
           onRemoveWorkspace={onRemoveWorkspace}
           busy={busy}
+          copilotSelectionRequired={Boolean(
+            copilotStatus?.packages.some((candidate) => candidate.available),
+          )}
+          onCopilotUnavailable={() => setShowSettings(true)}
         />
 
         <McpStatus servers={mcpServers} />
@@ -195,6 +215,14 @@ export default function Sidebar({
                 <div className="web-version-info">Gateway v{gatewayVersion}</div>
               )}
             </div>
+            <CopilotManager
+              status={copilotStatus}
+              loading={copilotStatusLoading}
+              error={copilotStatusError}
+              onRefresh={onRefreshCopilots}
+              onActivate={onActivateCopilot}
+              onDeactivate={onDeactivateCopilot}
+            />
           </section>
         </div>,
         document.body,

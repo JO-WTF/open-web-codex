@@ -428,6 +428,20 @@ export class PlatformClient {
     return this.request<CopilotProfileStatus>("/api/profile/copilots");
   }
 
+  activateCopilot(packageId: string) {
+    return this.request<CopilotProfileStatus>("/api/profile/copilots/activate", {
+      method: "POST",
+      body: JSON.stringify({ packageId }),
+    });
+  }
+
+  deactivateCopilot(packageId: string) {
+    return this.request<CopilotProfileStatus>("/api/profile/copilots/deactivate", {
+      method: "POST",
+      body: JSON.stringify({ packageId }),
+    });
+  }
+
   updateTaskModelSelection(taskId: string, providerId: string, modelId: string) {
     return this.request<{ providerId: string; modelId: string }>(
       `/api/tasks/${encodeURIComponent(taskId)}/model-selection`,

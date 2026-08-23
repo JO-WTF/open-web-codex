@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Sidebar from "./index";
 
@@ -43,6 +43,62 @@ describe("Sidebar settings", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull();
+  });
+
+  it("manages Copilot desired state inside Settings without a restart control", async () => {
+    const onDeactivateCopilot = vi.fn(async () => undefined);
+    render(
+      <Sidebar
+        gatewayState="online"
+        gatewayVersion="1.0.0"
+        workspaces={[]}
+        activeWorkspaceId={null}
+        onSelectWorkspace={vi.fn()}
+        onCreateWorkspace={vi.fn()}
+        onLoadWorkspaces={vi.fn()}
+        onConnectWorkspace={vi.fn()}
+        threadsByWorkspace={{}}
+        activeThreadId={null}
+        onSelectThread={vi.fn()}
+        copilots={[]}
+        onNewThread={vi.fn()}
+        onArchiveThread={vi.fn()}
+        onRemoveWorkspace={vi.fn()}
+        baseUrl="http://127.0.0.1:4733"
+        token=""
+        onBaseUrlChange={vi.fn()}
+        onTokenChange={vi.fn()}
+        onCheckGateway={vi.fn()}
+        mcpServers={{}}
+        rateLimits={null}
+        currentProviderId={null}
+        busy={false}
+        theme="dark"
+        onToggleTheme={vi.fn()}
+        copilotStatus={{
+          packages: [],
+          installations: [{
+            packageId: "missing-package",
+            sourceRevision: "a".repeat(64),
+            active: true,
+            state: "unavailable",
+            restartRequired: true,
+            managedSkillIds: ["managed-skill"],
+            managedAgentRoleIds: [],
+            runtimeDiscoveredSkillIds: [],
+            failureCode: "application_source_unavailable",
+          }],
+        }}
+        onDeactivateCopilot={onDeactivateCopilot}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    fireEvent.click(screen.getByRole("button", { name: "Deactivate missing-package" }));
+
+    await waitFor(() => expect(onDeactivateCopilot).toHaveBeenCalledWith("missing-package"));
+    expect(screen.queryByRole("button", { name: /restart/i })).toBeNull();
+    expect(screen.getByText(/operator sync and a cold restart/)).toBeTruthy();
   });
 
   it("toggles between dark and light themes", () => {

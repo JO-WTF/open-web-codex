@@ -165,6 +165,29 @@ struct PreparedDescriptorEnvironmentBinding {
 }
 
 impl CopilotPackageAssets {
+    #[cfg(test)]
+    pub(crate) fn lifecycle_test_assets(
+        id: &str,
+        source_revision: &str,
+        deliveries: DeliveryRegistry,
+    ) -> Self {
+        Self {
+            id: id.to_string(),
+            display_name: "Lifecycle test Copilot".to_string(),
+            source_revision: source_revision.to_string(),
+            root_skill: "lifecycle-root".to_string(),
+            root_task_skill_access: RootTaskSkillAccess::None,
+            root_agent: None,
+            skills: vec![PackageSkill {
+                id: "lifecycle-root".to_string(),
+                contents: b"---\nname: lifecycle-root\ndescription: lifecycle test\n---\n".to_vec(),
+            }],
+            roles: Vec::new(),
+            capability_roots: BTreeMap::new(),
+            deliveries,
+        }
+    }
+
     pub(crate) fn manifest_id(package_root: &Path) -> Result<String, CopilotPackageError> {
         Ok(load_copilot_package(package_root)?.id)
     }

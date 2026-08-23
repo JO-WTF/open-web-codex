@@ -610,6 +610,14 @@ export class CodexMonitorWebClient {
     return this.platform.copilotProfileStatus();
   }
 
+  activateCopilot(packageId: string) {
+    return this.platform.activateCopilot(packageId);
+  }
+
+  deactivateCopilot(packageId: string) {
+    return this.platform.deactivateCopilot(packageId);
+  }
+
   async getSupervisorOverview(
     threadId: string,
   ): Promise<SupervisorOverviewData | null> {

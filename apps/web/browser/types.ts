@@ -52,14 +52,27 @@ export type AvailableCopilotPackage = {
   displayName?: string;
 };
 
+export type CopilotInstallationState =
+  | "installed"
+  | "configured"
+  | "unavailable"
+  | "failed";
+
+export type CopilotInstallationSummary = {
+  packageId: string;
+  sourceRevision: string;
+  active: boolean;
+  state: CopilotInstallationState;
+  restartRequired: boolean;
+  managedSkillIds: string[];
+  managedAgentRoleIds: string[];
+  runtimeDiscoveredSkillIds: string[];
+  failureCode?: string;
+};
+
 export type CopilotProfileStatus = {
   packages: AvailableCopilotPackage[];
-  installations: Array<{
-    packageId: string;
-    active: boolean;
-    state: string;
-    restartRequired: boolean;
-  }>;
+  installations: CopilotInstallationSummary[];
 };
 
 export type ExplicitResourceSelection = {
