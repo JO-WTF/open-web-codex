@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_api::AgentIdentityTelemetry;
+use codex_api::ModelsCatalog;
+use codex_api::ModelsCatalogError;
 use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -20,6 +22,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::create_client_for_route_async;
+use codex_login::default_client::create_client_for_route_without_request_logging_async;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
@@ -38,6 +41,32 @@ use crate::provider::enforce_managed_residency;
 
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
+
+/// Sanitized model metadata returned by a Provider-owned catalog request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderModelSummary {
+    pub model_id: String,
+    pub model_name: Option<String>,
+    pub max_token_len: Option<i64>,
+    pub max_output_tokens: Option<i64>,
+    pub show_in_picker: bool,
+    pub context_window: Option<i64>,
+    pub supports_search_tool: bool,
+}
+
+/// Body-free failure classification for a Provider-owned catalog request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderModelsError {
+    Authentication,
+    NotFound,
+    RateLimited,
+    Upstream,
+    Timeout,
+    Network,
+    InvalidJson,
+    IncompatibleSchema,
+    EmptyCatalog,
+}
 
 /// Provider-owned OpenAI-compatible `/models` endpoint.
 #[derive(Debug)]
@@ -116,12 +145,159 @@ impl OpenAiModelsEndpoint {
         .map_err(|_| CodexErr::Timeout)?
     }
 
+    /// Fetches one bounded Provider-owned catalog without consulting or mutating
+    /// a Thread model manager or its cache.
+    pub(crate) async fn list_model_catalog(
+        &self,
+        client_version: &str,
+        http_client_factory: HttpClientFactory,
+    ) -> Result<Vec<ProviderModelSummary>, ProviderModelsError> {
+        let auth = self.auth().await;
+        let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
+        let mut api_provider = self
+            .provider_info
+            .to_api_provider(auth_mode)
+            .map_err(|_| ProviderModelsError::NotFound)?;
+        enforce_managed_residency(&mut api_provider);
+        let api_auth = resolve_provider_auth(auth.as_ref(), &self.provider_info)
+            .map_err(|_| ProviderModelsError::Authentication)?;
+        let request_url =
+            ModelsClient::<ReqwestTransport>::request_url(&api_provider, client_version);
+        if !valid_models_request_url(&request_url) {
+            return Err(ProviderModelsError::NotFound);
+        }
+
+        let catalog_result = timeout(MODELS_REFRESH_TIMEOUT, async {
+            let http_client = create_client_for_route_without_request_logging_async(
+                http_client_factory,
+                request_url.clone(),
+                ClientRouteClass::Api,
+            )
+            .await
+            .map_err(|_| ProviderModelsError::Network)?;
+            let client = ModelsClient::new(
+                ReqwestTransport::from_http_client(http_client),
+                api_provider,
+                api_auth,
+            );
+            client
+                .list_models_catalog(request_url, HeaderMap::new())
+                .await
+                .map_err(provider_models_error_from_catalog)
+        })
+        .await
+        .map_err(|_| ProviderModelsError::Timeout)
+        .and_then(|result| result);
+
+        record_catalog_result(&catalog_result);
+        let catalog = catalog_result?;
+        let mut summaries = match catalog {
+            ModelsCatalog::Rich(models) => models
+                .into_iter()
+                .map(provider_model_summary_from_rich)
+                .collect::<Vec<_>>(),
+            ModelsCatalog::OpenAiCompatible(model_ids) => model_ids
+                .into_iter()
+                .map(|model_id| ProviderModelSummary {
+                    model_id,
+                    model_name: None,
+                    max_token_len: None,
+                    max_output_tokens: None,
+                    show_in_picker: true,
+                    context_window: None,
+                    supports_search_tool: false,
+                })
+                .collect::<Vec<_>>(),
+        };
+        for model in &mut summaries {
+            model.supports_search_tool = self
+                .provider_info
+                .models
+                .iter()
+                .find(|config| config.model_id == model.model_id)
+                .is_some_and(|config| config.supports_search_tool);
+        }
+        Ok(summaries)
+    }
+
     fn auth_env(&self) -> AuthEnvTelemetry {
         let codex_api_key_env_enabled = self
             .auth_manager
             .as_ref()
             .is_some_and(|auth_manager| auth_manager.codex_api_key_env_enabled());
         collect_auth_env_telemetry(&self.provider_info, codex_api_key_env_enabled)
+    }
+}
+
+fn provider_models_error_from_catalog(error: ModelsCatalogError) -> ProviderModelsError {
+    match error {
+        ModelsCatalogError::Authentication => ProviderModelsError::Authentication,
+        ModelsCatalogError::NotFound => ProviderModelsError::NotFound,
+        ModelsCatalogError::RateLimited => ProviderModelsError::RateLimited,
+        ModelsCatalogError::Upstream => ProviderModelsError::Upstream,
+        ModelsCatalogError::Timeout => ProviderModelsError::Timeout,
+        ModelsCatalogError::Network => ProviderModelsError::Network,
+        ModelsCatalogError::InvalidJson => ProviderModelsError::InvalidJson,
+        ModelsCatalogError::IncompatibleSchema => ProviderModelsError::IncompatibleSchema,
+        ModelsCatalogError::EmptyCatalog => ProviderModelsError::EmptyCatalog,
+    }
+}
+
+fn valid_models_request_url(request_url: &str) -> bool {
+    let Ok(uri) = request_url.parse::<http::Uri>() else {
+        return false;
+    };
+    matches!(uri.scheme_str(), Some("http") | Some("https")) && uri.authority().is_some()
+}
+
+fn provider_model_summary_from_rich(model: ModelInfo) -> ProviderModelSummary {
+    let context_window = model.resolved_context_window().filter(|window| *window > 0);
+    let max_token_len = matches!(
+        model.truncation_policy.mode,
+        codex_protocol::openai_models::TruncationMode::Tokens
+    )
+    .then_some(model.truncation_policy.limit)
+    .filter(|limit| *limit > 0);
+    ProviderModelSummary {
+        model_id: model.slug,
+        model_name: Some(model.display_name),
+        max_token_len,
+        max_output_tokens: None,
+        show_in_picker: matches!(
+            model.visibility,
+            codex_protocol::openai_models::ModelVisibility::List
+        ) && model.supported_in_api,
+        context_window,
+        supports_search_tool: false,
+    }
+}
+
+fn record_catalog_result(result: &Result<ModelsCatalog, ProviderModelsError>) {
+    let (success, error_category) = match result {
+        Ok(_) => (true, None),
+        Err(error) => (false, Some(provider_models_error_category(*error))),
+    };
+    tracing::event!(
+        target: "codex_otel.trace_safe",
+        tracing::Level::INFO,
+        event.name = "codex.model_catalog",
+        endpoint = MODELS_ENDPOINT,
+        success,
+        error.category = error_category,
+    );
+}
+
+fn provider_models_error_category(error: ProviderModelsError) -> &'static str {
+    match error {
+        ProviderModelsError::Authentication => "authentication",
+        ProviderModelsError::NotFound => "not_found",
+        ProviderModelsError::RateLimited => "rate_limited",
+        ProviderModelsError::Upstream => "upstream",
+        ProviderModelsError::Timeout => "timeout",
+        ProviderModelsError::Network => "network",
+        ProviderModelsError::InvalidJson => "invalid_json",
+        ProviderModelsError::IncompatibleSchema => "incompatible_schema",
+        ProviderModelsError::EmptyCatalog => "empty_catalog",
     }
 }
 
@@ -279,6 +455,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
 mod tests {
     use std::num::NonZeroU64;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     use super::*;
     use codex_http_client::OutboundProxyPolicy;
@@ -289,6 +466,7 @@ mod tests {
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::openai_models::ModelsResponse;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -334,6 +512,36 @@ mod tests {
             requires_openai_auth: false,
             ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
         }
+    }
+
+    fn catalog_provider(base_url: String) -> ModelProviderInfo {
+        let mut provider = ModelProviderInfo::create_openai_provider(Some(base_url));
+        provider.request_max_retries = Some(0);
+        provider
+    }
+
+    fn rich_model(model_id: &str) -> ModelInfo {
+        serde_json::from_value(json!({
+            "slug": model_id,
+            "display_name": "Rich Model",
+            "description": null,
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": [],
+            "shell_type": "shell_command",
+            "visibility": "list",
+            "supported_in_api": true,
+            "priority": 0,
+            "upgrade": null,
+            "support_verbosity": false,
+            "default_verbosity": null,
+            "apply_patch_tool_type": null,
+            "truncation_policy": {"mode": "tokens", "limit": 4096},
+            "supports_image_detail_original": false,
+            "context_window": 272_000,
+            "max_context_window": 272_000,
+            "experimental_supported_tools": [],
+        }))
+        .expect("valid rich model fixture")
     }
 
     #[test]
@@ -441,5 +649,214 @@ mod tests {
                 .and_then(|headers| headers.get(RESIDENCY_HEADER_NAME)),
             Some(&"eu".into())
         );
+    }
+
+    #[tokio::test]
+    async fn fresh_catalog_accepts_openai_compatible_models_without_caching() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .and(header("authorization", "Bearer provider-secret"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"id": "compatible-model"}]
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let mut provider_info = catalog_provider(server.uri());
+        provider_info.experimental_bearer_token = Some("provider-secret".into());
+        provider_info.models = vec![codex_model_provider_info::ProviderModelConfig {
+            model_id: "compatible-model".to_string(),
+            supports_search_tool: true,
+            ..Default::default()
+        }];
+        let endpoint = OpenAiModelsEndpoint::new(provider_info, None);
+        let factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
+
+        for _ in 0..2 {
+            assert_eq!(
+                endpoint
+                    .list_model_catalog("0.0.0", factory.clone())
+                    .await
+                    .expect("compatible catalog should succeed"),
+                vec![ProviderModelSummary {
+                    model_id: "compatible-model".to_string(),
+                    model_name: None,
+                    max_token_len: None,
+                    max_output_tokens: None,
+                    show_in_picker: true,
+                    context_window: None,
+                    supports_search_tool: true,
+                }]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fresh_catalog_preserves_valid_rich_model_metadata() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(ModelsResponse {
+                models: vec![rich_model("rich-model")],
+            }))
+            .mount(&server)
+            .await;
+        let endpoint = OpenAiModelsEndpoint::new(catalog_provider(server.uri()), None);
+
+        assert_eq!(
+            endpoint
+                .list_model_catalog(
+                    "0.0.0",
+                    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                )
+                .await
+                .expect("rich catalog should succeed"),
+            vec![ProviderModelSummary {
+                model_id: "rich-model".to_string(),
+                model_name: Some("Rich Model".to_string()),
+                max_token_len: Some(4096),
+                max_output_tokens: None,
+                show_in_picker: true,
+                context_window: Some(272_000),
+                supports_search_tool: false,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn fresh_catalog_rejects_duplicate_and_malformed_entries() {
+        for body in [
+            json!({"data": [{"id": "duplicate"}, {"id": "duplicate"}]}),
+            json!({"data": [{"name": "missing-id"}]}),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/models"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+            let endpoint = OpenAiModelsEndpoint::new(catalog_provider(server.uri()), None);
+
+            assert_eq!(
+                endpoint
+                    .list_model_catalog(
+                        "0.0.0",
+                        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                    )
+                    .await,
+                Err(ProviderModelsError::IncompatibleSchema)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fresh_catalog_rejects_oversized_bodies_without_exposing_content() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'x'; 1024 * 1024 + 1]))
+            .mount(&server)
+            .await;
+        let endpoint = OpenAiModelsEndpoint::new(catalog_provider(server.uri()), None);
+
+        assert_eq!(
+            endpoint
+                .list_model_catalog(
+                    "0.0.0",
+                    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                )
+                .await,
+            Err(ProviderModelsError::IncompatibleSchema)
+        );
+    }
+
+    #[tokio::test]
+    async fn fresh_catalog_classifies_unauthorized_and_timeout_without_response_details() {
+        let unauthorized = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .set_body_string("credential=provider-secret body-canary"),
+            )
+            .mount(&unauthorized)
+            .await;
+        let endpoint = OpenAiModelsEndpoint::new(catalog_provider(unauthorized.uri()), None);
+        assert_eq!(
+            endpoint
+                .list_model_catalog(
+                    "0.0.0",
+                    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                )
+                .await,
+            Err(ProviderModelsError::Authentication)
+        );
+
+        let slow = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_secs(MODELS_REFRESH_TIMEOUT.as_secs() + 1))
+                    .set_body_json(json!({"data": [{"id": "late-model"}]})),
+            )
+            .mount(&slow)
+            .await;
+        let endpoint = OpenAiModelsEndpoint::new(catalog_provider(slow.uri()), None);
+        assert_eq!(
+            endpoint
+                .list_model_catalog(
+                    "0.0.0",
+                    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                )
+                .await,
+            Err(ProviderModelsError::Timeout)
+        );
+    }
+
+    #[tokio::test]
+    async fn fresh_catalog_classifies_http_and_json_failures_without_body_details() {
+        const CANARY: &str = "catalog-response-canary";
+        for (status, expected) in [
+            (404, ProviderModelsError::NotFound),
+            (429, ProviderModelsError::RateLimited),
+            (500, ProviderModelsError::Upstream),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/models"))
+                .respond_with(ResponseTemplate::new(status).set_body_string(CANARY))
+                .mount(&server)
+                .await;
+            let endpoint = OpenAiModelsEndpoint::new(catalog_provider(server.uri()), None);
+
+            let error = endpoint
+                .list_model_catalog(
+                    "0.0.0",
+                    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                )
+                .await
+                .expect_err("HTTP failure should be classified");
+            assert_eq!(error, expected);
+            assert!(!format!("{error:?}").contains(CANARY));
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(CANARY))
+            .mount(&server)
+            .await;
+        let endpoint = OpenAiModelsEndpoint::new(catalog_provider(server.uri()), None);
+        let error = endpoint
+            .list_model_catalog(
+                "0.0.0",
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            )
+            .await
+            .expect_err("invalid JSON should be classified");
+        assert_eq!(error, ProviderModelsError::InvalidJson);
+        assert!(!format!("{error:?}").contains(CANARY));
     }
 }

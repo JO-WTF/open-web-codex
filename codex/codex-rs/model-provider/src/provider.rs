@@ -9,12 +9,14 @@ use codex_api::Provider;
 use codex_api::SharedAuthProvider;
 use codex_api::TransportError;
 use codex_api::is_azure_responses_provider;
+use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::RESIDENCY_HEADER_NAME;
 use codex_login::default_client::ResidencyRequirement;
 use codex_login::default_client::read_default_client_residency_requirement;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -31,6 +33,8 @@ use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
 use crate::models_endpoint::OpenAiModelsEndpoint;
+use crate::models_endpoint::ProviderModelSummary;
+use crate::models_endpoint::ProviderModelsError;
 
 pub(crate) fn enforce_managed_residency(provider: &mut Provider) {
     if let Some(requirement) = read_default_client_residency_requirement() {
@@ -57,6 +61,8 @@ pub enum RemoteCompactionSupport {
 /// that the active provider marks unsupported here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderCapabilities {
+    /// Whether the active Provider accepts function-tool calls on its wire.
+    pub function_tools: bool,
     pub namespace_tools: bool,
     pub image_generation: bool,
     pub web_search: bool,
@@ -67,6 +73,7 @@ pub struct ProviderCapabilities {
 impl Default for ProviderCapabilities {
     fn default() -> Self {
         Self {
+            function_tools: false,
             namespace_tools: true,
             image_generation: true,
             web_search: true,
@@ -289,6 +296,17 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         drop(cache);
         self.models_manager_without_cache(config_model_catalog)
     }
+
+    /// Fetches a fresh Provider-owned model catalog without touching the
+    /// Thread model manager or its cache.
+    fn list_models_fresh(
+        &self,
+        client_version: &str,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelProviderFuture<'_, Result<Vec<ProviderModelSummary>, ProviderModelsError>> {
+        let _ = (client_version, http_client_factory);
+        Box::pin(async { Err(ProviderModelsError::NotFound) })
+    }
 }
 
 pub type ModelProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -347,10 +365,15 @@ impl ModelProvider for ConfiguredModelProvider {
             RemoteCompactionSupport::Unsupported
         };
 
-        ProviderCapabilities {
+        let mut capabilities = ProviderCapabilities {
+            function_tools: self.info.supports_function_tools,
             remote_compaction,
             ..ProviderCapabilities::default()
+        };
+        if self.info.wire_api == WireApi::Chat {
+            capabilities.web_search = false;
         }
+        capabilities
     }
 
     fn approval_review_preferred_model(&self) -> &'static str {
@@ -435,19 +458,21 @@ impl ModelProvider for ConfiguredModelProvider {
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
         match config_model_catalog {
-            Some(model_catalog) => Arc::new(StaticModelsManager::new(
+            Some(model_catalog) => Arc::new(StaticModelsManager::new_with_model_configs(
                 self.auth_manager.clone(),
                 model_catalog,
+                self.info.models.clone(),
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new(
+                Arc::new(OpenAiModelsManager::new_with_model_configs(
                     codex_home,
                     endpoint,
                     self.auth_manager.clone(),
+                    self.info.models.clone(),
                 ))
             }
         }
@@ -458,18 +483,20 @@ impl ModelProvider for ConfiguredModelProvider {
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
         match config_model_catalog {
-            Some(model_catalog) => Arc::new(StaticModelsManager::new(
+            Some(model_catalog) => Arc::new(StaticModelsManager::new_with_model_configs(
                 self.auth_manager.clone(),
                 model_catalog,
+                self.info.models.clone(),
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new_without_cache(
+                Arc::new(OpenAiModelsManager::new_without_cache_with_model_configs(
                     endpoint,
                     self.auth_manager.clone(),
+                    self.info.models.clone(),
                 ))
             }
         }
@@ -481,22 +508,37 @@ impl ModelProvider for ConfiguredModelProvider {
         cache: Arc<dyn ModelsCache>,
     ) -> SharedModelsManager {
         match config_model_catalog {
-            Some(model_catalog) => Arc::new(StaticModelsManager::new(
+            Some(model_catalog) => Arc::new(StaticModelsManager::new_with_model_configs(
                 self.auth_manager.clone(),
                 model_catalog,
+                self.info.models.clone(),
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new_with_cache(
+                Arc::new(OpenAiModelsManager::new_with_cache_and_model_configs(
                     cache,
                     endpoint,
                     self.auth_manager.clone(),
+                    self.info.models.clone(),
                 ))
             }
         }
+    }
+
+    fn list_models_fresh(
+        &self,
+        client_version: &str,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelProviderFuture<'_, Result<Vec<ProviderModelSummary>, ProviderModelsError>> {
+        let client_version = client_version.to_string();
+        Box::pin(async move {
+            OpenAiModelsEndpoint::new(self.info.clone(), self.auth_manager.clone())
+                .list_model_catalog(&client_version, http_client_factory)
+                .await
+        })
     }
 }
 
@@ -510,9 +552,13 @@ mod tests {
     use codex_login::auth::BedrockApiKeyAuth;
     use codex_model_provider_info::AwsAuthRefreshConfig;
     use codex_model_provider_info::ModelProviderAwsAuthInfo;
+    use codex_model_provider_info::ProviderModelConfig;
     use codex_model_provider_info::WireApi;
     use codex_model_provider_info::create_oss_provider_with_base_url;
     use codex_models_manager::ModelsManagerConfig;
+    use codex_models_manager::cache::ModelsCacheEntry;
+    use codex_models_manager::cache::ModelsCacheError;
+    use codex_models_manager::cache::ModelsCacheFuture;
     use codex_models_manager::manager::RefreshStrategy;
     use codex_protocol::account::PlanType;
     use codex_protocol::config_types::ModelProviderAuthInfo;
@@ -564,6 +610,8 @@ mod tests {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
+            supports_function_tools: false,
+            models: Vec::new(),
             query_params: None,
             http_headers: None,
             env_http_headers: None,
@@ -599,6 +647,32 @@ mod tests {
             "experimental_supported_tools": [],
         }))
         .expect("valid model")
+    }
+
+    #[derive(Debug)]
+    struct EmptyModelsCache;
+
+    impl ModelsCache for EmptyModelsCache {
+        fn load<'a>(
+            &'a self,
+            _client_version: &'a str,
+        ) -> ModelsCacheFuture<'a, Result<Option<ModelsCacheEntry>, ModelsCacheError>> {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn store<'a>(
+            &'a self,
+            _entry: &'a ModelsCacheEntry,
+        ) -> ModelsCacheFuture<'a, Result<(), ModelsCacheError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn refresh_ttl<'a>(
+            &'a self,
+            _client_version: &'a str,
+        ) -> ModelsCacheFuture<'a, Result<(), ModelsCacheError>> {
+            Box::pin(async { Ok(()) })
+        }
     }
 
     fn bedrock_api_key_auth() -> CodexAuth {
@@ -637,10 +711,121 @@ mod tests {
         assert_eq!(
             provider.capabilities(),
             ProviderCapabilities {
+                function_tools: true,
                 remote_compaction: RemoteCompactionSupport::V2,
                 ..ProviderCapabilities::default()
             }
         );
+    }
+
+    #[test]
+    fn configured_provider_projects_exact_function_tool_capability() {
+        let mut chat_provider = provider_for("https://example.test/v1".to_string());
+        chat_provider.wire_api = WireApi::Chat;
+        chat_provider.supports_function_tools = true;
+
+        let enabled = create_model_provider(chat_provider, /*auth_manager*/ None);
+        assert!(enabled.capabilities().function_tools);
+        assert!(!enabled.capabilities().web_search);
+
+        let mut disabled_provider = provider_for("https://example.test/v1".to_string());
+        disabled_provider.wire_api = WireApi::Chat;
+        let disabled = create_model_provider(disabled_provider, /*auth_manager*/ None);
+        assert!(!disabled.capabilities().function_tools);
+        assert!(!disabled.capabilities().web_search);
+    }
+
+    #[tokio::test]
+    async fn configured_provider_model_capabilities_apply_by_exact_model_id() {
+        let mut provider_info = provider_for("https://example.test/v1".to_string());
+        provider_info.models = vec![ProviderModelConfig {
+            model_id: "configured-model".to_string(),
+            supports_search_tool: true,
+            ..ProviderModelConfig::default()
+        }];
+        let mut unconfigured = remote_model("unconfigured-model");
+        unconfigured.supports_search_tool = true;
+
+        let provider = create_model_provider(provider_info, /*auth_manager*/ None);
+        let manager = provider.models_manager(
+            test_codex_home(),
+            Some(ModelsResponse {
+                models: vec![remote_model("configured-model"), unconfigured],
+            }),
+        );
+
+        assert!(
+            manager
+                .get_model_info("configured-model", &ModelsManagerConfig::default())
+                .await
+                .supports_search_tool
+        );
+        assert!(
+            !manager
+                .get_model_info("unconfigured-model", &ModelsManagerConfig::default())
+                .await
+                .supports_search_tool
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_provider_passes_model_configs_to_every_remote_manager_kind() {
+        let server = MockServer::start().await;
+        let mut unconfigured = remote_model("unconfigured-model");
+        unconfigured.supports_search_tool = true;
+        let remote_catalog = ModelsResponse {
+            models: vec![remote_model("configured-model"), unconfigured],
+        };
+        Mock::given(method("GET"))
+            .and(path("/models"))
+            .and(header_regex("Authorization", "Bearer provider-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(remote_catalog))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let mut provider_info = provider_for(server.uri());
+        provider_info.experimental_bearer_token = Some("provider-token".into());
+        provider_info.models = vec![ProviderModelConfig {
+            model_id: "configured-model".to_string(),
+            supports_search_tool: true,
+            ..ProviderModelConfig::default()
+        }];
+        let provider = create_model_provider(
+            provider_info,
+            Some(AuthManager::from_auth_for_testing(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            )),
+        );
+        let managers = vec![
+            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None),
+            provider.models_manager_without_cache(/*config_model_catalog*/ None),
+            provider.models_manager_with_cache(
+                /*config_model_catalog*/ None,
+                Arc::new(EmptyModelsCache),
+            ),
+        ];
+
+        for manager in managers {
+            manager
+                .raw_model_catalog(
+                    RefreshStrategy::Online,
+                    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                )
+                .await;
+            assert!(
+                manager
+                    .get_model_info("configured-model", &ModelsManagerConfig::default())
+                    .await
+                    .supports_search_tool
+            );
+            assert!(
+                !manager
+                    .get_model_info("unconfigured-model", &ModelsManagerConfig::default())
+                    .await
+                    .supports_search_tool
+            );
+        }
     }
 
     #[test]
@@ -762,6 +947,24 @@ mod tests {
         );
 
         assert!(provider.auth_manager().is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_without_fresh_catalog_support_returns_typed_unavailable() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(
+            provider
+                .list_models_fresh(
+                    "0.0.0",
+                    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                )
+                .await,
+            Err(ProviderModelsError::NotFound)
+        );
     }
 
     #[tokio::test]
