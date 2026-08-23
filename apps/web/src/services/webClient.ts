@@ -104,12 +104,6 @@ function platformWorkspace(workspace: Workspace): WorkspaceInfo {
     worktree: workspace.kind === "worktree"
       ? { branch: workspace.branch_name ?? workspace.source_ref }
       : null,
-    settings: {
-      sidebarCollapsed: false,
-      cloneSourceWorkspaceId: workspace.kind === "clone"
-        ? workspace.parent_workspace_id
-        : null,
-    },
   };
 }
 

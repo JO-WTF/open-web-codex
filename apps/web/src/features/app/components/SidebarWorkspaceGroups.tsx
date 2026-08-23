@@ -24,10 +24,6 @@ import type {
 
 type SidebarWorkspaceGroupsProps = {
   groups: WorkspaceGroupSection[];
-  hasWorkspaceGroups: boolean;
-  collapsedGroups: Set<string>;
-  ungroupedCollapseId: string;
-  toggleGroupCollapse: (groupId: string) => void;
   cloneChildIds: Set<string>;
   clonesBySource: Map<string, WorkspaceInfo[]>;
   worktreesByParent: Map<string, WorkspaceInfo[]>;
@@ -43,6 +39,7 @@ type SidebarWorkspaceGroupsProps = {
   threadListPagingByWorkspace: Record<string, boolean>;
   threadListCursorByWorkspace: Record<string, string | null>;
   expandedWorkspaces: Set<string>;
+  collapsedWorkspaceIds: Set<string>;
   activeWorkspaceId: string | null;
   activeThreadId: string | null;
   pendingUserInputKeys?: Set<string>;
@@ -87,10 +84,6 @@ type SidebarWorkspaceGroupsProps = {
 type SidebarWorkspaceEntryProps = Omit<
   SidebarWorkspaceGroupsProps,
   | "groups"
-  | "hasWorkspaceGroups"
-  | "collapsedGroups"
-  | "ungroupedCollapseId"
-  | "toggleGroupCollapse"
 > & {
   workspace: WorkspaceInfo;
 };
@@ -112,6 +105,7 @@ function SidebarWorkspaceEntry({
   threadListPagingByWorkspace,
   threadListCursorByWorkspace,
   expandedWorkspaces,
+  collapsedWorkspaceIds,
   activeWorkspaceId,
   activeThreadId,
   pendingUserInputKeys,
@@ -146,7 +140,6 @@ function SidebarWorkspaceEntry({
   }
 
   const threads = threadsByWorkspace[workspace.id] ?? [];
-  const isCollapsed = workspace.settings.sidebarCollapsed;
   const isExpanded = expandedWorkspaces.has(workspace.id);
   const workspaceMatchesSearch = isWorkspaceMatch(workspace);
   const searchExpanded = isExpanded || isSearchActive;
@@ -207,7 +200,7 @@ function SidebarWorkspaceEntry({
           : "No conversations yet"
       }
       isActive={workspace.id === activeWorkspaceId}
-      isCollapsed={isCollapsed}
+      isCollapsed={collapsedWorkspaceIds.has(workspace.id)}
       addMenuOpen={addMenuOpen}
       addMenuWidth={addMenuWidth}
       onSelectWorkspace={onSelectWorkspace}
@@ -294,6 +287,7 @@ function SidebarWorkspaceEntry({
           threadListPagingByWorkspace={threadListPagingByWorkspace}
           threadListCursorByWorkspace={threadListCursorByWorkspace}
           expandedWorkspaces={expandedWorkspaces}
+          collapsedWorkspaceIds={collapsedWorkspaceIds}
           activeWorkspaceId={activeWorkspaceId}
           activeThreadId={activeThreadId}
           pendingUserInputKeys={pendingUserInputKeys}
@@ -328,6 +322,7 @@ function SidebarWorkspaceEntry({
           threadListPagingByWorkspace={threadListPagingByWorkspace}
           threadListCursorByWorkspace={threadListCursorByWorkspace}
           expandedWorkspaces={expandedWorkspaces}
+          collapsedWorkspaceIds={collapsedWorkspaceIds}
           activeWorkspaceId={activeWorkspaceId}
           activeThreadId={activeThreadId}
           pendingUserInputKeys={pendingUserInputKeys}
@@ -379,25 +374,17 @@ function SidebarWorkspaceEntry({
 
 export function SidebarWorkspaceGroups({
   groups,
-  hasWorkspaceGroups,
-  collapsedGroups,
-  ungroupedCollapseId,
-  toggleGroupCollapse,
   ...entryProps
 }: SidebarWorkspaceGroupsProps) {
   return groups.map((group) => {
-    const showGroupHeader = Boolean(group.id) || hasWorkspaceGroups;
-    const toggleId = group.id ?? (showGroupHeader ? ungroupedCollapseId : null);
-    const isGroupCollapsed = Boolean(toggleId && collapsedGroups.has(toggleId));
-
     return (
       <WorkspaceGroup
         key={group.id ?? "ungrouped"}
-        toggleId={toggleId}
+        toggleId={null}
         name={group.name}
-        showHeader={showGroupHeader}
-        isCollapsed={isGroupCollapsed}
-        onToggleCollapse={toggleGroupCollapse}
+        showHeader={false}
+        isCollapsed={false}
+        onToggleCollapse={() => undefined}
       >
         {group.workspaces.map((workspace) => (
           <SidebarWorkspaceEntry

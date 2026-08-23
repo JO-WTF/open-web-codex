@@ -18,4 +18,3 @@ export function isGitRootNotFound(error: string | null | undefined) {
   }
   return error.toLowerCase().includes("git root not found");
 }
-

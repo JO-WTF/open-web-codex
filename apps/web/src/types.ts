@@ -1,46 +1,3 @@
-export type WorkspaceSettings = {
-  sidebarCollapsed: boolean;
-  sortOrder?: number | null;
-  groupId?: string | null;
-  cloneSourceWorkspaceId?: string | null;
-  gitRoot?: string | null;
-  launchScript?: string | null;
-  launchScripts?: LaunchScriptEntry[] | null;
-  worktreeSetupScript?: string | null;
-  worktreesFolder?: string | null;
-};
-
-export type LaunchScriptIconId =
-  | "play"
-  | "build"
-  | "debug"
-  | "wrench"
-  | "terminal"
-  | "code"
-  | "server"
-  | "database"
-  | "package"
-  | "test"
-  | "lint"
-  | "dev"
-  | "git"
-  | "config"
-  | "logs";
-
-export type LaunchScriptEntry = {
-  id: string;
-  script: string;
-  icon: LaunchScriptIconId;
-  label?: string | null;
-};
-
-export type WorkspaceGroup = {
-  id: string;
-  name: string;
-  sortOrder?: number | null;
-  copiesFolder?: string | null;
-};
-
 export type WorkspaceKind = "main" | "worktree";
 
 export type WorktreeInfo = {
@@ -55,7 +12,6 @@ export type WorkspaceInfo = {
   kind?: WorkspaceKind;
   parentId?: string | null;
   worktree?: WorktreeInfo | null;
-  settings: WorkspaceSettings;
 };
 
 export type AppServerEvent = {
@@ -307,7 +263,6 @@ export type AppSettings = {
   composerFenceAutoWrapPasteCodeLike: boolean;
   composerListContinuation: boolean;
   composerCodeBlockCopyUseModifier: boolean;
-  workspaceGroups: WorkspaceGroup[];
   globalWorktreesFolder: string | null;
   openAppTargets: OpenAppTarget[];
   selectedOpenAppId: string;

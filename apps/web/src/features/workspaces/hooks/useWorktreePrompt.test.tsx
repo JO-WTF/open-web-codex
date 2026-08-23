@@ -10,20 +10,17 @@ const parentWorkspace: WorkspaceInfo = {
   path: "/tmp/ws-1",
   connected: true,
   kind: "main",
-  settings: { sidebarCollapsed: false },
 };
 
 describe("useWorktreePrompt", () => {
   it("derives branch from name until branch is manually edited", () => {
     const addWorktreeAgent = vi.fn().mockResolvedValue(null);
-    const updateWorkspaceSettings = vi.fn().mockResolvedValue(parentWorkspace);
     const connectWorkspace = vi.fn().mockResolvedValue(undefined);
     const onSelectWorkspace = vi.fn();
 
     const { result } = renderHook(() =>
       useWorktreePrompt({
         addWorktreeAgent,
-        updateWorkspaceSettings,
         connectWorkspace,
         onSelectWorkspace,
       }),
@@ -55,14 +52,12 @@ describe("useWorktreePrompt", () => {
 
   it("does not override branch when name is cleared", () => {
     const addWorktreeAgent = vi.fn().mockResolvedValue(null);
-    const updateWorkspaceSettings = vi.fn().mockResolvedValue(parentWorkspace);
     const connectWorkspace = vi.fn().mockResolvedValue(undefined);
     const onSelectWorkspace = vi.fn();
 
     const { result } = renderHook(() =>
       useWorktreePrompt({
         addWorktreeAgent,
-        updateWorkspaceSettings,
         connectWorkspace,
         onSelectWorkspace,
       }),
@@ -93,17 +88,14 @@ describe("useWorktreePrompt", () => {
       kind: "worktree",
       parentId: parentWorkspace.id,
       worktree: { branch: "codex/example" },
-      settings: { sidebarCollapsed: false },
     };
     const addWorktreeAgent = vi.fn().mockResolvedValue(worktreeWorkspace);
-    const updateWorkspaceSettings = vi.fn().mockResolvedValue(parentWorkspace);
     const connectWorkspace = vi.fn().mockResolvedValue(undefined);
     const onSelectWorkspace = vi.fn();
 
     const { result } = renderHook(() =>
       useWorktreePrompt({
         addWorktreeAgent,
-        updateWorkspaceSettings,
         connectWorkspace,
         onSelectWorkspace,
       }),

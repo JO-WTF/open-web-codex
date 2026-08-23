@@ -11,7 +11,6 @@ const worktree: WorkspaceInfo = {
   connected: true,
   kind: "worktree",
   worktree: { branch: "feature/test" },
-  settings: { sidebarCollapsed: false },
 };
 
 describe("WorktreeSection", () => {
@@ -26,6 +25,7 @@ describe("WorktreeSection", () => {
         threadListPagingByWorkspace={{ [worktree.id]: false }}
         threadListCursorByWorkspace={{ [worktree.id]: "cursor" }}
         expandedWorkspaces={new Set()}
+        collapsedWorkspaceIds={new Set()}
         activeWorkspaceId={null}
         activeThreadId={null}
         getThreadRows={() => ({

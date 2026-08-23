@@ -44,7 +44,6 @@ const connectedWorkspace: WorkspaceInfo = {
   name: "CodexMonitor",
   path: "/tmp/codex",
   connected: true,
-  settings: { sidebarCollapsed: false },
 };
 
 const makeOptions = (overrides: Partial<Parameters<typeof usePullRequestComposer>[0]> = {}) => ({

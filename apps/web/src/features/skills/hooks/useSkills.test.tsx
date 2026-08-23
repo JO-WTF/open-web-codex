@@ -19,7 +19,6 @@ const workspace: WorkspaceInfo = {
   name: "Workspace One",
   path: "/tmp/workspace-one",
   connected: true,
-  settings: { sidebarCollapsed: false },
 };
 
 let listener: ((event: AppServerEvent) => void) | null = null;

@@ -298,9 +298,13 @@ Vite 映射到 browser shim。production graph 之外仍有大量 non-test Brows
 及其 hooks/facade/styles/tests 因而仍构成非生产维护面。`PlatformClient` 又以一个完整 class 进入
 生产 bundle，未使用的 legacy methods 和 endpoint 字符串不会被 tree-shake，形成浏览器 API
 第二表面；阶段三 Atom 1 已删除 hidden generation、generic adapter RPC、remembered approval 及其
-旧 UI 控件，Atom 2a 又删除 Profile file/Agent/Prompt 二次系统与 `/profile/config/model` fallback。
+旧 UI 控件，Atom 2a 又删除 Profile file/Agent/Prompt 二次系统与 `/profile/config/model` fallback，
+Atom 2b 删除 Browser Workspace Preferences、未实际应用的 Runtime 参数以及自动执行 setup/launch
+脚本的旧链路和持久表。
 Workspace `AGENTS.md`、official feature/Skills/Apps 和 Copilot package-managed Role/Skill seed 保留；
-剩余 Terminal、Usage 和 Preferences 继续按 owner 原子清理，不建立兼容 facade。
+剩余 Terminal 与 Usage 继续按 owner 分成独立 Atom 清理，不建立兼容 facade。Workspace 固定归属、
+GitRuntime 和浏览器会话级布局选择仍由各自现役 owner 保留；旧 App 不再持久化工作区排序、分组、
+折叠或 Git root 投影。
 历史 `check-main-ui-parity` 字节级第二 UI truth 及其手工 SHA/overlay CI gate 已删除；Web 交付
 使用类型检查、组件/合同测试、生产构建与真实浏览器验收。`check:no-desktop` 继续作为
 browser-only 边界门。

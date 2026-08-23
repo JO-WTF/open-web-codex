@@ -30,7 +30,6 @@ import type {
   ThreadBucket,
   WorkspaceGroupSection,
 } from "./sidebarTypes";
-import { useCollapsedGroups } from "../hooks/useCollapsedGroups";
 import { useMenuController } from "../hooks/useMenuController";
 import { useSidebarMenus } from "../hooks/useSidebarMenus";
 import { useSidebarScrollFade } from "../hooks/useSidebarScrollFade";
@@ -40,8 +39,6 @@ import { getUsageLabels } from "../utils/usageLabels";
 import { formatRelativeTimeShort } from "../../../utils/time";
 import type { ThreadStatusById } from "../../../utils/threadStatus";
 
-const COLLAPSED_GROUPS_STORAGE_KEY = "codexmonitor.collapsedGroups";
-const UNGROUPED_COLLAPSE_ID = "__ungrouped__";
 const ADD_MENU_WIDTH = 200;
 const ALL_THREADS_ADD_MENU_WIDTH = 220;
 
@@ -99,7 +96,6 @@ function groupFlatThreadRowsByTimeBucket(
 type SidebarProps = {
   workspaces: WorkspaceInfo[];
   groupedWorkspaces: WorkspaceGroupSection[];
-  hasWorkspaceGroups: boolean;
   deletingWorktreeIds: Set<string>;
   newAgentDraftWorkspaceId?: string | null;
   startingDraftThreadWorkspaceId?: string | null;
@@ -134,7 +130,6 @@ type SidebarProps = {
   onAddAgent: (workspace: WorkspaceInfo) => void;
   onAddWorktreeAgent: (workspace: WorkspaceInfo) => void;
   onAddCloneAgent: (workspace: WorkspaceInfo) => void;
-  onToggleWorkspaceCollapse: (workspaceId: string, collapsed: boolean) => void;
   onSelectThread: (workspaceId: string, threadId: string) => void;
   onDeleteThread: (workspaceId: string, threadId: string) => void;
   onSyncThread: (workspaceId: string, threadId: string) => void;
@@ -160,7 +155,6 @@ type SidebarProps = {
 export const Sidebar = memo(function Sidebar({
   workspaces,
   groupedWorkspaces,
-  hasWorkspaceGroups,
   deletingWorktreeIds,
   newAgentDraftWorkspaceId = null,
   startingDraftThreadWorkspaceId = null,
@@ -195,7 +189,6 @@ export const Sidebar = memo(function Sidebar({
   onAddAgent,
   onAddWorktreeAgent,
   onAddCloneAgent,
-  onToggleWorkspaceCollapse,
   onSelectThread,
   onDeleteThread,
   onSyncThread,
@@ -220,6 +213,9 @@ export const Sidebar = memo(function Sidebar({
   const [expandedWorkspaces, setExpandedWorkspaces] = useState(
     new Set<string>(),
   );
+  const [collapsedWorkspaceIds, setCollapsedWorkspaceIds] = useState(
+    new Set<string>(),
+  );
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [addMenuAnchor, setAddMenuAnchor] =
@@ -237,9 +233,6 @@ export const Sidebar = memo(function Sidebar({
     onDismiss: () => setAllThreadsAddMenuAnchor(null),
   });
   const { containerRef: allThreadsAddMenuRef } = allThreadsAddMenuController;
-  const { collapsedGroups, toggleGroupCollapse } = useCollapsedGroups(
-    COLLAPSED_GROUPS_STORAGE_KEY,
-  );
   const { getThreadRows } = useThreadRows(threadParentById);
   const { showThreadMenu, showWorkspaceMenu, showWorktreeMenu, showCloneMenu } =
     useSidebarMenus({
@@ -456,7 +449,7 @@ export const Sidebar = memo(function Sidebar({
         return;
       }
 
-      const sourceId = workspace.settings.cloneSourceWorkspaceId?.trim();
+      const sourceId = workspace.parentId?.trim();
       if (sourceId) {
         cloneSourceIds.add(sourceId);
       }
@@ -526,7 +519,7 @@ export const Sidebar = memo(function Sidebar({
     workspaces
       .filter((entry) => (entry.kind ?? "main") === "main")
       .forEach((entry) => {
-        const sourceId = entry.settings.cloneSourceWorkspaceId?.trim();
+        const sourceId = entry.parentId?.trim();
         if (!sourceId || sourceId === entry.id || !workspaceById.has(sourceId)) {
           return;
         }
@@ -775,7 +768,7 @@ export const Sidebar = memo(function Sidebar({
     workspaces
       .filter((entry) => (entry.kind ?? "main") === "main")
       .forEach((entry) => {
-        const sourceId = entry.settings.cloneSourceWorkspaceId?.trim();
+        const sourceId = entry.parentId?.trim();
         if (!sourceId || sourceId === entry.id || !workspaceById.has(sourceId)) {
           return;
         }
@@ -821,6 +814,21 @@ export const Sidebar = memo(function Sidebar({
       return next;
     });
   }, []);
+
+  const handleToggleWorkspaceCollapse = useCallback(
+    (workspaceId: string, collapsed: boolean) => {
+      setCollapsedWorkspaceIds((previous) => {
+        const next = new Set(previous);
+        if (collapsed) {
+          next.add(workspaceId);
+        } else {
+          next.delete(workspaceId);
+        }
+        return next;
+      });
+    },
+    [],
+  );
 
   const getThreadTime = useCallback(
     (thread: ThreadSummary) => {
@@ -963,10 +971,6 @@ export const Sidebar = memo(function Sidebar({
             : (
                 <SidebarWorkspaceGroups
                   groups={groupedWorkspacesForRender}
-                  hasWorkspaceGroups={hasWorkspaceGroups}
-                  collapsedGroups={collapsedGroups}
-                  ungroupedCollapseId={UNGROUPED_COLLAPSE_ID}
-                  toggleGroupCollapse={toggleGroupCollapse}
                   cloneChildIds={cloneChildIds}
                   clonesBySource={clonesBySource}
                   worktreesByParent={worktreesByParent}
@@ -982,6 +986,7 @@ export const Sidebar = memo(function Sidebar({
                   threadListPagingByWorkspace={threadListPagingByWorkspace}
                   threadListCursorByWorkspace={threadListCursorByWorkspace}
                   expandedWorkspaces={expandedWorkspaces}
+                  collapsedWorkspaceIds={collapsedWorkspaceIds}
                   activeWorkspaceId={activeWorkspaceId}
                   activeThreadId={activeThreadId}
                   pendingUserInputKeys={pendingUserInputKeys}
@@ -1001,7 +1006,7 @@ export const Sidebar = memo(function Sidebar({
                   onAddAgent={onAddAgent}
                   onAddWorktreeAgent={onAddWorktreeAgent}
                   onAddCloneAgent={onAddCloneAgent}
-                  onToggleWorkspaceCollapse={onToggleWorkspaceCollapse}
+                  onToggleWorkspaceCollapse={handleToggleWorkspaceCollapse}
                   onSelectThread={onSelectThread}
                   onShowThreadMenu={showThreadMenu}
                   onShowWorkspaceMenu={showWorkspaceMenu}

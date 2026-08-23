@@ -8,6 +8,7 @@ type WorktreeCardProps = {
   isDeleting?: boolean;
   onSelectWorkspace: (id: string) => void;
   onShowWorktreeMenu: (event: MouseEvent, worktree: WorkspaceInfo) => void;
+  isCollapsed: boolean;
   onToggleWorkspaceCollapse: (workspaceId: string, collapsed: boolean) => void;
   onConnectWorkspace: (workspace: WorkspaceInfo) => void;
   children?: React.ReactNode;
@@ -19,16 +20,16 @@ export function WorktreeCard({
   isDeleting = false,
   onSelectWorkspace,
   onShowWorktreeMenu,
+  isCollapsed,
   onToggleWorkspaceCollapse,
   onConnectWorkspace,
   children,
 }: WorktreeCardProps) {
-  const worktreeCollapsed = worktree.settings.sidebarCollapsed;
   const worktreeBranch = worktree.worktree?.branch ?? "";
   const worktreeLabel = worktree.name?.trim() || worktreeBranch;
   const worktreeMeta =
     worktreeBranch && worktreeBranch !== worktreeLabel ? worktreeBranch : null;
-  const contentCollapsedClass = worktreeCollapsed ? " collapsed" : "";
+  const contentCollapsedClass = isCollapsed ? " collapsed" : "";
 
   return (
     <div className={`worktree-card${isDeleting ? " deleting" : ""}`}>
@@ -70,14 +71,14 @@ export function WorktreeCard({
           ) : (
             <>
               <button
-                className={`worktree-toggle ${worktreeCollapsed ? "" : "expanded"}`}
+                className={`worktree-toggle ${isCollapsed ? "" : "expanded"}`}
                 onClick={(event) => {
                   event.stopPropagation();
-                  onToggleWorkspaceCollapse(worktree.id, !worktreeCollapsed);
+                  onToggleWorkspaceCollapse(worktree.id, !isCollapsed);
                 }}
                 data-tauri-drag-region="false"
-                aria-label={worktreeCollapsed ? "Show agents" : "Hide agents"}
-                aria-expanded={!worktreeCollapsed}
+                aria-label={isCollapsed ? "Show agents" : "Hide agents"}
+                aria-expanded={!isCollapsed}
               >
                 <span className="worktree-toggle-icon">›</span>
               </button>
@@ -99,8 +100,8 @@ export function WorktreeCard({
       </div>
       <div
         className={`worktree-card-content${contentCollapsedClass}`}
-        aria-hidden={worktreeCollapsed}
-        inert={worktreeCollapsed ? true : undefined}
+        aria-hidden={isCollapsed}
+        inert={isCollapsed ? true : undefined}
       >
         <div className="worktree-card-content-inner">{children}</div>
       </div>

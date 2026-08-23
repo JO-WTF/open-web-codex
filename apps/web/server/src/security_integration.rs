@@ -81,6 +81,7 @@ async fn task_creation_binds_only_an_authorized_project_workspace() {
         "supervisor_revisions",
         "supervisor_definitions",
         "profile_capabilities",
+        "browser_workspace_preferences",
     ] {
         let relation: Option<String> = sqlx::query_scalar("SELECT to_regclass($1)::text")
             .bind(retired_table)
@@ -93,6 +94,7 @@ async fn task_creation_binds_only_an_authorized_project_workspace() {
         "provider_call_metrics",
         "runtime_agent_projections",
         "runtime_agent_execution_projections",
+        "terminal_sessions",
     ] {
         let relation: Option<String> = sqlx::query_scalar("SELECT to_regclass($1)::text")
             .bind(retained_table)
@@ -2108,6 +2110,45 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     )
     .await;
     assert_eq!(removed_profile_prompt_move.0, StatusCode::NOT_FOUND);
+
+    let removed_workspace_preferences = call(
+        &app,
+        authenticated("GET", "/api/browser-workspace-preferences", &first_token),
+    )
+    .await;
+    assert_eq!(removed_workspace_preferences.0, StatusCode::NOT_FOUND);
+    let removed_workspace_settings = call(
+        &app,
+        authenticated_json(
+            "PUT",
+            &format!("/api/browser-workspace-preferences/{workspace_id}"),
+            &first_token,
+            json!({"settings": {"sidebarCollapsed": true}}),
+        ),
+    )
+    .await;
+    assert_eq!(removed_workspace_settings.0, StatusCode::NOT_FOUND);
+    let removed_runtime_codex_args = call(
+        &app,
+        authenticated_json(
+            "PUT",
+            &format!("/api/browser-workspace-preferences/{workspace_id}/runtime-codex-args"),
+            &first_token,
+            json!({"codexArgs": "--ignored"}),
+        ),
+    )
+    .await;
+    assert_eq!(removed_runtime_codex_args.0, StatusCode::NOT_FOUND);
+    let removed_worktree_setup = call(
+        &app,
+        authenticated(
+            "GET",
+            &format!("/api/browser-workspace-preferences/{workspace_id}/worktree-setup"),
+            &first_token,
+        ),
+    )
+    .await;
+    assert_eq!(removed_worktree_setup.0, StatusCode::NOT_FOUND);
 
     let switched = call(
         &app,

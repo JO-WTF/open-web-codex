@@ -80,7 +80,6 @@ impl FakeCodexAdapter {
                 .to_string(),
             "connected": false,
             "kind": "main",
-            "settings": { "sidebarCollapsed": false },
         }));
         drop(state);
         self

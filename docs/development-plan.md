@@ -5,7 +5,7 @@
 | 文档性质 | 当前与下一里程碑的执行计划 |
 | 更新日期 | 2026-08-23 |
 | 当前阶段 | 阶段三：回归 Codex Runtime owner 并清理并行实现 |
-| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三 Atom 2a 已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统 |
+| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三 Atom 2b 已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统和 Browser Workspace Preferences |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018/019/024/025 为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
 | 阶段三后续 | 先清理剩余 Browser legacy API；再收敛 Provider/model owner、Run/Thread 状态和 history/event 投影；Codex upstream 同步与 seam 收敛独立作为最后步骤 |
@@ -45,8 +45,22 @@ Atom 2a 已完成：
 7. 保留 `/workspaces/{id}/agents`、official `/profile/features`、`/profile/skills`、`/profile/apps`
    以及 Copilot package-managed Role/Skill startup seed；不新增 Studio 替代品。
 
+Atom 2b 已完成：
+
+8. 删除 `/browser-workspace-preferences*`、任意 JSON settings、未实际应用的 Runtime 参数以及
+   worktree setup/launch script 的 route、DTO、client/facade、旧 App UI/hooks 和测试；不建立
+   Workspace 配置兼容接口。
+9. Sidebar 工作区卡片折叠只保留当前页面的本地交互状态；工作区列表来自 Workspace owner，
+   clone 归属使用其 typed `parentId`。旧 App 不再保存工作区顺序、分组、折叠或 Git root 投影；
+   Server `/workspaces/{id}/git-roots` 与 GitRuntime typed 能力保留，等待未来现役 WebApp 设计。
+10. 当前迁移删除 `browser_workspace_preferences` 表；不读取、迁移或删除任何用户 Profile 文件，
+    `terminal_sessions`、Terminal 和 Usage owner 均留给后续独立 Atom。
+
 本阶段每个已删除认证 route 都由代表性 authenticated 404 negative assertions 与 active-source rg
-覆盖；官方 typed approval 与 Thread 路径继续通过，Web/Rust/no-desktop 门全绿。
+覆盖；官方 typed approval 与 Thread 路径继续通过，Web/Rust/no-desktop 门全绿。Atom 2b 的本地
+PostgreSQL fresh-schema retired-table 门已通过；完整 ignored 跨租户门仍在既有 completed Thread
+follow-up 请求处返回 `502` 而非 `200`。该失败归入后续 Run/Thread owner Atom，Atom 2b 没有用
+Preferences fallback、重试或放宽断言掩盖它。
 
 ## 0A. 阶段二已完成基线：Copilot SDK、Task 选包与单 Profile 多包组合
 
@@ -457,7 +471,7 @@ Item 验收，不把后续模型误选低层 Tool 或求解失败伪装成地图
 只在完整 Data→Network→12h 基线→Balikpapan 增仓时效变化率→map canonical 链实际完成时计为通过。
 
 后续 backlog 继续遵守已确认边界：official Thread/Turn/Item/history 是唯一会话事实；Browser legacy、
-Terminal/Usage/Preferences、Provider 重复 owner、Task creation selection、Run lease/history overlay 与
+Terminal/Usage、Provider 重复 owner、Task creation selection、Run lease/history overlay 与
 physical-cwd join 必须按 owner 原子收敛，但不得再次插到上述仓网关键路径之前。
 
 阶段二已把领域无关的 ResourceRef/schema/codec/bounds/error/store/runtime/Workspace file

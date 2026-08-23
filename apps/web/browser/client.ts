@@ -32,7 +32,6 @@ import type {
   ProjectThreadContext,
   ThreadHistoryResponse,
   ThreadHistoryTurn,
-  BrowserWorkspacePreference,
   CreateGitHubRepositoryResponse,
   MapsConfiguration,
   MapsProvider,
@@ -270,37 +269,6 @@ export class PlatformClient {
 
   me() {
     return this.request<Me>("/api/me");
-  }
-
-  listBrowserWorkspacePreferences() {
-    return this.request<BrowserWorkspacePreference[]>("/api/browser-workspace-preferences");
-  }
-
-  updateBrowserWorkspaceSettings(workspaceId: string, settings: Record<string, unknown>) {
-    return this.request<BrowserWorkspacePreference>(
-      `/api/browser-workspace-preferences/${encodeURIComponent(workspaceId)}`,
-      { method: "PUT", body: JSON.stringify({ settings }) },
-    );
-  }
-
-  setWorkspaceRuntimeCodexArgs(workspaceId: string, codexArgs: string | null) {
-    return this.request<{ appliedCodexArgs: string | null; respawned: boolean }>(
-      `/api/browser-workspace-preferences/${encodeURIComponent(workspaceId)}/runtime-codex-args`,
-      { method: "PUT", body: JSON.stringify({ codexArgs }) },
-    );
-  }
-
-  worktreeSetupStatus(workspaceId: string) {
-    return this.request<{ shouldRun: boolean; script: string | null }>(
-      `/api/browser-workspace-preferences/${encodeURIComponent(workspaceId)}/worktree-setup`,
-    );
-  }
-
-  markWorktreeSetupRan(workspaceId: string) {
-    return this.request<{ status: string }>(
-      `/api/browser-workspace-preferences/${encodeURIComponent(workspaceId)}/worktree-setup`,
-      { method: "POST" },
-    );
   }
 
   getMapsConfiguration() {

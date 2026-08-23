@@ -130,7 +130,6 @@ const baseSettings: AppSettings = {
   composerFenceAutoWrapPasteCodeLike: false,
   composerListContinuation: false,
   composerCodeBlockCopyUseModifier: false,
-  workspaceGroups: [],
   openAppTargets: [
     {
       id: "vscode",
@@ -186,19 +185,9 @@ const renderDisplaySection = (
     appSettings: { ...baseSettings, ...options.appSettings },
     openAppIconById: {},
     onUpdateAppSettings,
-    workspaceGroups: [],
-    groupedWorkspaces: [],
-    ungroupedLabel: "Ungrouped",
+    workspaces: [],
     onClose: vi.fn(),
-    onMoveWorkspace: vi.fn(),
-    onDeleteWorkspace: vi.fn(),
-    onCreateWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onRenameWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onMoveWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onDeleteWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onAssignWorkspaceGroup: vi.fn().mockResolvedValue(null),
     onRunDoctor: vi.fn().mockResolvedValue(createDoctorResult()),
-    onUpdateWorkspaceSettings: vi.fn().mockResolvedValue(undefined),
     scaleShortcutTitle: "Scale shortcut",
     scaleShortcutText: "Use Command +/-",
     onTestNotificationSound: vi.fn(),
@@ -230,19 +219,9 @@ const renderComposerSection = (
     appSettings: { ...baseSettings, ...options.appSettings },
     openAppIconById: {},
     onUpdateAppSettings,
-    workspaceGroups: [],
-    groupedWorkspaces: [],
-    ungroupedLabel: "Ungrouped",
+    workspaces: [],
     onClose: vi.fn(),
-    onMoveWorkspace: vi.fn(),
-    onDeleteWorkspace: vi.fn(),
-    onCreateWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onRenameWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onMoveWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onDeleteWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onAssignWorkspaceGroup: vi.fn().mockResolvedValue(null),
     onRunDoctor: vi.fn().mockResolvedValue(createDoctorResult()),
-    onUpdateWorkspaceSettings: vi.fn().mockResolvedValue(undefined),
     scaleShortcutTitle: "Scale shortcut",
     scaleShortcutText: "Use Command +/-",
     onTestNotificationSound: vi.fn(),
@@ -279,19 +258,9 @@ const renderAboutSection = (
     openAppIconById: {},
     onUpdateAppSettings,
     onToggleAutomaticAppUpdateChecks,
-    workspaceGroups: [],
-    groupedWorkspaces: [],
-    ungroupedLabel: "Ungrouped",
+    workspaces: [],
     onClose: vi.fn(),
-    onMoveWorkspace: vi.fn(),
-    onDeleteWorkspace: vi.fn(),
-    onCreateWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onRenameWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onMoveWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onDeleteWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onAssignWorkspaceGroup: vi.fn().mockResolvedValue(null),
     onRunDoctor: vi.fn().mockResolvedValue(createDoctorResult()),
-    onUpdateWorkspaceSettings: vi.fn().mockResolvedValue(undefined),
     scaleShortcutTitle: "Scale shortcut",
     scaleShortcutText: "Use Command +/-",
     onTestNotificationSound: vi.fn(),
@@ -350,25 +319,9 @@ const renderFeaturesSection = (
     appSettings: { ...baseSettings, ...options.appSettings },
     openAppIconById: {},
     onUpdateAppSettings,
-    workspaceGroups: [],
-    groupedWorkspaces: [
-      {
-        id: null,
-        name: "Ungrouped",
-        workspaces: [workspace({ id: "w-features", name: "Features Workspace", connected: true })],
-      },
-    ],
-    ungroupedLabel: "Ungrouped",
+    workspaces: [workspace({ id: "w-features", name: "Features Workspace", connected: true })],
     onClose: vi.fn(),
-    onMoveWorkspace: vi.fn(),
-    onDeleteWorkspace: vi.fn(),
-    onCreateWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onRenameWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onMoveWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onDeleteWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onAssignWorkspaceGroup: vi.fn().mockResolvedValue(null),
     onRunDoctor: vi.fn().mockResolvedValue(createDoctorResult()),
-    onUpdateWorkspaceSettings: vi.fn().mockResolvedValue(undefined),
     scaleShortcutTitle: "Scale shortcut",
     scaleShortcutText: "Use Command +/-",
     onTestNotificationSound: vi.fn(),
@@ -385,10 +338,7 @@ const renderFeaturesSection = (
 };
 
 const workspace = (
-  overrides: Omit<Partial<WorkspaceInfo>, "settings"> &
-    Pick<WorkspaceInfo, "id" | "name"> & {
-      settings?: Partial<WorkspaceInfo["settings"]>;
-    },
+  overrides: Partial<WorkspaceInfo> & Pick<WorkspaceInfo, "id" | "name">,
 ): WorkspaceInfo => ({
   id: overrides.id,
   name: overrides.name,
@@ -397,97 +347,8 @@ const workspace = (
   kind: overrides.kind ?? "main",
   parentId: overrides.parentId ?? null,
   worktree: overrides.worktree ?? null,
-  settings: {
-    sidebarCollapsed: false,
-    sortOrder: null,
-    groupId: null,
-    gitRoot: null,
-    launchScript: null,
-    launchScripts: null,
-    worktreeSetupScript: null,
-    ...overrides.settings,
-  },
 });
 
-const renderEnvironmentsSection = (
-  options: {
-    appSettings?: Partial<AppSettings>;
-    groupedWorkspaces?: ComponentProps<typeof SettingsView>["groupedWorkspaces"];
-    onUpdateAppSettings?: ComponentProps<typeof SettingsView>["onUpdateAppSettings"];
-    onUpdateWorkspaceSettings?: ComponentProps<typeof SettingsView>["onUpdateWorkspaceSettings"];
-  } = {},
-) => {
-  cleanup();
-  const onUpdateAppSettings =
-    options.onUpdateAppSettings ?? vi.fn().mockResolvedValue(undefined);
-  const onUpdateWorkspaceSettings =
-    options.onUpdateWorkspaceSettings ?? vi.fn().mockResolvedValue(undefined);
-  const defaultGroupedWorkspaces =
-    options.groupedWorkspaces ??
-    [
-      {
-        id: null,
-        name: "Ungrouped",
-        workspaces: [
-          workspace({
-            id: "w1",
-            name: "Project One",
-            settings: {
-              sidebarCollapsed: false,
-              worktreeSetupScript: "echo one",
-            },
-          }),
-        ],
-      },
-    ];
-
-  const buildProps = (
-    nextOptions: {
-      appSettings?: Partial<AppSettings>;
-      groupedWorkspaces?: ComponentProps<typeof SettingsView>["groupedWorkspaces"];
-    } = {},
-  ): ComponentProps<typeof SettingsView> => ({
-    reduceTransparency: false,
-    onToggleTransparency: vi.fn(),
-    appSettings: { ...baseSettings, ...options.appSettings, ...nextOptions.appSettings },
-    openAppIconById: {},
-    onUpdateAppSettings,
-    workspaceGroups: [],
-    groupedWorkspaces: nextOptions.groupedWorkspaces ?? defaultGroupedWorkspaces,
-    ungroupedLabel: "Ungrouped",
-    onClose: vi.fn(),
-    onMoveWorkspace: vi.fn(),
-    onDeleteWorkspace: vi.fn(),
-    onCreateWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onRenameWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onMoveWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onDeleteWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onAssignWorkspaceGroup: vi.fn().mockResolvedValue(null),
-    onRunDoctor: vi.fn().mockResolvedValue(createDoctorResult()),
-    onUpdateWorkspaceSettings,
-    scaleShortcutTitle: "Scale shortcut",
-    scaleShortcutText: "Use Command +/-",
-    onTestNotificationSound: vi.fn(),
-    onTestSystemNotification: vi.fn(),
-    dictationModelStatus: null,
-    onDownloadDictationModel: vi.fn(),
-    onCancelDictationDownload: vi.fn(),
-    onRemoveDictationModel: vi.fn(),
-    initialSection: "environments",
-  });
-
-  const renderResult = render(<SettingsView {...buildProps()} />);
-  return {
-    onUpdateAppSettings,
-    onUpdateWorkspaceSettings,
-    rerender: (
-      nextOptions: {
-        appSettings?: Partial<AppSettings>;
-        groupedWorkspaces?: ComponentProps<typeof SettingsView>["groupedWorkspaces"];
-      } = {},
-    ) => renderResult.rerender(<SettingsView {...buildProps(nextOptions)} />),
-  };
-};
 
 describe("SettingsView Display", () => {
   it("updates the theme selection", async () => {
@@ -755,310 +616,6 @@ describe("SettingsView About", () => {
   });
 });
 
-describe("SettingsView Environments", () => {
-  it("shows the global worktrees root input", () => {
-    renderEnvironmentsSection({
-      appSettings: { globalWorktreesFolder: "I:/existing-worktrees" },
-    });
-
-    const input = screen.getByLabelText("Global worktrees root");
-    expect(input).toBeTruthy();
-    expect((input as HTMLInputElement).value).toBe("I:/existing-worktrees");
-    expect((input as HTMLInputElement).placeholder).toBe("/path/to/worktrees-root");
-  });
-
-  it("saves the global worktrees root through app settings", async () => {
-    const onUpdateAppSettings = vi.fn().mockResolvedValue(undefined);
-    const onUpdateWorkspaceSettings = vi.fn().mockResolvedValue(undefined);
-    renderEnvironmentsSection({
-      onUpdateAppSettings,
-      onUpdateWorkspaceSettings,
-    });
-
-    const input = screen.getByLabelText("Global worktrees root");
-    fireEvent.change(input, { target: { value: "I:/cm-worktrees" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(onUpdateAppSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
-          globalWorktreesFolder: "I:/cm-worktrees",
-        }),
-      );
-    });
-    expect(onUpdateWorkspaceSettings).not.toHaveBeenCalled();
-  });
-
-  it("does not clear an existing global worktrees root when saving project-only changes", async () => {
-    const onUpdateAppSettings = vi.fn().mockResolvedValue(undefined);
-    const onUpdateWorkspaceSettings = vi.fn().mockResolvedValue(undefined);
-    renderEnvironmentsSection({
-      appSettings: { globalWorktreesFolder: "I:/existing-worktrees" },
-      onUpdateAppSettings,
-      onUpdateWorkspaceSettings,
-    });
-
-    const textarea = screen.getByPlaceholderText("pnpm install");
-    fireEvent.change(textarea, { target: { value: "echo updated" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(onUpdateWorkspaceSettings).toHaveBeenCalledWith("w1", {
-        worktreeSetupScript: "echo updated",
-        worktreesFolder: null,
-      });
-    });
-    expect(onUpdateAppSettings).not.toHaveBeenCalled();
-  });
-
-  it("keeps the global worktrees root marked as saved after workspace save fails", async () => {
-    const onUpdateAppSettings = vi.fn().mockResolvedValue(undefined);
-    const onUpdateWorkspaceSettings = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("Failed to save workspace settings"))
-      .mockResolvedValueOnce(undefined);
-    renderEnvironmentsSection({
-      appSettings: { globalWorktreesFolder: "I:/existing-worktrees" },
-      onUpdateAppSettings,
-      onUpdateWorkspaceSettings,
-    });
-
-    fireEvent.change(screen.getByLabelText("Global worktrees root"), {
-      target: { value: "I:/cm-worktrees" },
-    });
-    fireEvent.change(screen.getByPlaceholderText("pnpm install"), {
-      target: { value: "echo updated" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    expect(
-      await screen.findByText("Failed to save workspace settings"),
-    ).toBeTruthy();
-    expect(onUpdateAppSettings).toHaveBeenCalledTimes(1);
-    expect(onUpdateWorkspaceSettings).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(onUpdateWorkspaceSettings).toHaveBeenCalledTimes(2);
-    });
-    expect(onUpdateAppSettings).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps the global worktrees root editable when there are no projects", async () => {
-    const onUpdateAppSettings = vi.fn().mockResolvedValue(undefined);
-    renderEnvironmentsSection({
-      groupedWorkspaces: [],
-      onUpdateAppSettings,
-    });
-
-    expect(screen.getByText("No projects yet.")).toBeTruthy();
-    const input = screen.getByLabelText("Global worktrees root");
-    fireEvent.change(input, { target: { value: "I:/cm-worktrees" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(onUpdateAppSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
-          globalWorktreesFolder: "I:/cm-worktrees",
-        }),
-      );
-    });
-  });
-
-  it("keeps the no-project global worktrees root save state active until the request resolves", async () => {
-    let resolveSave: (() => void) | null = null;
-    const pendingSave = new Promise<void>((resolve) => {
-      resolveSave = resolve;
-    });
-    const onUpdateAppSettings = vi.fn().mockImplementation(() => pendingSave);
-    renderEnvironmentsSection({
-      groupedWorkspaces: [],
-      onUpdateAppSettings,
-    });
-
-    fireEvent.change(screen.getByLabelText("Global worktrees root"), {
-      target: { value: "I:/cm-worktrees" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(
-        (screen.getByRole("button", { name: "Saving..." }) as HTMLButtonElement).disabled,
-      ).toBe(true);
-    });
-    expect((screen.getByLabelText("Global worktrees root") as HTMLInputElement).disabled).toBe(
-      true,
-    );
-    expect(onUpdateAppSettings).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(screen.getByRole("button", { name: "Saving..." }));
-    expect(onUpdateAppSettings).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      resolveSave?.();
-      await pendingSave;
-    });
-
-    await waitFor(() => {
-      expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(
-        true,
-      );
-    });
-  });
-
-  it("resyncs the global worktrees root baseline after dirty state clears", async () => {
-    const { rerender } = renderEnvironmentsSection({
-      groupedWorkspaces: [],
-      appSettings: { globalWorktreesFolder: null },
-    });
-
-    const input = screen.getByLabelText("Global worktrees root");
-    fireEvent.change(input, { target: { value: "I:/typing" } });
-
-    rerender({
-      groupedWorkspaces: [],
-      appSettings: { globalWorktreesFolder: "I:/loaded-from-settings" },
-    });
-
-    expect((screen.getByLabelText("Global worktrees root") as HTMLInputElement).value).toBe(
-      "I:/typing",
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
-
-    await waitFor(() => {
-      expect((screen.getByLabelText("Global worktrees root") as HTMLInputElement).value).toBe(
-        "I:/loaded-from-settings",
-      );
-    });
-  });
-
-  it("shows save errors for the global worktrees root when there are no projects", async () => {
-    const onUpdateAppSettings = vi
-      .fn()
-      .mockRejectedValue(new Error("Failed to save global worktrees root"));
-    renderEnvironmentsSection({
-      groupedWorkspaces: [],
-      onUpdateAppSettings,
-    });
-
-    const input = screen.getByLabelText("Global worktrees root");
-    fireEvent.change(input, { target: { value: "I:/cm-worktrees" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    expect(
-      await screen.findByText("Failed to save global worktrees root"),
-    ).toBeTruthy();
-  });
-
-  it("keeps the new global worktrees root as saved when workspace settings fail afterward", async () => {
-    const onUpdateAppSettings = vi.fn().mockResolvedValue(undefined);
-    const onUpdateWorkspaceSettings = vi
-      .fn()
-      .mockRejectedValue(new Error("Failed to save workspace settings"));
-    renderEnvironmentsSection({
-      appSettings: { globalWorktreesFolder: "I:/existing-worktrees" },
-      onUpdateAppSettings,
-      onUpdateWorkspaceSettings,
-    });
-
-    const input = screen.getByLabelText("Global worktrees root");
-    const textarea = screen.getByPlaceholderText("pnpm install");
-    fireEvent.change(input, { target: { value: "I:/cm-worktrees" } });
-    fireEvent.change(textarea, { target: { value: "echo updated" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    expect(
-      await screen.findByText("Failed to save workspace settings"),
-    ).toBeTruthy();
-
-    await waitFor(() => {
-      expect(onUpdateAppSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
-          globalWorktreesFolder: "I:/cm-worktrees",
-        }),
-      );
-      expect(onUpdateWorkspaceSettings).toHaveBeenCalledWith("w1", {
-        worktreeSetupScript: "echo updated",
-        worktreesFolder: null,
-      });
-    });
-
-    expect((input as HTMLInputElement).value).toBe("I:/cm-worktrees");
-
-    onUpdateWorkspaceSettings.mockResolvedValueOnce(undefined);
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(onUpdateWorkspaceSettings).toHaveBeenCalledTimes(2);
-    });
-    expect(onUpdateAppSettings).toHaveBeenCalledTimes(1);
-  });
-
-  it("saves the setup script for the selected project", async () => {
-    const onUpdateWorkspaceSettings = vi.fn().mockResolvedValue(undefined);
-    renderEnvironmentsSection({ onUpdateWorkspaceSettings });
-
-    expect(
-      screen.getByText("Environments", { selector: ".settings-section-title" }),
-    ).toBeTruthy();
-    const textarea = screen.getByPlaceholderText("pnpm install");
-    expect((textarea as HTMLTextAreaElement).value).toBe("echo one");
-
-    fireEvent.change(textarea, { target: { value: "echo updated" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(onUpdateWorkspaceSettings).toHaveBeenCalledWith("w1", {
-        worktreeSetupScript: "echo updated",
-        worktreesFolder: null,
-      });
-    });
-  });
-
-  it("normalizes whitespace-only scripts to null", async () => {
-    const onUpdateWorkspaceSettings = vi.fn().mockResolvedValue(undefined);
-    renderEnvironmentsSection({ onUpdateWorkspaceSettings });
-
-    const textarea = screen.getByPlaceholderText("pnpm install");
-    fireEvent.change(textarea, { target: { value: "   \n\t" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => {
-      expect(onUpdateWorkspaceSettings).toHaveBeenCalledWith("w1", {
-        worktreeSetupScript: null,
-        worktreesFolder: null,
-      });
-    });
-  });
-
-  it("copies the setup script to the clipboard", async () => {
-    const originalDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      value: { writeText },
-      configurable: true,
-    });
-
-    try {
-      renderEnvironmentsSection();
-
-      fireEvent.click(screen.getByRole("button", { name: "Copy" }));
-
-      await waitFor(() => {
-        expect(writeText).toHaveBeenCalledWith("echo one");
-      });
-    } finally {
-      if (originalDescriptor) {
-        Object.defineProperty(navigator, "clipboard", originalDescriptor);
-      } else {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        delete (navigator as any).clipboard;
-      }
-    }
-  });
-});
 
 describe("SettingsView Codex section", () => {
   it("updates review mode in codex section", async () => {
@@ -1066,17 +623,8 @@ describe("SettingsView Codex section", () => {
     const onUpdateAppSettings = vi.fn().mockResolvedValue(undefined);
     render(
       <SettingsView
-        workspaceGroups={[]}
-        groupedWorkspaces={[]}
-        ungroupedLabel="Ungrouped"
+        workspaces={[]}
         onClose={vi.fn()}
-        onMoveWorkspace={vi.fn()}
-        onDeleteWorkspace={vi.fn()}
-        onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
         reduceTransparency={false}
         onToggleTransparency={vi.fn()}
         appSettings={baseSettings}
@@ -1084,7 +632,6 @@ describe("SettingsView Codex section", () => {
         onUpdateAppSettings={onUpdateAppSettings}
         onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
         onRunCodexUpdate={vi.fn().mockResolvedValue(createUpdateResult())}
-        onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
         scaleShortcutTitle="Scale shortcut"
         scaleShortcutText="Use Command +/-"
         onTestNotificationSound={vi.fn()}
@@ -1112,17 +659,8 @@ describe("SettingsView Codex section", () => {
     cleanup();
     render(
       <SettingsView
-        workspaceGroups={[]}
-        groupedWorkspaces={[]}
-        ungroupedLabel="Ungrouped"
+        workspaces={[]}
         onClose={vi.fn()}
-        onMoveWorkspace={vi.fn()}
-        onDeleteWorkspace={vi.fn()}
-        onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
         reduceTransparency={false}
         onToggleTransparency={vi.fn()}
         appSettings={{
@@ -1133,7 +671,6 @@ describe("SettingsView Codex section", () => {
         openAppIconById={{}}
         onUpdateAppSettings={vi.fn().mockResolvedValue(undefined)}
         onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
-        onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
         scaleShortcutTitle="Scale shortcut"
         scaleShortcutText="Use Command +/-"
         onTestNotificationSound={vi.fn()}
@@ -1187,17 +724,8 @@ describe("SettingsView Codex section", () => {
     try {
       render(
         <SettingsView
-          workspaceGroups={[]}
-          groupedWorkspaces={[]}
-          ungroupedLabel="Ungrouped"
+          workspaces={[]}
           onClose={vi.fn()}
-          onMoveWorkspace={vi.fn()}
-          onDeleteWorkspace={vi.fn()}
-          onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-          onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-          onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-          onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-          onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
           reduceTransparency={false}
           onToggleTransparency={vi.fn()}
           appSettings={{
@@ -1208,7 +736,6 @@ describe("SettingsView Codex section", () => {
           openAppIconById={{}}
           onUpdateAppSettings={vi.fn().mockResolvedValue(undefined)}
           onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
-          onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
           scaleShortcutTitle="Scale shortcut"
           scaleShortcutText="Use Command +/-"
           onTestNotificationSound={vi.fn()}
@@ -1290,17 +817,8 @@ describe("SettingsView Codex section", () => {
     try {
       render(
         <SettingsView
-          workspaceGroups={[]}
-          groupedWorkspaces={[]}
-          ungroupedLabel="Ungrouped"
+          workspaces={[]}
           onClose={vi.fn()}
-          onMoveWorkspace={vi.fn()}
-          onDeleteWorkspace={vi.fn()}
-          onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-          onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-          onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-          onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-          onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
           reduceTransparency={false}
           onToggleTransparency={vi.fn()}
           appSettings={{
@@ -1329,7 +847,6 @@ describe("SettingsView Codex section", () => {
           openAppIconById={{}}
           onUpdateAppSettings={onUpdateAppSettings}
           onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
-          onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
           scaleShortcutTitle="Scale shortcut"
           scaleShortcutText="Use Command +/-"
           onTestNotificationSound={vi.fn()}
@@ -1505,23 +1022,8 @@ describe("SettingsView Codex defaults", () => {
 
     render(
       <SettingsView
-        workspaceGroups={[]}
-        groupedWorkspaces={[
-          {
-            id: null,
-            name: "Ungrouped",
-            workspaces: [workspace({ id: "w1", name: "Workspace", connected: true })],
-          },
-        ]}
-        ungroupedLabel="Ungrouped"
+        workspaces={[workspace({ id: "w1", name: "Workspace", connected: true })]}
         onClose={vi.fn()}
-        onMoveWorkspace={vi.fn()}
-        onDeleteWorkspace={vi.fn()}
-        onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
         reduceTransparency={false}
         onToggleTransparency={vi.fn()}
         appSettings={baseSettings}
@@ -1529,7 +1031,6 @@ describe("SettingsView Codex defaults", () => {
         onUpdateAppSettings={onUpdateAppSettings}
         onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
         onRunCodexUpdate={vi.fn().mockResolvedValue(createUpdateResult())}
-        onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
         scaleShortcutTitle="Scale shortcut"
         scaleShortcutText="Use Command +/-"
         onTestNotificationSound={vi.fn()}
@@ -1602,23 +1103,8 @@ describe("SettingsView Codex defaults", () => {
 
     render(
       <SettingsView
-        workspaceGroups={[]}
-        groupedWorkspaces={[
-          {
-            id: null,
-            name: "Ungrouped",
-            workspaces: [workspace({ id: "w1", name: "Workspace", connected: true })],
-          },
-        ]}
-        ungroupedLabel="Ungrouped"
+        workspaces={[workspace({ id: "w1", name: "Workspace", connected: true })]}
         onClose={vi.fn()}
-        onMoveWorkspace={vi.fn()}
-        onDeleteWorkspace={vi.fn()}
-        onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
         reduceTransparency={false}
         onToggleTransparency={vi.fn()}
         appSettings={baseSettings}
@@ -1626,7 +1112,6 @@ describe("SettingsView Codex defaults", () => {
         onUpdateAppSettings={onUpdateAppSettings}
         onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
         onRunCodexUpdate={vi.fn().mockResolvedValue(createUpdateResult())}
-        onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
         scaleShortcutTitle="Scale shortcut"
         scaleShortcutText="Use Command +/-"
         onTestNotificationSound={vi.fn()}
@@ -1890,24 +1375,14 @@ describe("SettingsView mobile layout", () => {
     try {
       const rendered = render(
         <SettingsView
-          workspaceGroups={[]}
-          groupedWorkspaces={[]}
-          ungroupedLabel="Ungrouped"
+          workspaces={[]}
           onClose={vi.fn()}
-          onMoveWorkspace={vi.fn()}
-          onDeleteWorkspace={vi.fn()}
-          onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-          onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-          onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-          onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-          onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
           reduceTransparency={false}
           onToggleTransparency={vi.fn()}
           appSettings={baseSettings}
           openAppIconById={{}}
           onUpdateAppSettings={vi.fn().mockResolvedValue(undefined)}
           onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
-          onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
           scaleShortcutTitle="Scale shortcut"
           scaleShortcutText="Use Command +/-"
           onTestNotificationSound={vi.fn()}
@@ -1993,24 +1468,14 @@ describe("SettingsView Shortcuts", () => {
     const onClose = vi.fn();
     render(
       <SettingsView
-        workspaceGroups={[]}
-        groupedWorkspaces={[]}
-        ungroupedLabel="Ungrouped"
+        workspaces={[]}
         onClose={onClose}
-        onMoveWorkspace={vi.fn()}
-        onDeleteWorkspace={vi.fn()}
-        onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
         reduceTransparency={false}
         onToggleTransparency={vi.fn()}
         appSettings={baseSettings}
         openAppIconById={{}}
         onUpdateAppSettings={vi.fn().mockResolvedValue(undefined)}
         onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
-        onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
         scaleShortcutTitle="Scale shortcut"
         scaleShortcutText="Use Command +/-"
         onTestNotificationSound={vi.fn()}
@@ -2037,24 +1502,14 @@ describe("SettingsView Shortcuts", () => {
     const onClose = vi.fn();
     render(
       <SettingsView
-        workspaceGroups={[]}
-        groupedWorkspaces={[]}
-        ungroupedLabel="Ungrouped"
+        workspaces={[]}
         onClose={onClose}
-        onMoveWorkspace={vi.fn()}
-        onDeleteWorkspace={vi.fn()}
-        onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
         reduceTransparency={false}
         onToggleTransparency={vi.fn()}
         appSettings={baseSettings}
         openAppIconById={{}}
         onUpdateAppSettings={vi.fn().mockResolvedValue(undefined)}
         onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
-        onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
         scaleShortcutTitle="Scale shortcut"
         scaleShortcutText="Use Command +/-"
         onTestNotificationSound={vi.fn()}
@@ -2079,24 +1534,14 @@ describe("SettingsView Shortcuts", () => {
     const onClose = vi.fn();
     const { container } = render(
       <SettingsView
-        workspaceGroups={[]}
-        groupedWorkspaces={[]}
-        ungroupedLabel="Ungrouped"
+        workspaces={[]}
         onClose={onClose}
-        onMoveWorkspace={vi.fn()}
-        onDeleteWorkspace={vi.fn()}
-        onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
         reduceTransparency={false}
         onToggleTransparency={vi.fn()}
         appSettings={baseSettings}
         openAppIconById={{}}
         onUpdateAppSettings={vi.fn().mockResolvedValue(undefined)}
         onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
-        onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
         scaleShortcutTitle="Scale shortcut"
         scaleShortcutText="Use Command +/-"
         onTestNotificationSound={vi.fn()}
@@ -2125,24 +1570,14 @@ describe("SettingsView Shortcuts", () => {
   it("filters shortcuts by search query", async () => {
     render(
       <SettingsView
-        workspaceGroups={[]}
-        groupedWorkspaces={[]}
-        ungroupedLabel="Ungrouped"
+        workspaces={[]}
         onClose={vi.fn()}
-        onMoveWorkspace={vi.fn()}
-        onDeleteWorkspace={vi.fn()}
-        onCreateWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onRenameWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onMoveWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onDeleteWorkspaceGroup={vi.fn().mockResolvedValue(null)}
-        onAssignWorkspaceGroup={vi.fn().mockResolvedValue(null)}
         reduceTransparency={false}
         onToggleTransparency={vi.fn()}
         appSettings={baseSettings}
         openAppIconById={{}}
         onUpdateAppSettings={vi.fn().mockResolvedValue(undefined)}
         onRunDoctor={vi.fn().mockResolvedValue(createDoctorResult())}
-        onUpdateWorkspaceSettings={vi.fn().mockResolvedValue(undefined)}
         scaleShortcutTitle="Scale shortcut"
         scaleShortcutText="Use Command +/-"
         onTestNotificationSound={vi.fn()}

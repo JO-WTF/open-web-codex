@@ -22,7 +22,6 @@ const workspace: WorkspaceInfo = {
   name: "CodexMonitor",
   path: "/tmp/codex",
   connected: true,
-  settings: { sidebarCollapsed: false },
 };
 
 describe("useApps", () => {

@@ -79,7 +79,6 @@ describe("useRemoteThreadLiveConnection", () => {
           name: "Workspace",
           path: "/tmp/ws-1",
           connected: true,
-          settings: { sidebarCollapsed: false },
         },
         activeThreadId: "thread-1",
         refreshThread,
@@ -127,7 +126,6 @@ describe("useRemoteThreadLiveConnection", () => {
           name: "Workspace",
           path: "/tmp/ws-1",
           connected: true,
-          settings: { sidebarCollapsed: false },
         },
         activeThreadId: "thread-1",
         refreshThread,
@@ -165,7 +163,6 @@ describe("useRemoteThreadLiveConnection", () => {
           name: "Workspace",
           path: "/tmp/ws-1",
           connected: true,
-          settings: { sidebarCollapsed: false },
         },
         activeThreadId: "thread-1",
         refreshThread,
@@ -199,7 +196,6 @@ describe("useRemoteThreadLiveConnection", () => {
       name: "Workspace",
       path: "/tmp/ws-1",
       connected: true,
-      settings: { sidebarCollapsed: false },
     };
 
     const { result } = renderHook(() =>
@@ -254,7 +250,6 @@ describe("useRemoteThreadLiveConnection", () => {
           name: "Workspace",
           path: "/tmp/ws-1",
           connected: true,
-          settings: { sidebarCollapsed: false },
         },
         activeThreadId: null,
         refreshThread,
@@ -301,7 +296,6 @@ describe("useRemoteThreadLiveConnection", () => {
           name: "Workspace",
           path: "/tmp/ws-1",
           connected: true,
-          settings: { sidebarCollapsed: false },
         },
         activeThreadId: null,
         refreshThread,
@@ -351,7 +345,6 @@ describe("useRemoteThreadLiveConnection", () => {
           name: "Workspace",
           path: "/tmp/ws-1",
           connected: true,
-          settings: { sidebarCollapsed: false },
         },
         activeThreadId: null,
         refreshThread,
@@ -394,7 +387,6 @@ describe("useRemoteThreadLiveConnection", () => {
           name: "Workspace",
           path: "/tmp/ws-1",
           connected: true,
-          settings: { sidebarCollapsed: false },
         },
         activeThreadId: null,
         refreshThread,
@@ -442,7 +434,6 @@ describe("useRemoteThreadLiveConnection", () => {
       name: "Workspace",
       path: "/tmp/ws-1",
       connected: true,
-      settings: { sidebarCollapsed: false },
     };
 
     const { rerender } = renderHook(
@@ -470,7 +461,6 @@ describe("useRemoteThreadLiveConnection", () => {
       name: "Workspace (renamed)",
       path: "/tmp/ws-1",
       connected: true,
-      settings: { sidebarCollapsed: false },
     };
 
     await act(async () => {
@@ -490,7 +480,6 @@ describe("useRemoteThreadLiveConnection", () => {
       name: "Workspace",
       path: "/tmp/ws-1",
       connected: true,
-      settings: { sidebarCollapsed: false },
     };
 
     const { rerender } = renderHook(
@@ -527,7 +516,6 @@ describe("useRemoteThreadLiveConnection", () => {
       name: "Workspace",
       path: "/tmp/ws-1",
       connected: true,
-      settings: { sidebarCollapsed: false },
     };
 
     const { rerender } = renderHook(
@@ -572,7 +560,6 @@ describe("useRemoteThreadLiveConnection", () => {
       name: "Workspace",
       path: "/tmp/ws-1",
       connected: true,
-      settings: { sidebarCollapsed: false },
     };
 
     const { result } = renderHook(() =>

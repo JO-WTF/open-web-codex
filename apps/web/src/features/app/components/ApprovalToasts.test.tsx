@@ -10,7 +10,6 @@ const workspaces: WorkspaceInfo[] = [
     name: "Workspace One",
     path: "/tmp/workspace-1",
     connected: true,
-    settings: { sidebarCollapsed: false },
   },
 ];
 

@@ -51,14 +51,6 @@ type UseThreadMessagingOptions = {
   onSelectServiceTier?: (tier: ServiceTier | null | undefined) => void;
   reviewDeliveryMode?: "inline" | "detached";
   steerEnabled: boolean;
-  ensureWorkspaceRuntimeCodexArgs?: (
-    workspaceId: string,
-    threadId: string | null,
-  ) => Promise<void>;
-  shouldPreflightRuntimeCodexArgsForSend?: (
-    workspaceId: string,
-    threadId: string,
-  ) => boolean;
   threadStatusById: ThreadState["threadStatusById"];
   activeTurnIdByThread: ThreadState["activeTurnIdByThread"];
   rateLimitsByWorkspace: Record<string, RateLimitSnapshot | null>;
@@ -104,8 +96,6 @@ export function useThreadMessaging({
   onSelectServiceTier,
   reviewDeliveryMode = "inline",
   steerEnabled,
-  ensureWorkspaceRuntimeCodexArgs,
-  shouldPreflightRuntimeCodexArgsForSend,
   threadStatusById,
   activeTurnIdByThread,
   rateLimitsByWorkspace,
@@ -209,15 +199,6 @@ export function useThreadMessaging({
         },
       });
       try {
-        const shouldPreflightRuntimeCodexArgs =
-          shouldPreflightRuntimeCodexArgsForSend?.(workspace.id, threadId) ?? true;
-        if (
-          !shouldSteer &&
-          shouldPreflightRuntimeCodexArgs &&
-          ensureWorkspaceRuntimeCodexArgs
-        ) {
-          await ensureWorkspaceRuntimeCodexArgs(workspace.id, threadId);
-        }
         const response: Record<string, unknown> = shouldSteer
           ? (await (appMentions.length > 0
             ? steerTurnService(
@@ -332,8 +313,6 @@ export function useThreadMessaging({
       dispatch,
       effort,
       serviceTier,
-      ensureWorkspaceRuntimeCodexArgs,
-      shouldPreflightRuntimeCodexArgsForSend,
       activeTurnIdByThread,
       getCustomName,
       markProcessing,

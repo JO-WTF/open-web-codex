@@ -19,7 +19,6 @@ function workspace(id: string, connected = true): WorkspaceInfo {
     name: `Workspace ${id}`,
     path: `/tmp/${id}`,
     connected,
-    settings: { sidebarCollapsed: false },
   };
 }
 

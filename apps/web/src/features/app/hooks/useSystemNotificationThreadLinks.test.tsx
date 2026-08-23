@@ -10,7 +10,6 @@ function makeWorkspace(overrides: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
     name: "Workspace",
     path: "/tmp/workspace",
     connected: true,
-    settings: { sidebarCollapsed: false },
     ...overrides,
   };
 }

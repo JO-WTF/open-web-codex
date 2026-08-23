@@ -12,11 +12,9 @@ const baseProps = {
   name: "",
   branch: "feature/new-worktree",
   copyAgentsMd: false,
-  setupScript: "",
   onNameChange: vi.fn(),
   onChange: vi.fn(),
   onCopyAgentsMdChange: vi.fn(),
-  onSetupScriptChange: vi.fn(),
   onCancel: vi.fn(),
   onConfirm: vi.fn(),
 };

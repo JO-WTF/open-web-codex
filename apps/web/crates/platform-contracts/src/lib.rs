@@ -962,14 +962,6 @@ pub struct ProfileLoginStatusResponse {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BrowserWorkspacePreference {
-    pub workspace_id: Uuid,
-    pub settings: serde_json::Value,
-    pub runtime_codex_args: Option<String>,
-}
-
 // ── Platform configuration ─────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1010,31 +1002,6 @@ pub struct UseMapsConfigurationRequest {
     /// credential handoff URL from this record; the browser never receives or
     /// submits that URL.
     pub approval_id: Uuid,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateBrowserWorkspaceSettingsRequest {
-    pub settings: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetWorkspaceRuntimeCodexArgsRequest {
-    pub codex_args: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SetWorkspaceRuntimeCodexArgsResponse {
-    pub applied_codex_args: Option<String>,
-    pub respawned: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorktreeSetupStatus {
-    pub should_run: bool,
-    pub script: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

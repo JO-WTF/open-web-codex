@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import * as Sentry from "@sentry/react";
-import type { WorkspaceInfo, WorkspaceSettings } from "../../../types";
+import type { WorkspaceInfo } from "../../../types";
 
 type UseWorkspaceSelectionOptions = {
   workspaces: WorkspaceInfo[];
@@ -8,10 +8,6 @@ type UseWorkspaceSelectionOptions = {
   activeWorkspaceId: string | null;
   setActiveTab: (tab: "home" | "projects" | "codex" | "git" | "log") => void;
   setActiveWorkspaceId: (workspaceId: string | null) => void;
-  updateWorkspaceSettings: (
-    workspaceId: string,
-    settings: Partial<WorkspaceSettings>,
-  ) => Promise<WorkspaceInfo>;
   setCenterMode: (mode: "chat" | "diff") => void;
   setSelectedDiffPath: (path: string | null) => void;
 };
@@ -28,7 +24,6 @@ export function useWorkspaceSelection({
   activeWorkspaceId,
   setActiveTab,
   setActiveWorkspaceId,
-  updateWorkspaceSettings,
   setCenterMode,
   setSelectedDiffPath,
 }: UseWorkspaceSelectionOptions): UseWorkspaceSelectionResult {
@@ -42,11 +37,6 @@ export function useWorkspaceSelection({
       setSelectedDiffPath(null);
       const target = workspaces.find((entry) => entry.id === workspaceId);
       const didSwitch = activeWorkspaceId !== workspaceId;
-      if (target?.settings.sidebarCollapsed) {
-        void updateWorkspaceSettings(workspaceId, {
-          sidebarCollapsed: false,
-        });
-      }
       setActiveWorkspaceId(workspaceId);
       if (didSwitch) {
         Sentry.metrics.count("workspace_switched", 1, {
@@ -67,7 +57,6 @@ export function useWorkspaceSelection({
       setActiveTab,
       setActiveWorkspaceId,
       setSelectedDiffPath,
-      updateWorkspaceSettings,
       workspaces,
     ],
   );

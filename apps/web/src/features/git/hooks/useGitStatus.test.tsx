@@ -14,7 +14,6 @@ const workspace: WorkspaceInfo = {
   name: "CodexMonitor",
   path: "/tmp/codex",
   connected: true,
-  settings: { sidebarCollapsed: false },
 };
 
 const secondaryWorkspace: WorkspaceInfo = {
@@ -22,7 +21,6 @@ const secondaryWorkspace: WorkspaceInfo = {
   name: "CodexMonitor Secondary",
   path: "/tmp/codex-secondary",
   connected: true,
-  settings: { sidebarCollapsed: false },
 };
 
 const makeStatus = (branchName: string, additions = 0, deletions = 0) => ({

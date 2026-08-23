@@ -49,14 +49,12 @@ describe("useThreadActions", () => {
     name: "CodexMonitor",
     path: "/tmp/codex",
     connected: true,
-    settings: { sidebarCollapsed: false },
   };
   const workspaceTwo: WorkspaceInfo = {
     id: "ws-2",
     name: "Other",
     path: "/tmp/other",
     connected: true,
-    settings: { sidebarCollapsed: false },
   };
 
   beforeEach(() => {

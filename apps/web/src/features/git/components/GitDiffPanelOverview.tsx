@@ -1,5 +1,4 @@
 import type { GitPanelMode } from "../types";
-import ArrowLeftRight from "lucide-react/dist/esm/icons/arrow-left-right";
 import RotateCw from "lucide-react/dist/esm/icons/rotate-cw";
 
 type GitMode = GitPanelMode;
@@ -113,48 +112,6 @@ export function GitBranchRow({ mode, branchName, onFetch, fetchLoading }: GitBra
           <RotateCw size={12} aria-hidden />
         )}
       </button>
-    </div>
-  );
-}
-
-type GitRootCurrentPathProps = {
-  mode: GitMode;
-  hasGitRoot: boolean;
-  gitRoot: string | null;
-  onScanGitRoots?: () => void;
-  gitRootScanLoading: boolean;
-};
-
-export function GitRootCurrentPath({
-  mode,
-  hasGitRoot,
-  gitRoot,
-  onScanGitRoots,
-  gitRootScanLoading,
-}: GitRootCurrentPathProps) {
-  if (mode === "issues" || !hasGitRoot) {
-    return null;
-  }
-
-  return (
-    <div className="git-root-current">
-      <div className="git-root-current-main">
-        <span className="git-root-label">Repository root</span>
-        <span className="git-root-path" title={gitRoot ?? ""}>
-          {gitRoot}
-        </span>
-      </div>
-      {onScanGitRoots && (
-        <button
-          type="button"
-          className="ghost git-root-button git-root-button--icon"
-          onClick={onScanGitRoots}
-          disabled={gitRootScanLoading}
-        >
-          <ArrowLeftRight className="git-root-button-icon" aria-hidden />
-          Change
-        </button>
-      )}
     </div>
   );
 }

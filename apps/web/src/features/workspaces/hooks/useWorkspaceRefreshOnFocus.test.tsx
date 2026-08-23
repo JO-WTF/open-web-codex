@@ -26,7 +26,6 @@ describe("useWorkspaceRefreshOnFocus", () => {
         name: "Workspace",
         path: "/tmp/ws-1",
         connected: true,
-        settings: { sidebarCollapsed: false },
       },
     ]);
     const listThreadsForWorkspaces = vi.fn().mockResolvedValue(undefined);
@@ -60,7 +59,6 @@ describe("useWorkspaceRefreshOnFocus", () => {
         name: "Workspace",
         path: "/tmp/ws-1",
         connected: true,
-        settings: { sidebarCollapsed: false },
       },
     ]);
     const listThreadsForWorkspaces = vi.fn().mockResolvedValue(undefined);

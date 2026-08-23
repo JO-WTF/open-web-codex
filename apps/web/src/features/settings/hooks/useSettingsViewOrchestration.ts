@@ -4,20 +4,16 @@ import type {
   CodexDoctorResult,
   CodexUpdateResult,
   DictationModelStatus,
-  WorkspaceGroup,
-  WorkspaceSettings,
+  WorkspaceInfo,
 } from "@/types";
 import { isMacPlatform, isWindowsPlatform } from "@utils/platformPaths";
 import { useSettingsOpenAppDrafts } from "./useSettingsOpenAppDrafts";
 import { useSettingsShortcutDrafts } from "./useSettingsShortcutDrafts";
 import { useSettingsCodexSection } from "./useSettingsCodexSection";
 import { useSettingsDisplaySection } from "./useSettingsDisplaySection";
-import { useSettingsEnvironmentsSection } from "./useSettingsEnvironmentsSection";
 import { useSettingsFeaturesSection } from "./useSettingsFeaturesSection";
 import { useSettingsGitSection } from "./useSettingsGitSection";
-import { useSettingsProjectsSection } from "./useSettingsProjectsSection";
 import { useSettingsServerSection } from "./useSettingsServerSection";
-import type { GroupedWorkspaces } from "./settingsSectionTypes";
 import {
   COMPOSER_PRESET_CONFIGS,
   COMPOSER_PRESET_LABELS,
@@ -25,9 +21,7 @@ import {
 } from "@settings/components/settingsViewConstants";
 
 type UseSettingsViewOrchestrationArgs = {
-  workspaceGroups: WorkspaceGroup[];
-  groupedWorkspaces: GroupedWorkspaces;
-  ungroupedLabel: string;
+  workspaces: WorkspaceInfo[];
   reduceTransparency: boolean;
   onToggleTransparency: (value: boolean) => void;
   appSettings: AppSettings;
@@ -42,25 +36,11 @@ type UseSettingsViewOrchestrationArgs = {
     codexBin: string | null,
     codexArgs: string | null,
   ) => Promise<CodexUpdateResult>;
-  onUpdateWorkspaceSettings: (
-    id: string,
-    settings: Partial<WorkspaceSettings>,
-  ) => Promise<void>;
   scaleShortcutTitle: string;
   scaleShortcutText: string;
   onTestNotificationSound: () => void;
   onTestSystemNotification: () => void;
   onMobileConnectSuccess?: () => Promise<void> | void;
-  onMoveWorkspace: (id: string, direction: "up" | "down") => void;
-  onDeleteWorkspace: (id: string) => void;
-  onCreateWorkspaceGroup: (name: string) => Promise<WorkspaceGroup | null>;
-  onRenameWorkspaceGroup: (id: string, name: string) => Promise<boolean | null>;
-  onMoveWorkspaceGroup: (id: string, direction: "up" | "down") => Promise<boolean | null>;
-  onDeleteWorkspaceGroup: (id: string) => Promise<boolean | null>;
-  onAssignWorkspaceGroup: (
-    workspaceId: string,
-    groupId: string | null,
-  ) => Promise<boolean | null>;
   dictationModelStatus?: DictationModelStatus | null;
   onDownloadDictationModel?: () => void;
   onCancelDictationDownload?: () => void;
@@ -68,9 +48,7 @@ type UseSettingsViewOrchestrationArgs = {
 };
 
 export function useSettingsViewOrchestration({
-  workspaceGroups,
-  groupedWorkspaces,
-  ungroupedLabel,
+  workspaces,
   reduceTransparency,
   onToggleTransparency,
   appSettings,
@@ -79,35 +57,19 @@ export function useSettingsViewOrchestration({
   onToggleAutomaticAppUpdateChecks,
   onRunDoctor,
   onRunCodexUpdate,
-  onUpdateWorkspaceSettings,
   scaleShortcutTitle,
   scaleShortcutText,
   onTestNotificationSound,
   onTestSystemNotification,
   onMobileConnectSuccess,
-  onMoveWorkspace,
-  onDeleteWorkspace,
-  onCreateWorkspaceGroup,
-  onRenameWorkspaceGroup,
-  onMoveWorkspaceGroup,
-  onDeleteWorkspaceGroup,
-  onAssignWorkspaceGroup,
   dictationModelStatus,
   onDownloadDictationModel,
   onCancelDictationDownload,
   onRemoveDictationModel,
 }: UseSettingsViewOrchestrationArgs) {
-  const projects = useMemo(
-    () => groupedWorkspaces.flatMap((group) => group.workspaces),
-    [groupedWorkspaces],
-  );
-  const mainWorkspaces = useMemo(
-    () => projects.filter((workspace) => (workspace.kind ?? "main") !== "worktree"),
-    [projects],
-  );
   const featureWorkspaceId = useMemo(
-    () => projects.find((workspace) => workspace.connected)?.id ?? null,
-    [projects],
+    () => workspaces.find((workspace) => workspace.connected)?.id ?? null,
+    [workspaces],
   );
 
   const optionKeyLabel = isMacPlatform() ? "Option" : "Alt";
@@ -151,29 +113,6 @@ export function useSettingsViewOrchestration({
       onUpdateAppSettings,
     });
 
-  const projectsSectionProps = useSettingsProjectsSection({
-    appSettings,
-    workspaceGroups,
-    groupedWorkspaces,
-    ungroupedLabel,
-    projects,
-    onUpdateAppSettings,
-    onMoveWorkspace,
-    onDeleteWorkspace,
-    onCreateWorkspaceGroup,
-    onRenameWorkspaceGroup,
-    onMoveWorkspaceGroup,
-    onDeleteWorkspaceGroup,
-    onAssignWorkspaceGroup,
-  });
-
-  const environmentsSectionProps = useSettingsEnvironmentsSection({
-    appSettings,
-    onUpdateAppSettings,
-    mainWorkspaces,
-    onUpdateWorkspaceSettings,
-  });
-
   const displaySectionProps = useSettingsDisplaySection({
     appSettings,
     reduceTransparency,
@@ -193,7 +132,7 @@ export function useSettingsViewOrchestration({
 
   const codexSectionProps = useSettingsCodexSection({
     appSettings,
-    projects,
+    projects: workspaces,
     onUpdateAppSettings,
     onRunDoctor,
     onRunCodexUpdate,
@@ -215,8 +154,6 @@ export function useSettingsViewOrchestration({
       appSettings,
       onToggleAutomaticAppUpdateChecks,
     },
-    projectsSectionProps,
-    environmentsSectionProps,
     displaySectionProps,
     composerSectionProps: {
       appSettings,

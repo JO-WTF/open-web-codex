@@ -14,7 +14,6 @@ const workspaceOne: WorkspaceInfo = {
   name: "Workspace One",
   path: "/tmp/workspace-one",
   connected: true,
-  settings: { sidebarCollapsed: false },
 };
 
 const workspaceTwoDisconnected: WorkspaceInfo = {
@@ -22,7 +21,6 @@ const workspaceTwoDisconnected: WorkspaceInfo = {
   name: "Workspace Two",
   path: "/tmp/workspace-two",
   connected: false,
-  settings: { sidebarCollapsed: false },
 };
 
 const workspaceTwoConnected: WorkspaceInfo = {

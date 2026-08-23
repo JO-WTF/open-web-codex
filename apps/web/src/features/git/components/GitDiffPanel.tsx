@@ -25,7 +25,6 @@ import {
   GitPerFileModeContent,
   GitPanelModeStatus,
   GitPullRequestsModeContent,
-  GitRootCurrentPath,
 } from "./GitDiffPanelModeContent";
 import {
   SidebarError,
@@ -36,10 +35,8 @@ import {
   getGitHubBaseUrl,
   getRelativePathWithin,
   hasPushSyncConflict,
-  isMissingRepo,
   joinRootAndPath,
   normalizeRootPath,
-  resolveRootPath,
 } from "./GitDiffPanel.utils";
 import { useDiffFileSelection } from "../hooks/useDiffFileSelection";
 import type { GitPanelMode } from "../types";
@@ -84,17 +81,6 @@ type GitDiffPanelProps = {
   selectedPullRequest?: number | null;
   onSelectPullRequest?: (pullRequest: GitHubPullRequest) => void;
   gitRemoteUrl?: string | null;
-  gitRoot?: string | null;
-  gitRootCandidates?: string[];
-  gitRootScanDepth?: number;
-  gitRootScanLoading?: boolean;
-  gitRootScanError?: string | null;
-  gitRootScanHasScanned?: boolean;
-  onGitRootScanDepthChange?: (depth: number) => void;
-  onScanGitRoots?: () => void;
-  onSelectGitRoot?: (path: string) => void;
-  onClearGitRoot?: () => void;
-  onPickGitRoot?: () => void | Promise<void>;
   onInitGitRepo?: () => void | Promise<void>;
   initGitRepoLoading?: boolean;
   selectedPath?: string | null;
@@ -185,12 +171,6 @@ export function GitDiffPanel({
   pullRequestsError = null,
   selectedPullRequest = null,
   onSelectPullRequest,
-  gitRoot = null,
-  gitRootCandidates = [],
-  gitRootScanDepth = 2,
-  gitRootScanLoading = false,
-  gitRootScanError = null,
-  gitRootScanHasScanned = false,
   selectedPath = null,
   stagedFiles = [],
   unstagedFiles = [],
@@ -199,11 +179,6 @@ export function GitDiffPanel({
   onUnstageFile,
   onRevertFile,
   onReviewUncommittedChanges,
-  onGitRootScanDepthChange,
-  onScanGitRoots,
-  onSelectGitRoot,
-  onClearGitRoot,
-  onPickGitRoot,
   onInitGitRepo,
   initGitRepoLoading = false,
   commitMessage = "",
@@ -388,13 +363,8 @@ export function GitDiffPanel({
       const fileCount = targetPaths.length;
       const plural = fileCount > 1 ? "s" : "";
       const countSuffix = fileCount > 1 ? ` (${fileCount})` : "";
-      const normalizedRoot = resolveRootPath(gitRoot, workspacePath);
-      const inferredRoot =
-        !normalizedRoot && gitRootCandidates.length === 1
-          ? resolveRootPath(gitRootCandidates[0], workspacePath)
-          : "";
       const fallbackRoot = normalizeRootPath(workspacePath);
-      const resolvedRoot = normalizedRoot || inferredRoot || fallbackRoot;
+      const resolvedRoot = fallbackRoot;
 
       const stagedPaths = targetPaths.filter((targetPath) =>
         stagedFiles.some((file) => file.path === targetPath),
@@ -515,8 +485,6 @@ export function GitDiffPanel({
       onStageFile,
       onRevertFile,
       discardFiles,
-      gitRoot,
-      gitRootCandidates,
       workspacePath,
     ],
   );
@@ -542,15 +510,7 @@ export function GitDiffPanel({
     : logUpstream
       ? `${logSyncLabel} · ${fileStatus}`
       : fileStatus;
-  const hasGitRoot = Boolean(gitRoot && gitRoot.trim());
-  const showGitRootPanel =
-    isMissingRepo(error) ||
-    gitRootScanLoading ||
-    gitRootScanHasScanned ||
-    Boolean(gitRootScanError) ||
-    gitRootCandidates.length > 0;
-  const normalizedGitRoot = normalizeRootPath(gitRoot);
-  const errorScope = `${workspaceId ?? "no-workspace"}:${normalizedGitRoot || "no-git-root"}:${mode}`;
+  const errorScope = `${workspaceId ?? "no-workspace"}:${mode}`;
   const hasAnyChanges = stagedFiles.length > 0 || unstagedFiles.length > 0;
   const showApplyWorktree = mode === "diff" && Boolean(onApplyWorktreeChanges) && hasAnyChanges;
   const showCommitMessage = mode === "diff" && hasAnyChanges;
@@ -571,7 +531,6 @@ export function GitDiffPanel({
             { key: "sync", message: syncError },
             { key: "git", message: error },
             { key: "worktreeApply", message: worktreeApplyError },
-            { key: "gitRootScan", message: gitRootScanError },
           ]
         : mode === "log"
           ? [{ key: "log", message: logError }]
@@ -590,7 +549,6 @@ export function GitDiffPanel({
     commitError,
     error,
     fetchError,
-    gitRootScanError,
     issuesError,
     logError,
     pullRequestsError,
@@ -678,33 +636,13 @@ export function GitDiffPanel({
           fetchLoading={fetchLoading}
         />
 
-        <GitRootCurrentPath
-          mode={mode}
-          hasGitRoot={hasGitRoot}
-          gitRoot={gitRoot}
-          onScanGitRoots={onScanGitRoots}
-          gitRootScanLoading={gitRootScanLoading}
-        />
       </div>
 
       {mode === "diff" ? (
         <GitDiffModeContent
           error={error}
-          showGitRootPanel={showGitRootPanel}
-          onScanGitRoots={onScanGitRoots}
-          gitRootScanLoading={gitRootScanLoading}
-          gitRootScanDepth={gitRootScanDepth}
-          onGitRootScanDepthChange={onGitRootScanDepthChange}
-          onPickGitRoot={onPickGitRoot}
           onInitGitRepo={onInitGitRepo}
           initGitRepoLoading={initGitRepoLoading}
-          hasGitRoot={hasGitRoot}
-          onClearGitRoot={onClearGitRoot}
-          gitRootScanError={gitRootScanError}
-          gitRootScanHasScanned={gitRootScanHasScanned}
-          gitRootCandidates={gitRootCandidates}
-          gitRoot={gitRoot}
-          onSelectGitRoot={onSelectGitRoot}
           showCommitMessage={showCommitMessage}
           showApplyWorktree={showApplyWorktree}
           commitMessage={commitMessage}

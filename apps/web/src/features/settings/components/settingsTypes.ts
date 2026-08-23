@@ -1,8 +1,6 @@
 import type { OpenAppTarget } from "@/types";
 
 export const SETTINGS_SECTION_IDS = [
-  "projects",
-  "environments",
   "display",
   "about",
   "composer",

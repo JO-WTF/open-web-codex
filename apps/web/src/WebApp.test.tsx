@@ -71,7 +71,6 @@ describe("WebApp workspace-first messaging", () => {
       name: "Demo",
       path: "/tmp/demo",
       connected: true,
-      settings: { sidebarCollapsed: false },
     }]);
     client.subscribeAppServerEvents.mockImplementation((handler: (event: AppServerEvent) => void) => {
       appServerEventHandler = handler;

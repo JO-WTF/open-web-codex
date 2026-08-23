@@ -15,7 +15,6 @@ afterEach(() => {
 const baseProps = {
   workspaces: [],
   groupedWorkspaces: [],
-  hasWorkspaceGroups: false,
   deletingWorktreeIds: new Set<string>(),
   threadsByWorkspace: {},
   threadParentById: {},
@@ -47,7 +46,6 @@ const baseProps = {
   onAddAgent: vi.fn(),
   onAddWorktreeAgent: vi.fn(),
   onAddCloneAgent: vi.fn(),
-  onToggleWorkspaceCollapse: vi.fn(),
   onSelectThread: vi.fn(),
   onDeleteThread: vi.fn(),
   onSyncThread: vi.fn(),
@@ -186,14 +184,12 @@ describe("Sidebar", () => {
             name: "Alpha Project",
             path: "/tmp/alpha",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
           {
             id: "ws-2",
             name: "Beta Project",
             path: "/tmp/beta",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
         ]}
         groupedWorkspaces={[
@@ -206,14 +202,12 @@ describe("Sidebar", () => {
                 name: "Alpha Project",
                 path: "/tmp/alpha",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
               {
                 id: "ws-2",
                 name: "Beta Project",
                 path: "/tmp/beta",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
             ],
           },
@@ -245,14 +239,12 @@ describe("Sidebar", () => {
             name: "Alpha Project",
             path: "/tmp/alpha",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
           {
             id: "ws-2",
             name: "Beta Project",
             path: "/tmp/beta",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
         ]}
         groupedWorkspaces={[
@@ -265,14 +257,12 @@ describe("Sidebar", () => {
                 name: "Alpha Project",
                 path: "/tmp/alpha",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
               {
                 id: "ws-2",
                 name: "Beta Project",
                 path: "/tmp/beta",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
             ],
           },
@@ -307,7 +297,6 @@ describe("Sidebar", () => {
             name: "Alpha Project",
             path: "/tmp/alpha",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
         ]}
         groupedWorkspaces={[
@@ -320,7 +309,6 @@ describe("Sidebar", () => {
                 name: "Alpha Project",
                 path: "/tmp/alpha",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
             ],
           },
@@ -359,7 +347,6 @@ describe("Sidebar", () => {
             name: "Alpha Project",
             path: "/tmp/alpha",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
         ]}
         groupedWorkspaces={[
@@ -372,7 +359,6 @@ describe("Sidebar", () => {
                 name: "Alpha Project",
                 path: "/tmp/alpha",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
             ],
           },
@@ -406,7 +392,6 @@ describe("Sidebar", () => {
             name: "Main Project",
             path: "/tmp/main",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
           {
             id: "ws-worktree",
@@ -415,7 +400,6 @@ describe("Sidebar", () => {
             connected: true,
             kind: "worktree",
             parentId: "ws-root",
-            settings: { sidebarCollapsed: false },
           },
         ]}
         groupedWorkspaces={[
@@ -428,7 +412,6 @@ describe("Sidebar", () => {
                 name: "Main Project",
                 path: "/tmp/main",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
             ],
           },
@@ -464,17 +447,13 @@ describe("Sidebar", () => {
             name: "Main Project",
             path: "/tmp/main",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
           {
             id: "ws-clone",
             name: "Clone Agent",
             path: "/tmp/main-clone",
             connected: true,
-            settings: {
-              sidebarCollapsed: false,
-              cloneSourceWorkspaceId: "ws-root",
-            },
+            parentId: "ws-root",
           },
         ]}
         groupedWorkspaces={[
@@ -487,17 +466,13 @@ describe("Sidebar", () => {
                 name: "Main Project",
                 path: "/tmp/main",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
               {
                 id: "ws-clone",
                 name: "Clone Agent",
                 path: "/tmp/main-clone",
                 connected: true,
-                settings: {
-                  sidebarCollapsed: false,
-                  cloneSourceWorkspaceId: "ws-root",
-                },
+                parentId: "ws-root",
               },
             ],
           },
@@ -536,14 +511,12 @@ describe("Sidebar", () => {
             name: "Alpha Project",
             path: "/tmp/alpha",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
           {
             id: "ws-2",
             name: "Beta Project",
             path: "/tmp/beta",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
         ]}
         groupedWorkspaces={[
@@ -556,14 +529,12 @@ describe("Sidebar", () => {
                 name: "Alpha Project",
                 path: "/tmp/alpha",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
               {
                 id: "ws-2",
                 name: "Beta Project",
                 path: "/tmp/beta",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
             ],
           },
@@ -589,7 +560,6 @@ describe("Sidebar", () => {
             name: "Workspace",
             path: "/tmp/workspace",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
         ]}
         groupedWorkspaces={[
@@ -602,7 +572,6 @@ describe("Sidebar", () => {
                 name: "Workspace",
                 path: "/tmp/workspace",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
             ],
           },
@@ -625,7 +594,6 @@ describe("Sidebar", () => {
             name: "Workspace",
             path: "/tmp/workspace",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
         ]}
         groupedWorkspaces={[
@@ -638,7 +606,6 @@ describe("Sidebar", () => {
                 name: "Workspace",
                 path: "/tmp/workspace",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
             ],
           },
@@ -663,7 +630,6 @@ describe("Sidebar", () => {
           name: "Workspace",
           path: "/tmp/workspace",
           connected: true,
-          settings: { sidebarCollapsed: false },
         },
       ],
       groupedWorkspaces: [
@@ -676,7 +642,6 @@ describe("Sidebar", () => {
               name: "Workspace",
               path: "/tmp/workspace",
               connected: true,
-              settings: { sidebarCollapsed: false },
             },
           ],
         },
@@ -708,17 +673,13 @@ describe("Sidebar", () => {
             name: "Main Project",
             path: "/tmp/main",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
           {
             id: "ws-2",
             name: "Clone Agent",
             path: "/tmp/main-copy",
             connected: true,
-            settings: {
-              sidebarCollapsed: false,
-              cloneSourceWorkspaceId: "ws-1",
-            },
+            parentId: "ws-1",
           },
         ]}
         groupedWorkspaces={[
@@ -731,17 +692,13 @@ describe("Sidebar", () => {
                 name: "Main Project",
                 path: "/tmp/main",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
               {
                 id: "ws-2",
                 name: "Clone Agent",
                 path: "/tmp/main-copy",
                 connected: true,
-                settings: {
-                  sidebarCollapsed: false,
-                  cloneSourceWorkspaceId: "ws-1",
-                },
+                parentId: "ws-1",
               },
             ],
           },
@@ -766,24 +723,19 @@ describe("Sidebar", () => {
             name: "Alpha Project",
             path: "/tmp/alpha",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
           {
             id: "ws-a-clone",
             name: "Alpha Clone",
             path: "/tmp/alpha-clone",
             connected: true,
-            settings: {
-              sidebarCollapsed: false,
-              cloneSourceWorkspaceId: "ws-a",
-            },
+            parentId: "ws-a",
           },
           {
             id: "ws-b",
             name: "Beta Project",
             path: "/tmp/beta",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
         ]}
         groupedWorkspaces={[
@@ -796,24 +748,19 @@ describe("Sidebar", () => {
                 name: "Alpha Project",
                 path: "/tmp/alpha",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
               {
                 id: "ws-a-clone",
                 name: "Alpha Clone",
                 path: "/tmp/alpha-clone",
                 connected: true,
-                settings: {
-                  sidebarCollapsed: false,
-                  cloneSourceWorkspaceId: "ws-a",
-                },
+                parentId: "ws-a",
               },
               {
                 id: "ws-b",
                 name: "Beta Project",
                 path: "/tmp/beta",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
             ],
           },
@@ -845,7 +792,6 @@ describe("Sidebar", () => {
             name: "Workspace",
             path: "/tmp/workspace",
             connected: true,
-            settings: { sidebarCollapsed: false },
           },
         ]}
         groupedWorkspaces={[
@@ -858,7 +804,6 @@ describe("Sidebar", () => {
                 name: "Workspace",
                 path: "/tmp/workspace",
                 connected: true,
-                settings: { sidebarCollapsed: false },
               },
             ],
           },

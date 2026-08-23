@@ -4,10 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { BranchInfo, WorkspaceInfo } from "../../../types";
 import { BranchSwitcherPrompt } from "./BranchSwitcherPrompt";
 
-const baseSettings: WorkspaceInfo["settings"] = {
-  sidebarCollapsed: false,
-};
-
 Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
   value: vi.fn(),
   writable: true,
@@ -24,7 +20,6 @@ function createWorkspace(
     kind: overrides.kind ?? "main",
     parentId: overrides.parentId ?? null,
     worktree: overrides.worktree ?? null,
-    settings: overrides.settings ?? baseSettings,
   };
 }
 

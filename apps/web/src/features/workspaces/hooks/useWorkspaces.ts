@@ -1,38 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type {
-  AppSettings,
-  DebugEntry,
-  WorkspaceGroup,
-  WorkspaceInfo,
-  WorkspaceSettings,
-} from "../../../types";
-import {
-  RESERVED_GROUP_NAME,
-  buildGroupedWorkspaces,
-  buildWorkspaceById,
-  buildWorkspaceGroupById,
-  getWorkspaceGroupNameById,
-  sortWorkspaceGroups,
-} from "../domain/workspaceGroups";
+import { useEffect, useMemo, useState } from "react";
+import type { DebugEntry, WorkspaceInfo } from "../../../types";
+import { buildGroupedWorkspaces } from "../domain/workspaceGroups";
 import {
   useWorkspaceCrud,
   type AddWorkspacesFromPathsResult,
 } from "./useWorkspaceCrud";
-import { useWorkspaceGroupOps } from "./useWorkspaceGroupOps";
 import { useWorktreeOps } from "./useWorktreeOps";
 
 export type UseWorkspacesOptions = {
   onDebug?: (entry: DebugEntry) => void;
-  appSettings?: AppSettings;
-  onUpdateAppSettings?: (next: AppSettings) => Promise<AppSettings>;
 };
 
 export type UseWorkspacesResult = {
   workspaces: WorkspaceInfo[];
-  workspaceGroups: WorkspaceGroup[];
   groupedWorkspaces: ReturnType<typeof buildGroupedWorkspaces>;
-  getWorkspaceGroupName: (workspaceId: string) => string | null;
-  ungroupedLabel: string;
   activeWorkspace: WorkspaceInfo | null;
   activeWorkspaceId: string | null;
   setActiveWorkspaceId: (workspaceId: string | null) => void;
@@ -57,12 +38,6 @@ export type UseWorkspacesResult = {
   ) => Promise<WorkspaceInfo | null>;
   connectWorkspace: (entry: WorkspaceInfo) => Promise<void>;
   markWorkspaceConnected: (id: string) => void;
-  updateWorkspaceSettings: (workspaceId: string, patch: Partial<WorkspaceSettings>) => Promise<WorkspaceInfo>;
-  createWorkspaceGroup: (name: string) => Promise<WorkspaceGroup | null>;
-  renameWorkspaceGroup: (groupId: string, name: string) => Promise<true | null>;
-  moveWorkspaceGroup: (groupId: string, direction: "up" | "down") => Promise<true | null>;
-  deleteWorkspaceGroup: (groupId: string) => Promise<true | null>;
-  assignWorkspaceGroup: (workspaceId: string, groupId: string | null) => Promise<true | null>;
   removeWorkspace: (workspaceId: string) => Promise<void>;
   removeWorktree: (workspaceId: string) => Promise<void>;
   renameWorktree: (workspaceId: string, branch: string) => Promise<WorkspaceInfo>;
@@ -76,8 +51,7 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}): UseWorkspaces
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false);
-  const workspaceSettingsRef = useRef<Map<string, WorkspaceSettings>>(new Map());
-  const { onDebug, appSettings, onUpdateAppSettings } = options;
+  const { onDebug } = options;
 
   const {
     addWorkspaceFromPath,
@@ -88,13 +62,11 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}): UseWorkspaces
     markWorkspaceConnected,
     refreshWorkspaces,
     removeWorkspace,
-    updateWorkspaceSettings,
   } = useWorkspaceCrud({
     onDebug,
     workspaces,
     setWorkspaces,
     setActiveWorkspaceId,
-    workspaceSettingsRef,
     setHasLoaded,
   });
 
@@ -102,40 +74,14 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}): UseWorkspaces
     void refreshWorkspaces();
   }, [refreshWorkspaces]);
 
-  useEffect(() => {
-    const next = new Map<string, WorkspaceSettings>();
-    workspaces.forEach((entry) => {
-      next.set(entry.id, entry.settings);
-    });
-    workspaceSettingsRef.current = next;
-  }, [workspaces]);
-
   const activeWorkspace = useMemo(
     () => workspaces.find((entry) => entry.id === activeWorkspaceId) ?? null,
     [activeWorkspaceId, workspaces],
   );
 
-  const workspaceById = useMemo(() => buildWorkspaceById(workspaces), [workspaces]);
-
-  const workspaceGroups = useMemo(
-    () => sortWorkspaceGroups(appSettings?.workspaceGroups ?? []),
-    [appSettings?.workspaceGroups],
-  );
-
-  const workspaceGroupById = useMemo(
-    () => buildWorkspaceGroupById(workspaceGroups),
-    [workspaceGroups],
-  );
-
   const groupedWorkspaces = useMemo(
-    () => buildGroupedWorkspaces(workspaces, workspaceGroups),
-    [workspaceGroups, workspaces],
-  );
-
-  const getWorkspaceGroupName = useCallback(
-    (workspaceId: string) =>
-      getWorkspaceGroupNameById(workspaceId, workspaceById, workspaceGroupById),
-    [workspaceById, workspaceGroupById],
+    () => buildGroupedWorkspaces(workspaces),
+    [workspaces],
   );
 
   const {
@@ -151,27 +97,9 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}): UseWorkspaces
     setActiveWorkspaceId,
   });
 
-  const {
-    assignWorkspaceGroup,
-    createWorkspaceGroup,
-    deleteWorkspaceGroup,
-    moveWorkspaceGroup,
-    renameWorkspaceGroup,
-  } = useWorkspaceGroupOps({
-    appSettings,
-    onUpdateAppSettings,
-    workspaceGroups,
-    workspaceGroupById,
-    workspaces,
-    updateWorkspaceSettings,
-  });
-
   return {
     workspaces,
-    workspaceGroups,
     groupedWorkspaces,
-    getWorkspaceGroupName,
-    ungroupedLabel: RESERVED_GROUP_NAME,
     activeWorkspace,
     activeWorkspaceId,
     setActiveWorkspaceId,
@@ -183,12 +111,6 @@ export function useWorkspaces(options: UseWorkspacesOptions = {}): UseWorkspaces
     addWorktreeAgent,
     connectWorkspace,
     markWorkspaceConnected,
-    updateWorkspaceSettings,
-    createWorkspaceGroup,
-    renameWorkspaceGroup,
-    moveWorkspaceGroup,
-    deleteWorkspaceGroup,
-    assignWorkspaceGroup,
     removeWorkspace,
     removeWorktree,
     renameWorktree,

@@ -22,9 +22,6 @@ function makeWorkspace(
     name: id,
     path: `/tmp/${id}`,
     connected: true,
-    settings: {
-      sidebarCollapsed: false,
-    },
     ...overrides,
   };
 }

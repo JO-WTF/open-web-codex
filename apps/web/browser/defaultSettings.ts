@@ -71,7 +71,6 @@ export const defaultAppSettings: AppSettings = {
   composerFenceAutoWrapPasteCodeLike: false,
   composerListContinuation: false,
   composerCodeBlockCopyUseModifier: false,
-  workspaceGroups: [],
   globalWorktreesFolder: null,
   openAppTargets: [
     { id: "vscode", label: "VS Code", kind: "command", command: "code", args: [] },

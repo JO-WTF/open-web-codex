@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 
-import type { WorkspaceInfo, WorkspaceSettings } from "../../../types";
+import type { WorkspaceInfo } from "../../../types";
 
 type AppTab = "home" | "projects" | "codex" | "git" | "log";
 
@@ -17,10 +17,6 @@ type UseSidebarLayoutActionsOptions = {
   isCompact: boolean;
   setActiveTab: (tab: AppTab) => void;
   workspacesById: Map<string, WorkspaceInfo>;
-  updateWorkspaceSettings: (
-    workspaceId: string,
-    patch: Partial<WorkspaceSettings>,
-  ) => void | Promise<unknown>;
   removeThread: (workspaceId: string, threadId: string) => void;
   clearDraftForThread: (threadId: string) => void;
   removeImagesForThread: (threadId: string) => void;
@@ -45,7 +41,6 @@ export function useSidebarLayoutActions({
   isCompact,
   setActiveTab,
   workspacesById,
-  updateWorkspaceSettings,
   removeThread,
   clearDraftForThread,
   removeImagesForThread,
@@ -91,19 +86,6 @@ export function useSidebarLayoutActions({
       }
     },
     [connectWorkspace, isCompact, setActiveTab],
-  );
-
-  const onToggleWorkspaceCollapse = useCallback(
-    (workspaceId: string, collapsed: boolean) => {
-      const target = workspacesById.get(workspaceId);
-      if (!target) {
-        return;
-      }
-      void updateWorkspaceSettings(workspaceId, {
-        sidebarCollapsed: collapsed,
-      });
-    },
-    [updateWorkspaceSettings, workspacesById],
   );
 
   const onSelectThread = useCallback(
@@ -187,7 +169,6 @@ export function useSidebarLayoutActions({
     onSelectHome,
     onSelectWorkspace,
     onConnectWorkspace,
-    onToggleWorkspaceCollapse,
     onSelectThread,
     onDeleteThread,
     onSyncThread,

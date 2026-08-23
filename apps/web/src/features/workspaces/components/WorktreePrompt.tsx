@@ -12,17 +12,13 @@ type WorktreePromptProps = {
   branchWasEdited?: boolean;
   branchSuggestions?: BranchInfo[];
   copyAgentsMd: boolean;
-  setupScript: string;
-  scriptError?: string | null;
   error?: string | null;
   onNameChange: (value: string) => void;
   onChange: (value: string) => void;
   onCopyAgentsMdChange: (value: boolean) => void;
-  onSetupScriptChange: (value: string) => void;
   onCancel: () => void;
   onConfirm: () => void;
   isBusy?: boolean;
-  isSavingScript?: boolean;
 };
 
 export function WorktreePrompt({
@@ -32,17 +28,13 @@ export function WorktreePrompt({
   branchWasEdited = false,
   branchSuggestions = [],
   copyAgentsMd,
-  setupScript,
-  scriptError = null,
   error = null,
   onNameChange,
   onChange,
   onCopyAgentsMdChange,
-  onSetupScriptChange,
   onCancel,
   onConfirm,
   isBusy = false,
-  isSavingScript = false,
 }: WorktreePromptProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const branchContainerRef = useRef<HTMLDivElement | null>(null);
@@ -240,22 +232,6 @@ export function WorktreePrompt({
           Copy <code>AGENTS.md</code> into the worktree
         </label>
       </div>
-      <div className="ds-modal-divider worktree-modal-divider" />
-      <div className="worktree-modal-section-title">Environment setup script</div>
-      <div className="worktree-modal-hint">
-        Stored on the project (Settings → Environments) and runs once in a dedicated
-        terminal after each new worktree is created.
-      </div>
-      <textarea
-        id="worktree-setup-script"
-        className="ds-modal-textarea worktree-modal-textarea"
-        value={setupScript}
-        onChange={(event) => onSetupScriptChange(event.target.value)}
-        placeholder="pnpm install"
-        rows={4}
-        disabled={isBusy || isSavingScript}
-      />
-      {scriptError && <div className="ds-modal-error worktree-modal-error">{scriptError}</div>}
       {error && <div className="ds-modal-error worktree-modal-error">{error}</div>}
       <div className="ds-modal-actions worktree-modal-actions">
         <button

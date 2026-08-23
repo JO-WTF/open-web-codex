@@ -74,10 +74,6 @@ describe("useSidebarMenus", () => {
       path: "/tmp/worktree-1",
       kind: "worktree",
       connected: true,
-      settings: {
-        sidebarCollapsed: false,
-        worktreeSetupScript: "",
-      },
       worktree: { branch: "feature/test" },
     };
 

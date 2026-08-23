@@ -31,7 +31,6 @@ vi.mock("../../../services/tauri", () => ({
   removeWorktree: vi.fn(),
   renameWorktree: vi.fn(),
   renameWorktreeUpstream: vi.fn(),
-  updateWorkspaceSettings: vi.fn(),
 }));
 
 vi.mock("../../../utils/platformPaths", () => ({
@@ -46,7 +45,6 @@ const workspaceOne: WorkspaceInfo = {
   kind: "main",
   parentId: null,
   worktree: null,
-  settings: { sidebarCollapsed: false, groupId: null },
 };
 
 const workspaceTwo: WorkspaceInfo = {
@@ -57,13 +55,11 @@ const workspaceTwo: WorkspaceInfo = {
   kind: "main",
   parentId: null,
   worktree: null,
-  settings: { sidebarCollapsed: false, groupId: null },
 };
 
 const baseAppSettings = {
   codexBin: null,
   backendMode: "local",
-  workspaceGroups: [],
 } as unknown as AppSettings;
 
 describe("useWorkspaceController dialogs", () => {
@@ -83,7 +79,6 @@ describe("useWorkspaceController dialogs", () => {
       useWorkspaceController({
         appSettings: baseAppSettings,
         addDebugEntry: vi.fn(),
-        queueSaveSettings: vi.fn(async (next) => next),
       }),
     );
 
@@ -111,7 +106,6 @@ describe("useWorkspaceController dialogs", () => {
       useWorkspaceController({
         appSettings: baseAppSettings,
         addDebugEntry: vi.fn(),
-        queueSaveSettings: vi.fn(async (next) => next),
       }),
     );
 
@@ -145,7 +139,6 @@ describe("useWorkspaceController dialogs", () => {
           backendMode: "remote",
         },
         addDebugEntry: vi.fn(),
-        queueSaveSettings: vi.fn(async (next) => next),
       }),
     );
 
@@ -197,7 +190,6 @@ describe("useWorkspaceController dialogs", () => {
           backendMode: "remote",
         },
         addDebugEntry: vi.fn(),
-        queueSaveSettings: vi.fn(async (next) => next),
       }),
     );
 
@@ -245,7 +237,6 @@ describe("useWorkspaceController dialogs", () => {
           backendMode: "remote",
         },
         addDebugEntry: vi.fn(),
-        queueSaveSettings: vi.fn(async (next) => next),
       }),
     );
 

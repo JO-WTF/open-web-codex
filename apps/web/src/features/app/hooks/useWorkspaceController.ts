@@ -8,18 +8,14 @@ import { isMobilePlatform } from "../../../utils/platformPaths";
 type WorkspaceControllerOptions = {
   appSettings: AppSettings;
   addDebugEntry: (entry: DebugEntry) => void;
-  queueSaveSettings: (next: AppSettings) => Promise<AppSettings>;
 };
 
 export function useWorkspaceController({
   appSettings,
   addDebugEntry,
-  queueSaveSettings,
 }: WorkspaceControllerOptions) {
   const workspaceCore = useWorkspaces({
     onDebug: addDebugEntry,
-    appSettings,
-    onUpdateAppSettings: queueSaveSettings,
   });
 
   const {

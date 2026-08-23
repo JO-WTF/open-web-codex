@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import type { WorkspaceInfo } from "../../../types";
 import { pickWorkspacePath } from "../../../services/tauri";
 
@@ -6,8 +6,6 @@ type ClonePromptState = {
   workspace: WorkspaceInfo;
   copyName: string;
   copiesFolder: string;
-  initialCopiesFolder: string;
-  groupId: string | null;
   suggestedCopiesFolder: string | null;
   isSubmitting: boolean;
   error: string | null;
@@ -21,10 +19,6 @@ type UseClonePromptOptions = {
   ) => Promise<WorkspaceInfo | null>;
   connectWorkspace: (workspace: WorkspaceInfo) => Promise<void>;
   onSelectWorkspace: (workspaceId: string) => void;
-  resolveProjectContext: (
-    workspace: WorkspaceInfo,
-  ) => { groupId: string | null; copiesFolder: string | null };
-  persistProjectCopiesFolder?: (groupId: string, copiesFolder: string) => Promise<void>;
   onCompactActivate?: () => void;
   onError?: (message: string) => void;
 };
@@ -100,8 +94,6 @@ export function useClonePrompt({
   addCloneAgent,
   connectWorkspace,
   onSelectWorkspace,
-  resolveProjectContext,
-  persistProjectCopiesFolder,
   onCompactActivate,
   onError,
 }: UseClonePromptOptions): UseClonePromptResult {
@@ -109,19 +101,16 @@ export function useClonePrompt({
 
   const openPrompt = useCallback(
     (workspace: WorkspaceInfo) => {
-      const { groupId, copiesFolder } = resolveProjectContext(workspace);
       setClonePrompt({
         workspace,
         copyName: defaultCopyName(workspace),
-        copiesFolder: copiesFolder ?? "",
-        initialCopiesFolder: copiesFolder ?? "",
-        groupId,
+        copiesFolder: "",
         suggestedCopiesFolder: suggestCopiesFolder(workspace.path),
         isSubmitting: false,
         error: null,
       });
     },
-    [resolveProjectContext],
+    [],
   );
 
   const updateCopyName = useCallback((value: string) => {
@@ -156,16 +145,6 @@ export function useClonePrompt({
   const clearCopiesFolder = useCallback(() => {
     setClonePrompt((prev) => (prev ? { ...prev, copiesFolder: "", error: null } : prev));
   }, []);
-
-  const canPersistCopiesFolder = useMemo(() => {
-    if (!clonePrompt) {
-      return false;
-    }
-    if (!clonePrompt.groupId || !persistProjectCopiesFolder) {
-      return false;
-    }
-    return clonePrompt.copiesFolder.trim().length > 0;
-  }, [clonePrompt, persistProjectCopiesFolder]);
 
   const confirmPrompt = useCallback(async () => {
     if (!clonePrompt || clonePrompt.isSubmitting) {
@@ -204,19 +183,6 @@ export function useClonePrompt({
         await connectWorkspace(cloneWorkspace);
       }
 
-      if (
-        canPersistCopiesFolder &&
-        clonePrompt.groupId &&
-        copiesFolder !== clonePrompt.initialCopiesFolder
-      ) {
-        try {
-          await persistProjectCopiesFolder?.(clonePrompt.groupId, copiesFolder);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          onError?.(message);
-        }
-      }
-
       onCompactActivate?.();
       setClonePrompt(null);
     } catch (error) {
@@ -228,13 +194,11 @@ export function useClonePrompt({
     }
   }, [
     addCloneAgent,
-    canPersistCopiesFolder,
     clonePrompt,
     connectWorkspace,
     onCompactActivate,
     onError,
     onSelectWorkspace,
-    persistProjectCopiesFolder,
   ]);
 
   return {

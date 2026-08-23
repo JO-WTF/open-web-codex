@@ -33,9 +33,6 @@ import { useInterruptShortcut } from "@app/hooks/useInterruptShortcut";
 import { useArchiveShortcut } from "@app/hooks/useArchiveShortcut";
 import { useCopyThread } from "@threads/hooks/useCopyThread";
 import { useTerminalController } from "@/features/terminal/hooks/useTerminalController";
-import { useWorkspaceLaunchScript } from "@app/hooks/useWorkspaceLaunchScript";
-import { useWorkspaceLaunchScripts } from "@app/hooks/useWorkspaceLaunchScripts";
-import { useWorktreeSetupScript } from "@app/hooks/useWorktreeSetupScript";
 import { useMobileServerSetup } from "@/features/mobile/hooks/useMobileServerSetup";
 import { useMainAppModals } from "@app/hooks/useMainAppModals";
 import { useMainAppDisplayNodes } from "@app/hooks/useMainAppDisplayNodes";
@@ -51,7 +48,6 @@ import { useHomeAccount } from "@app/hooks/useHomeAccount";
 import type {
   ComposerEditorSettings,
   ServiceTier,
-  WorkspaceInfo,
 } from "@/types";
 import { useOpenAppIcons } from "@app/hooks/useOpenAppIcons";
 import { useAccountSwitching } from "@app/hooks/useAccountSwitching";
@@ -72,7 +68,6 @@ import {
 } from "@app/orchestration/useThreadOrchestration";
 import {
   useWorkspaceInsightsOrchestration,
-  useWorkspaceOrderingOrchestration,
 } from "@app/orchestration/useWorkspaceOrchestration";
 import { useAppShellOrchestration } from "@app/orchestration/useLayoutOrchestration";
 import { normalizeCodexArgsInput } from "@/utils/codexArgsInput";
@@ -130,10 +125,7 @@ export default function MainApp() {
     activeTab === "projects" || activeTab === "home" ? "codex" : activeTab;
   const {
     workspaces,
-    workspaceGroups,
     groupedWorkspaces,
-    getWorkspaceGroupName,
-    ungroupedLabel,
     activeWorkspace,
     activeWorkspaceId,
     setActiveWorkspaceId,
@@ -150,12 +142,6 @@ export default function MainApp() {
     addWorktreeAgent,
     connectWorkspace,
     markWorkspaceConnected,
-    updateWorkspaceSettings,
-    createWorkspaceGroup,
-    renameWorkspaceGroup,
-    moveWorkspaceGroup,
-    deleteWorkspaceGroup,
-    assignWorkspaceGroup,
     removeWorkspace,
     removeWorktree,
     renameWorktree,
@@ -166,7 +152,6 @@ export default function MainApp() {
   } = useWorkspaceController({
     appSettings,
     addDebugEntry,
-    queueSaveSettings,
   });
   const {
     isMobileRuntime,
@@ -236,7 +221,6 @@ export default function MainApp() {
     terminalOpen,
     handleDebugClick,
     handleToggleTerminal,
-    openTerminal,
     closeTerminal: closeTerminalPanel,
   } = useLayoutController({
     activeWorkspaceId,
@@ -391,7 +375,6 @@ export default function MainApp() {
   const {
     handleThreadCodexMetadataDetected,
     codexArgsOptions,
-    ensureWorkspaceRuntimeCodexArgs,
     getThreadArgsBadge,
   } = useMainAppThreadCodexState({
     appCodexArgs: appSettings.codexArgs,
@@ -485,7 +468,6 @@ export default function MainApp() {
     collaborationMode: collaborationModePayload,
     onSelectServiceTier: handleSelectServiceTier,
     accessMode,
-    ensureWorkspaceRuntimeCodexArgs,
     reviewDeliveryMode: appSettings.reviewDeliveryMode,
     steerEnabled: appSettings.steerEnabled,
     chatHistoryScrollbackItems: appSettingsLoading
@@ -557,7 +539,6 @@ export default function MainApp() {
       reviewDeliveryMode: appSettings.reviewDeliveryMode,
     },
     addDebugEntry,
-    updateWorkspaceSettings,
     connectWorkspace,
     startThreadForWorkspace,
     sendUserMessageToThread,
@@ -777,8 +758,6 @@ export default function MainApp() {
     onNewTerminal,
     onCloseTerminal,
     terminalState,
-    ensureTerminalWithTitle,
-    restartTerminalSession,
     requestTerminalFocus,
   } = useTerminalController({
     activeWorkspaceId,
@@ -787,19 +766,6 @@ export default function MainApp() {
     onCloseTerminalPanel: closeTerminalPanel,
     onDebug: addDebugEntry,
   });
-
-  const ensureLaunchTerminal = useCallback(
-    (workspaceId: string) => ensureTerminalWithTitle(workspaceId, "launch", "Launch"),
-    [ensureTerminalWithTitle],
-  );
-
-  const openTerminalWithFocus = useCallback(() => {
-    if (!activeWorkspaceId) {
-      return;
-    }
-    requestTerminalFocus();
-    openTerminal();
-  }, [activeWorkspaceId, openTerminal, requestTerminalFocus]);
 
   const handleToggleTerminalWithFocus = useCallback(() => {
     if (!activeWorkspaceId) {
@@ -816,84 +782,20 @@ export default function MainApp() {
     terminalOpen,
   ]);
 
-  const launchScriptState = useWorkspaceLaunchScript({
-    activeWorkspace,
-    updateWorkspaceSettings,
-    openTerminal: openTerminalWithFocus,
-    ensureLaunchTerminal,
-    restartLaunchSession: restartTerminalSession,
-    terminalState,
-    activeTerminalId,
-  });
-
-  const launchScriptsState = useWorkspaceLaunchScripts({
-    activeWorkspace,
-    updateWorkspaceSettings,
-    openTerminal: openTerminalWithFocus,
-    ensureLaunchTerminal: (workspaceId, entry, title) => {
-      const label = entry.label?.trim() || entry.icon;
-      return ensureTerminalWithTitle(
-        workspaceId,
-        `launch:${entry.id}`,
-        title || `Launch ${label}`,
-      );
-    },
-    restartLaunchSession: restartTerminalSession,
-    terminalState,
-    activeTerminalId,
-  });
-
-  const worktreeSetupScriptState = useWorktreeSetupScript({
-    ensureTerminalWithTitle,
-    restartTerminalSession,
-    openTerminal,
-    onDebug: addDebugEntry,
-  });
-
-  const handleWorktreeCreated = useCallback(
-    async (worktree: WorkspaceInfo, _parentWorkspace?: WorkspaceInfo) => {
-      await worktreeSetupScriptState.maybeRunWorktreeSetupScript(worktree);
-    },
-    [worktreeSetupScriptState],
-  );
-
   const { exitDiffView, selectWorkspace, selectHome } = useWorkspaceSelection({
     workspaces,
     isCompact,
     activeWorkspaceId,
     setActiveTab,
     setActiveWorkspaceId,
-    updateWorkspaceSettings,
     setCenterMode,
     setSelectedDiffPath,
-  });
-
-  const resolveCloneProjectContext = useCallback(
-    (workspace: WorkspaceInfo) => {
-      const groupId = workspace.settings.groupId ?? null;
-      const group = groupId
-        ? appSettings.workspaceGroups.find((entry) => entry.id === groupId)
-        : null;
-      return {
-        groupId,
-        copiesFolder: group?.copiesFolder ?? null,
-      };
-    },
-    [appSettings.workspaceGroups],
-  );
-
-  const { handleMoveWorkspace } = useWorkspaceOrderingOrchestration({
-    workspaces,
-    workspacesById,
-    updateWorkspaceSettings,
   });
 
   const {
     handleSelectOpenAppId,
     handleToggleAutomaticAppUpdateChecks,
-    persistProjectCopiesFolder,
   } = useMainAppSettingsActions({
-    appSettings,
     setAppSettings,
     queueSaveSettings,
   });
@@ -919,9 +821,6 @@ export default function MainApp() {
   const { appModalsProps, modalActions } = useMainAppModals({
     settingsViewComponent: SettingsView,
     workspaces,
-    workspaceGroups,
-    groupedWorkspaces,
-    ungroupedLabel,
     activeWorkspace,
     setActiveWorkspaceId,
     branches,
@@ -942,11 +841,7 @@ export default function MainApp() {
       addWorktreeAgent,
       addCloneAgent,
       connectWorkspace,
-      updateWorkspaceSettings,
       selectWorkspace,
-      handleWorktreeCreated,
-      resolveCloneProjectContext,
-      persistProjectCopiesFolder,
       onCompactActivate: isCompact ? () => setActiveTab("codex") : undefined,
       onWorkspacePromptError: (message, kind) => {
         addDebugEntry({
@@ -978,13 +873,6 @@ export default function MainApp() {
       },
     },
     settings: {
-      handleMoveWorkspace,
-      removeWorkspace,
-      createWorkspaceGroup,
-      renameWorkspaceGroup,
-      moveWorkspaceGroup,
-      deleteWorkspaceGroup,
-      assignWorkspaceGroup,
       reduceTransparency,
       setReduceTransparency,
       appSettings,
@@ -993,7 +881,6 @@ export default function MainApp() {
       handleToggleAutomaticAppUpdateChecks,
       doctor,
       codexUpdate,
-      updateWorkspaceSettings,
       scaleShortcutTitle,
       scaleShortcutText,
       handleTestNotificationSound,
@@ -1038,7 +925,6 @@ export default function MainApp() {
     lastAgentMessageByThread,
     threadStatusById,
     threadListLoadingByWorkspace,
-    getWorkspaceGroupName,
   });
 
   const activeRateLimits = activeWorkspaceId
@@ -1128,7 +1014,6 @@ export default function MainApp() {
       startFast,
       startStatus,
       addWorktreeAgent,
-      handleWorktreeCreated,
       addDebugEntry,
     },
   });
@@ -1395,7 +1280,6 @@ export default function MainApp() {
       isCompact,
       setActiveTab,
       workspacesById,
-      updateWorkspaceSettings,
       removeThread,
       clearDraftForThread,
       removeImagesForThread,
@@ -1454,11 +1338,8 @@ export default function MainApp() {
     Boolean(activeWorkspace?.connected) &&
     appSettings.backendMode === "remote" &&
     remoteThreadConnectionState === "polling";
-  const gitRootOverride = activeWorkspace?.settings.gitRoot;
-  const hasGitRootOverride =
-    typeof gitRootOverride === "string" && gitRootOverride.trim().length > 0;
   const showGitInitBanner =
-    Boolean(activeWorkspace) && !hasGitRootOverride && isMissingRepo(gitStatus.error);
+    Boolean(activeWorkspace) && isMissingRepo(gitStatus.error);
   const displayNodes = useMainAppDisplayNodes({
     showCompactCodexThreadActions,
     handleMobileThreadRefresh,
@@ -1556,7 +1437,6 @@ export default function MainApp() {
     },
     workspaces,
     groupedWorkspaces,
-    workspaceGroupsCount: workspaceGroups.length,
     deletingWorktreeIds,
     newAgentDraftWorkspaceId,
     startingDraftThreadWorkspaceId,
@@ -1656,8 +1536,6 @@ export default function MainApp() {
     handleSelectOpenAppId,
     handleCopyThread,
     handleToggleTerminalWithFocus,
-    launchScriptState,
-    launchScriptsState,
     models,
     selectedModelId,
     onSelectModel: handleSelectModel,

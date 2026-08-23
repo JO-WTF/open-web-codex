@@ -5,8 +5,6 @@ import type {
   CodexDoctorResult,
   CodexUpdateResult,
   DictationModelStatus,
-  WorkspaceSettings,
-  WorkspaceGroup,
   WorkspaceInfo,
 } from "@/types";
 import { useSettingsViewCloseShortcuts } from "@settings/hooks/useSettingsViewCloseShortcuts";
@@ -19,24 +17,8 @@ import { SETTINGS_SECTION_LABELS } from "./settingsViewConstants";
 import { SettingsSectionContainers } from "./sections/SettingsSectionContainers";
 
 export type SettingsViewProps = {
-  workspaceGroups: WorkspaceGroup[];
-  groupedWorkspaces: Array<{
-    id: string | null;
-    name: string;
-    workspaces: WorkspaceInfo[];
-  }>;
-  ungroupedLabel: string;
+  workspaces: WorkspaceInfo[];
   onClose: () => void;
-  onMoveWorkspace: (id: string, direction: "up" | "down") => void;
-  onDeleteWorkspace: (id: string) => void;
-  onCreateWorkspaceGroup: (name: string) => Promise<WorkspaceGroup | null>;
-  onRenameWorkspaceGroup: (id: string, name: string) => Promise<boolean | null>;
-  onMoveWorkspaceGroup: (id: string, direction: "up" | "down") => Promise<boolean | null>;
-  onDeleteWorkspaceGroup: (id: string) => Promise<boolean | null>;
-  onAssignWorkspaceGroup: (
-    workspaceId: string,
-    groupId: string | null,
-  ) => Promise<boolean | null>;
   reduceTransparency: boolean;
   onToggleTransparency: (value: boolean) => void;
   appSettings: AppSettings;
@@ -51,10 +33,6 @@ export type SettingsViewProps = {
     codexBin: string | null,
     codexArgs: string | null,
   ) => Promise<CodexUpdateResult>;
-  onUpdateWorkspaceSettings: (
-    id: string,
-    settings: Partial<WorkspaceSettings>,
-  ) => Promise<void>;
   scaleShortcutTitle: string;
   scaleShortcutText: string;
   onTestNotificationSound: () => void;
@@ -68,17 +46,8 @@ export type SettingsViewProps = {
 };
 
 export function SettingsView({
-  workspaceGroups,
-  groupedWorkspaces,
-  ungroupedLabel,
+  workspaces,
   onClose,
-  onMoveWorkspace,
-  onDeleteWorkspace,
-  onCreateWorkspaceGroup,
-  onRenameWorkspaceGroup,
-  onMoveWorkspaceGroup,
-  onDeleteWorkspaceGroup,
-  onAssignWorkspaceGroup,
   reduceTransparency,
   onToggleTransparency,
   appSettings,
@@ -87,7 +56,6 @@ export function SettingsView({
   onToggleAutomaticAppUpdateChecks,
   onRunDoctor,
   onRunCodexUpdate,
-  onUpdateWorkspaceSettings,
   scaleShortcutTitle,
   scaleShortcutText,
   onTestNotificationSound,
@@ -108,9 +76,7 @@ export function SettingsView({
   } = useSettingsViewNavigation({ initialSection });
 
   const orchestration = useSettingsViewOrchestration({
-    workspaceGroups,
-    groupedWorkspaces,
-    ungroupedLabel,
+    workspaces,
     reduceTransparency,
     onToggleTransparency,
     appSettings,
@@ -119,18 +85,10 @@ export function SettingsView({
     onToggleAutomaticAppUpdateChecks,
     onRunDoctor,
     onRunCodexUpdate,
-    onUpdateWorkspaceSettings,
     scaleShortcutTitle,
     scaleShortcutText,
     onTestNotificationSound,
     onTestSystemNotification,
-    onMoveWorkspace,
-    onDeleteWorkspace,
-    onCreateWorkspaceGroup,
-    onRenameWorkspaceGroup,
-    onMoveWorkspaceGroup,
-    onDeleteWorkspaceGroup,
-    onAssignWorkspaceGroup,
     onMobileConnectSuccess,
     dictationModelStatus,
     onDownloadDictationModel,

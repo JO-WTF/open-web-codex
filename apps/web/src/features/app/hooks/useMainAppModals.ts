@@ -6,9 +6,7 @@ import type {
   CodexDoctorResult,
   CodexUpdateResult,
   ThreadSummary,
-  WorkspaceGroup,
   WorkspaceInfo,
-  WorkspaceSettings,
 } from "@/types";
 import { useSettingsModalState } from "@app/hooks/useSettingsModalState";
 import type { SettingsSection } from "@app/hooks/useSettingsModalState";
@@ -21,14 +19,9 @@ import type { InitGitRepoOutcome } from "@/features/git/hooks/useGitActions";
 import { useWorktreePrompt } from "@/features/workspaces/hooks/useWorktreePrompt";
 import { useClonePrompt } from "@/features/workspaces/hooks/useClonePrompt";
 
-type GroupedWorkspaceInfo = SettingsViewProps["groupedWorkspaces"];
-
 type UseMainAppModalsArgs = {
   settingsViewComponent: ComponentType<SettingsViewProps>;
   workspaces: WorkspaceInfo[];
-  workspaceGroups: WorkspaceGroup[];
-  groupedWorkspaces: GroupedWorkspaceInfo;
-  ungroupedLabel: string;
   activeWorkspace: WorkspaceInfo | null;
   setActiveWorkspaceId: (id: string) => void;
   branches: BranchInfo[];
@@ -61,16 +54,7 @@ type UseMainAppModalsArgs = {
       copiesFolder: string,
     ) => Promise<WorkspaceInfo | null>;
     connectWorkspace: (workspace: WorkspaceInfo) => Promise<void>;
-    updateWorkspaceSettings: (
-      id: string,
-      settings: Partial<WorkspaceSettings>,
-    ) => Promise<WorkspaceInfo>;
     selectWorkspace: (workspaceId: string) => void;
-    handleWorktreeCreated: (worktree: WorkspaceInfo, parent: WorkspaceInfo) => Promise<void>;
-    resolveCloneProjectContext: (
-      workspace: WorkspaceInfo,
-    ) => { groupId: string | null; copiesFolder: string | null };
-    persistProjectCopiesFolder: (groupId: string, copiesFolder: string) => Promise<void>;
     onCompactActivate?: () => void;
     onWorkspacePromptError: (message: string, kind: "worktree" | "clone") => void;
     mobileRemoteWorkspacePathPrompt: AppModalsProps["mobileRemoteWorkspacePathPrompt"];
@@ -92,16 +76,6 @@ type UseMainAppModalsArgs = {
     >;
   };
   settings: {
-    handleMoveWorkspace: (id: string, direction: "up" | "down") => void;
-    removeWorkspace: (workspaceId: string) => Promise<void>;
-    createWorkspaceGroup: (name: string) => Promise<WorkspaceGroup | null>;
-    renameWorkspaceGroup: (id: string, name: string) => Promise<boolean | null>;
-    moveWorkspaceGroup: (id: string, direction: "up" | "down") => Promise<boolean | null>;
-    deleteWorkspaceGroup: (id: string) => Promise<boolean | null>;
-    assignWorkspaceGroup: (
-      workspaceId: string,
-      groupId: string | null,
-    ) => Promise<boolean | null>;
     reduceTransparency: boolean;
     setReduceTransparency: (value: boolean) => void;
     appSettings: AppSettings;
@@ -116,10 +90,6 @@ type UseMainAppModalsArgs = {
       codexBin: string | null,
       codexArgs: string | null,
     ) => Promise<CodexUpdateResult>;
-    updateWorkspaceSettings: (
-      id: string,
-      settings: Partial<WorkspaceSettings>,
-    ) => Promise<WorkspaceInfo>;
     scaleShortcutTitle: string;
     scaleShortcutText: string;
     handleTestNotificationSound: () => void;
@@ -150,31 +120,16 @@ type UseMainAppModalsResult = {
 };
 
 type BuildSettingsViewPropsArgs = {
-  groupedWorkspaces: GroupedWorkspaceInfo;
-  workspaceGroups: WorkspaceGroup[];
-  ungroupedLabel: string;
+  workspaces: WorkspaceInfo[];
   settings: UseMainAppModalsArgs["settings"];
 };
 
 function buildSettingsViewProps({
-  groupedWorkspaces,
-  workspaceGroups,
-  ungroupedLabel,
+  workspaces,
   settings,
 }: BuildSettingsViewPropsArgs): Omit<SettingsViewProps, "initialSection" | "onClose"> {
   return {
-    workspaceGroups,
-    groupedWorkspaces,
-    ungroupedLabel,
-    onMoveWorkspace: settings.handleMoveWorkspace,
-    onDeleteWorkspace: (workspaceId) => {
-      void settings.removeWorkspace(workspaceId);
-    },
-    onCreateWorkspaceGroup: settings.createWorkspaceGroup,
-    onRenameWorkspaceGroup: settings.renameWorkspaceGroup,
-    onMoveWorkspaceGroup: settings.moveWorkspaceGroup,
-    onDeleteWorkspaceGroup: settings.deleteWorkspaceGroup,
-    onAssignWorkspaceGroup: settings.assignWorkspaceGroup,
+    workspaces,
     reduceTransparency: settings.reduceTransparency,
     onToggleTransparency: settings.setReduceTransparency,
     appSettings: settings.appSettings,
@@ -186,9 +141,6 @@ function buildSettingsViewProps({
       settings.handleToggleAutomaticAppUpdateChecks,
     onRunDoctor: settings.doctor,
     onRunCodexUpdate: settings.codexUpdate,
-    onUpdateWorkspaceSettings: async (id, nextSettings) => {
-      await settings.updateWorkspaceSettings(id, nextSettings);
-    },
     scaleShortcutTitle: settings.scaleShortcutTitle,
     scaleShortcutText: settings.scaleShortcutText,
     onTestNotificationSound: settings.handleTestNotificationSound,
@@ -218,7 +170,6 @@ type BuildAppModalsPropsArgs = {
   onWorktreePromptNameChange: (value: string) => void;
   onWorktreePromptChange: (value: string) => void;
   onWorktreePromptCopyAgentsMdChange: (value: boolean) => void;
-  onWorktreeSetupScriptChange: (value: string) => void;
   onWorktreePromptCancel: () => void;
   onWorktreePromptConfirm: () => void;
   clonePrompt: AppModalsProps["clonePrompt"];
@@ -277,7 +228,6 @@ function buildAppModalsProps({
   onWorktreePromptNameChange,
   onWorktreePromptChange,
   onWorktreePromptCopyAgentsMdChange,
-  onWorktreeSetupScriptChange,
   onWorktreePromptCancel,
   onWorktreePromptConfirm,
   clonePrompt,
@@ -323,7 +273,6 @@ function buildAppModalsProps({
     onWorktreePromptNameChange,
     onWorktreePromptChange,
     onWorktreePromptCopyAgentsMdChange,
-    onWorktreeSetupScriptChange,
     onWorktreePromptCancel,
     onWorktreePromptConfirm,
     clonePrompt,
@@ -357,9 +306,6 @@ function buildAppModalsProps({
 export function useMainAppModals({
   settingsViewComponent,
   workspaces,
-  workspaceGroups,
-  groupedWorkspaces,
-  ungroupedLabel,
   activeWorkspace,
   setActiveWorkspaceId,
   branches,
@@ -423,13 +369,10 @@ export function useMainAppModals({
     updateName: updateWorktreeName,
     updateBranch: updateWorktreeBranch,
     updateCopyAgentsMd: updateWorktreeCopyAgentsMd,
-    updateSetupScript: updateWorktreeSetupScript,
   } = useWorktreePrompt({
     addWorktreeAgent: workspacePrompts.addWorktreeAgent,
-    updateWorkspaceSettings: workspacePrompts.updateWorkspaceSettings,
     connectWorkspace: workspacePrompts.connectWorkspace,
     onSelectWorkspace: workspacePrompts.selectWorkspace,
-    onWorktreeCreated: workspacePrompts.handleWorktreeCreated,
     onCompactActivate: workspacePrompts.onCompactActivate,
     onError: (message) => workspacePrompts.onWorkspacePromptError(message, "worktree"),
   });
@@ -447,8 +390,6 @@ export function useMainAppModals({
     addCloneAgent: workspacePrompts.addCloneAgent,
     connectWorkspace: workspacePrompts.connectWorkspace,
     onSelectWorkspace: workspacePrompts.selectWorkspace,
-    resolveProjectContext: workspacePrompts.resolveCloneProjectContext,
-    persistProjectCopiesFolder: workspacePrompts.persistProjectCopiesFolder,
     onCompactActivate: workspacePrompts.onCompactActivate,
     onError: (message) => workspacePrompts.onWorkspacePromptError(message, "clone"),
   });
@@ -456,12 +397,10 @@ export function useMainAppModals({
   const settingsViewProps = useMemo<Omit<SettingsViewProps, "initialSection" | "onClose">>(
     () =>
       buildSettingsViewProps({
-        groupedWorkspaces,
-        workspaceGroups,
-        ungroupedLabel,
+        workspaces,
         settings,
       }),
-    [groupedWorkspaces, settings, ungroupedLabel, workspaceGroups],
+    [settings, workspaces],
   );
 
   const appModalsProps = useMemo<AppModalsProps>(
@@ -484,7 +423,6 @@ export function useMainAppModals({
         onWorktreePromptNameChange: updateWorktreeName,
         onWorktreePromptChange: updateWorktreeBranch,
         onWorktreePromptCopyAgentsMdChange: updateWorktreeCopyAgentsMd,
-        onWorktreeSetupScriptChange: updateWorktreeSetupScript,
         onWorktreePromptCancel: cancelWorktreePrompt,
         onWorktreePromptConfirm: confirmWorktreePrompt,
         clonePrompt,
@@ -555,7 +493,6 @@ export function useMainAppModals({
       updateWorktreeBranch,
       updateWorktreeCopyAgentsMd,
       updateWorktreeName,
-      updateWorktreeSetupScript,
       useSuggestedCloneCopiesFolder,
       workspaces,
       worktreePrompt,

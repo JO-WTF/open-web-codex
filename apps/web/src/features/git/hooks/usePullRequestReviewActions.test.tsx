@@ -20,7 +20,6 @@ const workspace: WorkspaceInfo = {
   name: "CodexMonitor",
   path: "/tmp/codex-monitor",
   connected: true,
-  settings: { sidebarCollapsed: false },
 };
 
 const pullRequest: GitHubPullRequest = {

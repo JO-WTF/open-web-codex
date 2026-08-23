@@ -14,7 +14,6 @@ const workspace = {
   name: "Demo",
   path: "/tmp/demo",
   connected: true,
-  settings: { sidebarCollapsed: false },
 };
 
 function baseProps() {

@@ -24,7 +24,6 @@ function makeWorkspace(overrides: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
     name: "Workspace One",
     path: "/tmp/workspace-one",
     connected: true,
-    settings: { sidebarCollapsed: false },
     ...overrides,
   };
 }

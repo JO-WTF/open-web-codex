@@ -1,7 +1,6 @@
 import type { RefObject } from "react";
 import type { AppSettings, ComposerEditorSettings, WorkspaceInfo } from "@/types";
 import type { ThreadState } from "@/features/threads/hooks/useThreadsReducer";
-import type { WorkspaceLaunchScriptsState } from "@app/hooks/useWorkspaceLaunchScripts";
 import { REMOTE_THREAD_POLL_INTERVAL_MS } from "@app/hooks/useRemoteThreadRefreshOnFocus";
 import type { useMainAppComposerWorkspaceState } from "@app/hooks/useMainAppComposerWorkspaceState";
 import type { useMainAppDisplayNodes } from "@app/hooks/useMainAppDisplayNodes";
@@ -32,7 +31,6 @@ type UseMainAppLayoutSurfacesArgs = {
   >;
   workspaces: WorkspaceInfo[];
   groupedWorkspaces: Array<{ id: string | null; name: string; workspaces: WorkspaceInfo[] }>;
-  workspaceGroupsCount: number;
   deletingWorktreeIds: Set<string>;
   newAgentDraftWorkspaceId: string | null;
   startingDraftThreadWorkspaceId: string | null;
@@ -126,19 +124,6 @@ type UseMainAppLayoutSurfacesArgs = {
   handleSelectOpenAppId: MainHeaderProps["onSelectOpenAppId"];
   handleCopyThread: MainHeaderProps["onCopyThread"];
   handleToggleTerminalWithFocus: MainHeaderProps["onToggleTerminal"];
-  launchScriptState: {
-    launchScript: string | null;
-    editorOpen: boolean;
-    draftScript: string;
-    isSaving: boolean;
-    error: string | null;
-    onRunLaunchScript: () => void;
-    onOpenEditor: () => void;
-    onCloseEditor: () => void;
-    onDraftScriptChange: (value: string) => void;
-    onSaveLaunchScript: () => void;
-  };
-  launchScriptsState: WorkspaceLaunchScriptsState | undefined;
   models: ComposerProps["models"];
   selectedModelId: ComposerProps["selectedModelId"];
   onSelectModel: ComposerProps["onSelectModel"];
@@ -231,7 +216,6 @@ function buildPrimarySurface({
   appSettings,
   workspaces,
   groupedWorkspaces,
-  workspaceGroupsCount,
   deletingWorktreeIds,
   newAgentDraftWorkspaceId,
   startingDraftThreadWorkspaceId,
@@ -296,8 +280,6 @@ function buildPrimarySurface({
   handleSelectOpenAppId,
   handleCopyThread,
   handleToggleTerminalWithFocus,
-  launchScriptState,
-  launchScriptsState,
   models,
   selectedModelId,
   onSelectModel,
@@ -371,7 +353,6 @@ function buildPrimarySurface({
     sidebarProps: {
       workspaces,
       groupedWorkspaces,
-      hasWorkspaceGroups: workspaceGroupsCount > 0,
       deletingWorktreeIds,
       newAgentDraftWorkspaceId,
       startingDraftThreadWorkspaceId,
@@ -406,7 +387,6 @@ function buildPrimarySurface({
       onAddAgent: handleAddAgent,
       onAddWorktreeAgent: handleAddWorktreeAgent,
       onAddCloneAgent: handleAddCloneAgent,
-      onToggleWorkspaceCollapse: sidebarHandlers.onToggleWorkspaceCollapse,
       onSelectThread: sidebarHandlers.onSelectThread,
       onDeleteThread: sidebarHandlers.onDeleteThread,
       onSyncThread: sidebarHandlers.onSyncThread,
@@ -618,17 +598,6 @@ function buildPrimarySurface({
           isTerminalOpen: terminalOpen,
           showTerminalButton: !isCompact,
           showWorkspaceTools: !isCompact,
-          launchScript: launchScriptState.launchScript,
-          launchScriptEditorOpen: launchScriptState.editorOpen,
-          launchScriptDraft: launchScriptState.draftScript,
-          launchScriptSaving: launchScriptState.isSaving,
-          launchScriptError: launchScriptState.error,
-          onRunLaunchScript: launchScriptState.onRunLaunchScript,
-          onOpenLaunchScriptEditor: launchScriptState.onOpenEditor,
-          onCloseLaunchScriptEditor: launchScriptState.onCloseEditor,
-          onLaunchScriptDraftChange: launchScriptState.onDraftScriptChange,
-          onSaveLaunchScript: launchScriptState.onSaveLaunchScript,
-          launchScriptsState,
           extraActionsNode: displayNodes.mainHeaderActionsNode,
         }
       : null,
@@ -757,21 +726,6 @@ function buildGitSurface({
         pullRequestComposer.handleSelectPullRequest(pullRequest);
       },
       gitRemoteUrl: gitState.gitRemoteUrl,
-      gitRoot: gitState.activeGitRoot,
-      gitRootCandidates: gitState.gitRootCandidates,
-      gitRootScanDepth: gitState.gitRootScanDepth,
-      gitRootScanLoading: gitState.gitRootScanLoading,
-      gitRootScanError: gitState.gitRootScanError,
-      gitRootScanHasScanned: gitState.gitRootScanHasScanned,
-      onGitRootScanDepthChange: gitState.setGitRootScanDepth,
-      onScanGitRoots: gitState.scanGitRoots,
-      onSelectGitRoot: (path) => {
-        void gitState.handleSetGitRoot(path);
-      },
-      onClearGitRoot: () => {
-        void gitState.handleSetGitRoot(null);
-      },
-      onPickGitRoot: gitState.handlePickGitRoot,
       onInitGitRepo: openInitGitRepoPrompt,
       initGitRepoLoading: gitState.initGitRepoLoading,
       onStageAllChanges: gitState.handleStageGitAll,
@@ -911,7 +865,6 @@ export function useMainAppLayoutSurfaces({
   appSettings,
   workspaces,
   groupedWorkspaces,
-  workspaceGroupsCount,
   deletingWorktreeIds,
   newAgentDraftWorkspaceId,
   startingDraftThreadWorkspaceId,
@@ -979,8 +932,6 @@ export function useMainAppLayoutSurfaces({
   handleSelectOpenAppId,
   handleCopyThread,
   handleToggleTerminalWithFocus,
-  launchScriptState,
-  launchScriptsState,
   models,
   selectedModelId,
   onSelectModel,
@@ -1069,7 +1020,6 @@ export function useMainAppLayoutSurfaces({
     appSettings,
     workspaces,
     groupedWorkspaces,
-    workspaceGroupsCount,
     deletingWorktreeIds,
     newAgentDraftWorkspaceId,
     startingDraftThreadWorkspaceId,
@@ -1137,8 +1087,6 @@ export function useMainAppLayoutSurfaces({
     handleSelectOpenAppId,
     handleCopyThread,
     handleToggleTerminalWithFocus,
-    launchScriptState,
-    launchScriptsState,
     models,
     selectedModelId,
     onSelectModel,

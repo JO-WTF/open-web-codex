@@ -1,4 +1,3 @@
-import LayoutGrid from "lucide-react/dist/esm/icons/layout-grid";
 import SlidersHorizontal from "lucide-react/dist/esm/icons/sliders-horizontal";
 import Mic from "lucide-react/dist/esm/icons/mic";
 import Keyboard from "lucide-react/dist/esm/icons/keyboard";
@@ -7,7 +6,6 @@ import TerminalSquare from "lucide-react/dist/esm/icons/terminal-square";
 import FileText from "lucide-react/dist/esm/icons/file-text";
 import FlaskConical from "lucide-react/dist/esm/icons/flask-conical";
 import ExternalLink from "lucide-react/dist/esm/icons/external-link";
-import Layers from "lucide-react/dist/esm/icons/layers";
 import ServerCog from "lucide-react/dist/esm/icons/server-cog";
 import Info from "lucide-react/dist/esm/icons/info";
 import { PanelNavItem, PanelNavList } from "@/features/design-system/components/panel/PanelPrimitives";
@@ -27,24 +25,6 @@ export function SettingsNav({
   return (
     <aside className="settings-sidebar">
       <PanelNavList className="settings-nav-list">
-        <PanelNavItem
-          className="settings-nav"
-          icon={<LayoutGrid aria-hidden />}
-          active={activeSection === "projects"}
-          showDisclosure={showDisclosure}
-          onClick={() => onSelectSection("projects")}
-        >
-          Projects
-        </PanelNavItem>
-        <PanelNavItem
-          className="settings-nav"
-          icon={<Layers aria-hidden />}
-          active={activeSection === "environments"}
-          showDisclosure={showDisclosure}
-          onClick={() => onSelectSection("environments")}
-        >
-          Environments
-        </PanelNavItem>
         <PanelNavItem
           className="settings-nav"
           icon={<SlidersHorizontal aria-hidden />}

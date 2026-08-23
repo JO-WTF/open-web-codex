@@ -16,7 +16,6 @@ type UseGitActionsOptions = {
   activeWorkspace: WorkspaceInfo | null;
   onRefreshGitStatus: () => void;
   onRefreshGitDiffs: () => void;
-  onClearGitRootCandidates?: () => void;
   onError?: (error: unknown) => void;
 };
 
@@ -26,7 +25,6 @@ export function useGitActions({
   activeWorkspace,
   onRefreshGitStatus,
   onRefreshGitDiffs,
-  onClearGitRootCandidates,
   onError,
 }: UseGitActionsOptions) {
   const [worktreeApplyError, setWorktreeApplyError] = useState<string | null>(null);
@@ -253,13 +251,12 @@ export function useGitActions({
       if (workspaceIdRef.current === actionWorkspaceId) {
         setInitGitRepoLoading(false);
         if (shouldRefresh) {
-          onClearGitRootCandidates?.();
           refreshGitData();
         }
       }
     }
     return outcome;
-  }, [onClearGitRootCandidates, onError, refreshGitData, workspaceId]);
+  }, [onError, refreshGitData, workspaceId]);
 
   const createGitHubRepo = useCallback(
     async (

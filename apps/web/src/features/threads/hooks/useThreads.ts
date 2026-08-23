@@ -42,10 +42,6 @@ type UseThreadsOptions = {
   activeWorkspace: WorkspaceInfo | null;
   onWorkspaceConnected: (id: string) => void;
   onDebug?: (entry: DebugEntry) => void;
-  ensureWorkspaceRuntimeCodexArgs?: (
-    workspaceId: string,
-    threadId: string | null,
-  ) => Promise<void>;
   model?: string | null;
   effort?: string | null;
   serviceTier?: ServiceTier | null | undefined;
@@ -74,7 +70,6 @@ export function useThreads({
   activeWorkspace,
   onWorkspaceConnected,
   onDebug,
-  ensureWorkspaceRuntimeCodexArgs,
   model,
   effort,
   serviceTier,
@@ -540,7 +535,7 @@ export function useThreads({
   useAppServerEvents(handlers);
 
   const {
-    startThreadForWorkspace: startThreadForWorkspaceInternal,
+    startThreadForWorkspace,
     forkThreadForWorkspace,
     resumeThreadForWorkspace,
     refreshThread,
@@ -570,77 +565,6 @@ export function useThreads({
     onThreadCodexMetadataDetected,
   });
 
-  const ensureWorkspaceRuntimeCodexArgsBestEffort = useCallback(
-    async (workspaceId: string, threadId: string | null, phase: string) => {
-      if (!ensureWorkspaceRuntimeCodexArgs) {
-        return;
-      }
-      try {
-        await ensureWorkspaceRuntimeCodexArgs(workspaceId, threadId);
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        onDebug?.({
-          id: `${Date.now()}-client-thread-runtime-codex-args-sync-error`,
-          timestamp: Date.now(),
-          source: "error",
-          label: "thread/runtime-codex-args sync error",
-          payload: `${phase}: ${detail}`,
-        });
-      }
-    },
-    [ensureWorkspaceRuntimeCodexArgs, onDebug],
-  );
-
-  const getWorkspaceThreadIds = useCallback(
-    (workspaceId: string, includeThreadId?: string) => {
-      const visibleThreadIds = (state.threadsByWorkspace[workspaceId] ?? [])
-        .map((thread) => String(thread.id ?? "").trim())
-        .filter((threadId) => threadId.length > 0);
-      const hiddenThreadIds = Object.keys(
-        state.hiddenThreadIdsByWorkspace[workspaceId] ?? {},
-      );
-      const activeThreadIdForWorkspace =
-        state.activeThreadIdByWorkspace[workspaceId] ?? null;
-      const threadIds = new Set([...visibleThreadIds, ...hiddenThreadIds]);
-      if (activeThreadIdForWorkspace) {
-        threadIds.add(activeThreadIdForWorkspace);
-      }
-      if (includeThreadId) {
-        threadIds.add(includeThreadId);
-      }
-      return Array.from(threadIds);
-    },
-    [
-      state.activeThreadIdByWorkspace,
-      state.hiddenThreadIdsByWorkspace,
-      state.threadsByWorkspace,
-    ],
-  );
-
-  const hasProcessingThreadInWorkspace = useCallback(
-    (workspaceId: string, excludedThreadId?: string) =>
-      getWorkspaceThreadIds(workspaceId, excludedThreadId).some(
-        (candidateThreadId) =>
-          candidateThreadId !== excludedThreadId &&
-          Boolean(state.threadStatusById[candidateThreadId]?.isProcessing),
-      ),
-    [getWorkspaceThreadIds, state.threadStatusById],
-  );
-
-  const shouldPreflightRuntimeCodexArgsForSend = useCallback(
-    (workspaceId: string, threadId: string) =>
-      !hasProcessingThreadInWorkspace(workspaceId, threadId),
-    [hasProcessingThreadInWorkspace],
-  );
-
-  const startThreadForWorkspace = useCallback(
-    async (workspaceId: string, options?: { activate?: boolean }) => {
-      await ensureWorkspaceRuntimeCodexArgsBestEffort(workspaceId, null, "start");
-      return startThreadForWorkspaceInternal(workspaceId, options);
-    },
-    [ensureWorkspaceRuntimeCodexArgsBestEffort, startThreadForWorkspaceInternal],
-  );
-
   const startThread = useCallback(async () => {
     if (!activeWorkspaceId) {
       return null;
@@ -659,18 +583,12 @@ export function useThreads({
         return null;
       }
     } else if (!loadedThreadsRef.current[threadId]) {
-      await ensureWorkspaceRuntimeCodexArgsBestEffort(
-        activeWorkspace.id,
-        threadId,
-        "resume",
-      );
       await resumeThreadForWorkspace(activeWorkspace.id, threadId);
     }
     return threadId;
   }, [
     activeWorkspace,
     activeThreadId,
-    ensureWorkspaceRuntimeCodexArgsBestEffort,
     resumeThreadForWorkspace,
     startThreadForWorkspace,
   ]);
@@ -688,7 +606,6 @@ export function useThreads({
           return null;
         }
       } else if (!loadedThreadsRef.current[threadId]) {
-        await ensureWorkspaceRuntimeCodexArgsBestEffort(workspaceId, threadId, "resume");
         await resumeThreadForWorkspace(workspaceId, threadId);
       }
       if (shouldActivate && currentActiveThreadId !== threadId) {
@@ -699,7 +616,6 @@ export function useThreads({
     [
       activeWorkspaceId,
       dispatch,
-      ensureWorkspaceRuntimeCodexArgsBestEffort,
       loadedThreadsRef,
       resumeThreadForWorkspace,
       startThreadForWorkspace,
@@ -751,8 +667,6 @@ export function useThreads({
     onSelectServiceTier,
     reviewDeliveryMode,
     steerEnabled,
-    ensureWorkspaceRuntimeCodexArgs,
-    shouldPreflightRuntimeCodexArgsForSend,
     threadStatusById: state.threadStatusById,
     activeTurnIdByThread: state.activeTurnIdByThread,
     rateLimitsByWorkspace: state.rateLimitsByWorkspace,
@@ -812,19 +726,13 @@ export function useThreads({
             loadedThreadsRef.current[threadId] = true;
             return;
           }
-          const hasActiveTurnInWorkspace = hasProcessingThreadInWorkspace(targetId);
-          if (!hasActiveTurnInWorkspace) {
-            await ensureWorkspaceRuntimeCodexArgsBestEffort(targetId, threadId, "resume");
-          }
           await resumeThreadForWorkspace(targetId, threadId);
         })();
       }
     },
     [
       activeWorkspaceId,
-      ensureWorkspaceRuntimeCodexArgsBestEffort,
       hasLocalThreadSnapshot,
-      hasProcessingThreadInWorkspace,
       loadedThreadsRef,
       resumeThreadForWorkspace,
       state.activeThreadIdByWorkspace,

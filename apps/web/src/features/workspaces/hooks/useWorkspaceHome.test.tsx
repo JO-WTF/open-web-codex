@@ -10,7 +10,6 @@ const workspace: WorkspaceInfo = {
   path: "/tmp/project",
   connected: true,
   kind: "main",
-  settings: { sidebarCollapsed: false },
 };
 
 const worktreeWorkspace: WorkspaceInfo = {
@@ -21,7 +20,6 @@ const worktreeWorkspace: WorkspaceInfo = {
   kind: "worktree",
   parentId: "ws-1",
   worktree: { branch: "feat/test" },
-  settings: { sidebarCollapsed: false },
 };
 
 const models: ModelOption[] = [

@@ -1,7 +1,6 @@
 pub mod approvals;
 pub mod artifacts;
 pub mod bootstrap;
-pub mod browser_workspaces;
 pub mod configuration;
 pub mod copilots;
 pub mod events;
@@ -70,23 +69,6 @@ pub fn router(
             axum::routing::put(sessions::select_organization),
         )
         .route("/me", axum::routing::get(me::me))
-        .route(
-            "/browser-workspace-preferences",
-            axum::routing::get(browser_workspaces::list),
-        )
-        .route(
-            "/browser-workspace-preferences/{id}",
-            axum::routing::put(browser_workspaces::update_settings),
-        )
-        .route(
-            "/browser-workspace-preferences/{id}/runtime-codex-args",
-            axum::routing::put(browser_workspaces::set_runtime_codex_args),
-        )
-        .route(
-            "/browser-workspace-preferences/{id}/worktree-setup",
-            axum::routing::get(browser_workspaces::worktree_setup_status)
-                .post(browser_workspaces::mark_worktree_setup_ran),
-        )
         .route(
             "/configuration/maps",
             axum::routing::get(configuration::get_maps).put(configuration::update_maps),

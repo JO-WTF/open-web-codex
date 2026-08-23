@@ -12,13 +12,6 @@ export const normalizeOverrideValue = (value: string): string | null => {
   return trimmed ? trimmed : null;
 };
 
-export const normalizeWorktreeSetupScript = (
-  value: string | null | undefined,
-): string | null => {
-  const next = value ?? "";
-  return next.trim().length > 0 ? next : null;
-};
-
 export const buildWorkspaceOverrideDrafts = (
   projects: WorkspaceInfo[],
   prev: Record<string, string>,

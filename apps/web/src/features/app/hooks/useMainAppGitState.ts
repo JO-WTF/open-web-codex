@@ -8,9 +8,7 @@ import type {
 import { useGitPanelController } from "@app/hooks/useGitPanelController";
 import { useGitHubPanelController } from "@app/hooks/useGitHubPanelController";
 import { useGitCommitController } from "@app/hooks/useGitCommitController";
-import { useGitRootSelection } from "@app/hooks/useGitRootSelection";
 import { useGitRemote } from "@/features/git/hooks/useGitRemote";
-import { useGitRepoScan } from "@/features/git/hooks/useGitRepoScan";
 import { usePullRequestReviewActions } from "@/features/git/hooks/usePullRequestReviewActions";
 import { useGitActions } from "@/features/git/hooks/useGitActions";
 import { useGitBranches } from "@/features/git/hooks/useGitBranches";
@@ -33,7 +31,6 @@ type UseMainAppGitStateOptions = {
     reviewDeliveryMode: "inline" | "detached";
   };
   addDebugEntry: (entry: DebugEntry) => void;
-  updateWorkspaceSettings: Parameters<typeof useGitRootSelection>[0]["updateWorkspaceSettings"];
   connectWorkspace: (workspace: WorkspaceInfo) => Promise<void>;
   startThreadForWorkspace: (
     workspaceId: string,
@@ -197,7 +194,6 @@ export function useMainAppGitState({
   setActiveTab,
   appSettings,
   addDebugEntry,
-  updateWorkspaceSettings,
   connectWorkspace,
   startThreadForWorkspace,
   sendUserMessageToThread,
@@ -233,17 +229,6 @@ export function useMainAppGitState({
   }, [activeWorkspaceId, resetGitHubPanelState]);
 
   const { remote: gitRemoteUrl, refresh: refreshGitRemote } = useGitRemote(activeWorkspace);
-  const {
-    repos: gitRootCandidates,
-    isLoading: gitRootScanLoading,
-    error: gitRootScanError,
-    depth: gitRootScanDepth,
-    hasScanned: gitRootScanHasScanned,
-    scan: scanGitRoots,
-    setDepth: setGitRootScanDepth,
-    clear: clearGitRootCandidates,
-  } = useGitRepoScan(activeWorkspace);
-
   const {
     centerMode,
     setCenterMode,
@@ -344,15 +329,7 @@ export function useMainAppGitState({
     activeWorkspace,
     onRefreshGitStatus: refreshGitStatus,
     onRefreshGitDiffs: refreshGitDiffs,
-    onClearGitRootCandidates: clearGitRootCandidates,
     onError: alertError,
-  });
-
-  const { activeGitRoot, handleSetGitRoot, handlePickGitRoot } = useGitRootSelection({
-    activeWorkspace,
-    updateWorkspaceSettings,
-    clearGitRootCandidates,
-    refreshGitStatus,
   });
 
   const fileStatus = buildGitStatusText(gitStatus);
@@ -476,13 +453,6 @@ export function useMainAppGitState({
     handleGitPullRequestCommentsChange,
     gitRemoteUrl,
     refreshGitRemote,
-    gitRootCandidates,
-    gitRootScanLoading,
-    gitRootScanError,
-    gitRootScanDepth,
-    gitRootScanHasScanned,
-    scanGitRoots,
-    setGitRootScanDepth,
     branches,
     currentBranch,
     isBranchSwitcherEnabled,
@@ -502,9 +472,6 @@ export function useMainAppGitState({
     worktreeApplyError,
     worktreeApplyLoading,
     worktreeApplySuccess,
-    activeGitRoot,
-    handleSetGitRoot,
-    handlePickGitRoot,
     fileStatus,
     commitMessage,
     commitLoading,

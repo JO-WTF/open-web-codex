@@ -1,9 +1,7 @@
 import { useCallback, useMemo } from "react";
-import { setWorkspaceRuntimeCodexArgs } from "@services/tauri";
 import { buildCodexArgsOptions } from "@threads/utils/codexArgsProfiles";
 import {
   resolveWorkspaceRuntimeCodexArgsBadgeLabel,
-  resolveWorkspaceRuntimeCodexArgsOverride,
 } from "@threads/utils/threadCodexParamsSeed";
 import type { ThreadCodexParams } from "@threads/utils/threadStorage";
 
@@ -87,18 +85,6 @@ export function useMainAppThreadCodexState({
     [appCodexArgs, selectedCodexArgsOverride],
   );
 
-  const ensureWorkspaceRuntimeCodexArgs = useCallback(
-    async (workspaceId: string, threadId: string | null) => {
-      const sanitizedCodexArgsOverride = resolveWorkspaceRuntimeCodexArgsOverride({
-        workspaceId,
-        threadId,
-        getThreadCodexParams,
-      });
-      await setWorkspaceRuntimeCodexArgs(workspaceId, sanitizedCodexArgsOverride);
-    },
-    [getThreadCodexParams],
-  );
-
   const getThreadArgsBadge = useCallback(
     (workspaceId: string, threadId: string) =>
       resolveWorkspaceRuntimeCodexArgsBadgeLabel({
@@ -112,7 +98,6 @@ export function useMainAppThreadCodexState({
   return {
     handleThreadCodexMetadataDetected,
     codexArgsOptions,
-    ensureWorkspaceRuntimeCodexArgs,
     getThreadArgsBadge,
   };
 }

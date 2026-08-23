@@ -83,7 +83,6 @@ export type AppModalsProps = {
   onWorktreePromptNameChange: (value: string) => void;
   onWorktreePromptChange: (value: string) => void;
   onWorktreePromptCopyAgentsMdChange: (value: boolean) => void;
-  onWorktreeSetupScriptChange: (value: string) => void;
   onWorktreePromptCancel: () => void;
   onWorktreePromptConfirm: () => void;
   clonePrompt: ClonePromptState;
@@ -137,7 +136,6 @@ export const AppModals = memo(function AppModals({
   onWorktreePromptNameChange,
   onWorktreePromptChange,
   onWorktreePromptCopyAgentsMdChange,
-  onWorktreeSetupScriptChange,
   onWorktreePromptCancel,
   onWorktreePromptConfirm,
   clonePrompt,
@@ -218,15 +216,11 @@ export const AppModals = memo(function AppModals({
             branchWasEdited={worktreePrompt.branchWasEdited}
             branchSuggestions={worktreeBranches}
             copyAgentsMd={worktreePrompt.copyAgentsMd}
-            setupScript={worktreePrompt.setupScript}
-            scriptError={worktreePrompt.scriptError}
             error={worktreePrompt.error}
             isBusy={worktreePrompt.isSubmitting}
-            isSavingScript={worktreePrompt.isSavingScript}
             onNameChange={onWorktreePromptNameChange}
             onChange={onWorktreePromptChange}
             onCopyAgentsMdChange={onWorktreePromptCopyAgentsMdChange}
-            onSetupScriptChange={onWorktreeSetupScriptChange}
             onCancel={onWorktreePromptCancel}
             onConfirm={onWorktreePromptConfirm}
           />

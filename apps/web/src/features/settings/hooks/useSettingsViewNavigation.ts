@@ -10,7 +10,7 @@ type UseSettingsViewNavigationParams = {
 export const useSettingsViewNavigation = ({
   initialSection,
 }: UseSettingsViewNavigationParams) => {
-  const [activeSection, setActiveSection] = useState<CodexSection>("projects");
+  const [activeSection, setActiveSection] = useState<CodexSection>("display");
   const [isNarrowViewport, setIsNarrowViewport] = useState(() =>
     isNarrowSettingsViewport(),
   );

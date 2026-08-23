@@ -10,7 +10,6 @@ const workspace: WorkspaceInfo = {
   name: "Workspace One",
   path: "/tmp/workspace-one",
   connected: true,
-  settings: { sidebarCollapsed: false },
 };
 
 describe("useSidebarLayoutActions", () => {
@@ -28,7 +27,6 @@ describe("useSidebarLayoutActions", () => {
       isCompact: false,
       setActiveTab: vi.fn(),
       workspacesById: new Map([[workspace.id, workspace]]),
-      updateWorkspaceSettings: vi.fn(async () => workspace),
       removeThread: vi.fn(),
       clearDraftForThread: vi.fn(),
       removeImagesForThread: vi.fn(),
@@ -85,7 +83,6 @@ describe("useSidebarLayoutActions", () => {
         isCompact: false,
         setActiveTab: vi.fn(),
         workspacesById: new Map([[workspace.id, workspace]]),
-        updateWorkspaceSettings: vi.fn(async () => workspace),
         removeThread: vi.fn(),
         clearDraftForThread: vi.fn(),
         removeImagesForThread: vi.fn(),
@@ -126,7 +123,6 @@ describe("useSidebarLayoutActions", () => {
         isCompact: true,
         setActiveTab,
         workspacesById: new Map([[workspace.id, workspace]]),
-        updateWorkspaceSettings: vi.fn(async () => workspace),
         removeThread: vi.fn(),
         clearDraftForThread: vi.fn(),
         removeImagesForThread: vi.fn(),

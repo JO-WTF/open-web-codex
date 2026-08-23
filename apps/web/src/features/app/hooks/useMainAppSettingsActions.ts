@@ -3,13 +3,11 @@ import type { AppSettings } from "@/types";
 import { OPEN_APP_STORAGE_KEY } from "@app/constants";
 
 type UseMainAppSettingsActionsArgs = {
-  appSettings: AppSettings;
   setAppSettings: Dispatch<SetStateAction<AppSettings>>;
   queueSaveSettings: (next: AppSettings) => Promise<unknown>;
 };
 
 export function useMainAppSettingsActions({
-  appSettings,
   setAppSettings,
   queueSaveSettings,
 }: UseMainAppSettingsActionsArgs) {
@@ -44,21 +42,8 @@ export function useMainAppSettingsActions({
     });
   }, [queueSaveSettings, setAppSettings]);
 
-  const persistProjectCopiesFolder = useCallback(
-    async (groupId: string, copiesFolder: string) => {
-      await queueSaveSettings({
-        ...appSettings,
-        workspaceGroups: appSettings.workspaceGroups.map((entry) =>
-          entry.id === groupId ? { ...entry, copiesFolder } : entry,
-        ),
-      });
-    },
-    [appSettings, queueSaveSettings],
-  );
-
   return {
     handleSelectOpenAppId,
     handleToggleAutomaticAppUpdateChecks,
-    persistProjectCopiesFolder,
   };
 }

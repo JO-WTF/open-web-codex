@@ -15,7 +15,6 @@ import type {
   TraySessionUsage,
   WorkspaceInfo,
   AppMention,
-  WorkspaceSettings,
 } from "../types";
 import type {
   GitFileDiff,
@@ -170,28 +169,6 @@ export async function addWorktree(
   return invoke<WorkspaceInfo>("add_worktree", { parentId, branch, name, copyAgentsMd });
 }
 
-export type WorktreeSetupStatus = {
-  shouldRun: boolean;
-  script: string | null;
-};
-
-export async function getWorktreeSetupStatus(
-  workspaceId: string,
-): Promise<WorktreeSetupStatus> {
-  return invoke<WorktreeSetupStatus>("worktree_setup_status", { workspaceId });
-}
-
-export async function markWorktreeSetupRan(workspaceId: string): Promise<void> {
-  return invoke("worktree_setup_mark_ran", { workspaceId });
-}
-
-export async function updateWorkspaceSettings(
-  id: string,
-  settings: WorkspaceSettings,
-): Promise<WorkspaceInfo> {
-  return invoke<WorkspaceInfo>("update_workspace_settings", { id, settings });
-}
-
 export async function removeWorkspace(id: string): Promise<void> {
   return invoke("remove_workspace", { id });
 }
@@ -245,16 +222,6 @@ export async function getOpenAppIcon(appName: string): Promise<string | null> {
 
 export async function connectWorkspace(id: string): Promise<void> {
   return invoke("connect_workspace", { id });
-}
-
-export async function setWorkspaceRuntimeCodexArgs(
-  workspaceId: string,
-  codexArgs: string | null,
-): Promise<{ appliedCodexArgs: string | null; respawned: boolean }> {
-  return invoke("set_workspace_runtime_codex_args", {
-    workspaceId,
-    codexArgs,
-  });
 }
 
 export async function startThread(workspaceId: string) {
@@ -464,13 +431,6 @@ export async function createGitHubRepo(
     visibility,
     branch,
   });
-}
-
-export async function listGitRoots(
-  workspace_id: string,
-  depth: number,
-): Promise<string[]> {
-  return invoke("list_git_roots", { workspaceId: workspace_id, depth });
 }
 
 export async function getGitDiffs(

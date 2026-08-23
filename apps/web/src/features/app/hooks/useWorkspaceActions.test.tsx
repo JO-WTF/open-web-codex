@@ -17,9 +17,6 @@ describe("useWorkspaceActions telemetry", () => {
     name: "Workspace",
     path: "/tmp/workspace",
     connected: true,
-    settings: {
-      sidebarCollapsed: false,
-    },
   };
 
   beforeEach(() => {

@@ -9,9 +9,6 @@ const workspace: WorkspaceInfo = {
   name: "Repo",
   path: "/tmp/repo",
   connected: true,
-  settings: {
-    sidebarCollapsed: false,
-  },
 };
 
 describe("useInitGitRepoPrompt", () => {

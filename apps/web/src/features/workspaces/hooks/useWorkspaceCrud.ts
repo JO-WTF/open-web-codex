@@ -1,7 +1,7 @@
 import { useCallback } from "react";
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import type { Dispatch, SetStateAction } from "react";
 import * as Sentry from "@sentry/react";
-import type { DebugEntry, WorkspaceInfo, WorkspaceSettings } from "../../../types";
+import type { DebugEntry, WorkspaceInfo } from "../../../types";
 import { normalizeRootPath } from "../../threads/utils/threadNormalize";
 import {
   addWorkspace as addWorkspaceService,
@@ -10,7 +10,6 @@ import {
   isWorkspacePathDir as isWorkspacePathDirService,
   listWorkspaces,
   removeWorkspace as removeWorkspaceService,
-  updateWorkspaceSettings as updateWorkspaceSettingsService,
 } from "../../../services/tauri";
 
 type UseWorkspaceCrudOptions = {
@@ -18,7 +17,6 @@ type UseWorkspaceCrudOptions = {
   workspaces: WorkspaceInfo[];
   setWorkspaces: Dispatch<SetStateAction<WorkspaceInfo[]>>;
   setActiveWorkspaceId: Dispatch<SetStateAction<string | null>>;
-  workspaceSettingsRef: MutableRefObject<Map<string, WorkspaceSettings>>;
   setHasLoaded: Dispatch<SetStateAction<boolean>>;
 };
 
@@ -93,7 +91,6 @@ export function useWorkspaceCrud({
   workspaces,
   setWorkspaces,
   setActiveWorkspaceId,
-  workspaceSettingsRef,
   setHasLoaded,
 }: UseWorkspaceCrudOptions) {
   const refreshWorkspaces = useCallback(async () => {
@@ -360,61 +357,6 @@ export function useWorkspaceCrud({
     [setWorkspaces],
   );
 
-  const updateWorkspaceSettings = useCallback(
-    async (workspaceId: string, patch: Partial<WorkspaceSettings>) => {
-      onDebug?.({
-        id: `${Date.now()}-client-update-workspace-settings`,
-        timestamp: Date.now(),
-        source: "client",
-        label: "workspace/settings",
-        payload: { workspaceId, patch },
-      });
-      const currentWorkspace = workspaces.find((entry) => entry.id === workspaceId) ?? null;
-      const currentSettings =
-        workspaceSettingsRef.current.get(workspaceId) ?? currentWorkspace?.settings ?? null;
-      if (!currentWorkspace || !currentSettings) {
-        throw new Error("workspace not found");
-      }
-      const previousSettings = currentSettings;
-      const nextSettings = { ...currentSettings, ...patch };
-      workspaceSettingsRef.current.set(workspaceId, nextSettings);
-      setWorkspaces((prev) =>
-        prev.map((entry) => {
-          if (entry.id !== workspaceId) {
-            return entry;
-          }
-          return { ...entry, settings: nextSettings };
-        }),
-      );
-      try {
-        const updated = await updateWorkspaceSettingsService(workspaceId, nextSettings);
-        workspaceSettingsRef.current.set(workspaceId, updated.settings);
-        setWorkspaces((prev) =>
-          prev.map((entry) => (entry.id === workspaceId ? updated : entry)),
-        );
-        return updated;
-      } catch (error) {
-        workspaceSettingsRef.current.set(workspaceId, previousSettings);
-        setWorkspaces((prev) =>
-          prev.map((entry) =>
-            entry.id === workspaceId
-              ? { ...entry, settings: previousSettings }
-              : entry,
-          ),
-        );
-        onDebug?.({
-          id: `${Date.now()}-client-update-workspace-settings-error`,
-          timestamp: Date.now(),
-          source: "error",
-          label: "workspace/settings error",
-          payload: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
-      }
-    },
-    [onDebug, setWorkspaces, workspaces, workspaceSettingsRef],
-  );
-
   const removeWorkspace = useCallback(
     async (workspaceId: string) => {
       const childIds = new Set(
@@ -465,6 +407,5 @@ export function useWorkspaceCrud({
     markWorkspaceConnected,
     refreshWorkspaces,
     removeWorkspace,
-    updateWorkspaceSettings,
   };
 }

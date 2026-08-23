@@ -12,7 +12,6 @@ const worktree: WorkspaceInfo = {
   kind: "worktree",
   parentId: "parent-1",
   worktree: { branch: "feature/old" },
-  settings: { sidebarCollapsed: false },
 };
 
 describe("useRenameWorktreePrompt", () => {

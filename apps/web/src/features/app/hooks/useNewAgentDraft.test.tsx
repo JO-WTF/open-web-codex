@@ -9,7 +9,6 @@ const workspace: WorkspaceInfo = {
   name: "Workspace",
   path: "/tmp/ws-1",
   connected: true,
-  settings: { sidebarCollapsed: false },
 };
 
 describe("useNewAgentDraft", () => {

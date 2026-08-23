@@ -3,30 +3,12 @@ import Download from "lucide-react/dist/esm/icons/download";
 import RotateCcw from "lucide-react/dist/esm/icons/rotate-ccw";
 import Upload from "lucide-react/dist/esm/icons/upload";
 import { CommitButton, DiffSection, type DiffFile } from "./GitDiffPanelShared";
-import {
-  DEPTH_OPTIONS,
-  isGitRootNotFound,
-  isMissingRepo,
-  normalizeRootPath,
-} from "./GitDiffPanel.utils";
+import { isGitRootNotFound, isMissingRepo } from "./GitDiffPanel.utils";
 
 type GitDiffModeContentProps = {
   error: string | null | undefined;
-  showGitRootPanel: boolean;
-  onScanGitRoots?: () => void;
-  gitRootScanLoading: boolean;
-  gitRootScanDepth: number;
-  onGitRootScanDepthChange?: (depth: number) => void;
-  onPickGitRoot?: () => void | Promise<void>;
   onInitGitRepo?: () => void | Promise<void>;
   initGitRepoLoading: boolean;
-  hasGitRoot: boolean;
-  onClearGitRoot?: () => void;
-  gitRootScanError: string | null | undefined;
-  gitRootScanHasScanned: boolean;
-  gitRootCandidates: string[];
-  gitRoot: string | null;
-  onSelectGitRoot?: (path: string) => void;
   showCommitMessage: boolean;
   showApplyWorktree: boolean;
   commitMessage: string;
@@ -71,21 +53,8 @@ type GitDiffModeContentProps = {
 
 export function GitDiffModeContent({
   error,
-  showGitRootPanel,
-  onScanGitRoots,
-  gitRootScanLoading,
-  gitRootScanDepth,
-  onGitRootScanDepthChange,
-  onPickGitRoot,
   onInitGitRepo,
   initGitRepoLoading,
-  hasGitRoot,
-  onClearGitRoot,
-  gitRootScanError,
-  gitRootScanHasScanned,
-  gitRootCandidates,
-  gitRoot,
-  onSelectGitRoot,
   showCommitMessage,
   showApplyWorktree,
   commitMessage,
@@ -119,118 +88,30 @@ export function GitDiffModeContent({
   onShowFileMenu,
   onDiffListClick,
 }: GitDiffModeContentProps) {
-  const normalizedGitRoot = normalizeRootPath(gitRoot);
   const missingRepo = isMissingRepo(error);
-  const gitRootNotFound = isGitRootNotFound(error);
-  const showInitGitRepo = Boolean(onInitGitRepo) && missingRepo && !gitRootNotFound;
-  const gitRootTitle = gitRootNotFound
-    ? "Git root folder not found."
-    : missingRepo
-      ? "This workspace isn't a Git repository yet."
-      : "Choose a repo for this workspace.";
+  const showInitGitRepo =
+    Boolean(onInitGitRepo) && missingRepo && !isGitRootNotFound(error);
   const showWorktreeApplyInUnstaged = showApplyWorktree && unstagedFiles.length > 0;
   const showWorktreeApplyInStaged =
     showApplyWorktree && unstagedFiles.length === 0 && stagedFiles.length > 0;
 
   return (
     <div className="diff-list" onClick={onDiffListClick}>
-      {showGitRootPanel && (
+      {showInitGitRepo && (
         <div className="git-root-panel">
-          <div className="git-root-title">{gitRootTitle}</div>
-          {showInitGitRepo && (
-            <div className="git-root-primary-action">
-              <button
-                type="button"
-                className="primary git-root-button"
-                onClick={() => {
-                  void onInitGitRepo?.();
-                }}
-                disabled={initGitRepoLoading || gitRootScanLoading}
-              >
-                {initGitRepoLoading ? "Initializing..." : "Initialize Git"}
-              </button>
-            </div>
-          )}
-          <div className="git-root-actions">
+          <div className="git-root-title">This workspace isn't a Git repository yet.</div>
+          <div className="git-root-primary-action">
             <button
               type="button"
-              className="ghost git-root-button"
-              onClick={onScanGitRoots}
-              disabled={!onScanGitRoots || gitRootScanLoading || initGitRepoLoading}
+              className="primary git-root-button"
+              onClick={() => {
+                void onInitGitRepo?.();
+              }}
+              disabled={initGitRepoLoading}
             >
-              Scan workspace
+              {initGitRepoLoading ? "Initializing..." : "Initialize Git"}
             </button>
-            <label className="git-root-depth">
-              <span>Depth</span>
-              <select
-                className="git-root-select"
-                value={gitRootScanDepth}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
-                  if (!Number.isNaN(value)) {
-                    onGitRootScanDepthChange?.(value);
-                  }
-                }}
-                disabled={gitRootScanLoading || initGitRepoLoading}
-              >
-                {DEPTH_OPTIONS.map((depth) => (
-                  <option key={depth} value={depth}>
-                    {depth}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {onPickGitRoot && (
-              <button
-                type="button"
-                className="ghost git-root-button"
-                onClick={() => {
-                  void onPickGitRoot();
-                }}
-                disabled={gitRootScanLoading || initGitRepoLoading}
-              >
-                Pick folder
-              </button>
-            )}
-            {hasGitRoot && onClearGitRoot && (
-              <button
-                type="button"
-                className="ghost git-root-button"
-                onClick={onClearGitRoot}
-                disabled={gitRootScanLoading || initGitRepoLoading}
-              >
-                Use workspace root
-              </button>
-            )}
           </div>
-          {gitRootScanLoading && (
-            <div className="diff-empty">Scanning for repositories...</div>
-          )}
-          {!gitRootScanLoading &&
-            !gitRootScanError &&
-            gitRootScanHasScanned &&
-            gitRootCandidates.length === 0 && (
-              <div className="diff-empty">No repositories found.</div>
-            )}
-          {gitRootCandidates.length > 0 && (
-            <div className="git-root-list">
-              {gitRootCandidates.map((path) => {
-                const normalizedPath = normalizeRootPath(path);
-                const isActive = normalizedGitRoot && normalizedGitRoot === normalizedPath;
-                return (
-                  <button
-                    key={path}
-                    type="button"
-                    className={`git-root-item ${isActive ? "active" : ""}`}
-                    onClick={() => onSelectGitRoot?.(path)}
-                  >
-                    <span className="git-root-path">{path}</span>
-                    {isActive && <span className="git-root-tag">Active</span>}
-                  </button>
-                );
-              })}
-            </div>
-          )}
         </div>
       )}
       {showCommitMessage && (

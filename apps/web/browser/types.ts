@@ -584,12 +584,6 @@ export type ProfileLoginStatus = {
   error: string | null;
 };
 
-export type BrowserWorkspacePreference = {
-  workspaceId: string;
-  settings: Record<string, unknown>;
-  runtimeCodexArgs: string | null;
-};
-
 export type MapsProvider = "mapbox" | "google";
 
 export type MapsConfiguration = {
