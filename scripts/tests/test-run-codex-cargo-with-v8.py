@@ -20,6 +20,80 @@ MODULE_SPEC.loader.exec_module(adapter)
 
 
 class CodexCargoAdapterTests(unittest.TestCase):
+    def run_adapter_subprocess(
+        self, environment_updates: dict[str, str | None]
+    ) -> tuple[subprocess.CompletedProcess[str], Path]:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        directory_path = Path(directory.name)
+        fake_cargo = directory_path / "fake-cargo"
+        observed_root = directory_path / "codex-repo-root"
+        fake_cargo.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf \'%s\\n\' "${CODEX_REPO_ROOT-}" >"$OBSERVED_CODEX_REPO_ROOT"\n',
+            encoding="utf-8",
+        )
+        fake_cargo.chmod(0o755)
+
+        environment = os.environ.copy()
+        environment.update(
+            V8_FROM_SOURCE="1",
+            OBSERVED_CODEX_REPO_ROOT=str(observed_root),
+        )
+        for key, value in environment_updates.items():
+            if value is None:
+                environment.pop(key, None)
+            else:
+                environment[key] = value
+        completed = subprocess.run(
+            [sys.executable, str(ADAPTER_PATH), str(fake_cargo), "check"],
+            cwd=REPO_ROOT / "codex",
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return completed, observed_root
+
+    def test_subprocess_sets_codex_repo_root_when_unset(self) -> None:
+        completed, observed_root = self.run_adapter_subprocess(
+            {"CODEX_REPO_ROOT": None}
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            observed_root.read_text(encoding="utf-8").strip(),
+            str((REPO_ROOT / "codex").resolve()),
+        )
+
+    def test_subprocess_rejects_external_codex_repo_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            external_root = Path(directory) / "external-codex"
+            external_root.mkdir()
+            completed, observed_root = self.run_adapter_subprocess(
+                {"CODEX_REPO_ROOT": str(external_root)}
+            )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn(
+            "CODEX_REPO_ROOT must point to this checkout's codex directory",
+            completed.stderr,
+        )
+        self.assertFalse(
+            observed_root.exists(), "external configuration must not run Cargo"
+        )
+
+    def test_subprocess_preserves_explicit_current_checkout_root(self) -> None:
+        configured_root = f"{REPO_ROOT}/codex/."
+        completed, observed_root = self.run_adapter_subprocess(
+            {"CODEX_REPO_ROOT": configured_root}
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            observed_root.read_text(encoding="utf-8").strip(), configured_root
+        )
+
     def test_native_target_and_v8_environment_are_forwarded_to_cargo(self) -> None:
         captured: dict[str, object] = {}
 

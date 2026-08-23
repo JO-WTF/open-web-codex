@@ -8,7 +8,31 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CODEX_SCRIPTS = REPO_ROOT / "codex" / "scripts"
+CODEX_REPO_ROOT = (REPO_ROOT / "codex").resolve()
+
+
+def configure_codex_repo_root() -> None:
+    """Bind upstream package helpers to this checkout before importing them."""
+    configured = os.environ.get("CODEX_REPO_ROOT")
+    if configured is None:
+        os.environ["CODEX_REPO_ROOT"] = str(CODEX_REPO_ROOT)
+        return
+
+    try:
+        configured_root = Path(configured).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise RuntimeError(
+            "CODEX_REPO_ROOT must point to this checkout's codex directory"
+        ) from error
+    if configured_root != CODEX_REPO_ROOT:
+        raise RuntimeError(
+            "CODEX_REPO_ROOT must point to this checkout's codex directory"
+        )
+
+
+configure_codex_repo_root()
+
+CODEX_SCRIPTS = CODEX_REPO_ROOT / "scripts"
 if str(CODEX_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(CODEX_SCRIPTS))
 
