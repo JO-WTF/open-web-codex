@@ -6,6 +6,7 @@ use http::HeaderValue;
 use http::StatusCode;
 use pretty_assertions::assert_eq;
 
+use super::error::BEDROCK_EXPIRED_SIGNATURE_MESSAGE;
 use super::error::is_refreshable_auth_error;
 use super::error::map_api_error;
 
@@ -23,10 +24,13 @@ fn http_error(status: StatusCode, body: &str) -> ApiError {
 }
 
 #[test]
-fn unauthorized_signature_error_uses_safe_provider_agnostic_message() {
+fn unauthorized_signature_error_uses_static_guidance_without_response_details() {
+    const CANARY: &str = "signature-body-canary";
     let error = map_api_error(http_error(
         StatusCode::UNAUTHORIZED,
-        "Signature expired: 20260609T133205Z is now earlier than 20260614T062525Z",
+        &format!(
+            "Signature expired: 20260609T133205Z is now earlier than 20260614T062525Z; {CANARY}"
+        ),
     ));
 
     let CodexErrorDetails::UnexpectedStatus(response) = error.details() else {
@@ -34,18 +38,26 @@ fn unauthorized_signature_error_uses_safe_provider_agnostic_message() {
     };
     assert_eq!(
         response.user_message.as_deref(),
-        Some("Authentication failed. Check the Provider credentials.")
+        Some(BEDROCK_EXPIRED_SIGNATURE_MESSAGE)
     );
     assert!(response.body.is_empty());
     assert!(response.url.is_none());
     assert_eq!(
         error.to_string(),
-        "Authentication failed. Check the Provider credentials., request id: req-bedrock"
+        format!("{BEDROCK_EXPIRED_SIGNATURE_MESSAGE}, request id: req-bedrock")
     );
+    for rendered in [
+        format!("{error:?}"),
+        error.to_error_event(/*message_prefix*/ None).message,
+    ] {
+        assert!(!rendered.contains(CANARY));
+        assert!(!rendered.contains(BEDROCK_RESPONSES_URL));
+    }
 }
 
 #[test]
 fn unauthorized_errors_do_not_expose_provider_response_body() {
+    const CANARY: &str = "security token";
     let error = map_api_error(http_error(
         StatusCode::UNAUTHORIZED,
         "The security token included in the request is invalid",
@@ -60,7 +72,14 @@ fn unauthorized_errors_do_not_expose_provider_response_body() {
     );
     assert!(response.body.is_empty());
     assert!(response.url.is_none());
-    assert!(!error.to_string().contains("security token"));
+    for rendered in [
+        error.to_string(),
+        format!("{error:?}"),
+        error.to_error_event(/*message_prefix*/ None).message,
+    ] {
+        assert!(!rendered.contains(CANARY));
+        assert!(!rendered.contains(BEDROCK_RESPONSES_URL));
+    }
 }
 
 #[test]

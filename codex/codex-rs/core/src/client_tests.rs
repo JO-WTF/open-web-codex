@@ -680,7 +680,7 @@ async fn response_stream_records_last_model_feedback_ids() {
 }
 
 #[tokio::test]
-async fn bedrock_unauthorized_error_uses_safe_provider_agnostic_mapping() {
+async fn bedrock_unauthorized_signature_error_uses_static_guidance() {
     let provider = create_model_provider(
         ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
         /*auth_manager*/ None,
@@ -707,7 +707,7 @@ async fn bedrock_unauthorized_error_uses_safe_provider_agnostic_mapping() {
 
     assert_eq!(
         error.to_string(),
-        "Authentication failed. Check the Provider credentials."
+        "Amazon Bedrock rejected the request because its AWS signature has expired. Refresh your AWS credentials and retry. If `AWS_BEARER_TOKEN_BEDROCK` is set, update or unset it, then restart Codex"
     );
 }
 
