@@ -6,9 +6,7 @@ use open_web_codex_platform_contracts::error::{ErrorKind, PlatformError, Provide
 use open_web_codex_platform_contracts::{
     ModelSelection, ProviderCatalog, UpdateProviderModelRequest, UpsertProviderRequest,
 };
-use open_web_codex_platform_store::configuration::{
-    get_global, put_global, MODEL_SELECTION_CONFIG_KEY,
-};
+use open_web_codex_platform_store::configuration::{put_global, MODEL_SELECTION_CONFIG_KEY};
 use open_web_codex_platform_store::AppState;
 use open_web_codex_provider_service::secured::{
     AuthorizedProviderError, AuthorizedProviderOperations, ProviderActor,
@@ -21,16 +19,14 @@ type ApiResult<T> = Result<Json<T>, (StatusCode, Json<PlatformError>)>;
 
 /// GET /api/providers — return a credential-safe Provider catalog.
 pub async fn list_providers(
-    State(state): State<AppState>,
     auth: AuthenticatedUser,
     Extension(providers): Extension<Arc<dyn AuthorizedProviderOperations>>,
 ) -> ApiResult<ProviderCatalog> {
-    let mut catalog = providers
+    providers
         .list(provider_actor(&auth))
         .await
-        .map_err(provider_error)?;
-    apply_persisted_selection(&state, &mut catalog).await?;
-    Ok(Json(catalog))
+        .map(Json)
+        .map_err(provider_error)
 }
 
 /// PUT /api/providers/:id — create or update a custom Provider.
@@ -68,7 +64,7 @@ pub async fn select_provider_model(
     Path((provider_id, model_id)): Path<(String, String)>,
     Extension(providers): Extension<Arc<dyn AuthorizedProviderOperations>>,
 ) -> ApiResult<ProviderCatalog> {
-    let mut catalog = providers
+    let catalog = providers
         .select_model(provider_actor(&auth), &provider_id, &model_id)
         .await
         .map_err(provider_error)?;
@@ -84,8 +80,6 @@ pub async fn select_provider_model(
     )
     .await
     .map_err(|_| internal_error("Model selection could not be persisted"))?;
-    catalog.current_provider_id = provider_id;
-    catalog.current_model_id = Some(model_id);
     Ok(Json(catalog))
 }
 
@@ -153,34 +147,6 @@ fn provider_actor(auth: &AuthenticatedUser) -> ProviderActor {
         user_id: auth.user_id,
         organization_id: auth.organization_id,
     }
-}
-
-async fn apply_persisted_selection(
-    state: &AppState,
-    catalog: &mut ProviderCatalog,
-) -> Result<(), (StatusCode, Json<PlatformError>)> {
-    let stored = get_global(&state.db, MODEL_SELECTION_CONFIG_KEY)
-        .await
-        .map_err(|_| internal_error("Model selection could not be loaded"))?;
-    let Some(stored) = stored else {
-        return Ok(());
-    };
-    let Ok(selection) = serde_json::from_value::<ModelSelection>(stored.value) else {
-        return Ok(());
-    };
-    if selection.provider_id == catalog.current_provider_id
-        && catalog.data.iter().any(|provider| {
-            provider.id == selection.provider_id
-                && (provider.models.is_empty()
-                    || provider
-                        .models
-                        .iter()
-                        .any(|model| model.model_id == selection.model_id && model.show_in_picker))
-        })
-    {
-        catalog.current_model_id = Some(selection.model_id);
-    }
-    Ok(())
 }
 
 fn internal_error(message: &str) -> (StatusCode, Json<PlatformError>) {
@@ -290,10 +256,55 @@ fn provider_catalog_failure_error(failure: ProviderCatalogFailure) -> (StatusCod
 
 #[cfg(test)]
 mod tests {
-    use super::provider_error;
-    use axum::http::StatusCode;
+    use std::sync::Arc;
+
+    use super::{list_providers, provider_error};
+    use axum::{http::StatusCode, Extension};
     use open_web_codex_platform_contracts::error::{ErrorKind, ProviderCatalogFailure};
+    use open_web_codex_provider_service::secured::{
+        AuthorizedProviderOperations, InMemoryAuthorizedProviderService, ProviderActor,
+    };
     use open_web_codex_provider_service::{secured::AuthorizedProviderError, ProviderServiceError};
+    use uuid::Uuid;
+
+    use crate::middleware::auth::AuthenticatedUser;
+
+    fn authenticated_user(organization_id: Uuid, user_id: Uuid) -> AuthenticatedUser {
+        AuthenticatedUser {
+            session_id: Uuid::now_v7(),
+            user_id,
+            name: "Provider test".to_string(),
+            username: format!("provider-{user_id}"),
+            email: format!("{user_id}@example.invalid"),
+            role: "owner".to_string(),
+            organization_id,
+            organization_role: "owner".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_forwards_the_runtime_catalog_without_platform_state() {
+        let organization_id = Uuid::now_v7();
+        let user_id = Uuid::now_v7();
+        let providers = Arc::new(InMemoryAuthorizedProviderService::default());
+        let expected = providers
+            .list(ProviderActor {
+                user_id,
+                organization_id,
+            })
+            .await
+            .expect("Runtime catalog");
+
+        let actual = list_providers(
+            authenticated_user(organization_id, user_id),
+            Extension(providers),
+        )
+        .await
+        .expect("route catalog")
+        .0;
+
+        assert_eq!(actual, expected);
+    }
 
     #[test]
     fn runtime_failures_do_not_expose_runtime_details() {

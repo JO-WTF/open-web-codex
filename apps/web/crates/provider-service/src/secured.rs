@@ -3,8 +3,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use open_web_codex_platform_contracts::{
-    ProviderCatalog, ProviderCredentialInput, ProviderModelSummary, UpdateProviderModelRequest,
-    UpsertProviderRequest,
+    ProviderCatalog, ProviderCredentialInput, UpdateProviderModelRequest, UpsertProviderRequest,
 };
 use open_web_codex_profile_registry::{ProfileRegistry, ProfileRegistryError};
 use open_web_codex_secret_store::{PostgresSecretStore, SecretStoreError, SecretValue};
@@ -15,8 +14,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
-    update_provider_models, InMemoryProviderService, ProviderOperations, ProviderService,
-    ProviderServiceError, ProviderTransport,
+    InMemoryProviderService, ProviderOperations, ProviderService, ProviderServiceError,
+    ProviderTransport,
 };
 
 #[derive(Debug, Error)]
@@ -113,11 +112,6 @@ struct AuthorizedProfile {
     organization_id: Uuid,
 }
 
-enum PersistedEnvironmentKey {
-    Preserve,
-    Replace(Option<String>),
-}
-
 impl SecuredProviderService {
     pub fn new(
         db: PgPool,
@@ -158,192 +152,11 @@ impl SecuredProviderService {
             .collect())
     }
 
-    /// Rebuild Runtime provider configuration from the durable platform
-    /// definition after the Profile Host has initialized.
-    pub async fn restore_persisted_configuration(&self) -> Result<(), AuthorizedProviderError> {
-        let Some(profile) = self.profile_identity().await? else {
-            return Ok(());
-        };
-        let rows = sqlx::query(
-            "SELECT provider_id, name, base_url, wire_api, supports_function_tools, models, is_selected, selected_model_id, credential_env_key \
-             FROM profile_provider_definitions WHERE profile_id = $1 ORDER BY provider_id",
-        )
-        .bind(profile.id)
-        .fetch_all(&self.db)
-        .await?;
-        let restored_provider_configuration = !rows.is_empty();
-        let environments = self
-            .secrets
-            .list_provider_environment(profile.organization_id, profile.id)
-            .await?
-            .into_iter()
-            .map(|entry| (entry.provider_id, entry.environment_key))
-            .collect::<BTreeMap<_, _>>();
-        let mut selected_provider = None;
-        let mut selected_model: Option<String> = None;
-        for row in rows {
-            let provider_id: String = row.get("provider_id");
-            let persisted_environment_key: Option<String> = row.get("credential_env_key");
-            self.runtime
-                .upsert(
-                    &provider_id,
-                    UpsertProviderRequest {
-                        name: row.get("name"),
-                        base_url: row.get("base_url"),
-                        wire_api: row.get("wire_api"),
-                        credentials: environments
-                            .get(&provider_id)
-                            .cloned()
-                            .or(persisted_environment_key)
-                            .map(|env_key| ProviderCredentialInput::Environment { env_key })
-                            .unwrap_or(ProviderCredentialInput::NoCredential),
-                        supports_function_tools: Some(row.get("supports_function_tools")),
-                        select: false,
-                    },
-                )
-                .await?;
-            let models: Vec<ProviderModelSummary> = serde_json::from_value(row.get("models"))
-                .map_err(|error| ProviderServiceError::InvalidResponse(error.to_string()))?;
-            if !models.is_empty() {
-                self.runtime.replace_models(&provider_id, models).await?;
-            }
-            if row.get::<bool, _>("is_selected") {
-                selected_provider = Some(provider_id);
-                selected_model = row.get::<Option<String>, _>("selected_model_id");
-            }
-        }
-        if let Some(provider_id) = selected_provider {
-            self.runtime.select(&provider_id).await?;
-            if let Some(model_id) = selected_model {
-                self.runtime.select_model(&provider_id, &model_id).await?;
-            }
-        }
+    /// Applies the platform-owned reasoning default through the official Runtime
+    /// config contract without restoring Provider state from the platform DB.
+    pub async fn ensure_runtime_defaults(&self) -> Result<(), AuthorizedProviderError> {
         self.runtime.ensure_default_reasoning_effort().await?;
-        if restored_provider_configuration {
-            self.registry
-                .schedule_runtime_refresh(&self.runtime_key)
-                .await?;
-        }
         Ok(())
-    }
-
-    async fn persist_catalog_provider(
-        &self,
-        profile_id: Uuid,
-        catalog: &ProviderCatalog,
-        provider_id: &str,
-        selected_model_id: Option<&str>,
-        environment_key: PersistedEnvironmentKey,
-    ) -> Result<(), AuthorizedProviderError> {
-        let provider = catalog
-            .data
-            .iter()
-            .find(|provider| provider.id == provider_id)
-            .ok_or_else(|| ProviderServiceError::NotFound(provider_id.to_string()))?;
-        let models = serde_json::to_value(&provider.models)
-            .map_err(|error| ProviderServiceError::InvalidResponse(error.to_string()))?;
-        let (credential_env_key, preserve_credential_env_key) = match environment_key {
-            PersistedEnvironmentKey::Preserve => (None, true),
-            PersistedEnvironmentKey::Replace(value) => (value, false),
-        };
-        sqlx::query(
-            "INSERT INTO profile_provider_definitions \
-             (profile_id, provider_id, name, base_url, wire_api, supports_function_tools, models, is_selected, selected_model_id, credential_env_key) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
-             ON CONFLICT (profile_id, provider_id) DO UPDATE SET \
-               name = EXCLUDED.name, base_url = EXCLUDED.base_url, wire_api = EXCLUDED.wire_api, \
-               supports_function_tools = EXCLUDED.supports_function_tools, models = EXCLUDED.models, \
-               is_selected = EXCLUDED.is_selected, \
-               selected_model_id = COALESCE(EXCLUDED.selected_model_id, profile_provider_definitions.selected_model_id), \
-               credential_env_key = CASE WHEN $11 THEN profile_provider_definitions.credential_env_key ELSE EXCLUDED.credential_env_key END, \
-               updated_at = now()",
-        )
-        .bind(profile_id)
-        .bind(&provider.id)
-        .bind(&provider.name)
-        .bind(provider.base_url.as_deref().unwrap_or_default())
-        .bind(&provider.wire_api)
-        .bind(provider.supports_function_tools)
-        .bind(models)
-        .bind(provider.is_current)
-        .bind(selected_model_id)
-        .bind(credential_env_key)
-        .bind(preserve_credential_env_key)
-        .execute(&self.db)
-        .await?;
-        Ok(())
-    }
-
-    async fn overlay_persisted_models(
-        &self,
-        profile_id: Uuid,
-        mut catalog: ProviderCatalog,
-    ) -> Result<ProviderCatalog, AuthorizedProviderError> {
-        let rows = sqlx::query(
-            "SELECT provider_id, models FROM profile_provider_definitions \
-             WHERE profile_id = $1 ORDER BY provider_id",
-        )
-        .bind(profile_id)
-        .fetch_all(&self.db)
-        .await?;
-        for row in rows {
-            let provider_id: String = row.get("provider_id");
-            let Some(provider) = catalog
-                .data
-                .iter_mut()
-                .find(|provider| provider.id == provider_id)
-            else {
-                continue;
-            };
-            let models: Vec<ProviderModelSummary> = serde_json::from_value(row.get("models"))
-                .map_err(|error| ProviderServiceError::InvalidResponse(error.to_string()))?;
-            provider.model_count = models.len();
-            provider.models = models;
-        }
-        Ok(catalog)
-    }
-
-    async fn persisted_models(
-        &self,
-        profile_id: Uuid,
-        provider_id: &str,
-    ) -> Result<Vec<ProviderModelSummary>, AuthorizedProviderError> {
-        let row = sqlx::query(
-            "SELECT models FROM profile_provider_definitions \
-             WHERE profile_id = $1 AND provider_id = $2",
-        )
-        .bind(profile_id)
-        .bind(provider_id)
-        .fetch_optional(&self.db)
-        .await?;
-        row.map(|row| {
-            serde_json::from_value(row.get("models"))
-                .map_err(|error| ProviderServiceError::InvalidResponse(error.to_string()).into())
-        })
-        .transpose()
-        .map(|models| models.unwrap_or_default())
-    }
-
-    fn merge_persisted_model_capabilities(
-        catalog: &mut ProviderCatalog,
-        provider_id: &str,
-        persisted_models: &[ProviderModelSummary],
-    ) {
-        let Some(provider) = catalog
-            .data
-            .iter_mut()
-            .find(|provider| provider.id == provider_id)
-        else {
-            return;
-        };
-        for model in &mut provider.models {
-            if let Some(persisted) = persisted_models
-                .iter()
-                .find(|candidate| candidate.model_id == model.model_id)
-            {
-                model.supports_search_tool = persisted.supports_search_tool;
-            }
-        }
     }
 
     async fn authorize(
@@ -418,9 +231,8 @@ impl SecuredProviderService {
 #[async_trait]
 impl AuthorizedProviderOperations for SecuredProviderService {
     async fn list(&self, actor: ProviderActor) -> Result<ProviderCatalog, AuthorizedProviderError> {
-        let profile = self.authorize(actor).await?;
-        let catalog = self.runtime.list().await?;
-        self.overlay_persisted_models(profile.id, catalog).await
+        self.authorize(actor).await?;
+        Ok(self.runtime.list().await?)
     }
 
     async fn upsert(
@@ -460,17 +272,7 @@ impl AuthorizedProviderOperations for SecuredProviderService {
                     env_key: environment_key,
                 };
                 match self.runtime.upsert(id, request).await {
-                    Ok(catalog) => {
-                        self.persist_catalog_provider(
-                            profile.id,
-                            &catalog,
-                            id,
-                            None,
-                            PersistedEnvironmentKey::Replace(None),
-                        )
-                        .await?;
-                        Ok(catalog)
-                    }
+                    Ok(catalog) => Ok(catalog),
                     Err(error) => {
                         self.restore_secret(profile, id, previous).await?;
                         Err(error.into())
@@ -479,13 +281,6 @@ impl AuthorizedProviderOperations for SecuredProviderService {
             }
             credentials @ (ProviderCredentialInput::Environment { .. }
             | ProviderCredentialInput::NoCredential) => {
-                let persisted_environment_key = match &credentials {
-                    ProviderCredentialInput::Environment { env_key } => {
-                        PersistedEnvironmentKey::Replace(Some(env_key.trim().to_string()))
-                    }
-                    ProviderCredentialInput::NoCredential => PersistedEnvironmentKey::Replace(None),
-                    _ => unreachable!("matched environment or no-credential input"),
-                };
                 request.credentials = credentials;
                 let previous = self
                     .secrets
@@ -506,35 +301,14 @@ impl AuthorizedProviderOperations for SecuredProviderService {
                     }
                 }
                 match self.runtime.upsert(id, request).await {
-                    Ok(catalog) => {
-                        self.persist_catalog_provider(
-                            profile.id,
-                            &catalog,
-                            id,
-                            None,
-                            persisted_environment_key,
-                        )
-                        .await?;
-                        Ok(catalog)
-                    }
+                    Ok(catalog) => Ok(catalog),
                     Err(error) => {
                         self.restore_secret(profile, id, previous).await?;
                         Err(error.into())
                     }
                 }
             }
-            ProviderCredentialInput::Preserve => {
-                let catalog = self.runtime.upsert(id, request).await?;
-                self.persist_catalog_provider(
-                    profile.id,
-                    &catalog,
-                    id,
-                    None,
-                    PersistedEnvironmentKey::Preserve,
-                )
-                .await?;
-                Ok(catalog)
-            }
+            ProviderCredentialInput::Preserve => Ok(self.runtime.upsert(id, request).await?),
         }
     }
 
@@ -543,16 +317,8 @@ impl AuthorizedProviderOperations for SecuredProviderService {
         actor: ProviderActor,
         id: &str,
     ) -> Result<ProviderCatalog, AuthorizedProviderError> {
-        let profile = self.authorize(actor).await?;
-        let catalog = self.runtime.select(id).await?;
-        sqlx::query(
-            "UPDATE profile_provider_definitions SET is_selected = (provider_id = $2), updated_at = now() WHERE profile_id = $1",
-        )
-        .bind(profile.id)
-        .bind(id)
-        .execute(&self.db)
-        .await?;
-        self.overlay_persisted_models(profile.id, catalog).await
+        self.authorize(actor).await?;
+        Ok(self.runtime.select(id).await?)
     }
 
     async fn select_model(
@@ -561,17 +327,8 @@ impl AuthorizedProviderOperations for SecuredProviderService {
         provider_id: &str,
         model_id: &str,
     ) -> Result<ProviderCatalog, AuthorizedProviderError> {
-        let profile = self.authorize(actor).await?;
-        let catalog = self.runtime.select_model(provider_id, model_id).await?;
-        sqlx::query(
-            "UPDATE profile_provider_definitions SET is_selected = (provider_id = $2), selected_model_id = CASE WHEN provider_id = $2 THEN $3 ELSE selected_model_id END, updated_at = now() WHERE profile_id = $1",
-        )
-        .bind(profile.id)
-        .bind(provider_id)
-        .bind(model_id)
-        .execute(&self.db)
-        .await?;
-        self.overlay_persisted_models(profile.id, catalog).await
+        self.authorize(actor).await?;
+        Ok(self.runtime.select_model(provider_id, model_id).await?)
     }
 
     async fn delete(
@@ -600,16 +357,7 @@ impl AuthorizedProviderOperations for SecuredProviderService {
             }
         }
         match self.runtime.delete(id).await {
-            Ok(catalog) => {
-                sqlx::query(
-                    "DELETE FROM profile_provider_definitions WHERE profile_id = $1 AND provider_id = $2",
-                )
-                .bind(profile.id)
-                .bind(id)
-                .execute(&self.db)
-                .await?;
-                self.overlay_persisted_models(profile.id, catalog).await
-            }
+            Ok(catalog) => Ok(catalog),
             Err(error) => {
                 self.restore_secret(profile, id, previous).await?;
                 Err(error.into())
@@ -623,18 +371,8 @@ impl AuthorizedProviderOperations for SecuredProviderService {
         id: &str,
     ) -> Result<ProviderCatalog, AuthorizedProviderError> {
         let _operation = self.operation.lock().await;
-        let profile = self.authorize(actor).await?;
-        let persisted_models = self.persisted_models(profile.id, id).await?;
-        let mut catalog = self.runtime.refresh_models(id).await?;
-        Self::merge_persisted_model_capabilities(&mut catalog, id, &persisted_models);
-        self.persist_catalog_provider(
-            profile.id,
-            &catalog,
-            id,
-            None,
-            PersistedEnvironmentKey::Preserve,
-        )
-        .await?;
+        self.authorize(actor).await?;
+        let catalog = self.runtime.refresh_models(id).await?;
         self.registry
             .schedule_runtime_refresh(&self.runtime_key)
             .await?;
@@ -649,25 +387,11 @@ impl AuthorizedProviderOperations for SecuredProviderService {
         request: UpdateProviderModelRequest,
     ) -> Result<ProviderCatalog, AuthorizedProviderError> {
         let _operation = self.operation.lock().await;
-        let profile = self.authorize(actor).await?;
-        let persisted_models = self.persisted_models(profile.id, provider_id).await?;
-        let context_window = request.context_window;
-        let supports_search_tool = request.supports_search_tool;
-        let models = update_provider_models(
-            &persisted_models,
-            model_id,
-            context_window,
-            supports_search_tool,
-        );
-        let catalog = self.runtime.replace_models(provider_id, models).await?;
-        self.persist_catalog_provider(
-            profile.id,
-            &catalog,
-            provider_id,
-            None,
-            PersistedEnvironmentKey::Preserve,
-        )
-        .await?;
+        self.authorize(actor).await?;
+        let catalog = self
+            .runtime
+            .update_model(provider_id, model_id, request)
+            .await?;
         self.registry
             .schedule_runtime_refresh(&self.runtime_key)
             .await?;

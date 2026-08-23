@@ -18,10 +18,10 @@ usage() {
 Usage: ./scripts/rebuild-development-database.sh --confirm-development-only [options]
 
 Destroys and recreates the selected development database. It preserves only the
-identity closure required to restore Provider/model configuration and the active
-maps credential: organizations, users, memberships, profiles, profile_secrets,
-profile_provider_definitions, the default model selection, and the encrypted
-maps credential. Secret ciphertext is never printed or decrypted.
+identity closure required to restore Provider credentials, the default model
+selection, and the active maps credential: organizations, users, memberships,
+profiles, profile_secrets, platform configuration, and platform configuration
+secrets. Secret ciphertext is never printed or decrypted.
 
 Options:
   --confirm-development-only  Required destructive-operation acknowledgement.
@@ -166,7 +166,7 @@ trap 'rm -rf "$backup_dir"' EXIT
 preservation_schema_state="$("$postgres_bin/psql" "$database_url" -Atq -v ON_ERROR_STOP=1 -c "
 WITH expected(name) AS (
     VALUES ('organizations'), ('users'), ('memberships'), ('profiles'),
-           ('profile_secrets'), ('profile_provider_definitions'),
+           ('profile_secrets'),
            ('platform_configuration'), ('platform_configuration_secrets')
 ), availability AS (
     SELECT COUNT(*) FILTER (WHERE to_regclass('public.' || name) IS NOT NULL) AS found,
@@ -188,7 +188,6 @@ WITH preserved(value) AS (
     UNION ALL SELECT 'memberships:' || to_jsonb(entry)::text FROM memberships AS entry
     UNION ALL SELECT 'profiles:' || to_jsonb(entry)::text FROM profiles AS entry
     UNION ALL SELECT 'profile_secrets:' || to_jsonb(entry)::text FROM profile_secrets AS entry
-    UNION ALL SELECT 'profile_provider_definitions:' || to_jsonb(entry)::text FROM profile_provider_definitions AS entry
     UNION ALL SELECT 'platform_configuration:' || to_jsonb(entry)::text FROM platform_configuration AS entry
     UNION ALL SELECT 'platform_configuration_secrets:' || to_jsonb(entry)::text FROM platform_configuration_secrets AS entry
 )
@@ -199,7 +198,6 @@ critical_configuration_digest() {
   "$postgres_bin/psql" "$database_url" -Atq -v ON_ERROR_STOP=1 -c "
 WITH preserved(value) AS (
     SELECT 'profile_secrets:' || to_jsonb(entry)::text FROM profile_secrets AS entry
-    UNION ALL SELECT 'profile_provider_definitions:' || to_jsonb(entry)::text FROM profile_provider_definitions AS entry
     UNION ALL
         SELECT 'platform_configuration:' || to_jsonb(entry)::text
         FROM platform_configuration AS entry
@@ -219,23 +217,23 @@ case "$preservation_schema_state" in
     has_preservable_configuration="1"
     preservation_digest_before="$(preservation_digest)"
     critical_configuration_digest_before="$(critical_configuration_digest)"
-    printf 'Exporting encrypted Provider/model and maps configuration...\n'
+    printf 'Exporting encrypted Provider credentials, default model selection, and maps configuration...\n'
     "$postgres_bin/pg_dump" "$database_url" \
       --format=custom --data-only --no-owner --no-privileges \
       --table=organizations --table=users --table=memberships --table=profiles \
-      --table=profile_secrets --table=profile_provider_definitions \
+      --table=profile_secrets \
       --table=platform_configuration --table=platform_configuration_secrets \
       --file="$backup_file"
     ;;
   empty)
-    printf 'No persisted Provider/model/maps configuration exists; starting with an empty development database.\n'
+    printf 'No persisted Provider credentials/default model selection/maps configuration exists; starting with an empty development database.\n'
     ;;
   incomplete)
-    printf 'error: refusing to rebuild because Provider/model or Maps persistence is incomplete; migrate or repair it before destructive rebuild.\n' >&2
+    printf 'error: refusing to rebuild because Provider credential/default model selection or Maps persistence is incomplete; migrate or repair it before destructive rebuild.\n' >&2
     exit 1
     ;;
   *)
-    printf 'error: could not determine Provider/model/maps preservation state.\n' >&2
+    printf 'error: could not determine Provider credential/default model selection/maps preservation state.\n' >&2
     exit 1
     ;;
 esac
@@ -248,11 +246,11 @@ printf 'Applying current migrations...\n'
 "$server_bin" --database-url "$database_url" --migrate-only
 
 if [[ "$has_preservable_configuration" == "1" ]]; then
-  printf 'Restoring encrypted Provider/model and maps configuration...\n'
+  printf 'Restoring encrypted Provider credentials, default model selection, and maps configuration...\n'
   "$postgres_bin/pg_restore" --dbname="$database_url" --data-only --exit-on-error \
     --no-owner --no-privileges "$backup_file"
   if [[ "$(preservation_digest)" != "$preservation_digest_before" ]]; then
-    printf 'error: restored Provider/model or Maps persistence does not match the encrypted backup.\n' >&2
+    printf 'error: restored Provider credentials/default model selection or Maps persistence does not match the encrypted backup.\n' >&2
     exit 1
   fi
   "$postgres_bin/psql" "$database_url" -v ON_ERROR_STOP=1 <<'SQL'
@@ -271,7 +269,7 @@ WHERE NOT (
 );
 SQL
   if [[ "$(critical_configuration_digest)" != "$critical_configuration_digest_before" ]]; then
-    printf 'error: rebuilt database did not retain Provider credentials/models or Maps credentials.\n' >&2
+    printf 'error: rebuilt database did not retain Provider credentials/default model selection or Maps credentials.\n' >&2
     exit 1
   fi
 fi

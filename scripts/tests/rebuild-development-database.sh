@@ -71,7 +71,7 @@ grep -F 'dropdb --force --maintenance-db=postgresql://fixture@localhost/postgres
 grep -F 'createdb --maintenance-db=postgresql://fixture@localhost/postgres rebuild_fixture' "$record_file" >/dev/null
 grep -F 'server --database-url postgresql://fixture@localhost/rebuild_fixture --migrate-only' "$record_file" >/dev/null
 grep -F -- '--table=profile_secrets' "$record_file" >/dev/null
-grep -F -- '--table=profile_provider_definitions' "$record_file" >/dev/null
+! grep -F -- '--table=profile_provider_definitions' "$record_file" >/dev/null
 grep -F -- '--table=platform_configuration_secrets' "$record_file" >/dev/null
 grep -F 'pg_restore --dbname=postgresql://fixture@localhost/rebuild_fixture --data-only --exit-on-error' "$record_file" >/dev/null
 grep -F "'maps.active_credential'" "$record_file" >/dev/null

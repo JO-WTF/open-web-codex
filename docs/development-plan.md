@@ -5,10 +5,10 @@
 | 文档性质 | 当前与下一里程碑的执行计划 |
 | 更新日期 | 2026-08-24 |
 | 当前阶段 | 阶段三：回归 Codex Runtime owner 并清理并行实现 |
-| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统、Browser Workspace Preferences、独立 Terminal、本地 Usage 和 Fake 生产运行模式；Codex 六个最小 seam 已代码收敛，验证矩阵待执行 |
+| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统、Browser Workspace Preferences、独立 Terminal、本地 Usage、Fake 生产运行模式和 Provider 定义/模型目录数据库镜像；Codex 六个最小 seam 已代码收敛，验证矩阵待执行 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018/019/024/025 为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
-| 阶段三后续 | 执行六个 retained seam 的 focused/schema/app-server/product 验证；收敛 Provider/model 单一 owner；再处理 Run/Thread 状态和 history/event 投影 |
+| 阶段三后续 | 执行六个 retained seam 的 focused/schema/app-server/product 验证；收敛 Provider/model Task/default seed 的剩余单一 owner；再处理 Run/Thread 状态和 history/event 投影 |
 
 本文记录阶段一已完成的正常业务主链、仍有效的边界和后续工作。用户心智统一为：
 
@@ -489,9 +489,9 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
 加速误报为端到端加速。
 浏览器响应、日志、Workspace 与普通 Profile 文件均不得出现 Secret 明文；不写 `model_catalog_json`、
 不按模型名推断、不重试提示词、不回退 single-agent。后续真实空目录故障已用窄 follow-up 收口：Codex 只增加 exact
-Provider 的 fresh typed catalog，Platform 不切换 current Provider，只在非空成功后持久化目标目录并在
-刷新/重启后恢复；Turn Provider override、Provider owner 全量重构和 Browser dead graph 仍不属于阶段一
-关键门。
+Provider 的 fresh typed catalog，Platform 不切换 current Provider，只在非空成功后写回 Runtime 目标目录并在
+成功后安排安全 refresh；Provider 定义/模型目录数据库镜像和启动回放已删除。Turn Provider override、Task/default
+seed 收敛和 Browser dead graph 仍不属于阶段一关键门。
 
 D6 已收敛仓网 package 的执行面：Root、Data、Network 的 native Role config 显式设置
 `features.shell_tool=false`，只对该 package 生效；Root 仍保留协作、`tool_search` 和原生用户输入，

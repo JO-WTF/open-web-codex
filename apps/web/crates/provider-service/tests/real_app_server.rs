@@ -381,15 +381,6 @@ async fn secured_provider_credentials_never_enter_codex_config() {
     assert_eq!(restarted_provider.model_count, 1);
     assert_eq!(restarted_provider.models[0].model_id, "provider-one-model");
     assert!(restarted_provider.supports_function_tools);
-    let persisted_function_tools: bool = sqlx::query_scalar(
-        "SELECT supports_function_tools FROM profile_provider_definitions WHERE profile_id = $1 AND provider_id = $2",
-    )
-    .bind(profile_id)
-    .bind("secured-provider")
-    .fetch_one(&db)
-    .await
-    .expect("persisted function-tool capability");
-    assert!(persisted_function_tools);
 
     service
         .upsert(
@@ -411,15 +402,15 @@ async fn secured_provider_credentials_never_enter_codex_config() {
     service
         .refresh_models(actor, "environment-provider")
         .await
-        .expect("refresh environment-backed Provider before restore");
+        .expect("refresh environment-backed Provider");
     service
-        .restore_persisted_configuration()
+        .ensure_runtime_defaults()
         .await
-        .expect("restore persisted Provider configuration");
+        .expect("preserve Runtime Provider configuration while applying defaults");
     let restored_environment_catalog = service
-        .refresh_models(actor, "environment-provider")
+        .list(actor)
         .await
-        .expect("refresh environment-backed Provider after restore");
+        .expect("list Runtime-owned environment-backed Provider configuration");
     assert_eq!(
         restored_environment_catalog
             .data
@@ -430,27 +421,6 @@ async fn secured_provider_credentials_never_enter_codex_config() {
             .model_id,
         "provider-two-model"
     );
-    let persisted_environment_key: Option<String> = sqlx::query_scalar(
-        "SELECT credential_env_key FROM profile_provider_definitions WHERE profile_id = $1 AND provider_id = $2",
-    )
-    .bind(profile_id)
-    .bind("environment-provider")
-    .fetch_one(&db)
-    .await
-    .expect("persisted environment credential source");
-    assert_eq!(
-        persisted_environment_key.as_deref(),
-        Some(external_environment_key)
-    );
-    let persisted_direct_environment_key: Option<String> = sqlx::query_scalar(
-        "SELECT credential_env_key FROM profile_provider_definitions WHERE profile_id = $1 AND provider_id = $2",
-    )
-    .bind(profile_id)
-    .bind("secured-provider")
-    .fetch_one(&db)
-    .await
-    .expect("persisted direct credential source");
-    assert_eq!(persisted_direct_environment_key, None);
     let config =
         std::fs::read_to_string(home.join("config.toml")).expect("read restored Codex config");
     assert!(config.contains(external_environment_key));

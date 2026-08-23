@@ -261,7 +261,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     completion.mark_host_ready(&copilot_store).await?;
-    provider_service.restore_persisted_configuration().await?;
+    provider_service.ensure_runtime_defaults().await?;
     let adapter: Arc<dyn CodexAdapter> =
         Arc::new(RealCodexAdapter::from_host_with_root_executions(
             host.clone(),

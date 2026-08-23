@@ -1452,7 +1452,6 @@ pub struct ProviderModelSummary {
     pub max_output_tokens: Option<i64>,
     pub show_in_picker: bool,
     pub context_window: Option<i64>,
-    #[serde(default)]
     pub supports_search_tool: bool,
 }
 
@@ -1483,8 +1482,68 @@ pub struct ProviderSummary {
 pub struct ProviderCatalog {
     pub data: Vec<ProviderSummary>,
     pub current_provider_id: String,
-    #[serde(default)]
+    #[serde(deserialize_with = "Option::deserialize")]
     pub current_model_id: Option<String>,
+}
+
+#[cfg(test)]
+mod provider_catalog_contract_tests {
+    use super::*;
+
+    fn catalog_json() -> serde_json::Value {
+        serde_json::json!({
+            "data": [{
+                "id": "configured",
+                "name": "Configured",
+                "baseUrl": "https://provider.example/v1",
+                "envKey": "PROVIDER_KEY",
+                "wireApi": "chat",
+                "supportsFunctionTools": true,
+                "kind": "custom",
+                "isCurrent": true,
+                "modelCount": 1,
+                "canEdit": true,
+                "canDelete": false,
+                "canFetchModels": true,
+                "models": [{
+                    "modelId": "configured-model",
+                    "modelName": "Configured model",
+                    "maxTokenLen": null,
+                    "maxOutputTokens": null,
+                    "showInPicker": true,
+                    "contextWindow": 128000,
+                    "supportsSearchTool": false
+                }]
+            }],
+            "currentProviderId": "configured",
+            "currentModelId": null
+        })
+    }
+
+    #[test]
+    fn provider_catalog_requires_nullable_current_model_id_and_model_search_capability() {
+        let catalog: ProviderCatalog =
+            serde_json::from_value(catalog_json()).expect("strict Provider catalog contract");
+        assert_eq!(catalog.current_model_id, None);
+        assert_eq!(
+            serde_json::to_value(&catalog).expect("serialize Provider catalog")["currentModelId"],
+            serde_json::Value::Null
+        );
+
+        let mut missing_current_model = catalog_json();
+        missing_current_model
+            .as_object_mut()
+            .expect("catalog object")
+            .remove("currentModelId");
+        assert!(serde_json::from_value::<ProviderCatalog>(missing_current_model).is_err());
+
+        let mut missing_search_capability = catalog_json();
+        missing_search_capability["data"][0]["models"][0]
+            .as_object_mut()
+            .expect("model object")
+            .remove("supportsSearchTool");
+        assert!(serde_json::from_value::<ProviderCatalog>(missing_search_capability).is_err());
+    }
 }
 
 // ── Copilot Profile installation ──────────────────────────────────────────
@@ -1607,8 +1666,9 @@ pub struct UpsertProviderRequest {
     pub base_url: String,
     pub wire_api: String,
     pub credentials: ProviderCredentialInput,
-    /// Browser-projected capability echo. Provider Service derives the
-    /// effective value from `wire_api`: Chat is enabled, Responses is disabled.
+    /// Browser-projected product declaration. The Provider save boundary writes
+    /// Chat as enabled and Responses as disabled; the Runtime never infers this
+    /// capability from the transport name.
     #[serde(default)]
     pub supports_function_tools: Option<bool>,
     #[serde(default)]

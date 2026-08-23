@@ -247,9 +247,7 @@ impl ProviderService {
             config_edit("model".to_string(), json!(model_id)),
         ])
         .await?;
-        let mut catalog = self.list().await?;
-        catalog.current_model_id = Some(model_id.to_string());
-        Ok(catalog)
+        self.list().await
     }
 
     pub async fn delete(&self, id: &str) -> Result<ProviderCatalog, ProviderServiceError> {
@@ -319,11 +317,7 @@ impl ProviderService {
             json!(persisted_models),
         )])
         .await?;
-        let mut catalog = self.list().await?;
-        let provider_index = require_catalog_provider(&catalog, id)?;
-        catalog.data[provider_index].model_count = models.len();
-        catalog.data[provider_index].models = models;
-        Ok(catalog)
+        self.list().await
     }
 
     pub async fn update_model(
@@ -405,11 +399,7 @@ impl ProviderService {
             json!(persisted_models),
         )])
         .await?;
-        let mut catalog = self.list().await?;
-        let provider_index = require_catalog_provider(&catalog, provider_id)?;
-        catalog.data[provider_index].model_count = models.len();
-        catalog.data[provider_index].models = models;
-        Ok(catalog)
+        self.list().await
     }
 
     /// Apply the Platform default only to Profiles without an explicit
@@ -1119,6 +1109,7 @@ mod tests {
         json!({
             "data": providers,
             "currentProviderId": current_provider_id,
+            "currentModelId": null,
         })
     }
 
@@ -1372,13 +1363,6 @@ mod tests {
 
     #[tokio::test]
     async fn replace_models_writes_the_complete_catalog_atomically() {
-        let initial = catalog("deepseek", json!([provider("deepseek", true, json!([]))]));
-        let transport = MockTransport::new(vec![
-            json!({ "result": initial.clone() }),
-            json!({ "result": { "status": "ok" } }),
-            json!({ "result": initial }),
-        ]);
-        let service = ProviderService::new(transport.clone());
         let models = vec![
             ProviderModelSummary {
                 model_id: "deepseek-v4-flash".to_string(),
@@ -1399,6 +1383,21 @@ mod tests {
                 supports_search_tool: false,
             },
         ];
+        let initial = catalog("deepseek", json!([provider("deepseek", true, json!([]))]));
+        let final_catalog = catalog(
+            "deepseek",
+            json!([provider(
+                "deepseek",
+                true,
+                serde_json::to_value(&models).expect("serialize configured models"),
+            )]),
+        );
+        let transport = MockTransport::new(vec![
+            json!({ "result": initial }),
+            json!({ "result": { "status": "ok" } }),
+            json!({ "result": final_catalog }),
+        ]);
+        let service = ProviderService::new(transport.clone());
 
         let result = service
             .replace_models("deepseek", models.clone())
@@ -1489,6 +1488,7 @@ mod tests {
             "maxOutputTokens": null,
             "showInPicker": true,
             "contextWindow": 32_000,
+            "supportsSearchTool": false,
         }]);
         let initial = catalog(
             "provider-a",
@@ -1509,16 +1509,26 @@ mod tests {
                 ),
             ]),
         );
-        // Codex owns Provider discovery, but its modelProvider/list projection
-        // does not echo a custom Provider's freshly fetched model catalog.
-        // The refresh result must therefore carry the typed catalog returned by
-        // modelProvider/models/list instead of replacing it with this empty
-        // discovery projection.
+        // Codex owns both the fresh fetch and the subsequent configured catalog
+        // projection. The post-write list response is the only catalog returned
+        // to the caller.
         let final_catalog = catalog(
             "provider-a",
             json!([
                 provider("provider-a", true, provider_a_models),
-                provider("provider-b", false, json!([])),
+                provider(
+                    "provider-b",
+                    false,
+                    json!([{
+                        "modelId": "b-model",
+                        "modelName": "B model",
+                        "maxTokenLen": null,
+                        "maxOutputTokens": null,
+                        "showInPicker": true,
+                        "contextWindow": null,
+                        "supportsSearchTool": true,
+                    }]),
+                ),
             ]),
         );
         let transport = MockTransport::new(vec![
@@ -1606,6 +1616,7 @@ mod tests {
                             "maxOutputTokens": null,
                             "showInPicker": true,
                             "contextWindow": null,
+                            "supportsSearchTool": false,
                         }])
                     ),
                 ]),
@@ -1653,6 +1664,7 @@ mod tests {
                         "maxOutputTokens": null,
                         "showInPicker": true,
                         "contextWindow": null,
+                        "supportsSearchTool": false,
                     }])
                 ),
             ]),
@@ -1669,6 +1681,7 @@ mod tests {
                         "maxOutputTokens": null,
                         "showInPicker": true,
                         "contextWindow": null,
+                        "supportsSearchTool": false,
                     }]
                 }
             }),
@@ -1719,6 +1732,7 @@ mod tests {
                             "maxOutputTokens": null,
                             "showInPicker": true,
                             "contextWindow": null,
+                            "supportsSearchTool": false,
                         }])
                     ),
                 ]),
@@ -1768,6 +1782,7 @@ mod tests {
                     "maxOutputTokens": 8192,
                     "showInPicker": false,
                     "contextWindow": 128000,
+                    "supportsSearchTool": true,
                 }]
             }
         }))
@@ -1791,12 +1806,14 @@ mod tests {
             "maxOutputTokens": null,
             "showInPicker": true,
             "contextWindow": 128_000,
+            "supportsSearchTool": true,
         }]);
         let initial = catalog(
             "provider-a",
             json!([provider("deepseek", false, models.clone())]),
         );
-        let selected = catalog("deepseek", json!([provider("deepseek", true, models)]));
+        let mut selected = catalog("deepseek", json!([provider("deepseek", true, models)]));
+        selected["currentModelId"] = json!("deepseek-v4-flash");
         let transport = MockTransport::new(vec![initial, json!({ "status": "ok" }), selected]);
         let service = ProviderService::new(transport.clone());
 
