@@ -91,6 +91,52 @@ impl FakeCodexAdapter {
         *self.thread_model_update_calls.lock().await
     }
 
+    /// Test-only fixture hook for an already persisted Runtime Thread.
+    ///
+    /// This deliberately is not part of `CodexAdapter`: production callers
+    /// must obtain a Thread through the Runtime. The fixture keeps the same
+    /// exact Workspace binding enforced by the fake's normal RPC methods.
+    #[doc(hidden)]
+    pub async fn seed_completed_thread_for_test(
+        &self,
+        workspace: &AuthorizedWorkspace,
+        thread_id: &str,
+    ) -> Result<(), AdapterError> {
+        if workspace.id.trim().is_empty() || thread_id.trim().is_empty() {
+            return Err(AdapterError::Internal(
+                "fake completed Thread requires a Workspace and Thread id".to_string(),
+            ));
+        }
+
+        let mut state = self.state.lock().await;
+        if let Some(existing) = state
+            .threads
+            .iter()
+            .find(|existing| existing.id == thread_id)
+        {
+            if existing.ws_id != workspace.id {
+                return Err(AdapterError::Internal(
+                    "fake Thread is already bound to a different Workspace".to_string(),
+                ));
+            }
+            return Err(AdapterError::Internal(
+                "fake Thread has already been seeded".to_string(),
+            ));
+        }
+
+        state.threads.push(MockThread {
+            id: thread_id.to_string(),
+            ws_id: workspace.id.clone(),
+            developer_instructions: None,
+            model_provider: "mock_provider".to_string(),
+            model: "mock-model".to_string(),
+            status: "completed".to_string(),
+            msg_count: 0,
+            updated_at: Utc::now().timestamp_millis(),
+        });
+        Ok(())
+    }
+
     /// Helper: push an SSE frame event and notify the event loop.
     async fn emit(&self, evt: Value) {
         let mut state = self.state.lock().await;
@@ -640,5 +686,67 @@ impl CodexAdapter for FakeCodexAdapter {
         });
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn workspace(id: &str) -> AuthorizedWorkspace {
+        AuthorizedWorkspace {
+            id: id.to_string(),
+            root: std::path::PathBuf::from(format!("/tmp/{id}")),
+        }
+    }
+
+    #[tokio::test]
+    async fn seeded_completed_thread_requires_a_nonempty_id_and_exact_workspace() {
+        let adapter = FakeCodexAdapter::new();
+        let owner_workspace = workspace("owner-workspace");
+        let wrong_workspace = workspace("wrong-workspace");
+
+        let missing_id = adapter
+            .seed_completed_thread_for_test(&owner_workspace, "  ")
+            .await
+            .expect_err("empty Thread id must be rejected");
+        assert!(
+            matches!(missing_id, AdapterError::Internal(message) if message.contains("Thread id"))
+        );
+
+        adapter
+            .seed_completed_thread_for_test(&owner_workspace, "completed-thread")
+            .await
+            .expect("seed exact persisted Thread");
+        adapter
+            .send_user_message(
+                &owner_workspace,
+                "completed-thread",
+                "continue",
+                &TurnOptions::default(),
+            )
+            .await
+            .expect("exact Workspace may continue the seeded Thread");
+
+        let wrong_workspace_send = adapter
+            .send_user_message(
+                &wrong_workspace,
+                "completed-thread",
+                "continue",
+                &TurnOptions::default(),
+            )
+            .await
+            .expect_err("a different Workspace must not send to the seeded Thread");
+        assert!(
+            matches!(wrong_workspace_send, AdapterError::Rpc(message) if message == "fake Thread was not found")
+        );
+
+        let wrong_workspace_seed = adapter
+            .seed_completed_thread_for_test(&wrong_workspace, "completed-thread")
+            .await
+            .expect_err("a Thread id cannot be rebound to a different Workspace");
+        assert!(
+            matches!(wrong_workspace_seed, AdapterError::Internal(message) if message.contains("different Workspace"))
+        );
     }
 }

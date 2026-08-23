@@ -7,7 +7,7 @@ use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
 use chrono::DateTime;
 use futures_util::{SinkExt, StreamExt};
-use open_web_codex_adapter::{fake::FakeCodexAdapter, CodexAdapter};
+use open_web_codex_adapter::{fake::FakeCodexAdapter, AuthorizedWorkspace, CodexAdapter};
 use open_web_codex_approval_service::{ApprovalActor, ApprovalService};
 use open_web_codex_auth::hash_password;
 use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
@@ -686,6 +686,17 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
     .execute(&pool)
     .await
     .unwrap();
+
+    adapter
+        .seed_completed_thread_for_test(
+            &AuthorizedWorkspace {
+                id: workspace_id.to_string(),
+                root: checkout.root.clone(),
+            },
+            "completed-followup-thread",
+        )
+        .await
+        .expect("seed completed Thread in its exact authorized Workspace");
 
     sqlx::query(
         "INSERT INTO workspace_grants \
