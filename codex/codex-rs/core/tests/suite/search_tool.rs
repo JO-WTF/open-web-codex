@@ -798,8 +798,14 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     assert!(
         !second_request_tools
             .iter()
-            .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
+            .any(|name| name == CALENDAR_CREATE_TOOL),
         "follow-up request should rely on tool_search_output history, not tool injection: {second_request_tools:?}"
+    );
+    assert!(
+        !second_request_tools
+            .iter()
+            .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
+        "follow-up request should rely on tool_search_output history, not namespace injection: {second_request_tools:?}"
     );
 
     let output_item = requests[2].function_call_output("calendar-call-1");
@@ -812,8 +818,14 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     assert!(
         !third_request_tools
             .iter()
+            .any(|name| name == CALENDAR_CREATE_TOOL),
+        "post-tool follow-up should still rely on tool_search_output history, not tool injection: {third_request_tools:?}"
+    );
+    assert!(
+        !third_request_tools
+            .iter()
             .any(|name| name == SEARCH_CALENDAR_NAMESPACE),
-        "post-tool follow-up should rely on tool_search_output history, not tool injection: {third_request_tools:?}"
+        "post-tool follow-up should still rely on tool_search_output history, not namespace injection: {third_request_tools:?}"
     );
 
     Ok(())
@@ -1221,6 +1233,13 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
         })]
     );
 
+    let second_request_body = requests[1].body_json();
+    let second_request_tools = tool_names(&second_request_body);
+    assert!(
+        !second_request_tools.iter().any(|name| name == tool_name),
+        "follow-up request should rely on tool_search_output history, not tool injection: {second_request_tools:?}"
+    );
+
     let output = requests[2]
         .function_call_output(dynamic_call_id)
         .get("output")
@@ -1230,6 +1249,13 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
     assert_eq!(
         payload,
         FunctionCallOutputPayload::from_text("dynamic-search-ok".to_string())
+    );
+
+    let third_request_body = requests[2].body_json();
+    let third_request_tools = tool_names(&third_request_body);
+    assert!(
+        !third_request_tools.iter().any(|name| name == tool_name),
+        "post-tool follow-up should still rely on tool_search_output history, not tool injection: {third_request_tools:?}"
     );
 
     Ok(())

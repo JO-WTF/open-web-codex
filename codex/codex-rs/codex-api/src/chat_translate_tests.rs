@@ -5,7 +5,6 @@ use crate::common::ResponsesApiTools;
 use crate::common::TextControls;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;
 use std::sync::Arc;
 
@@ -40,13 +39,6 @@ fn text_message(role: &str, text: &str) -> ResponseItem {
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
-    }
-}
-
-fn turn_metadata(turn_id: &str) -> InternalChatMessageMetadataPassthrough {
-    InternalChatMessageMetadataPassthrough {
-        turn_id: Some(turn_id.to_string()),
-        ..Default::default()
     }
 }
 
@@ -217,7 +209,7 @@ fn translates_history_loaded_tool_search_into_chat_tools_and_reverse_targets() {
                 text: "Use the network baseline tool.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -225,7 +217,7 @@ fn translates_history_loaded_tool_search_into_chat_tools_and_reverse_targets() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "network coverage"}),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -238,7 +230,7 @@ fn translates_history_loaded_tool_search_into_chat_tools_and_reverse_targets() {
                 "description": "Evaluate a network baseline.",
                 "parameters": {"type": "object", "properties": {}}
             })],
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -305,7 +297,7 @@ fn keeps_history_loaded_deferred_target_after_inter_agent_completion_message() {
                 text: "Plan the network.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -313,7 +305,7 @@ fn keeps_history_loaded_deferred_target_after_inter_agent_completion_message() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "spawn agent"}),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -331,10 +323,10 @@ fn keeps_history_loaded_deferred_target_after_inter_agent_completion_message() {
                     "parameters": {"type": "object", "properties": {}}
                 }]
             })],
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
-        // Inter-Agent completion is represented as a user-role Chat message,
-        // but its typed metadata keeps it inside the same Root Turn.
+        // Inter-Agent completion remains part of the translated history even
+        // without transport-private turn metadata.
         ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -342,7 +334,7 @@ fn keeps_history_loaded_deferred_target_after_inter_agent_completion_message() {
                 text: "Data Agent completed the prepared input handoff.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -367,7 +359,7 @@ fn keeps_history_loaded_deferred_target_after_inter_agent_completion_message() {
 }
 
 #[test]
-fn replays_history_loaded_target_when_latest_user_message_lacks_turn_metadata() {
+fn replays_history_loaded_target_without_turn_metadata() {
     let mut request = request(Some(vec![serde_json::json!({
         "type": "tool_search",
         "execution": "client",
@@ -383,7 +375,7 @@ fn replays_history_loaded_target_when_latest_user_message_lacks_turn_metadata() 
                 text: "Plan the network.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -391,7 +383,7 @@ fn replays_history_loaded_target_when_latest_user_message_lacks_turn_metadata() 
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "spawn agent"}),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -407,7 +399,7 @@ fn replays_history_loaded_target_when_latest_user_message_lacks_turn_metadata() 
                     "parameters": {"type": "object"}
                 }]
             })],
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
             id: None,
@@ -447,7 +439,7 @@ fn replays_prior_turn_loaded_tool_schema_for_resume_shaped_history() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "network coverage"}),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -460,7 +452,7 @@ fn replays_prior_turn_loaded_tool_schema_for_resume_shaped_history() {
                 "description": "Evaluate a network baseline.",
                 "parameters": {"type": "object", "properties": {}}
             })],
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
             id: None,
@@ -469,7 +461,7 @@ fn replays_prior_turn_loaded_tool_schema_for_resume_shaped_history() {
                 text: "Use navigation distances now.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-new")),
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -524,7 +516,7 @@ fn deduplicates_the_same_history_loaded_tool_across_turns() {
                 text: "Find route tools.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -532,7 +524,7 @@ fn deduplicates_the_same_history_loaded_tool_across_turns() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "route"}),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -540,7 +532,7 @@ fn deduplicates_the_same_history_loaded_tool_across_turns() {
             status: "completed".to_string(),
             execution: "client".to_string(),
             tools: vec![route_tool.clone()],
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
             id: None,
@@ -549,7 +541,7 @@ fn deduplicates_the_same_history_loaded_tool_across_turns() {
                 text: "Resume and use route again.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-new")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -557,7 +549,7 @@ fn deduplicates_the_same_history_loaded_tool_across_turns() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "route"}),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-new")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -565,7 +557,7 @@ fn deduplicates_the_same_history_loaded_tool_across_turns() {
             status: "completed".to_string(),
             execution: "client".to_string(),
             tools: vec![route_tool],
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-new")),
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -597,7 +589,7 @@ fn does_not_project_empty_history_loaded_tool_search_output() {
                 text: "Search for an unavailable tool.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -605,7 +597,7 @@ fn does_not_project_empty_history_loaded_tool_search_output() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "missing"}),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -613,7 +605,7 @@ fn does_not_project_empty_history_loaded_tool_search_output() {
             status: "completed".to_string(),
             execution: "client".to_string(),
             tools: Vec::new(),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-old")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::Message {
             id: None,
@@ -622,7 +614,7 @@ fn does_not_project_empty_history_loaded_tool_search_output() {
                 text: "Continue.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-new")),
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -757,7 +749,7 @@ fn encodes_a_loaded_namespace_from_prompt_once() {
                 text: "Compare the network.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -765,7 +757,7 @@ fn encodes_a_loaded_namespace_from_prompt_once() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "compare network"}),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -783,7 +775,7 @@ fn encodes_a_loaded_namespace_from_prompt_once() {
                     "parameters": {"type": "object", "properties": {}}
                 }]
             })],
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -825,7 +817,7 @@ fn rejects_colliding_history_loaded_deferred_tool_targets() {
                 text: "Use the matching tool.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -833,7 +825,7 @@ fn rejects_colliding_history_loaded_deferred_tool_targets() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "one"}),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -850,7 +842,7 @@ fn rejects_colliding_history_loaded_deferred_tool_targets() {
                     "parameters": {"type": "object"}
                 }]
             })],
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -858,7 +850,7 @@ fn rejects_colliding_history_loaded_deferred_tool_targets() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "two"}),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -875,7 +867,7 @@ fn rejects_colliding_history_loaded_deferred_tool_targets() {
                     "parameters": {"type": "object"}
                 }]
             })],
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -902,7 +894,7 @@ fn rejects_repeated_history_loaded_deferred_tool_with_different_schema() {
                 text: "Use the route tool.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -910,7 +902,7 @@ fn rejects_repeated_history_loaded_deferred_tool_with_different_schema() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "route"}),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -922,7 +914,7 @@ fn rejects_repeated_history_loaded_deferred_tool_with_different_schema() {
                 "name": "route",
                 "parameters": {"type": "object"}
             })],
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -930,7 +922,7 @@ fn rejects_repeated_history_loaded_deferred_tool_with_different_schema() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "route details"}),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -945,7 +937,7 @@ fn rejects_repeated_history_loaded_deferred_tool_with_different_schema() {
                     "properties": {"mode": {"type": "string"}}
                 }
             })],
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -979,7 +971,7 @@ fn rejects_history_loaded_deferred_tool_schema_conflict_with_prompt_tool() {
                 text: "Use the route tool.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -987,7 +979,7 @@ fn rejects_history_loaded_deferred_tool_schema_conflict_with_prompt_tool() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "route"}),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -1002,7 +994,7 @@ fn rejects_history_loaded_deferred_tool_schema_conflict_with_prompt_tool() {
                     "properties": {"mode": {"type": "string"}}
                 }
             })],
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -1036,7 +1028,7 @@ fn rejects_history_loaded_deferred_flatten_collision_with_prompt_tool() {
                 text: "Use the matching tool.".to_string(),
             }],
             phase: None,
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchCall {
             id: None,
@@ -1044,7 +1036,7 @@ fn rejects_history_loaded_deferred_flatten_collision_with_prompt_tool() {
             status: None,
             execution: "client".to_string(),
             arguments: serde_json::json!({"query": "matching"}),
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
         ResponseItem::ToolSearchOutput {
             id: None,
@@ -1060,7 +1052,7 @@ fn rejects_history_loaded_deferred_flatten_collision_with_prompt_tool() {
                     "parameters": {"type": "object"}
                 }]
             })],
-            internal_chat_message_metadata_passthrough: Some(turn_metadata("turn-current")),
+            internal_chat_message_metadata_passthrough: None,
         },
     ];
 
@@ -1112,7 +1104,9 @@ fn groups_raw_reasoning_assistant_text_and_tool_calls() {
         function_call("route", Some("mcp__maps"), "call_1"),
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "call_1".to_string(),
+            call_id: Some("call_1".to_string()),
+            name: None,
+            namespace: None,
             output: FunctionCallOutputPayload::from_text("12 km".to_string()),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -1164,7 +1158,9 @@ fn groups_raw_reasoning_tool_only_and_output() {
         function_call("route", Some("mcp__maps"), "call_1"),
         ResponseItem::FunctionCallOutput {
             id: None,
-            call_id: "call_1".to_string(),
+            call_id: Some("call_1".to_string()),
+            name: None,
+            namespace: None,
             output: FunctionCallOutputPayload::from_text("12 km".to_string()),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -1195,6 +1191,26 @@ fn groups_raw_reasoning_tool_only_and_output() {
             },
         ]
     );
+}
+
+#[test]
+fn rejects_history_function_call_output_without_call_id() {
+    let mut request = request(None);
+    request.instructions.clear();
+    request.input = vec![ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: None,
+        name: Some("external_context".to_string()),
+        namespace: None,
+        output: FunctionCallOutputPayload::from_text("external context".to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    assert!(matches!(
+        responses_request_to_chat_completions_request(request),
+        Err(ApiError::InvalidRequest { message })
+            if message.contains("function-call output without a call_id")
+    ));
 }
 
 #[test]

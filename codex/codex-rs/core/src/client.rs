@@ -882,13 +882,7 @@ impl ModelClient {
         let is_openai = self.state.provider.info().is_openai();
         if !is_openai {
             for item in &mut input {
-                // Chat translation consumes this typed metadata locally to
-                // identify same-Turn Agent communication and deferred tool
-                // targets. ChatMessage serialization never forwards it to
-                // the provider wire, so preserve it until that adapter runs.
-                if self.state.provider.info().wire_api != WireApi::Chat {
-                    item.clear_internal_chat_message_metadata_passthrough();
-                }
+                item.clear_internal_chat_message_metadata_passthrough();
                 if let ResponseItem::FunctionCall {
                     encrypted_function_args,
                     ..

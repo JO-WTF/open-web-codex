@@ -189,11 +189,7 @@ impl ToolSearchHandler {
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation {
-            payload,
-            step_context: _,
-            ..
-        } = invocation;
+        let ToolInvocation { payload, .. } = invocation;
 
         let args = match payload {
             ToolPayload::ToolSearch { arguments } => arguments,
@@ -223,6 +219,7 @@ impl ToolSearchHandler {
         }
 
         let tools = self.search(query, limit)?;
+
         Ok(boxed_tool_output(ToolSearchOutput { tools }))
     }
 }

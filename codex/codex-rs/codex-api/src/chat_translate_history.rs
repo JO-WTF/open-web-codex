@@ -119,7 +119,9 @@ pub(crate) fn responses_input_to_chat_messages(
                 continue;
             }
             ResponseItem::FunctionCallOutput {
-                call_id, output, ..
+                call_id: Some(call_id),
+                output,
+                ..
             } => {
                 let Some(position) = expected_tool_outputs
                     .iter()
@@ -135,6 +137,11 @@ pub(crate) fn responses_input_to_chat_messages(
                     call_id.clone(),
                     function_output_to_chat_text(output)?,
                 );
+            }
+            ResponseItem::FunctionCallOutput { call_id: None, .. } => {
+                return Err(unsupported(
+                    "history function-call output without a call_id",
+                ));
             }
             ResponseItem::ToolSearchOutput {
                 call_id: Some(call_id),

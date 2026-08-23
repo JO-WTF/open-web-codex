@@ -19,30 +19,14 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(active_turn) => {
-                // Model-visible injections such as same-turn Agent completion
-                // messages must retain the active Turn identity. Chat
-                // translation uses this typed boundary to distinguish mailbox
-                // communication from a new user Turn; it must not infer that
-                // distinction from the message role or text.
-                let active_turn_id = active_turn
-                    .task
-                    .as_ref()
-                    .map(|task| task.turn_context.sub_id.clone());
-                let input = input
-                    .into_iter()
-                    .map(|mut item| {
-                        if let Some(active_turn_id) = active_turn_id.as_deref() {
-                            item.set_turn_id_if_missing(active_turn_id);
-                        }
-                        item
-                    })
-                    .map(ResponseItemEnvelope::new)
-                    .map(PendingTurnInput::ResponseItem)
-                    .collect();
                 self.input_queue
                     .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
                         active_turn.turn_state.as_ref(),
-                        input,
+                        input
+                            .into_iter()
+                            .map(ResponseItemEnvelope::new)
+                            .map(PendingTurnInput::ResponseItem)
+                            .collect(),
                     )
                     .await;
                 Ok(())
