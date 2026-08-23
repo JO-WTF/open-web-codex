@@ -3,7 +3,7 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前事实与证据 |
-| 观察日期 | 2026-08-22 |
+| 观察日期 | 2026-08-23 |
 | 代码快照 | ADR-025 source-unit/prepared v2 合同；真实 Web + DeepSeek Flash 三段业务验收已通过 |
 | 当前阶段 | 阶段二已进入；阶段一仓网 Copilot 正常业务闭环作为已通过基线 |
 | 接受基线 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md) + [ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md) + [ADR-024](adr/024-warehouse-copilot-contract-simplification.md) + [ADR-025](adr/025-source-unit-prepared-v2-reuse.md) |
@@ -51,6 +51,14 @@ SDK 在 Profile、Tool source 和 Workspace 外执行 bounded build/install，�
 > 用户从 Web 创建 Workspace/Task 后，仓网参考 Copilot 可以通过 Codex 原生 Root、Data Agent、
 > Network Agent、typed MCP Resource、普通 Workspace 文件和最终 Artifact，完成数据准备、规划、
 > 场景复用、地图卡片与中文 Markdown 正式简报。
+
+2026-08-23 又完成开发者 SDK 真实验收：fresh single/multi package 的完整 `check` 均通过；临时
+`record-review` 经真实 `sync`、Web 选择和 DeepSeek Flash Tool 调用完成后，再经 Web 停用、源码
+移除和冷启动收敛为 `Unavailable/Inactive`，managed Skill/Role 为空。随后同一仓网多 Agent Task
+完成 12h 基线（2:27，需求加权 81.5%、城市 66.0%）、Balikpapan（2:45，86.5%、+5.0pp）和
+90% 最少新增仓（2:49，Balikpapan + Jambi、90.1%）三轮，地图均 Ready。Agent 拓扑始终为
+Root/Data/Network；5 个 typed Tool 失败和 2 次模型参数构造错误均在原 Task/child 内恢复，未出现
+unknown Tool、stream disconnected、权限扩大或浏览器控制台错误。
 
 旧 Work State、SourceAsset、Case、ArtifactRef、冻结能力包和 Prompt 接线已经删除，不是当前
 合同。当前单一分工是 Codex 原生协作、MCP Resource、Workspace 普通文件和显式最终 Artifact。
@@ -534,9 +542,9 @@ malformed Role 和 Indonesia/Thailand native Workspace exact gate 也在删除�
 | Root coordination | Platform 第二控制面、Supervisor continuation 与主动 Root Turn 已删除；Runtime 原生 wait/mailbox/steer 是唯一协作路径 | E2 原生 runtime/projection gate；完整业务 E2E 未完成 |
 | Capability Catalog | 无生产 crate、API、Browser DTO/client、UI 或当前 schema 对象 | 不再是阶段一能力 |
 | Package Compiler | 无当前生产 owner；阶段二目标文档保留设计输入 | 不再是阶段一能力 |
-| Profile Installation | Platform 从显式可信应用根发现一级 Copilot 目录，按 `(Profile, package)` 持久 desired state、configured revision、managed Skill/child Role IDs 与安全 failure；Browser 只传 package ID；冷启动在 app-server 前合并收敛或清理精确 native destinations | E2 focused + 既有真实 PostgreSQL lifecycle；新的多 package schema/compile gate 已通过，完整双包 PostgreSQL/Runtime restart gate 待补。没有 Catalog/Release/Marketplace、多用户产品流或动态热切换 |
+| Profile Installation | Platform 从显式可信应用根发现一级 Copilot 目录，按 `(Profile, package)` 持久 desired state、configured revision、managed Skill/child Role IDs 与安全 failure；最小 Web 管理面只展示状态并激活/停用；冷启动前合并收敛或清理精确 native destinations，源码缺失 record 仍可停用并在 Host 成功后清空 managed IDs | E3：全量 Rust、disposable PostgreSQL lifecycle、真实 sync→Web可选→停用→移除源码→冷启动清理已通过。没有 Catalog/Release/Marketplace、多用户产品流或动态热切换 |
 | Runtime discovery/readiness | 当前 instance 每次 status 最多调用一次官方 `skills/list(forceReload)`，按 package 声明 Skill 交集投影 `Installed/Configured/Unavailable/Failed`；不再有 Copilot `Ready` 或 MCP inventory 字段，Role/MCP 可执行性由真实 Task/child MCP completion gate 证明 | built-in native gate E2；无 DB ready |
-| Copilot / Tool SDK | Copilot `init` 生成最小组合源码；一个 package 只声明一个 `[root]`。`validate` 支持 package-local Tool 或根级 `tool.toml` 引用，shared Tool 必须经显式 registry；`prepare` 在 Tool/Profile/Workspace 外准备依赖并生成 typed descriptor，`dev`/`test` 保留 official Runtime normal-case gate。checked-in meeting 与单/多 Agent 仓网包复用同一合同 | E2 既有本地 discovery/normal-case gate；114 项 SDK 单测和三个 checked-in package 的共享 registry validate 已通过。没有生产模型质量验收、Web Studio 或 Marketplace |
+| Copilot / Tool SDK | `init` 生成单/多 Agent源码，`tool init` 生成共享 Tool；`check` 聚合 validate→prepare→dev→test，`test` 支持 Root/child、多例隔离和 canonical history 取证；仓库 wrapper 提供隔离 bootstrap、可信 registry/build store 与安全 `sync` | E3：124 项 SDK 单测、bootstrap/wrapper/run-local 门、fresh single/multi real check、Provider SDK 11 + Cookbook 4 + stdio、124-link docs smoke 和真实 DeepSeek Web调用通过。没有外部 SDK push/import、生产模型质量矩阵、Web Studio 或 Marketplace |
 | Skill 创作 | 阶段一仅支持直接编辑 Profile Skill；公开 SDK/Web 创作后移 | 无阶段一产品流 |
 | Agent/Supervisor Studio | 旧 Settings/Sidebar Studio 已删除；原生 Profile Agent 配置保留 | 无阶段一 authoring 产品流 |
 | Copilot Builder | 没有 Web 创作入口；现有 Profile 安装状态 API 不是 Builder、Catalog 或 Marketplace | E0 |

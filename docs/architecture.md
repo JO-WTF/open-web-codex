@@ -126,7 +126,10 @@ destination；不同包目标冲突时整个 composition 明确失败。Profile 
 在 app-server 启动前先预检所有目标并 stage 全部写入，再批量 publish；失败时回滚
 本批已发布变更。停用只删除持久安装事实记录的精确 managed destinations，用户使用其他 ID
 创建的 Skill、Role 和 `config.toml` 不受影响。运行中 activate/deactivate 只保存 desired state
-并返回 `restartRequired`，下一次冷启动完成文件与 Runtime 收敛。当前 Runtime instance 的 GET
+并返回 `restartRequired`，下一次冷启动完成文件与 Runtime 收敛。源码先移除时，持久 installation
+record 仍允许停用；下一次 Profile Host 成功启动后才清除该包拥有的 Skill/Role，并保留安全的
+`Unavailable` 记录供同 ID 恢复。Web 的最小 Copilot 管理面只展示状态并修改 desired state，
+不接收源码路径、安装依赖或重启 Runtime。当前 Runtime instance 的 GET
 状态只保留 persisted/source-revision 的 `Installed`/`Configured`/`Unavailable`/`Failed`；当前 Runtime
 若存在 trusted Workspace，每次 status 最多做一次官方 `skills/list(forceReload)`，把该结果按 package
 声明 Skill 交集投影。Role/MCP 执行能力不伪造为 Copilot readiness，由真实 Task/child MCP Item 证明；Task
@@ -304,10 +307,11 @@ Settings 只保留 Codex 原生 Runtime Agents、Skills/MCP 等当前运行配�
 Catalog、Tool & Skill Studio、Supervisor Studio 与 Sidebar Agent Studio 已删除。当前阶段没有
 公开 Capability authoring/publish/install 产品入口。
 
-SDK 当前的 `copilot init/validate/prepare/dev/test` 提供源码脚手架、静态组合验证、
-通用 Tool 环境准备、official selected roots Skill/MCP discovery 与单条确定性
-normal-case gate。当前仍没有公开安装/发布、持久 Runtime readiness、Web 创作链路或
-Role/任意模型质量矩阵。
+SDK 当前提供单/多 Agent `init`、共享 `tool init`、`validate/prepare/dev/test` 和聚合
+`check`；仓库入口 `scripts/copilot.sh` 在隔离 SDK 环境中固定可信 Tool registry、当前 checkout
+Runtime 与共享 build store，`sync` 通过完整 `check` 后把冷重启交回 `run-local.sh`。`test`
+支持 Root 直调和 child Role、多用例隔离，并从 canonical Thread history 验证 Tool 与终态。
+当前仍没有公开安装/发布、持久 Runtime readiness、Web 源码创作链路或任意模型质量矩阵。
 公开 SDK、Studio 和 Copilot Builder 已后移到阶段二；它们不是阶段一缺口或退出门。
 
 ## 8. 当前最重要的边界偏离
