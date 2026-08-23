@@ -33,8 +33,7 @@ for rejected in \
   "$launcher --rebuild-development-database --status" \
   "$launcher --rebuild-development-database --stop" \
   "env OPEN_WEB_CODEX_DATA_DIR=$fixture_root $launcher --rebuild-development-database" \
-  "env DATABASE_URL=postgresql://invalid@127.0.0.1:5432/invalid $launcher --background --rebuild-development-database" \
-  "$launcher --background --rebuild-development-database --fake"
+  "env DATABASE_URL=postgresql://invalid@127.0.0.1:5432/invalid $launcher --background --rebuild-development-database"
 do
   if zsh -c "$rejected" >/dev/null 2>&1; then
     printf 'unsafe rebuild invocation unexpectedly succeeded: %s\n' "$rejected" >&2

@@ -72,22 +72,16 @@ Gateway、原始 JSON-RPC 路由或桌面应用。
 反向代理。脚本是当前单机 Release 部署入口；OS 服务守护、备份恢复和滚动升级
 仍属于 GA 门禁。
 
-用 Fake Runtime 启动同源 WebApp 与 Server：
-
-```bash
-./scripts/run-local.sh --fake --background
-```
-
-用真实 Codex 启动：
+用真实 Codex 启动同源 WebApp 与 Server：
 
 ```bash
 ./scripts/run-local.sh --background
 ```
 
-脚本在 `4800` 启动平台 Server，并在 `http://127.0.0.1:4800/web`
+脚本只启动真实 Runtime 的平台 Server，并在 `http://127.0.0.1:4800/web`
 同源提供 WebApp、类型化 REST 和认证 WebSocket；不启动独立 Vite、
-4732/4733 daemon 或 Gateway 进程。真实模式默认使用仓库 Codex Binary；
-Fake 模式只用于 Server/WebApp 联调。
+4732/4733 daemon 或 Gateway 进程。真实 Runtime 使用仓库 Codex Binary；
+Fake adapter 只允许测试代码显式构造，不是 Server 运行模式。
 本地 Secret Store 主密钥首次运行时生成在
 `.local/open-web-codex/master-key`，权限为仅当前用户可读；生产部署必须从外部
 Secret Manager 注入 `OPEN_WEB_CODEX_MASTER_KEY`。
@@ -204,7 +198,6 @@ Project、主 Thread 与延时 Thread，并验证消息流事件顺序、代码�
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL 连接 |
 | `DATABASE_MAX_CONNECTIONS` | 连接池大小，默认 10 |
-| `CODEX_MODE` | `real` 或 `fake` |
 | `CODEX_HOME` | 当前 Profile 的持久目录 |
 | `OPEN_WEB_CODEX_MASTER_KEY` | Base64 32-byte Secret Store key |
 | `OPEN_WEB_CODEX_RUNNER_ROOT` | 私有 mirror/workspace 根目录 |

@@ -14,7 +14,6 @@ runtime_root="$repo_root/codex/codex-rs"
 run_local="$script_dir/run-local.sh"
 
 action="deploy"
-codex_mode="${CODEX_MODE:-real}"
 bind_host="${OPEN_WEB_CODEX_BIND_HOST:-127.0.0.1}"
 server_port="${OPEN_WEB_CODEX_SERVER_PORT:-4800}"
 database_url="${DATABASE_URL:-}"
@@ -48,7 +47,6 @@ Actions:
   --check                   Validate prerequisites and database connectivity.
 
 Options:
-  --fake                    Deploy the deterministic fake Runtime.
   --reuse-build             Reuse existing release artifacts.
   --bind HOST               Bind host (default: 127.0.0.1).
   --port PORT               Server port (default: 4800).
@@ -60,7 +58,6 @@ Options:
   -h, --help                Show this help.
 
 Environment:
-  CODEX_BIN                         Compatible external Codex binary
   CODEX_HOME                        Persistent Profile home
   OPEN_WEB_CODEX_MASTER_KEY         Stable Base64-encoded 32-byte key
   OPEN_WEB_CODEX_DATA_DIR           Runtime state and log directory
@@ -92,7 +89,6 @@ while (($# > 0)); do
     --status) action="status" ;;
     --stop) action="stop" ;;
     --check) action="check" ;;
-    --fake) codex_mode="fake" ;;
     --reuse-build) reuse_build="1" ;;
     --bind)
       (($# >= 2)) || fail "$1 requires a value"
@@ -138,7 +134,6 @@ while (($# > 0)); do
   shift
 done
 
-case "$codex_mode" in real|fake) ;; *) fail "CODEX_MODE must be real or fake" ;; esac
 case "$reuse_build" in 0|1) ;; *) fail "reuse-build state is invalid" ;; esac
 [[ "$server_port" =~ ^[1-9][0-9]*$ ]] || fail "port must be a positive integer"
 [[ "$database_max_connections" =~ ^[1-9][0-9]*$ ]] || fail "database pool size must be a positive integer"
@@ -175,8 +170,6 @@ if [[ "$action" == "status" || "$action" == "stop" ]]; then
     stored_public_url="$(state_value PUBLIC_URL)"
     [[ -z "$stored_public_url" ]] || public_url="$stored_public_url"
   fi
-  stored_codex_mode="$(state_value CODEX_MODE)"
-  [[ -z "$stored_codex_mode" ]] || codex_mode="$stored_codex_mode"
   stored_deploy_commit="$(state_value DEPLOY_COMMIT)"
   [[ -z "$stored_deploy_commit" ]] || deploy_commit="$stored_deploy_commit"
 fi
@@ -246,7 +239,7 @@ show_service_box() {
   box_line " Status  : $status"
   box_line " Web     : $public_url"
   box_line " API     : http://$health_host:$server_port/api/health"
-  box_line " Runtime : $codex_mode / release"
+  box_line " Runtime : real / release"
   box_line " Build   : $deploy_commit"
   box_line " Process : $pid"
   box_line " Logs    : $server_log"
@@ -600,12 +593,6 @@ validate_prerequisites() {
   [[ -f "$web_root/package-lock.json" ]] || return 1
   [[ -f "$web_root/Cargo.lock" ]] || return 1
   [[ -f "$runtime_root/Cargo.lock" ]] || return 1
-  if [[ "$codex_mode" == "real" && -n "${CODEX_BIN:-}" ]]; then
-    [[ -x "$CODEX_BIN" ]] || {
-      printf 'CODEX_BIN is not executable\n'
-      return 1
-    }
-  fi
 }
 
 if [[ "$action" == "check" ]]; then
@@ -687,7 +674,6 @@ rollout_service() {
   args=(--release --restart --bind "$bind_host" --port "$server_port" \
     --database-max-connections "$database_max_connections")
   if [[ "$reuse_build" == "1" ]]; then args+=(--no-build); fi
-  if [[ "$codex_mode" == "fake" ]]; then args+=(--fake); fi
   if [[ -n "$database_url_file" ]]; then
     args+=(--database-url-file "$database_url_file")
   elif [[ -n "$database_url" ]]; then
@@ -713,7 +699,6 @@ write_deploy_state() {
     printf 'BIND_HOST=%s\n' "$bind_host"
     printf 'SERVER_PORT=%s\n' "$server_port"
     printf 'PUBLIC_URL=%s\n' "$public_url"
-    printf 'CODEX_MODE=%s\n' "$codex_mode"
     printf 'BUILD_PROFILE=release\n'
     printf 'DEPLOY_COMMIT=%s\n' "$deploy_commit"
   } >"$temporary"

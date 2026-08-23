@@ -30,27 +30,27 @@ attempt. Neither object implicitly creates or owns a checkout.
 - Stable Rust toolchain
 - PostgreSQL
 - Git
-- A Codex binary for real Runtime mode
+- A Codex binary built from this repository
 
 ## Local development
 
 From the repository root, start the same-origin WebApp and Server together:
 
 ```bash
-./scripts/run-local.sh --fake --background
+./scripts/run-local.sh --background
 ```
 
 Open `http://127.0.0.1:4800/web`. The current single-user flow creates an
 implicit local Owner and Session, skips login and registration screens, and
 opens the WebApp directly. Server-side Session, Organization, Profile and
 resource authorization remain in use. No daemon or Gateway process is started.
-Real Runtime mode is the default when `--fake` is omitted; see
+The launcher always starts the native Codex Runtime; see
 [`../../docs/mvp-runbook.md`](../../docs/mvp-runbook.md) for configuration.
 
 For frontend hot reload, keep the platform Server running and start Vite:
 
 ```bash
-./scripts/run-local.sh --fake --background
+./scripts/run-local.sh --background
 
 # another terminal
 cd apps/web

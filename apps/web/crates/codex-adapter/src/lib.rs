@@ -154,24 +154,6 @@ pub enum ReviewTarget {
     Custom { instructions: String },
 }
 
-/// Mode for the Codex adapter.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum AdapterMode {
-    /// Use a real (or proxied) Codex runtime.
-    Real,
-    /// Use an in-memory fake that simulates responses.
-    Fake,
-}
-
-impl std::fmt::Display for AdapterMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Real => write!(f, "real"),
-            Self::Fake => write!(f, "fake"),
-        }
-    }
-}
-
 /// Abstract interface to the Codex runtime.
 ///
 /// Platform server routes call through this trait instead of talking

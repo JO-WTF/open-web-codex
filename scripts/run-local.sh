@@ -16,7 +16,6 @@ source "$cargo_cache_lib"
 action="foreground"
 rebuild_development_database_requested="0"
 skip_build="${OPEN_WEB_CODEX_SKIP_BUILD:-0}"
-codex_mode="${CODEX_MODE:-real}"
 build_profile="${OPEN_WEB_CODEX_BUILD_PROFILE:-debug}"
 bind_host="${OPEN_WEB_CODEX_BIND_HOST:-127.0.0.1}"
 server_port="${OPEN_WEB_CODEX_SERVER_PORT:-4800}"
@@ -56,7 +55,6 @@ Options:
   --status                  Show process and health status.
   --no-build                Reuse existing browser and Rust build outputs.
   --release                 Build and run optimized release binaries.
-  --fake                    Use the deterministic in-memory Codex adapter.
   --bind HOST               Bind host (default: 127.0.0.1).
   --port PORT               HTTP/WebSocket port (default: 4800).
   --database-url URL        PostgreSQL connection URL.
@@ -66,7 +64,6 @@ Options:
   -h, --help                Show this help.
 
 Environment:
-  CODEX_MODE                         real (default) or fake
   CODEX_HOME                         Persistent Profile home
   OPEN_WEB_CODEX_IMPORT_CODEX_AUTH_FROM
                                      Single-Profile transition: import
@@ -114,8 +111,7 @@ fi
 
 show_launch_header() {
   printf '\n%sopen-web-codex · Local Runtime%s\n' "$color_cyan" "$color_reset"
-  printf '  Mode: %s · Profile: %s · Port: %s\n\n' \
-    "$codex_mode" "$build_profile" "$server_port"
+  printf '  Build: %s · Port: %s\n\n' "$build_profile" "$server_port"
 }
 
 show_step_skipped() {
@@ -238,7 +234,6 @@ while (($# > 0)); do
       ;;
     --no-build) skip_build="1" ;;
     --release) build_profile="release" ;;
-    --fake) codex_mode="fake" ;;
     --bind)
       (($# >= 2)) || { error "$1 requires a value"; exit 2; }
       bind_host="$2"
@@ -292,7 +287,6 @@ if [[ "${OPEN_WEB_CODEX_RUN_LOCAL_TEST:-}" == "progress" ]]; then
 fi
 
 case "$skip_build" in 0|1) ;; *) error "OPEN_WEB_CODEX_SKIP_BUILD must be 0 or 1"; exit 2 ;; esac
-case "$codex_mode" in real|fake) ;; *) error "CODEX_MODE must be real or fake"; exit 2 ;; esac
 case "$build_profile" in debug|release) ;; *) error "OPEN_WEB_CODEX_BUILD_PROFILE must be debug or release"; exit 2 ;; esac
 [[ "$server_port" =~ ^[1-9][0-9]*$ ]] || { error "port must be a positive integer"; exit 2; }
 [[ "$database_max_connections" =~ ^[1-9][0-9]*$ ]] || { error "database pool size must be a positive integer"; exit 2; }
@@ -349,10 +343,6 @@ validate_rebuild_development_database_authority() {
     error "--rebuild-development-database only rebuilds the default local PostgreSQL database"
     return 2
   }
-  [[ "$codex_mode" == "real" ]] || {
-    error "--rebuild-development-database requires the real Codex mode"
-    return 2
-  }
 }
 
 read_pid() {
@@ -404,7 +394,7 @@ show_service_box() {
   box_line " Status  : $status"
   box_line " Web     : $web_url"
   box_line " API     : $health_url"
-  box_line " Runtime : $codex_mode / $build_profile"
+  box_line " Runtime : real / $build_profile"
   box_line " Process : $pid"
   box_line " Logs    : $server_log"
   box_rule '╰' '─' '╯'
@@ -492,7 +482,7 @@ copilot_sdk_environment_root="$data_dir/sdk-environments/copilot"
 copilot_sdk_bootstrap="$script_dir/copilot-sdk-bootstrap.sh"
 copilot_sdk_python=""
 
-if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
+if [[ -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
   if [[ ! -f "$master_key_file" ]]; then
     command -v openssl >/dev/null 2>&1 || { error "openssl is required to create the local Secret Store key"; exit 1; }
     umask 077
@@ -502,17 +492,12 @@ if [[ "$codex_mode" == "real" && -z "${OPEN_WEB_CODEX_MASTER_KEY:-}" ]]; then
   export OPEN_WEB_CODEX_MASTER_KEY
 fi
 
-if [[ "$codex_mode" == "real" && -n "${CODEX_BIN:-}" ]]; then
+if [[ -n "${CODEX_BIN:-}" ]]; then
   error "run-local requires the Codex binary built from this checkout; CODEX_BIN is not supported"
   exit 2
 fi
 
-codex_bin=""
-using_repository_codex="0"
-if [[ "$codex_mode" == "real" ]]; then
-  codex_bin="$runtime_target_dir/$cargo_profile_dir/codex"
-  using_repository_codex="1"
-fi
+codex_bin="$runtime_target_dir/$cargo_profile_dir/codex"
 code_mode_host_bin="$runtime_target_dir/$cargo_profile_dir/codex-code-mode-host"
 server_dep_info="$web_target_dir/$cargo_profile_dir/open-web-codex-server.d"
 codex_dep_info="$runtime_target_dir/$cargo_profile_dir/codex.d"
@@ -811,24 +796,18 @@ if [[ "$skip_build" == "0" ]]; then
   fi
   run_step "Browser application" build_browser
   build_stale_platform_server
-  if [[ "$codex_mode" == "real" && "$using_repository_codex" == "1" ]]; then
-    build_stale_codex_runtime_components
-  fi
+  build_stale_codex_runtime_components
 else
   assert_reusable_outputs_current
   show_step_skipped "Build outputs" "reused (--no-build)"
 fi
 [[ -x "$server_bin" ]] || { error "platform server is missing: $server_bin"; exit 1; }
 [[ -f "$web_dist/index.html" ]] || { error "browser build is missing: $web_dist/index.html"; exit 1; }
-if [[ "$codex_mode" == "real" ]]; then
-  [[ -x "$codex_bin" ]] || { error "Codex binary is missing: $codex_bin"; exit 1; }
-  if [[ "$using_repository_codex" == "1" ]]; then
-    [[ -x "$code_mode_host_bin" ]] || { error "Codex code-mode host is missing: $code_mode_host_bin"; exit 1; }
-    export CODEX_CODE_MODE_HOST_PATH="$code_mode_host_bin"
-  fi
-  run_step "Copilot SDK" bootstrap_copilot_sdk
-  run_step "Copilot environments" prepare_copilot_environments
-fi
+[[ -x "$codex_bin" ]] || { error "Codex binary is missing: $codex_bin"; exit 1; }
+[[ -x "$code_mode_host_bin" ]] || { error "Codex code-mode host is missing: $code_mode_host_bin"; exit 1; }
+export CODEX_CODE_MODE_HOST_PATH="$code_mode_host_bin"
+run_step "Copilot SDK" bootstrap_copilot_sdk
+run_step "Copilot environments" prepare_copilot_environments
 
 if [[ "$rebuild_development_database_requested" == "1" ]]; then
   run_step "Stop current service" stop_server
@@ -839,19 +818,14 @@ server_command=(
   "$server_bin"
   --bind "$bind_address"
   --database-max-connections "$database_max_connections"
-  --codex-mode "$codex_mode"
   --runner-root "$runner_root"
   --web-dist "$web_dist"
+  --codex-home "$profile_home"
+  --codex-bin "$codex_bin"
+  --copilots-root "$copilots_root"
+  --copilot-prepared-root "$copilot_prepared_root"
+  --copilot-build-store-root "$copilot_build_store_root"
 )
-if [[ "$codex_mode" == "real" ]]; then
-  server_command+=(
-    --codex-home "$profile_home"
-    --codex-bin "$codex_bin"
-    --copilots-root "$copilots_root"
-    --copilot-prepared-root "$copilot_prepared_root"
-    --copilot-build-store-root "$copilot_build_store_root"
-  )
-fi
 
 if [[ "$action" == "restart" ]]; then
   run_step "Stop current service" stop_server
@@ -867,15 +841,10 @@ rm -f "$pid_file"
 
 export DATABASE_URL="$database_url"
 export DATABASE_MAX_CONNECTIONS="$database_max_connections"
-export CODEX_MODE="$codex_mode"
 export OPEN_WEB_CODEX_RUNNER_ROOT="$runner_root"
 export OPEN_WEB_CODEX_WEB_DIST="$web_dist"
-if [[ "$codex_mode" == "real" ]]; then
-  export CODEX_HOME="$profile_home"
-  export CODEX_BIN="$codex_bin"
-else
-  unset CODEX_HOME CODEX_BIN
-fi
+export CODEX_HOME="$profile_home"
+export CODEX_BIN="$codex_bin"
 
 start_background_server() {
   local server_pid healthy_samples=0

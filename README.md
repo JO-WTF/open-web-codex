@@ -66,19 +66,18 @@ directly. This is the production-shaped single-host launcher; the remaining GA
 security, backup and supervised-service gates are tracked in the development
 plan.
 
-For development, start the same-origin WebApp and deterministic test Runtime:
+For development, start the same-origin WebApp and repository Codex Runtime:
 
 ```bash
-./scripts/run-local.sh --fake --background
+./scripts/run-local.sh --background
 ```
 
 Then open `http://127.0.0.1:4800/web`. The current single-user WebApp creates an
 implicit local Session and enters directly, without a login or registration
 screen. It calls the platform Server through same-origin typed REST resources
-and `/api/events/ws`; there is no separate Gateway process. Omit `--fake` to use
-the repository Codex Runtime. See
-[the MVP runbook](docs/mvp-runbook.md) for the browser flow, binary override and
-known limitations.
+and `/api/events/ws`; there is no separate Gateway process. Fake adapter support
+is test-only. See [the MVP runbook](docs/mvp-runbook.md) for the browser flow
+and known limitations.
 
 For frontend hot reload, keep the platform Server on port 4800 and run
 `npm run dev` from `apps/web`; Vite uses port 1420 and proxies API and WebSocket
