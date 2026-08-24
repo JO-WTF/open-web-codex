@@ -84,6 +84,8 @@ const SUBAGENT_START_CONTEXT: &str = "subagent start context reaches child";
 const SUBAGENT_STOP_CONTINUATION: &str = "continue only the child";
 const INTERNAL_SUBAGENT_PROMPT: &str = "internal subagent: review";
 const FULL_HISTORY_MULTI_AGENT_MODE_HINT: &str = "Delegate independent work to another agent.";
+const FULL_HISTORY_SUBAGENT_DEVELOPER_INSTRUCTIONS: &str =
+    "Child-only developer instructions preserve their classification.";
 const FULL_HISTORY_SHARED_USAGE_HINT: &str = "Shared delegation guidance.";
 const FULL_HISTORY_PROACTIVE_PROMPT: &str = "switch to proactive delegation";
 const FULL_HISTORY_EXPLICIT_PROMPT: &str = "restore explicit-only delegation";
@@ -129,12 +131,6 @@ fn log_field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     line.split_ascii_whitespace()
         .find_map(|field| field.strip_prefix(&prefix))
         .map(|value| value.trim_matches('"'))
-}
-
-fn has_subagent_notification(req: &ResponsesRequest) -> bool {
-    req.message_input_texts("user")
-        .iter()
-        .any(|text| text.contains("<subagent_notification>"))
 }
 
 fn tool_parameter_description(tool: &Value, parameter_name: &str) -> Option<String> {
@@ -884,7 +880,11 @@ async fn subagent_notification_is_included_without_wait() -> Result<()> {
     test.submit_turn(TURN_2_NO_WAIT_PROMPT).await?;
 
     let turn2_requests = wait_for_requests(&turn2).await?;
-    assert!(turn2_requests.iter().any(has_subagent_notification));
+    assert!(
+        turn2_requests
+            .iter()
+            .any(|request| request.has_content_kinds(&["multi_agent.subagent_notification"]))
+    );
 
     Ok(())
 }
@@ -1231,6 +1231,11 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
                 .expect("test config should allow feature update");
             config.model_context_window = Some(128_000);
         }
+        if matches!(selection, FullHistoryV2ModelSelection::ConfiguredDefault) {
+            config.developer_instructions = None;
+            config.multi_agent_v2.subagent_developer_instructions =
+                Some(FULL_HISTORY_SUBAGENT_DEVELOPER_INSTRUCTIONS.to_string());
+        }
         if matches!(selection, FullHistoryV2ModelSelection::CurrentTimeReminders) {
             config
                 .features
@@ -1328,7 +1333,34 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
 
     let child_request = wait_for_request_with_model(&child_request_log, expected_model).await?;
     assert!(child_request.body_contains_text(TURN_0_FORK_PROMPT));
+    let misaligned_child_messages = child_request
+        .inputs_of_type("message")
+        .into_iter()
+        .filter(|message| {
+            message["internal_chat_message_metadata_passthrough"]["content_item_kinds"]
+                .as_array()
+                .is_some_and(|kinds| {
+                    message["content"]
+                        .as_array()
+                        .is_none_or(|content| content.len() != kinds.len())
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(misaligned_child_messages, Vec::<Value>::new());
     let child_developer_messages = child_request.message_input_texts("developer");
+    if matches!(selection, FullHistoryV2ModelSelection::ConfiguredDefault) {
+        assert_eq!(
+            (
+                parent_request.body_contains_text(FULL_HISTORY_SUBAGENT_DEVELOPER_INSTRUCTIONS),
+                child_request.has_content_kinds(&["generic.developer_instructions"]),
+                child_developer_messages
+                    .iter()
+                    .filter(|text| text.as_str() == FULL_HISTORY_SUBAGENT_DEVELOPER_INSTRUCTIONS)
+                    .count(),
+            ),
+            (false, true, 1)
+        );
+    }
     if !matches!(
         selection,
         FullHistoryV2ModelSelection::MultiAgentModeTransitions
