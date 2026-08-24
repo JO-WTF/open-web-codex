@@ -88,6 +88,18 @@ class AssignmentMapProperties(DeliveryModel):
     unit_cost: float | None
 
 
+class ComparisonDemandMapProperties(DemandMapProperties):
+    """Demand facts for one comparison map at its selected SLA target."""
+
+    after_service_status: Literal["attained", "missed", "unassigned"]
+
+
+class ComparisonAssignmentMapProperties(AssignmentMapProperties):
+    """One before/after assignment line at the selected SLA target."""
+
+    service_status: Literal["attained", "missed", "unassigned"]
+
+
 class LinehaulMapProperties(DeliveryModel):
     kind: Literal["linehaul_connection"] = "linehaul_connection"
     scenario: Literal["before", "after", "scenario"]
@@ -98,6 +110,14 @@ class LinehaulMapProperties(DeliveryModel):
 
 MapProperties = (
     WarehouseMapProperties | DemandMapProperties | AssignmentMapProperties | LinehaulMapProperties
+)
+
+
+ComparisonMapProperties = (
+    WarehouseMapProperties
+    | ComparisonDemandMapProperties
+    | ComparisonAssignmentMapProperties
+    | LinehaulMapProperties
 )
 
 
@@ -124,6 +144,13 @@ class NetworkMapFeature(DeliveryModel):
     properties: MapProperties
 
 
+class ComparisonNetworkMapFeature(DeliveryModel):
+    type: Literal["Feature"] = "Feature"
+    id: str
+    geometry: PointGeometry | LineStringGeometry
+    properties: ComparisonMapProperties
+
+
 class CoverageNetworkMapFeature(DeliveryModel):
     type: Literal["Feature"] = "Feature"
     id: str
@@ -147,9 +174,10 @@ class NetworkDistributionGeoJson(DeliveryModel):
 class NetworkComparisonGeoJson(DeliveryModel):
     """Comparison GeoJSON published specifically for an inline map card."""
 
-    schema_version: Literal["network_comparison_geojson.v2"] = "network_comparison_geojson.v2"
+    schema_version: Literal["network_comparison_geojson.v3"] = "network_comparison_geojson.v3"
+    service_target_hours: float = Field(gt=0)
     type: Literal["FeatureCollection"] = "FeatureCollection"
-    features: list[NetworkMapFeature]
+    features: list[ComparisonNetworkMapFeature]
 
 
 class NetworkCoverageGeoJson(DeliveryModel):
@@ -243,13 +271,17 @@ def build_network_comparison_geojson(
     before: ComparableNetworkView,
     after: ComparableNetworkView,
     comparison: AssignmentComparison,
+    *,
+    service_target_hours: float,
 ) -> NetworkComparisonGeoJson:
     """Build comparison GeoJSON for any exact before/after result pair."""
 
+    if service_target_hours not in comparison.requested_service_targets:
+        raise ValueError("comparison_map_service_target_unavailable")
     validated = validate_delivery_inputs(normalized, before, after, comparison)
     added_ids = set(after.active_warehouse_ids) - set(before.active_warehouse_ids)
     removed_ids = set(before.active_warehouse_ids) - set(after.active_warehouse_ids)
-    features: list[NetworkMapFeature] = []
+    features: list[ComparisonNetworkMapFeature] = []
     for warehouse_id in sorted(validated.warehouse_by_id):
         warehouse = validated.warehouse_by_id[warehouse_id]
         coordinates = _required_coordinates(
@@ -259,7 +291,7 @@ def build_network_comparison_geojson(
             warehouse.latitude,
         )
         features.append(
-            NetworkMapFeature(
+            ComparisonNetworkMapFeature(
                 id=_feature_id("warehouse", warehouse_id),
                 geometry=PointGeometry(coordinates=coordinates),
                 properties=WarehouseMapProperties(
@@ -289,10 +321,10 @@ def build_network_comparison_geojson(
             city.latitude,
         )
         features.append(
-            NetworkMapFeature(
+            ComparisonNetworkMapFeature(
                 id=_feature_id("demand", city_id),
                 geometry=PointGeometry(coordinates=coordinates),
-                properties=DemandMapProperties(
+                properties=ComparisonDemandMapProperties(
                     city_id=city_id,
                     city_name=city.city_name,
                     province_id=city.province_id,
@@ -306,25 +338,28 @@ def build_network_comparison_geojson(
                     after_distance_km=after_row.distance_km,
                     after_duration_hours=after_row.duration_hours,
                     after_unit_cost=after_row.cost,
+                    after_service_status=_service_status(after_row, service_target_hours),
                 ),
             )
         )
     features.extend(
-        _assignment_features(
+        _comparison_assignment_features(
             "before",
             before.label,
             validated.before_rows_by_city,
             validated.warehouse_by_id,
             validated.demand_by_id,
+            service_target_hours=service_target_hours,
         )
     )
     features.extend(
-        _assignment_features(
+        _comparison_assignment_features(
             "after",
             after.label,
             validated.after_rows_by_city,
             validated.warehouse_by_id,
             validated.demand_by_id,
+            service_target_hours=service_target_hours,
         )
     )
     features.extend(
@@ -333,6 +368,7 @@ def build_network_comparison_geojson(
             validated.before_active_ids,
             validated.before_rows_by_city,
             validated.warehouse_by_id,
+            comparison=True,
         )
     )
     features.extend(
@@ -341,9 +377,13 @@ def build_network_comparison_geojson(
             validated.after_active_ids,
             validated.after_rows_by_city,
             validated.warehouse_by_id,
+            comparison=True,
         )
     )
-    return NetworkComparisonGeoJson(features=features)
+    return NetworkComparisonGeoJson(
+        service_target_hours=service_target_hours,
+        features=features,
+    )
 
 
 def build_network_coverage_geojson(
@@ -518,6 +558,61 @@ def _assignment_features(
     return features
 
 
+def _comparison_assignment_features(
+    scenario: Literal["before", "after", "scenario"],
+    result_label: str,
+    rows_by_city: Mapping[str, AssignmentRow],
+    warehouse_by_id: Mapping[str, WarehouseRecord],
+    demand_by_id: Mapping[str, DemandCityRecord],
+    *,
+    service_target_hours: float,
+) -> list[ComparisonNetworkMapFeature]:
+    """Build the selected-target SLA facts for before and after assignment lines."""
+
+    features: list[ComparisonNetworkMapFeature] = []
+    for city_id in sorted(rows_by_city):
+        row = rows_by_city[city_id]
+        if row.warehouse_id is None:
+            continue
+        warehouse = warehouse_by_id[row.warehouse_id]
+        city = demand_by_id[city_id]
+        origin = _required_coordinates(
+            "warehouse",
+            warehouse.warehouse_id,
+            warehouse.longitude,
+            warehouse.latitude,
+        )
+        destination = _required_coordinates(
+            "demand",
+            city_id,
+            city.longitude,
+            city.latitude,
+        )
+        features.append(
+            ComparisonNetworkMapFeature(
+                id=_feature_id(
+                    scenario,
+                    "last_mile",
+                    warehouse.warehouse_id,
+                    city_id,
+                ),
+                geometry=LineStringGeometry(coordinates=(origin, destination)),
+                properties=ComparisonAssignmentMapProperties(
+                    scenario=scenario,
+                    result_label=result_label,
+                    warehouse_id=warehouse.warehouse_id,
+                    demand_city_id=city_id,
+                    demand_quantity=row.demand_quantity,
+                    distance_km=row.distance_km,
+                    duration_hours=row.duration_hours,
+                    unit_cost=row.cost,
+                    service_status=_service_status(row, service_target_hours),
+                ),
+            )
+        )
+    return features
+
+
 def _service_status(
     row: AssignmentRow,
     service_target_hours: float,
@@ -534,7 +629,10 @@ def _linehaul_features(
     warehouse_by_id: Mapping[str, WarehouseRecord],
     *,
     coverage: bool = False,
-) -> list[NetworkMapFeature | CoverageNetworkMapFeature]:
+    comparison: bool = False,
+) -> list[NetworkMapFeature | ComparisonNetworkMapFeature | CoverageNetworkMapFeature]:
+    if coverage and comparison:
+        raise ValueError("delivery_linehaul_map_variant_invalid")
     assigned_demand = {
         warehouse_id: sum(
             (
@@ -546,7 +644,7 @@ def _linehaul_features(
         )
         for warehouse_id in active_ids
     }
-    features: list[NetworkMapFeature | CoverageNetworkMapFeature] = []
+    features: list[NetworkMapFeature | ComparisonNetworkMapFeature | CoverageNetworkMapFeature] = []
     for warehouse_id in sorted(active_ids):
         warehouse = warehouse_by_id[warehouse_id]
         if warehouse.warehouse_type != "cross_docking":
@@ -568,7 +666,13 @@ def _linehaul_features(
             warehouse.longitude,
             warehouse.latitude,
         )
-        feature_type = CoverageNetworkMapFeature if coverage else NetworkMapFeature
+        feature_type = (
+            CoverageNetworkMapFeature
+            if coverage
+            else ComparisonNetworkMapFeature
+            if comparison
+            else NetworkMapFeature
+        )
         features.append(
             feature_type(
                 id=_feature_id(

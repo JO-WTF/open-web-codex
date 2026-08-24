@@ -304,18 +304,22 @@ def prepare_network_distribution_map(
 
 def prepare_network_comparison_map(
     plan_comparison_ref: NetworkPlanComparisonResourceRef,
+    service_target_hours: Annotated[float, Field(gt=0)],
     ctx: Context,
 ) -> CallToolResult:
-    """Publish raw before-versus-after GeoJSON for a separately authored map."""
+    """Publish raw before-versus-after GeoJSON at one compared service target."""
     _prepared, normalized, before, after, comparison = _load_final_delivery_inputs(
         plan_comparison_ref,
         ctx,
     )
+    if service_target_hours not in comparison.requested_service_targets:
+        raise McpResourceContractError("comparison_map_service_target_unavailable")
     geojson = build_network_comparison_geojson(
         normalized,
         before,
         after,
         comparison,
+        service_target_hours=service_target_hours,
     )
     summary = (
         f"Prepared an interactive comparison map with {len(geojson.features)} "
@@ -328,6 +332,7 @@ def prepare_network_comparison_map(
     structured.update(
         {
             "feature_count": len(geojson.features),
+            "service_target_hours": service_target_hours,
         }
     )
     return result

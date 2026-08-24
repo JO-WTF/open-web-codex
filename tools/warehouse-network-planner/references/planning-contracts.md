@@ -59,6 +59,11 @@ source result. Planner assigns `attained`, `missed` or `unassigned` to every dem
 corresponding status to each available last-mile line. Maps consumes these values for presentation
 and does not derive service attainment from display-layer expressions.
 
+`prepare_network_comparison_map` requires one exact `service_target_hours` from the comparison's
+`requested_service_targets` and publishes `network_comparison_geojson.v3`. Every demand point has
+only `after_service_status`; each before and after last-mile line has `service_status`. Maps consumes
+those Planner-owned values and does not derive SLA status from duration fields.
+
 Every Network Resource-producing Tool also returns `resource_name` in its structured result.
 Use that exact stable name when citing evidence; never expose or relabel the opaque
 Resource URI as a human-readable name. `resource_ref` is the calculation handoff identity,

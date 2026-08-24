@@ -690,7 +690,14 @@ def _network_layers(
         )
         legend_items.append({"label": "干线连接", "color": "#1E3A8A", "type": "line"})
     demand = _network_feature_type(network_data_ref, "demand")
-    if demand is not None and demand.properties.get("service_status") == "string":
+    demand_service_status_property = (
+        "service_status"
+        if demand is not None and demand.properties.get("service_status") == "string"
+        else "after_service_status"
+        if demand is not None and demand.properties.get("after_service_status") == "string"
+        else None
+    )
+    if demand is not None and demand_service_status_property is not None:
         for status, layer_id, color, radius, label in (
             ("attained", "attained-demand-cities", "#16A34A", 5, "达标城市"),
             ("missed", "missed-demand-cities", "#DC2626", 6, "未达标城市"),
@@ -704,7 +711,7 @@ def _network_layers(
                     "filter": [
                         "all",
                         ["==", ["get", "kind"], "demand"],
-                        ["==", ["get", "service_status"], status],
+                        ["==", ["get", demand_service_status_property], status],
                     ],
                     "paint": {
                         "circle-color": color,
@@ -822,7 +829,7 @@ def _network_hover_layers(
     network_data_ref: GeoJsonResourceRef,
     layers: list[dict[str, object]],
 ) -> list[dict[str, object]]:
-    """Create bounded hover fields from the exact v2 GeoJSON profile."""
+    """Create bounded hover fields from the exact GeoJSON profile."""
     layer_ids = {str(layer["id"]) for layer in layers if "id" in layer}
     profile_by_kind = {
         item.value: set(item.properties)
@@ -873,6 +880,7 @@ def _network_hover_layers(
                 "before_unit_cost",
                 "after_unit_cost",
                 "service_status",
+                "after_service_status",
             ),
             "demand",
         )

@@ -208,18 +208,18 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 server._map_card_spec_store = original
 
-    async def test_comparison_profile_exposes_before_after_hover_fields(self) -> None:
+    async def test_comparison_profile_uses_after_sla_status_for_layers_and_hover(self) -> None:
         comparison = deepcopy(coverage_data_ref())
+        comparison["uri"] = "supply-chain://resources/network_comparison_geojson.v3-digest"
+        comparison["resource_schema"] = "network_comparison_geojson.v3"
         demand = comparison["profile"]["feature_types"][0]
         assert isinstance(demand, dict)
         properties = demand["properties"]
         assert isinstance(properties, dict)
         properties.pop("service_status")
-        last_mile = comparison["profile"]["feature_types"][1]
-        assert isinstance(last_mile, dict)
-        last_mile["properties"].pop("service_status")
         properties.update(
             {
+                "after_service_status": "string",
                 "after_duration_hours": "number",
                 "after_warehouse_id": "string",
                 "before_duration_hours": "number",
@@ -237,16 +237,59 @@ class MapCardTests(unittest.IsolatedAsyncioTestCase):
                 spec_ref = result.structuredContent["map_spec_ref"]
                 resource_id = spec_ref["uri"].rsplit("/", 1)[-1]
                 spec = json.loads(server._map_card_spec_store.read(resource_id))
+                layers = {item["id"]: item for item in spec["layers"]}
+                self.assertEqual(
+                    layers["attained-demand-cities"]["filter"],
+                    [
+                        "all",
+                        ["==", ["get", "kind"], "demand"],
+                        ["==", ["get", "after_service_status"], "attained"],
+                    ],
+                )
+                self.assertEqual(
+                    layers["missed-demand-cities"]["filter"],
+                    [
+                        "all",
+                        ["==", ["get", "kind"], "demand"],
+                        ["==", ["get", "after_service_status"], "missed"],
+                    ],
+                )
+                self.assertEqual(
+                    layers["unassigned-demand-cities"]["filter"],
+                    [
+                        "all",
+                        ["==", ["get", "kind"], "demand"],
+                        ["==", ["get", "after_service_status"], "unassigned"],
+                    ],
+                )
+                self.assertEqual(
+                    layers["attained-last-mile-coverage"]["filter"],
+                    [
+                        "all",
+                        ["==", ["get", "kind"], "last_mile_assignment"],
+                        ["==", ["get", "service_status"], "attained"],
+                    ],
+                )
                 hover_layers = {
                     item["layer"]: item for item in spec["extensions"]["hover"]["layers"]
                 }
                 self.assertIn(
                     "after_warehouse_id",
-                    hover_layers["demand-cities"]["fields"],
+                    hover_layers["missed-demand-cities"]["fields"],
                 )
                 self.assertIn(
                     "before_duration_hours",
-                    hover_layers["demand-cities"]["fields"],
+                    hover_layers["missed-demand-cities"]["fields"],
+                )
+                self.assertIn(
+                    "after_service_status",
+                    hover_layers["missed-demand-cities"]["fields"],
+                )
+                legend_labels = {
+                    item["label"] for item in spec["extensions"]["legend"]["items"]
+                }
+                self.assertTrue(
+                    {"达标城市", "未达标城市", "无法判断城市"} <= legend_labels
                 )
             finally:
                 server._map_card_spec_store = original

@@ -210,7 +210,8 @@ def test_sample2_builds_complete_self_contained_map_and_report(
         inputs.normalized,
         inputs.before,
         inputs.after,
-        inputs.comparison
+        inputs.comparison,
+        service_target_hours=12,
     )
     report_bundle = build_network_planning_report_bundle(
         inputs.normalized,
@@ -269,6 +270,36 @@ def test_sample2_builds_complete_self_contained_map_and_report(
     ]
     assert all(item.before_duration_hours is not None for item in demand_properties)
     assert all(item.after_duration_hours is not None for item in demand_properties)
+    assert map_bundle.service_target_hours == 12
+    assert all(
+        item.after_service_status
+        == (
+            "unassigned"
+            if item.after_warehouse_id is None or item.after_duration_hours is None
+            else "attained"
+            if item.after_duration_hours <= map_bundle.service_target_hours
+            else "missed"
+        )
+        for item in demand_properties
+    )
+    assert all("service_status" not in item.model_dump() for item in demand_properties)
+    assignment_properties = [
+        feature.properties
+        for feature in map_bundle.features
+        if feature.properties.kind == "last_mile_assignment"
+    ]
+    assert {item.scenario for item in assignment_properties} == {"before", "after"}
+    assert all(
+        item.service_status
+        == (
+            "unassigned"
+            if item.warehouse_id is None or item.duration_hours is None
+            else "attained"
+            if item.duration_hours <= map_bundle.service_target_hours
+            else "missed"
+        )
+        for item in assignment_properties
+    )
     assert "title" not in type(map_bundle).model_fields
     assert "layers" not in type(map_bundle).model_fields
     assert "extensions" not in type(map_bundle).model_fields
@@ -358,7 +389,8 @@ def test_comparison_delivery_accepts_any_comparable_result_pair(
         inputs.normalized,
         before,
         after,
-        comparison
+        comparison,
+        service_target_hours=12,
     )
     report_bundle = build_network_planning_report_bundle(
         inputs.normalized,
@@ -369,7 +401,8 @@ def test_comparison_delivery_accepts_any_comparable_result_pair(
     )
     map_payload = map_bundle.model_dump(mode="json")
     report_payload = report_bundle.model_dump(mode="json")
-    assert map_bundle.schema_version == "network_comparison_geojson.v2"
+    assert map_bundle.schema_version == "network_comparison_geojson.v3"
+    assert map_bundle.service_target_hours == 12
     assert report_bundle.schema_version == "network_planning_report_bundle.v2"
     assert "baseline_active" not in str(map_payload)
     assert "facility_active" not in str(map_payload)
@@ -393,7 +426,8 @@ def test_comparison_delivery_rejects_result_identity_mismatch(
             inputs.normalized,
             inputs.before,
             mismatched,
-            inputs.comparison
+            inputs.comparison,
+            service_target_hours=12,
         )
 
 
@@ -468,6 +502,7 @@ def test_delivery_models_reject_unknown_nested_fields(
             inputs.before,
             inputs.after,
             inputs.comparison,
+            service_target_hours=12,
         ).model_dump(mode="json"),
         build_network_planning_report_bundle(
             inputs.normalized,
@@ -532,6 +567,7 @@ def test_delivery_bundles_are_deterministic_for_equivalent_input_order(
         inputs.before,
         inputs.after,
         inputs.comparison,
+        service_target_hours=12,
     )
     reordered_map = build_network_comparison_geojson(
         reversed_normalized,
@@ -550,6 +586,7 @@ def test_delivery_bundles_are_deterministic_for_equivalent_input_order(
             }
         ),
         reversed_comparison,
+        service_target_hours=12,
     )
     expected_report = build_network_planning_report_bundle(
         inputs.normalized,
@@ -656,7 +693,8 @@ def test_map_rejects_missing_coordinates_without_blocking_json_report(
             normalized,
             inputs.before,
             inputs.after,
-            inputs.comparison
+            inputs.comparison,
+            service_target_hours=12,
         )
 
     report = build_network_planning_report_bundle(

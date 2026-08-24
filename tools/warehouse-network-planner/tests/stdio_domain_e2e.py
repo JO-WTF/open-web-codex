@@ -433,14 +433,18 @@ async def _run_network_s3_then_s2(
             assert comparison["comparison"]["selected_warehouse_ids"] == EXPECTED_OPENED
             assert comparison["comparison"]["removed_warehouse_ids"] == []
 
-            final_refs = {
+            comparison_refs = {
                 "plan_comparison_ref": comparison_ref,
+            }
+            comparison_map_args = {
+                **comparison_refs,
+                "service_target_hours": 12,
             }
             s2_trace.append("prepare_network_comparison_map")
             inline_map_result = await _call(
                 session,
                 "prepare_network_comparison_map",
-                final_refs,
+                comparison_map_args,
                 workspace,
             )
             inline_map = await _read_resource(
@@ -470,7 +474,7 @@ async def _run_network_s3_then_s2(
                 {
                     "report_input": {
                         "mode": "comparison",
-                        **final_refs,
+                        **comparison_refs,
                     },
                     "output_relative_path": (
                         "outputs/warehouse-network/deliverables/sample2-report.md"

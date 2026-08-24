@@ -860,12 +860,59 @@ def test_prepared_input_drives_baseline_optimization_map_and_report(
     )
     assert comparison.resource_schema == "network_plan_comparison.v2"
 
-    map_result = delivery_tools.prepare_network_comparison_map(comparison, ctx)
+    map_result = delivery_tools.prepare_network_comparison_map(comparison, 12, ctx)
     assert map_result.structuredContent is not None
     assert (
         map_result.structuredContent["data_ref"]["resource_schema"]
-        == "network_comparison_geojson.v2"
+        == "network_comparison_geojson.v3"
     )
+    assert map_result.structuredContent["service_target_hours"] == 12
+    comparison_resource_id = map_result.structuredContent["data_ref"]["uri"].rsplit("/", 1)[-1]
+    comparison_geojson = json.loads(store.read(comparison_resource_id))
+    assert comparison_geojson["schema_version"] == "network_comparison_geojson.v3"
+    assert comparison_geojson["service_target_hours"] == 12
+    comparison_demand_features = [
+        feature
+        for feature in comparison_geojson["features"]
+        if feature["properties"]["kind"] == "demand"
+    ]
+    assert comparison_demand_features
+    assert all("service_status" not in feature["properties"] for feature in comparison_demand_features)
+    assert all(
+        feature["properties"]["after_service_status"]
+        == (
+            "unassigned"
+            if feature["properties"]["after_warehouse_id"] is None
+            or feature["properties"]["after_duration_hours"] is None
+            else "attained"
+            if feature["properties"]["after_duration_hours"] <= 12
+            else "missed"
+        )
+        for feature in comparison_demand_features
+    )
+    comparison_assignment_features = [
+        feature
+        for feature in comparison_geojson["features"]
+        if feature["properties"]["kind"] == "last_mile_assignment"
+    ]
+    assert {feature["properties"]["scenario"] for feature in comparison_assignment_features} == {
+        "before",
+        "after",
+    }
+    assert all(
+        feature["properties"]["service_status"]
+        == (
+            "unassigned"
+            if feature["properties"]["warehouse_id"] is None
+            or feature["properties"]["duration_hours"] is None
+            else "attained"
+            if feature["properties"]["duration_hours"] <= 12
+            else "missed"
+        )
+        for feature in comparison_assignment_features
+    )
+    with pytest.raises(ProviderContractError, match="comparison_map_service_target_unavailable"):
+        delivery_tools.prepare_network_comparison_map(comparison, 7, ctx)
 
     coverage = delivery_tools.prepare_network_coverage_map(prepared_path, facility, 12, ctx)
     assert coverage.structuredContent is not None

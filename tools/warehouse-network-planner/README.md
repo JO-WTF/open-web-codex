@@ -56,6 +56,9 @@ Data Tool 会把用户输入中完整的起点、终点、距离、时长与来�
 `attained/missed/unassigned` 状态，不包含标题、颜色、大小、标签、悬浮信息或图例。
 `prepare_network_coverage_map` 要求确切 `service_target_hours` 并验证该目标存在于计算结果；高层
 `map_utils/create_network_map_card` 只按这些 Planner 事实生成默认仓网图层和图例，不重新计算 SLA。
+`prepare_network_comparison_map` 同样要求比较结果中存在的确切 `service_target_hours`，发布
+`network_comparison_geojson.v3`：需求点只携带 after 的 `attained/missed/unassigned` 状态，前后
+末端线路各自携带该状态；Maps 继续只消费这些状态。
 
 `assess_facility_change` 接受精确的标准化输入、路线、可选成本以及任意合法的
 baseline/scenario/facility-location `before_ref`，以引用中的活动仓集合为起点，一次完成增仓、关仓或迁仓后的分配求解和前后比较。
