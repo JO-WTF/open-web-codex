@@ -1692,6 +1692,7 @@ mod tests {
     const SINGLE_AGENT_ROOT_ROLE: &str = include_str!(
         "../../../../copilots/warehouse-network-single-agent/agents/warehouse_single_agent.toml"
     );
+    const CLASSIFICATION_EVIDENCE_BOUNDARY: &str = "仓型、启停状态等分类小计或分类标签，只有本次 Data 交接或规划工具明确返回时才能报告；只有总数或 ID 时，只报告总数或 ID，不根据名称、地图资料或原始数据补出分类。";
 
     #[test]
     fn root_agent_toml_becomes_flat_app_server_config_overrides() {
@@ -1905,6 +1906,13 @@ mod tests {
         }
         assert!(SINGLE_AGENT_PLANNING_SKILL.contains("`warehouse_quote_mean_calculation.v1`"));
         assert!(SINGLE_AGENT_PLANNING_SKILL.contains("`plan_cost_matrix`"));
+    }
+
+    #[test]
+    fn warehouse_planning_skills_require_explicit_evidence_for_classification_claims() {
+        for skill in [PLANNING_SKILL, SINGLE_AGENT_PLANNING_SKILL] {
+            assert!(skill.contains(CLASSIFICATION_EVIDENCE_BOUNDARY));
+        }
     }
 
     fn write_file(path: &Path, contents: &str, executable: bool) {
