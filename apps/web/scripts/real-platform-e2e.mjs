@@ -1180,12 +1180,22 @@ async function configureProvider() {
   return provider;
 }
 
-async function configureModelToolSearch() {
-  const configured = await api(
+function providerModelPath(providerIdValue, modelId) {
+  return (
     "/providers/" +
-      encodeURIComponent(providerId) +
-      "/models/" +
-      encodeURIComponent(model),
+    encodeURIComponent(providerIdValue) +
+    "/models/" +
+    encodeURIComponent(modelId)
+  );
+}
+
+export async function configureModelToolSearchRequest(
+  request,
+  { providerId: providerIdValue, model: modelId },
+) {
+  const modelPath = providerModelPath(providerIdValue, modelId);
+  const configured = await request(
+    modelPath,
     {
       method: "PATCH",
       body: {
@@ -1194,11 +1204,28 @@ async function configureModelToolSearch() {
       },
     },
   );
-  const configuredProvider = configured.data.find((entry) => entry.id === providerId);
+  const configuredProvider = configured.data.find(
+    (entry) => entry.id === providerIdValue,
+  );
   const configuredModel = configuredProvider?.models?.find(
-    (entry) => entry.modelId === model,
+    (entry) => entry.modelId === modelId,
   );
   assert.equal(configuredModel?.supportsSearchTool, true);
+  const selected = await request(modelPath + "/select", { method: "POST" });
+  assert.equal(selected.currentProviderId, providerIdValue);
+  assert.equal(selected.currentModelId, modelId);
+  const selectedProvider = selected.data.find(
+    (entry) => entry.id === providerIdValue,
+  );
+  assert(
+    selectedProvider?.models?.some((entry) => entry.modelId === modelId),
+    "selected model was missing from its Provider catalog",
+  );
+  return selected;
+}
+
+async function configureModelToolSearch() {
+  return configureModelToolSearchRequest(api, { providerId, model });
 }
 
 async function cleanupRun(runId) {
@@ -1749,11 +1776,16 @@ async function main() {
   assert(results.every((result) => result.status === "passed"));
 }
 
-main().catch((error) => {
-  if (error instanceof NativeRuntimeBlocker) {
-    log("[BLOCKED] " + error.message);
-  } else {
-    log("[FAIL] " + error.stack);
-  }
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error) => {
+    if (error instanceof NativeRuntimeBlocker) {
+      log("[BLOCKED] " + error.message);
+    } else {
+      log("[FAIL] " + error.stack);
+    }
+    process.exitCode = 1;
+  });
+}
