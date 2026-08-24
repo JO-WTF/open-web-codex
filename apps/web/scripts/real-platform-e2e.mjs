@@ -509,6 +509,51 @@ function rootFinalMessageHasStandaloneMapEmbed(events, rootThreadId) {
     .some((line) => /^::codex-inline-vis\{artifact="[^"]+"\}$/.test(line.trim()));
 }
 
+export function assertDataInspectionToolOutput(dataModelRequests) {
+  let outputCount = 0;
+  for (const request of dataModelRequests) {
+    const messages = request?.body?.messages;
+    if (!Array.isArray(messages)) continue;
+    for (const message of messages) {
+      if (message?.role !== "tool" || typeof message.content !== "string") {
+        continue;
+      }
+      if (
+        !message.content.includes('"inspection_identity"') &&
+        !message.content.includes('"inspected_relative_paths"')
+      ) {
+        continue;
+      }
+      assert(
+        !message.content.includes("chars truncated"),
+        "Data inspection tool output was truncated before it reached the model",
+      );
+      let output;
+      try {
+        output = JSON.parse(message.content);
+      } catch (error) {
+        throw new Error(
+          "Data inspection tool output was not valid JSON: " + error.message,
+        );
+      }
+      assert(
+        output && typeof output === "object" && !Array.isArray(output),
+        "Data inspection tool output must be a JSON object",
+      );
+      assert(
+        Object.prototype.hasOwnProperty.call(output, "inspection_identity"),
+        "Data inspection tool output omitted inspection_identity",
+      );
+      assert(
+        Object.prototype.hasOwnProperty.call(output, "inspected_relative_paths"),
+        "Data inspection tool output omitted inspected_relative_paths",
+      );
+      outputCount += 1;
+    }
+  }
+  assert(outputCount > 0, "Data model requests omitted the inspection tool output");
+}
+
 function hasCall(text, callId) {
   return text.includes(callId);
 }
@@ -1344,6 +1389,10 @@ async function runCase(index) {
       (request) => request.runId === runId,
     );
     const modelCalls = state.modelServer.calls.filter((call) => call.runId === runId);
+    const dataModelRequests = modelRequests.filter(
+      (request) => request.role === "data",
+    );
+    assertDataInspectionToolOutput(dataModelRequests);
     const dataRequestText = JSON.stringify(
       modelRequests.find((request) => request.role === "data")?.body ?? {},
     );

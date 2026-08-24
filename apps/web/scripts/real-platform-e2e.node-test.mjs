@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { configureModelToolSearchRequest } from "./real-platform-e2e.mjs";
+import {
+  assertDataInspectionToolOutput,
+  configureModelToolSearchRequest,
+} from "./real-platform-e2e.mjs";
 
 const providerId = "deterministic-chat-e2e";
 const model = "gpt-5.4";
@@ -62,6 +65,42 @@ describe("deterministic Runtime-owned model selection", () => {
         error instanceof assert.AssertionError &&
         error.actual === "other-model" &&
         error.expected === model,
+    );
+  });
+});
+
+describe("deterministic Data inspection output", () => {
+  const inspectionOutput = {
+    inspection_identity: {
+      schemaVersion: "workspace_source_inspection.v2",
+      content_sha256: "0".repeat(64),
+      source_count: 6,
+    },
+    inspected_relative_paths: ["mock_data/demand-cities.csv"],
+  };
+
+  it("requires a direct, complete JSON inspection result in a Data model request", () => {
+    assert.doesNotThrow(() =>
+      assertDataInspectionToolOutput([
+        {
+          body: {
+            messages: [
+              { role: "tool", content: JSON.stringify(inspectionOutput) },
+            ],
+          },
+        },
+      ]),
+    );
+  });
+
+  it("rejects a truncated inspection result instead of parsing around it", () => {
+    const truncated = JSON.stringify(inspectionOutput) + " chars truncated";
+    assert.throws(
+      () =>
+        assertDataInspectionToolOutput([
+          { body: { messages: [{ role: "tool", content: truncated }] } },
+        ]),
+      { message: "Data inspection tool output was truncated before it reached the model" },
     );
   });
 });
