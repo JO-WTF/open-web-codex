@@ -75,6 +75,7 @@ const state = {
   proxy: undefined,
   cleanupErrors: [],
   userInputInteractions: [],
+  clientMessageIds: new Map(),
 };
 
 class ApiError extends Error {
@@ -129,6 +130,19 @@ function canonicalJson(value) {
 
 function log(value) {
   process.stdout.write(sanitize(value) + "\n");
+}
+
+function clientUserMessageId(taskId, messageKey) {
+  const key = String(taskId) + "\u0000" + String(messageKey);
+  const existing = state.clientMessageIds.get(key);
+  if (existing) return existing;
+  const id = "real-deepseek-message-" + createHash("sha256")
+    .update(key)
+    .digest("hex")
+    .slice(0, 48);
+  assert(/^[A-Za-z0-9._:-]{8,128}$/.test(id));
+  state.clientMessageIds.set(key, id);
+  return id;
 }
 
 async function api(pathname, options = {}) {
@@ -741,6 +755,16 @@ function logTimeline(label, timeline) {
 }
 
 async function runSelfTests() {
+  const retryMessageId = clientUserMessageId("self-task", "same-message");
+  assert.equal(
+    clientUserMessageId("self-task", "same-message"),
+    retryMessageId,
+  );
+  assert.notEqual(
+    clientUserMessageId("self-task", "different-message"),
+    retryMessageId,
+  );
+  assert(/^[A-Za-z0-9._:-]{8,128}$/.test(retryMessageId));
   const model = {
     modelId: "deepseek-v4-flash",
     supportsSearchTool: true,
@@ -1116,6 +1140,7 @@ async function runSelfTests() {
   log("[PASS] real DeepSeek Balikpapan facility-change self-test");
   log("[PASS] real DeepSeek baseline DTO-shape self-test");
   log("[PASS] real DeepSeek projection convergence self-test");
+  log("[PASS] real DeepSeek client message identity self-test");
 }
 
 function invalidWireToolRound(rounds) {
@@ -1513,6 +1538,10 @@ async function send(taskId, minimal = false) {
   return api("/tasks/" + taskId + "/messages", {
     method: "POST",
     body: {
+      clientUserMessageId: clientUserMessageId(
+        taskId,
+        minimal ? "tool-capability" : scenario,
+      ),
       text,
       effort: "none",
       service_tier: null,

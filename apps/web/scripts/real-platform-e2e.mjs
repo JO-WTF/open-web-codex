@@ -44,6 +44,7 @@ const state = {
   token: undefined,
   manifest: undefined,
   modelServer: undefined,
+  clientMessageIds: new Map(),
 };
 
 class ApiError extends Error {
@@ -106,6 +107,19 @@ function chatToolSearchOutput(body) {
 
 function log(message) {
   process.stdout.write(sanitize(message) + "\n");
+}
+
+function clientUserMessageId(taskId, messageKey) {
+  const key = String(taskId) + "\u0000" + String(messageKey);
+  const existing = state.clientMessageIds.get(key);
+  if (existing) return existing;
+  const id = "deterministic-message-" + createHash("sha256")
+    .update(key)
+    .digest("hex")
+    .slice(0, 48);
+  assert(/^[A-Za-z0-9._:-]{8,128}$/.test(id));
+  state.clientMessageIds.set(key, id);
+  return id;
 }
 
 async function api(pathname, options = {}) {
@@ -283,6 +297,7 @@ async function send(taskId, marker) {
   return api("/tasks/" + taskId + "/messages", {
     method: "POST",
     body: {
+      clientUserMessageId: clientUserMessageId(taskId, "root:" + marker),
       text: [
         "E2E_ROOT_MARKER=" + marker,
         "根据已上传的 mock_data 文件，计算 12 小时时效达标率并展示地图。",
