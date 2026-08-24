@@ -38,9 +38,12 @@ an administrative catalog is included in inspected paths but is passed separatel
 `country_code` is optional: when omitted, the Tool derives one only from a uniquely identified
 administrative catalog metadata record; missing or conflicting metadata leaves it null with a bounded
 warning. The Tool returns a bounded inline
-`workspace_source_profile.v2`, exact source units, `preview_sample_count`, `total_count`,
-`total_count_exact`, `inspection_identity` and inspected relative paths. Preview rows are schema
-examples only; `total_count` is the complete unit count. A fresh prepared candidate is reused only
+`workspace_source_profile.v3`, exact source units, `record_count`, `record_count_exact`,
+`inspection_identity` and inspected relative paths. A complete unambiguous role carries only its
+canonical target-to-source resolved mapping, confidence and ambiguity state; partial, ambiguous or
+unknown-header units carry only their unit-local field names, sample types, one representative value,
+candidate mappings and missing fields. The complete JSON result is limited to 8192 bytes; an
+over-budget result becomes typed `selection_required`, never truncated JSON. A fresh prepared candidate is reused only
 when its exact output path is included in the inspection selection and its selected raw/admin
 provenance is still fresh; otherwise inspection returns the raw profile. `prepare_network_input`
 rereads the selected complete units and recomputes the identity before writing; a path, byte or

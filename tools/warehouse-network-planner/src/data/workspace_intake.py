@@ -37,7 +37,13 @@ MAX_XLSX_COLUMNS = 256
 MAX_NORMALIZE_ROWS = 1_000_000
 MAX_INSPECTION_FILES = 64
 MAX_INSPECTION_UNITS = 128
-MAX_INSPECTION_BYTES = 512 * 1024
+# This protects the rich, server-internal structural profile used again by
+# preparation. It is never sent directly to the model.
+MAX_INSPECTION_PROFILE_BYTES = 512 * 1024
+# The complete JSON structured result exposed by inspect_workspace_sources.
+# Keep it below Core's normal head/tail truncation threshold so the result is
+# always valid JSON at the model boundary.
+MAX_MODEL_INSPECTION_BYTES = 8192
 EXCLUDED_DIRS = {
     ".git",
     "node_modules",

@@ -20,7 +20,7 @@ metadata:
 ## 处理方式
 
 1. 依次使用 `discover_workspace_sources` 和 `inspect_workspace_sources`，先发现可用来源以及可复用的已准备数据，再检查与本次目标有关的来源。
-2. CSV 表、Excel sheet 和 JSON 数组分别选择。表头名称不同不是缺数据；只要含义和类型清楚，就提交明确的字段对应关系。
+2. CSV 表、Excel sheet 和 JSON 数组分别选择。`complete` 且无歧义的 resolved mapping 已可直接选择 unit 而不重复提交 mappings；只有 partial、ambiguous 或未知表头的 unit 才根据其字段证据提交明确对应关系。
 3. 仅在字段含义有多种解释、单位或币种规则未知、仓型未知、选中记录缺少业务值，或同一标识存在冲突时询问。未选择的文件、预览之外的记录和不同表头都不构成阻塞。
 4. 检查结果为 `prepared_ready` 时直接复用；需要新准备数据时，把确切的表、sheet 或数组及字段对应关系组成 `source_selections`，再调用 `prepare_network_input`。行政区目录只用于地理补全，不把它误判为需求或仓库数据。
 

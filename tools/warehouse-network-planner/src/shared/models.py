@@ -244,10 +244,10 @@ class InspectionLimitCounts(StrictModel):
 
 
 class DataInspectionInspected(StrictModel):
-    """Successful v2 source-unit inspection."""
+    """Successful v3 source-unit inspection."""
 
     outcome: Literal["inspected"]
-    schema_version: Literal["workspace_source_profile.v2"] = Field(alias="schemaVersion")
+    schema_version: Literal["workspace_source_profile.v3"] = Field(alias="schemaVersion")
     summary: str
     next_action: Literal["confirm_sources"]
     retryable: Literal[False]
@@ -272,7 +272,7 @@ class DataInspectionSelectionRequired(StrictModel):
     """Typed bounded request to reduce inspection scope before retrying."""
 
     outcome: Literal["selection_required"]
-    schema_version: Literal["workspace_source_profile.v2"] = Field(alias="schemaVersion")
+    schema_version: Literal["workspace_source_profile.v3"] = Field(alias="schemaVersion")
     summary: str
     code: Literal["inspection_selection_required"]
     next_action: Literal["select_fewer_sources"]
@@ -289,7 +289,7 @@ class PreparedCandidateSummary(StrictModel):
 
 class DataInspectionPreparedReady(StrictModel):
     outcome: Literal["prepared_ready"]
-    schema_version: Literal["workspace_source_profile.v2"] = Field(alias="schemaVersion")
+    schema_version: Literal["workspace_source_profile.v3"] = Field(alias="schemaVersion")
     operation: Literal["reused"]
     summary: str
     next_action: Literal["handoff"]
@@ -312,7 +312,7 @@ class DataInspectionPreparedReady(StrictModel):
 
 class DataInspectionPreparedSelectionRequired(StrictModel):
     outcome: Literal["prepared_selection_required"]
-    schema_version: Literal["workspace_source_profile.v2"] = Field(alias="schemaVersion")
+    schema_version: Literal["workspace_source_profile.v3"] = Field(alias="schemaVersion")
     summary: str
     next_action: Literal["request_user_input"]
     retryable: Literal[False]
@@ -340,7 +340,7 @@ class DataInspectionToolResult(
         ]
     ]
 ):
-    """Discriminated v2 inspection contract; no global business blockers."""
+    """Discriminated v3 inspection contract; no global business blockers."""
 
 
 class CandidateWarehouseSummary(StrictModel):

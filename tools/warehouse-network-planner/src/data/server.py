@@ -118,10 +118,10 @@ mcp = FastMCP(
         "never request or accept organization IDs, Profile IDs, credentials, arbitrary SQL, "
         "filesystem paths, or write statements. Discover and inspect the complete authorized "
         "Workspace before confirming mappings. Inspection returns one bounded inline profile and "
-        "workspace_source_inspection.v2 identity; Data does not publish a source Resource. The "
-        "head preview has separate "
-        "preview_sample_count, total_count, and total_count_exact fields; preview rows are examples "
-        "only and never the full source. Never use the preview sample count as the source row count. "
+        "workspace_source_inspection.v2 identity; Data does not publish a source Resource. Complete "
+        "unambiguous roles return a compact resolved mapping and exact record count; only unresolved "
+        "units return unit-local field evidence. The complete structured result is never truncated: "
+        "an over-budget result returns typed selection_required. "
         "Inspection reports independent source-unit role assessments; partial or ambiguous units "
         "do not block inspection. Only the selected sources are validated during preparation. "
         "The initial normalization tool rereads "
@@ -363,12 +363,12 @@ def inspect_workspace_sources(
     result = DataInspectionToolResult(
         root=DataInspectionInspected(
             outcome="inspected",
-            schemaVersion="workspace_source_profile.v2",
+            schemaVersion="workspace_source_profile.v3",
             summary=summary,
             next_action="confirm_sources",
             retryable=False,
             country_code=derived_country,
-            source_profile=profile,
+            source_profile=_compact_model_profile(profile),
             inspection_identity=identity,
             inspected_relative_paths=sorted(raw_paths),
             warnings=(candidate_warnings + country_warnings)[:64],
@@ -376,9 +376,28 @@ def inspect_workspace_sources(
             warnings_truncated=len(candidate_warnings) + len(country_warnings) > 64,
         )
     )
+    payload = result.model_dump(mode="json", by_alias=True)
+    payload_bytes = _model_inspection_payload_bytes(payload)
+    if payload_bytes >= _workspace_intake.MAX_MODEL_INSPECTION_BYTES:
+        limited = DataInspectionToolResult(
+            root=_selection_required_result(
+                summary=(
+                    "Select fewer Workspace sources; the complete model-visible inspection "
+                    "result exceeds its JSON byte budget."
+                ),
+                observed=InspectionLimitCounts(
+                    files=source_count,
+                    units=sum(len(source.get("units", [])) for source in profile.get("sources", [])),
+                    bytes=payload_bytes,
+                ),
+                max_bytes=_workspace_intake.MAX_MODEL_INSPECTION_BYTES,
+            )
+        )
+        payload = limited.model_dump(mode="json", by_alias=True)
+        summary = limited.root.summary
     return CallToolResult(
         content=[TextContent(type="text", text=summary)],
-        structuredContent=result.model_dump(mode="json", by_alias=True),
+        structuredContent=payload,
     )
 
 
@@ -478,7 +497,7 @@ def _prepared_ready_result(
     result = DataInspectionToolResult(
         root=DataInspectionPreparedReady(
             outcome="prepared_ready",
-            schemaVersion="workspace_source_profile.v2",
+            schemaVersion="workspace_source_profile.v3",
             operation="reused",
             summary=f"Reused fresh prepared input {path} for the requested roles.",
             next_action="handoff",
@@ -511,7 +530,7 @@ def _prepared_selection_result(
     result = DataInspectionToolResult(
         root=DataInspectionPreparedSelectionRequired(
             outcome="prepared_selection_required",
-            schemaVersion="workspace_source_profile.v2",
+            schemaVersion="workspace_source_profile.v3",
             summary="Multiple fresh prepared inputs match the requested roles; choose one.",
             next_action="request_user_input",
             retryable=False,
@@ -560,31 +579,33 @@ def _inspect_workspace_sources(
                 ),
             )
         sources.append(source)
-    profile = _bound_agent_previews(
-        {
-            "schemaVersion": "workspace_source_profile.v2",
-            "sources": sources,
-            "source_count": len(sources),
-            "unit_count": unit_count,
-        }
-    )
+    profile = {
+        "schemaVersion": "workspace_source_profile.v3",
+        "sources": sources,
+        "source_count": len(sources),
+        "unit_count": unit_count,
+    }
     profile_bytes = len(json.dumps(profile, ensure_ascii=False, separators=(",", ":")).encode())
-    if profile_bytes > _workspace_intake.MAX_INSPECTION_BYTES:
+    if profile_bytes > _workspace_intake.MAX_INSPECTION_PROFILE_BYTES:
         return _selection_required_result(
             summary="Select fewer Workspace sources; the bounded inspection profile is too large.",
             observed=InspectionLimitCounts(
                 files=len(sources), units=unit_count, bytes=profile_bytes
             ),
+            max_bytes=_workspace_intake.MAX_INSPECTION_PROFILE_BYTES,
         )
     return profile
 
 
 def _selection_required_result(
-    *, summary: str, observed: InspectionLimitCounts
+    *,
+    summary: str,
+    observed: InspectionLimitCounts,
+    max_bytes: int | None = None,
 ) -> DataInspectionSelectionRequired:
     return DataInspectionSelectionRequired(
         outcome="selection_required",
-        schemaVersion="workspace_source_profile.v2",
+        schemaVersion="workspace_source_profile.v3",
         summary=summary,
         code="inspection_selection_required",
         next_action="select_fewer_sources",
@@ -593,9 +614,19 @@ def _selection_required_result(
         limit=InspectionLimitCounts(
             files=_workspace_intake.MAX_INSPECTION_FILES,
             units=_workspace_intake.MAX_INSPECTION_UNITS,
-            bytes=_workspace_intake.MAX_INSPECTION_BYTES,
+            bytes=(
+                _workspace_intake.MAX_MODEL_INSPECTION_BYTES
+                if max_bytes is None
+                else max_bytes
+            ),
         ),
     )
+
+
+def _model_inspection_payload_bytes(payload: dict[str, Any]) -> int:
+    """Measure the exact compact JSON payload exposed through the MCP result."""
+
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
 def _unit_definitions(structure: dict[str, Any]) -> list[dict[str, Any]]:
@@ -753,6 +784,155 @@ def _mapping_analysis(
     return units
 
 
+def _compact_model_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    """Project one rich inspection into the bounded model-visible v3 contract.
+
+    Preparation reruns the rich inspection and validates complete source units,
+    so the inline contract only needs evidence to select or resolve a unit. A
+    complete, unambiguous role is already deterministic; emitting its full
+    sample and suggestion tree again wastes context without adding a decision.
+    """
+
+    sources: list[dict[str, Any]] = []
+    for source in profile.get("sources", []):
+        if not isinstance(source, dict):
+            continue
+        compact_source = {
+            "relative_path": source.get("relative_path"),
+            "format": source.get("format"),
+            "units": [
+                _compact_model_unit(unit)
+                for unit in source.get("units", [])
+                if isinstance(unit, dict)
+            ],
+        }
+        administrative_metadata = source.get("administrative_metadata")
+        if isinstance(administrative_metadata, dict) and administrative_metadata:
+            compact_source["administrative_metadata"] = administrative_metadata
+        sources.append(compact_source)
+    return {
+        "schemaVersion": "workspace_source_profile.v3",
+        "sources": sources,
+        "source_count": profile.get("source_count", len(sources)),
+        "unit_count": profile.get("unit_count", sum(len(source["units"]) for source in sources)),
+    }
+
+
+def _compact_model_unit(unit: dict[str, Any]) -> dict[str, Any]:
+    assessments = [
+        assessment
+        for assessment in unit.get("role_assessments", [])
+        if isinstance(assessment, dict)
+    ]
+    compact_unit: dict[str, Any] = {
+        "unit_ref": unit.get("unit_ref"),
+        "kind": unit.get("kind"),
+        "locator": unit.get("locator", {}),
+        "record_count": unit.get("record_count", 0),
+        "record_count_exact": unit.get("record_count_exact", True),
+        "role_assessments": [
+            _compact_model_assessment(assessment) for assessment in assessments
+        ],
+    }
+    if not assessments or any(
+        not _is_resolved_model_assessment(assessment) for assessment in assessments
+    ):
+        compact_unit["fields"] = _compact_unresolved_field_evidence(
+            unit.get("fields", []), _unresolved_field_names(assessments)
+        )
+    return compact_unit
+
+
+def _is_resolved_model_assessment(assessment: dict[str, Any]) -> bool:
+    if assessment.get("state") != "complete" or assessment.get("ambiguous") is not False:
+        return False
+    mappings = assessment.get("field_mappings", [])
+    return isinstance(mappings, list) and all(
+        isinstance(mapping, dict)
+        and isinstance(mapping.get("target_field"), str)
+        and isinstance(mapping.get("source_fields"), list)
+        and len(mapping["source_fields"]) == 1
+        and isinstance(mapping["source_fields"][0], str)
+        for mapping in mappings
+    )
+
+
+def _compact_model_assessment(assessment: dict[str, Any]) -> dict[str, Any]:
+    if _is_resolved_model_assessment(assessment):
+        resolved_mapping = {
+            str(mapping["target_field"]): str(mapping["source_fields"][0])
+            for mapping in sorted(
+                assessment.get("field_mappings", []),
+                key=lambda item: str(item["target_field"]),
+            )
+        }
+        result: dict[str, Any] = {
+            "role": assessment.get("role"),
+            "state": "complete",
+            "confidence": assessment.get("confidence"),
+            "ambiguous": False,
+        }
+        if resolved_mapping:
+            result["resolved_mapping"] = resolved_mapping
+        return result
+    return {
+        "role": assessment.get("role"),
+        "state": assessment.get("state"),
+        "confidence": assessment.get("confidence"),
+        "ambiguous": assessment.get("ambiguous"),
+        "candidate_mappings": [
+            {
+                "target_field": mapping.get("target_field"),
+                "source_fields": mapping.get("source_fields", []),
+                "transform": mapping.get("transform", {}).get("kind"),
+            }
+            for mapping in assessment.get("field_mappings", [])
+            if isinstance(mapping, dict)
+        ],
+        "missing_required_fields": assessment.get("missing_required_fields", []),
+    }
+
+
+def _unresolved_field_names(assessments: list[dict[str, Any]]) -> set[str] | None:
+    """Return only fields needed to decide an unresolved role, if known."""
+
+    if not assessments:
+        return None
+    names: set[str] = set()
+    for assessment in assessments:
+        if _is_resolved_model_assessment(assessment):
+            continue
+        for mapping in assessment.get("field_mappings", []):
+            if not isinstance(mapping, dict):
+                continue
+            for field_name in mapping.get("source_fields", []):
+                if isinstance(field_name, str):
+                    names.add(field_name)
+    return names or None
+
+
+def _compact_unresolved_field_evidence(
+    fields: Any, required_names: set[str] | None
+) -> list[dict[str, Any]]:
+    if not isinstance(fields, list):
+        return []
+    evidence: list[dict[str, Any]] = []
+    for field in fields:
+        if not isinstance(field, dict) or not isinstance(field.get("name"), str):
+            continue
+        if required_names is not None and field["name"] not in required_names:
+            continue
+        values = field.get("representative_values", [])
+        evidence.append(
+            {
+                "name": field["name"],
+                "sample_types": field.get("sample_types", []),
+                "representative_values": values[:1] if isinstance(values, list) else [],
+            }
+        )
+    return evidence
+
+
 def _missing_fields_question(relative_path: str, missing_fields: tuple[str, ...]) -> str:
     if missing_fields == ("warehouse_type",):
         return (
@@ -761,25 +941,6 @@ def _missing_fields_question(relative_path: str, missing_fields: tuple[str, ...]
         )
     fields = ", ".join(missing_fields)
     return f"文件 {relative_path} 缺少必需字段：{fields}。请补充源数据后再继续。"
-
-
-def _bound_agent_previews(profile: dict[str, Any]) -> dict[str, Any]:
-    """Keep structural evidence while preventing sample rows from entering context."""
-
-    def trim(value: Any) -> Any:
-        if isinstance(value, dict):
-            result = {key: trim(item) for key, item in value.items()}
-            preview = result.get("preview")
-            if isinstance(preview, dict) and isinstance(preview.get("rows"), list):
-                preview["rows"] = preview["rows"][:3]
-                preview["preview_sample_count"] = len(preview["rows"])
-                preview["limit"] = min(int(preview.get("limit", 3)), 3)
-            return result
-        if isinstance(value, list):
-            return [trim(item) for item in value]
-        return value
-
-    return trim(profile)
 
 
 @mcp.tool(structured_output=True, annotations=WORKSPACE_PREPARATION_TOOL)
@@ -792,7 +953,7 @@ def prepare_network_input(
             min_length=1,
             max_length=640,
             description=(
-                "Select exact units from the latest workspace_source_profile.v2. Each item must "
+                "Select exact units from the latest workspace_source_profile.v3. Each item must "
                 "include relative_path, unit_ref, role, and optional explicit mappings. "
                 "Never include an administrative catalog here."
             )

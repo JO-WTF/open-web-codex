@@ -195,7 +195,7 @@ def test_missing_warehouse_type_is_typed_non_retryable_user_input(
     inspection = inspected.structuredContent
 
     assert inspection["outcome"] == "inspected"
-    assert inspection["schemaVersion"] == "workspace_source_profile.v2"
+    assert inspection["schemaVersion"] == "workspace_source_profile.v3"
     assert inspection["next_action"] == "confirm_sources"
     assert inspection["retryable"] is False
     warehouse_profile = next(
@@ -205,17 +205,26 @@ def test_missing_warehouse_type_is_typed_non_retryable_user_input(
     )
     assert "role_assessments" not in warehouse_profile
     assert len(warehouse_profile["units"]) == 1
-    assessment = warehouse_profile["units"][0]["role_assessments"][0]
+    warehouse_unit = warehouse_profile["units"][0]
+    assessment = warehouse_unit["role_assessments"][0]
     assert assessment["role"] == "existing_warehouse"
     assert assessment["state"] == "partial"
-    assert assessment["ambiguous"] is False
-    assert assessment["matched_required_fields"] == [
+    assert assessment["missing_required_fields"] == ["warehouse_type"]
+    assert {item["target_field"] for item in assessment["candidate_mappings"]} == {
         "city_id",
         "city_name",
+        "is_existing",
         "warehouse_id",
         "warehouse_name",
+    }
+    assert [item["name"] for item in warehouse_unit["fields"]] == [
+        "warehouse_id",
+        "warehouse_name",
+        "city_id",
+        "city_name",
+        "is_existing",
     ]
-    assert assessment["missing_required_fields"] == ["warehouse_type"]
+    assert "preview" not in warehouse_unit
 
     output_path = f"{PREPARED_OUTPUT_DIR}/must-not-write.json"
     blocked = data_server.prepare_network_input(
@@ -328,7 +337,7 @@ def test_preparation_bounded_count_contract_rejects_underfilled_or_wrong_flags()
         DataPreparationReady.model_validate({**ready, "warnings_truncated": True})
 
 
-def test_source_profile_distinguishes_preview_samples_from_exact_total(
+def test_complete_source_profile_uses_exact_total_without_repeated_preview_evidence(
     tmp_path, monkeypatch
 ) -> None:
     rows = [
@@ -358,18 +367,20 @@ def test_source_profile_distinguishes_preview_samples_from_exact_total(
     source = inspection["source_profile"]["sources"][0]
     assert "structure" not in source
     unit = source["units"][0]
-    preview = unit["preview"]
     inspection_identity = SourceInspectionIdentity.model_validate(
         inspection["inspection_identity"]
     )
     inspected_paths = inspection["inspected_relative_paths"]
 
     assert unit["record_count"] == 12
-    assert preview["preview_sample_count"] == 3
-    assert preview["total_count"] == 12
-    assert preview["total_count_exact"] is True
-    assert "returned_count" not in preview
-    assert "Balikpapan" not in json.dumps(preview["rows"])
+    assert unit["record_count_exact"] is True
+    assert "fields" not in unit
+    assert "preview" not in unit
+    assert "mapping_suggestions" not in unit
+    assert "Balikpapan" not in json.dumps(inspection, ensure_ascii=False)
+    resolved = unit["role_assessments"][0]
+    assert resolved["state"] == "complete"
+    assert resolved["resolved_mapping"]["warehouse_type"] == "warehouse_type"
 
     with pytest.raises(ProviderContractError, match="generated_output_path_invalid"):
         data_server.prepare_network_input(
@@ -527,6 +538,91 @@ def test_current_mock_sources_have_no_global_false_demand_blockers(tmp_path, mon
     )
     assert assessments["existing-warehouses.csv"][0]["role"] == "existing_warehouse"
     assert assessments["candidate-warehouses.csv"][0]["role"] == "candidate_warehouse"
+
+
+def test_model_visible_mock_inspection_is_compact_json_with_resolved_alias_mappings(
+    tmp_path, monkeypatch
+) -> None:
+    fixture_root = Path(__file__).parents[3] / "apps/web/scripts/fixtures/warehouse-network/mock_data"
+    required_paths = [
+        "administrative-areas.json",
+        "candidate-warehouses.csv",
+        "demand-cities.csv",
+        "existing-warehouses.csv",
+        "route-quotes.csv",
+    ]
+    for path in fixture_root.iterdir():
+        if path.name in {*required_paths, "population-snapshot.csv"}:
+            (tmp_path / path.name).write_bytes(path.read_bytes())
+    _use_store(tmp_path, monkeypatch)
+
+    for paths in (required_paths, [*required_paths, "population-snapshot.csv"]):
+        result = data_server.inspect_workspace_sources(
+            paths,
+            [
+                SourceRole.DEMAND,
+                SourceRole.EXISTING_WAREHOUSE,
+                SourceRole.CANDIDATE_WAREHOUSE,
+                SourceRole.ROUTE_QUOTE,
+            ],
+            ctx=object(),
+            country_code="ID",
+        )
+        assert result.structuredContent is not None
+        payload = result.structuredContent
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+        assert payload["outcome"] == "inspected"
+        assert len(serialized) < data_server._workspace_intake.MAX_MODEL_INSPECTION_BYTES
+        assert json.loads(serialized) == payload
+        assert payload["inspection_identity"]["schemaVersion"] == "workspace_source_inspection.v2"
+        assert payload["inspected_relative_paths"] == sorted(paths)
+        assert payload["source_profile"]["schemaVersion"] == "workspace_source_profile.v3"
+        assert payload["source_profile"]["source_count"] == len(paths)
+
+        sources = {
+            source["relative_path"]: source for source in payload["source_profile"]["sources"]
+        }
+        candidate_unit = sources["candidate-warehouses.csv"]["units"][0]
+        candidate_assessment = candidate_unit["role_assessments"][0]
+        assert candidate_assessment == {
+            "role": "candidate_warehouse",
+            "state": "complete",
+            "confidence": 1.0,
+            "ambiguous": False,
+            "resolved_mapping": {
+                "city_id": "city_id",
+                "city_name": "city_name",
+                "is_existing": "is_existing",
+                "is_fixed": "is_fixed",
+                "latitude": "latitude",
+                "longitude": "longitude",
+                "province_id": "province_id",
+                "province_name": "province_name",
+                "upstream_center_id": "upstream_center_id",
+                "warehouse_id": "warehouse_id",
+                "warehouse_name": "warehouse_name",
+                "warehouse_type": "warehouse_type",
+            },
+        }
+        assert candidate_unit["record_count"] == 12
+        assert candidate_unit["record_count_exact"] is True
+        assert "fields" not in candidate_unit
+        assert "mapping_suggestions" not in candidate_unit
+
+        admin_source = sources["administrative-areas.json"]
+        assert admin_source["administrative_metadata"]["country_code"] == "ID"
+        assert admin_source["units"][0]["record_count"] == 50
+        if len(paths) == 6:
+            population_unit = sources["population-snapshot.csv"]["units"][0]
+            assert population_unit["role_assessments"] == []
+            assert [field["name"] for field in population_unit["fields"]] == [
+                "city_id",
+                "city_name",
+                "province_name",
+                "population",
+            ]
+            assert all(len(field["representative_values"]) <= 1 for field in population_unit["fields"])
 
 
 def test_current_mock_sources_prepare_from_full_units_and_keep_preview_tail_rows(
@@ -982,6 +1078,23 @@ def test_explicit_mapping_handles_chinese_and_random_headers_without_name_infere
     )
     assert inspected.structuredContent is not None
     profile = inspected.structuredContent
+    random_unit = profile["source_profile"]["sources"][0]["units"][0]
+    assert random_unit["role_assessments"] == []
+    assert [field["name"] for field in random_unit["fields"]] == [
+        "甲",
+        "乙",
+        "丙",
+        "丁",
+        "戊",
+        "己",
+        "庚",
+    ]
+    assert random_unit["fields"][0] == {
+        "name": "甲",
+        "sample_types": ["string"],
+        "representative_values": ["C-1"],
+    }
+    assert all(len(field["representative_values"]) <= 1 for field in random_unit["fields"])
     selections = [
         SourceSelection(
             relative_path="random.csv",
@@ -1021,6 +1134,69 @@ def test_explicit_mapping_handles_chinese_and_random_headers_without_name_infere
     assert payload["outcome"] == "ready"
     assert payload["role_counts"]["demand"] == 1
     assert payload["role_counts"]["existing_warehouse"] == 1
+
+
+def test_ambiguous_headers_keep_unit_local_field_and_mapping_evidence(tmp_path, monkeypatch) -> None:
+    (tmp_path / "ambiguous.csv").write_text(
+        "city_id,city_code,city_name,demand_quantity\nC-1,CITY-ONE,Jakarta,10\n",
+        encoding="utf-8",
+    )
+    _use_store(tmp_path, monkeypatch)
+
+    result = data_server.inspect_workspace_sources(
+        ["ambiguous.csv"],
+        [SourceRole.DEMAND],
+        ctx=object(),
+        country_code="ID",
+    )
+    assert result.structuredContent is not None
+    unit = result.structuredContent["source_profile"]["sources"][0]["units"][0]
+    assessment = unit["role_assessments"][0]
+
+    assert assessment["role"] == "demand"
+    assert assessment["state"] == "ambiguous"
+    assert assessment["confidence"] == 1.0
+    assert assessment["ambiguous"] is True
+    assert assessment["missing_required_fields"] == []
+    city_id = next(
+        mapping for mapping in assessment["candidate_mappings"] if mapping["target_field"] == "city_id"
+    )
+    assert city_id == {
+        "target_field": "city_id",
+        "source_fields": ["city_id", "city_code"],
+        "transform": "normalize_identifier",
+    }
+    direct_mapping = SourceSelection.model_validate(
+        {
+            "relative_path": "ambiguous.csv",
+            "unit_ref": "table",
+            "role": "demand",
+            "mappings": [
+                {
+                    "source_field": "city_id",
+                    "target_field": "city_id",
+                    "transform": city_id["transform"],
+                },
+                *[
+                    {
+                        "source_field": mapping["source_fields"][0],
+                        "target_field": mapping["target_field"],
+                        "transform": mapping["transform"],
+                    }
+                    for mapping in assessment["candidate_mappings"]
+                    if mapping["target_field"] != "city_id"
+                ],
+            ],
+        }
+    )
+    assert direct_mapping.mappings[0].transform.value == "normalize_identifier"
+    assert [field["name"] for field in unit["fields"]] == [
+        "city_id",
+        "city_code",
+        "city_name",
+        "demand_quantity",
+    ]
+    assert "preview" not in unit
 
 
 def test_one_csv_unit_can_supply_multiple_selected_roles_without_duplicate_reads(
@@ -1591,7 +1767,7 @@ def test_inspection_limits_are_explicit_selection_errors(tmp_path, monkeypatch) 
     assert unit_limited.structuredContent["limit"]["units"] == 1
 
     monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_UNITS", 128)
-    monkeypatch.setattr(data_server._workspace_intake, "MAX_INSPECTION_BYTES", 1)
+    monkeypatch.setattr(data_server._workspace_intake, "MAX_MODEL_INSPECTION_BYTES", 1)
     byte_limited = data_server.inspect_workspace_sources(
         ["a.csv"],
         [SourceRole.DEMAND],

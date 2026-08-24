@@ -241,8 +241,8 @@ revision、operation、dependency、readiness 或 deliverable 状态。
 能力提供不可变 Resource 内容，并以 Profile 私有、canonical Workspace 隔离的物理目录保存
 字节；Data inspection 不发布 Resource。Data4 与 Network 的 active surface 以 inline inspection
 identity、Workspace 路径和 typed Network Resource 各司其职：Data Server 的 inspect 返回有界
-`workspace_source_profile.v2`、精确 source units、预览样本数与完整总数、`workspace_source_inspection.v2` identity 及精确
-inspected paths；角色评估不是全局业务缺口，只有选中 unit 的业务语义无法确定时才询问。prepare 使用
+`workspace_source_profile.v3`、精确 source units、精确记录数、`workspace_source_inspection.v2` identity 及精确
+inspected paths；完整且无歧义角色只保留 canonical→source resolved mapping，partial/ambiguous/未知表头才保留 unit-local 字段证据；完整 JSON 严格小于 8192 bytes，超限返回 typed `selection_required` 而不截断。角色评估不是全局业务缺口，只有选中 unit 的业务语义无法确定时才询问。prepare 使用
 `source_selections` 和必要的显式 mapping，若来源在握手期间变化则返回 `source_changed` 且不写文件，否则以
 `prepared_network_input.v2` 原子写入 `outputs/warehouse-network/prepared/`，保存 selected provenance、roles、role_counts 和有界 warnings；`prepare_network_geography` 再从该文件生成新的完整输入。Network
 Tool 只接受这个确切路径，并为矩阵与方案 Resource 绑定输入内容身份；不存在 candidate delta 或
