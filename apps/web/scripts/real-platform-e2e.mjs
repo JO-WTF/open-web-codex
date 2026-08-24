@@ -509,6 +509,29 @@ function rootFinalMessageHasStandaloneMapEmbed(events, rootThreadId) {
     .some((line) => /^::codex-inline-vis\{artifact="[^"]+"\}$/.test(line.trim()));
 }
 
+function parseDataInspectionToolJson(content) {
+  const officialEnvelope = /^Wall time: ((?:0|[1-9]\d*)(?:\.\d+)?) seconds\nOutput:\n([\s\S]+)$/;
+  const wrapped = officialEnvelope.exec(content);
+  if (wrapped && !Number.isFinite(Number(wrapped[1]))) {
+    throw new Error(
+      "Data inspection tool output must be direct JSON or use the exact official Wall time envelope",
+    );
+  }
+  const json = wrapped?.[2] ?? content;
+  if (!wrapped && !json.trimStart().startsWith("{") && !json.trimStart().startsWith("[")) {
+    throw new Error(
+      "Data inspection tool output must be direct JSON or use the exact official Wall time envelope",
+    );
+  }
+  try {
+    return JSON.parse(json);
+  } catch (error) {
+    throw new Error(
+      "Data inspection tool output was not valid JSON: " + error.message,
+    );
+  }
+}
+
 export function assertDataInspectionToolOutput(dataModelRequests) {
   let outputCount = 0;
   for (const request of dataModelRequests) {
@@ -518,34 +541,37 @@ export function assertDataInspectionToolOutput(dataModelRequests) {
       if (message?.role !== "tool" || typeof message.content !== "string") {
         continue;
       }
+      assert(
+        !message.content.includes("chars truncated"),
+        "Data inspection tool output was truncated before it reached the model",
+      );
       if (
         !message.content.includes('"inspection_identity"') &&
         !message.content.includes('"inspected_relative_paths"')
       ) {
         continue;
       }
-      assert(
-        !message.content.includes("chars truncated"),
-        "Data inspection tool output was truncated before it reached the model",
+      const output = parseDataInspectionToolJson(message.content);
+      if (!output || typeof output !== "object" || Array.isArray(output)) {
+        continue;
+      }
+      const hasInspectionIdentity = Object.prototype.hasOwnProperty.call(
+        output,
+        "inspection_identity",
       );
-      let output;
-      try {
-        output = JSON.parse(message.content);
-      } catch (error) {
-        throw new Error(
-          "Data inspection tool output was not valid JSON: " + error.message,
-        );
+      const hasInspectedRelativePaths = Object.prototype.hasOwnProperty.call(
+        output,
+        "inspected_relative_paths",
+      );
+      if (!hasInspectionIdentity && !hasInspectedRelativePaths) {
+        continue;
       }
       assert(
-        output && typeof output === "object" && !Array.isArray(output),
-        "Data inspection tool output must be a JSON object",
-      );
-      assert(
-        Object.prototype.hasOwnProperty.call(output, "inspection_identity"),
+        hasInspectionIdentity,
         "Data inspection tool output omitted inspection_identity",
       );
       assert(
-        Object.prototype.hasOwnProperty.call(output, "inspected_relative_paths"),
+        hasInspectedRelativePaths,
         "Data inspection tool output omitted inspected_relative_paths",
       );
       outputCount += 1;

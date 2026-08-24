@@ -85,11 +85,67 @@ describe("deterministic Data inspection output", () => {
         {
           body: {
             messages: [
+              {
+                role: "tool",
+                content: JSON.stringify([
+                  {
+                    function: {
+                      parameters: {
+                        properties: {
+                          inspection_identity: {},
+                          inspected_relative_paths: {},
+                        },
+                      },
+                    },
+                  },
+                ]),
+              },
               { role: "tool", content: JSON.stringify(inspectionOutput) },
             ],
           },
         },
       ]),
+    );
+  });
+
+  it("accepts the one exact Runtime tool-output envelope", () => {
+    assert.doesNotThrow(() =>
+      assertDataInspectionToolOutput([
+        {
+          body: {
+            messages: [
+              {
+                role: "tool",
+                content:
+                  "Wall time: 0.0187 seconds\nOutput:\n" +
+                  JSON.stringify(inspectionOutput),
+              },
+            ],
+          },
+        },
+      ]),
+    );
+  });
+
+  it("rejects a non-official tool-output prefix", () => {
+    assert.throws(
+      () =>
+        assertDataInspectionToolOutput([
+          {
+            body: {
+              messages: [
+                {
+                  role: "tool",
+                  content: "Elapsed: 0.0187\nOutput:\n" + JSON.stringify(inspectionOutput),
+                },
+              ],
+            },
+          },
+        ]),
+      {
+        message:
+          "Data inspection tool output must be direct JSON or use the exact official Wall time envelope",
+      },
     );
   });
 
