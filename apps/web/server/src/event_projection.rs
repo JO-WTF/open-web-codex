@@ -17,6 +17,12 @@ use crate::inline_map_cards::{self, InlineMapCandidate};
 use crate::resource_ref_projections::{self, ResourceRefCandidate};
 
 const PROJECTION_VERSION: i16 = 1;
+const MAX_RUNTIME_EVENT_FRAME_BYTES: usize = 128 * 1024;
+const MAX_PROJECTED_EVENT_BYTES: usize = 64 * 1024;
+const MAX_PROJECTED_EVENT_DEPTH: usize = 12;
+const MAX_PROJECTED_EVENT_OBJECT_KEYS: usize = 64;
+const MAX_PROJECTED_EVENT_ARRAY_ITEMS: usize = 64;
+const MAX_PROJECTED_EVENT_STRING_CHARS: usize = 12_000;
 
 #[derive(Debug, PartialEq)]
 struct ProjectedEvent {
@@ -152,6 +158,7 @@ pub async fn persist_frame_with_deliveries(
             .materialize(&mut event, context.workspace_id)
             .await;
     }
+    enforce_projected_event_bounds(&mut event);
     update_runtime_agent_projection(&mut transaction, &context, &event).await?;
 
     sqlx::query("SAVEPOINT artifact_projection")
@@ -391,6 +398,9 @@ fn project_frame_with_deliveries(
     data: &[u8],
     deliveries: &DeliveryRegistry,
 ) -> Result<Option<ProjectedEvent>, String> {
+    if data.len() > MAX_RUNTIME_EVENT_FRAME_BYTES {
+        return Err("runtime event frame exceeds maximum size".to_string());
+    }
     let Some(frame) = internal_frame(data)? else {
         return Ok(None);
     };
@@ -419,13 +429,46 @@ fn project_frame_with_deliveries(
     }
     let turn_id = string_field(&params, "turnId")
         .or_else(|| string_field(&params, "turn_id"))
-        .or_else(|| nested_string_field(&params, "turn", "id"));
+        .or_else(|| nested_string_field(&params, "turn", "id"))
+        .filter(|value| !value.is_empty() && value.len() <= 256);
     let item = params.get("item").and_then(Value::as_object);
     let item_id = string_field(&params, "itemId")
         .or_else(|| string_field(&params, "item_id"))
-        .or_else(|| item.and_then(|item| string_field(item, "id")));
+        .or_else(|| item.and_then(|item| string_field(item, "id")))
+        .filter(|value| !value.is_empty() && value.len() <= 256);
 
     let (event_type, lifecycle) = classify_method(runtime_method);
+    if !runtime_params_are_bounded(&params) {
+        return Ok(Some(bounded_projection_failure_event(
+            workspace_id,
+            thread_id,
+            turn_id,
+            bounded_runtime_source_type(runtime_method),
+            "runtime_params_bounded",
+        )));
+    }
+    if event_type == "codex.unknown" {
+        return Ok(Some(ProjectedEvent {
+            event_type: event_type.to_string(),
+            workspace_id,
+            thread_id,
+            turn_id,
+            item_id: None,
+            payload: json!({
+                "schemaVersion": PROJECTION_VERSION,
+                "lifecycle": lifecycle,
+                "itemType": Value::Null,
+                "data": {
+                    "sourceType": bounded_runtime_source_type(runtime_method),
+                    "audit": "unknown_runtime_method"
+                }
+            }),
+            thread_metadata: None,
+            artifacts: Vec::new(),
+            inline_map: None,
+            resource_refs: Vec::new(),
+        }));
+    }
     let item_type = item.and_then(|item| string_field(item, "type"));
     let (artifacts, artifact_delivery_error, final_delivery_seen) = match item
         .map(|item| final_artifact_candidate_with_registry(item, deliveries))
@@ -490,6 +533,133 @@ fn project_frame_with_deliveries(
         inline_map,
         resource_refs,
     }))
+}
+
+fn bounded_runtime_source_type(method: &str) -> String {
+    let method = method.trim();
+    if method.is_empty()
+        || method.len() > 128
+        || !method
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "/._-".contains(character))
+    {
+        return "unknown".to_string();
+    }
+    method.to_string()
+}
+
+fn bounded_projection_failure_event(
+    workspace_id: Option<Uuid>,
+    thread_id: String,
+    turn_id: Option<String>,
+    source_type: String,
+    audit: &'static str,
+) -> ProjectedEvent {
+    ProjectedEvent {
+        event_type: "platform.projection.bounded".to_string(),
+        workspace_id,
+        thread_id,
+        turn_id,
+        item_id: None,
+        payload: json!({
+            "schemaVersion": PROJECTION_VERSION,
+            "lifecycle": "failed",
+            "itemType": Value::Null,
+            "data": {
+                "sourceType": source_type,
+                "audit": audit,
+                "code": "payload_limit_exceeded",
+                "message": "Runtime event exceeded browser projection bounds"
+            }
+        }),
+        thread_metadata: None,
+        artifacts: Vec::new(),
+        inline_map: None,
+        resource_refs: Vec::new(),
+    }
+}
+
+fn runtime_params_are_bounded(params: &Map<String, Value>) -> bool {
+    let mut estimated_bytes = 2;
+    json_object_is_bounded(params, 0, &mut estimated_bytes)
+}
+
+fn enforce_projected_event_bounds(event: &mut ProjectedEvent) {
+    if projected_event_is_bounded(&event.payload) {
+        return;
+    }
+    event.event_type = "platform.projection.bounded".to_string();
+    event.item_id = None;
+    event.thread_metadata = None;
+    event.artifacts.clear();
+    event.inline_map = None;
+    event.resource_refs.clear();
+    event.payload = json!({
+        "schemaVersion": PROJECTION_VERSION,
+        "lifecycle": "failed",
+        "itemType": Value::Null,
+        "data": {
+            "sourceType": "platform/projection/bounded",
+            "code": "payload_limit_exceeded",
+            "message": "Runtime event exceeded browser projection bounds"
+        }
+    });
+}
+
+fn projected_event_is_bounded(payload: &Value) -> bool {
+    let mut estimated_bytes = 0;
+    json_value_is_bounded(payload, 0, &mut estimated_bytes)
+        && serde_json::to_vec(payload)
+            .map(|encoded| encoded.len() <= MAX_PROJECTED_EVENT_BYTES)
+            .unwrap_or(false)
+}
+
+fn json_value_is_bounded(value: &Value, depth: usize, estimated_bytes: &mut usize) -> bool {
+    if depth > MAX_PROJECTED_EVENT_DEPTH {
+        return false;
+    }
+    match value {
+        Value::Null | Value::Bool(_) => add_estimated_json_bytes(estimated_bytes, 8),
+        Value::Number(_) => add_estimated_json_bytes(estimated_bytes, 64),
+        Value::String(value) => {
+            value.chars().count() <= MAX_PROJECTED_EVENT_STRING_CHARS
+                && add_estimated_json_bytes(
+                    estimated_bytes,
+                    value.len().saturating_mul(6).saturating_add(2),
+                )
+        }
+        Value::Array(values) => {
+            values.len() <= MAX_PROJECTED_EVENT_ARRAY_ITEMS
+                && add_estimated_json_bytes(estimated_bytes, 2)
+                && values
+                    .iter()
+                    .all(|entry| json_value_is_bounded(entry, depth + 1, estimated_bytes))
+        }
+        Value::Object(values) => json_object_is_bounded(values, depth, estimated_bytes),
+    }
+}
+
+fn json_object_is_bounded(
+    values: &Map<String, Value>,
+    depth: usize,
+    estimated_bytes: &mut usize,
+) -> bool {
+    depth <= MAX_PROJECTED_EVENT_DEPTH
+        && values.len() <= MAX_PROJECTED_EVENT_OBJECT_KEYS
+        && add_estimated_json_bytes(estimated_bytes, 2)
+        && values.iter().all(|(key, value)| {
+            key.chars().count() <= 128
+                && add_estimated_json_bytes(
+                    estimated_bytes,
+                    key.len().saturating_mul(6).saturating_add(3),
+                )
+                && json_value_is_bounded(value, depth + 1, estimated_bytes)
+        })
+}
+
+fn add_estimated_json_bytes(estimated_bytes: &mut usize, additional: usize) -> bool {
+    *estimated_bytes = estimated_bytes.saturating_add(additional);
+    *estimated_bytes <= MAX_PROJECTED_EVENT_BYTES
 }
 
 #[cfg(test)]
@@ -578,6 +748,7 @@ fn classify_method(method: &str) -> (&'static str, &'static str) {
     match method {
         "platform/approvalRequested" => ("platform.approval.requested", "requested"),
         "serverRequest/resolved" => ("platform.approval.resolved", "resolved"),
+        "error" => ("codex.error", "failed"),
         "item/started" => ("codex.item.started", "started"),
         "item/completed" => ("codex.item.completed", "completed"),
         "turn/started" => ("codex.turn.started", "started"),
@@ -590,12 +761,16 @@ fn classify_method(method: &str) -> (&'static str, &'static str) {
         "thread/tokenUsage/updated" => ("codex.thread.token_usage.updated", "updated"),
         "thread/completed" => ("codex.thread.completed", "completed"),
         "thread/failed" => ("codex.thread.failed", "failed"),
-        method
-            if method.starts_with("item/")
-                && (method.ends_with("/delta") || method.ends_with("Delta")) =>
-        {
-            ("codex.item.delta", "delta")
-        }
+        "item/agentMessage/delta"
+        | "item/reasoning/summaryPartAdded"
+        | "item/reasoning/summaryTextDelta"
+        | "item/reasoning/textDelta"
+        | "item/plan/delta"
+        | "item/commandExecution/outputDelta"
+        | "item/commandExecution/terminalInteraction"
+        | "item/fileChange/outputDelta" => ("codex.item.delta", "delta"),
+        "turn/plan/updated" => ("codex.turn.plan.updated", "updated"),
+        "turn/diff/updated" => ("codex.turn.diff.updated", "updated"),
         _ => ("codex.unknown", "unknown"),
     }
 }
@@ -4915,5 +5090,50 @@ mod tests {
             .expect("Runtime Item object"),
         );
         assert!(invalid.get("clientId").is_none());
+    }
+
+    #[test]
+    fn unknown_runtime_methods_persist_only_a_bounded_audit_marker() {
+        let frame = br#"data: {"method":"app-server-event","params":{"message":{"method":"unrecognized/runtime/method","params":{"threadId":"thread-1","secret":"do-not-persist","nested":{"value":"do-not-persist"}}}}}
+
+"#;
+        let event = project_frame(frame).unwrap().unwrap();
+        assert_eq!(event.event_type, "codex.unknown");
+        assert_eq!(
+            event.payload["data"]["sourceType"],
+            "unrecognized/runtime/method"
+        );
+        assert_eq!(event.payload["data"]["audit"], "unknown_runtime_method");
+        assert!(!event.payload.to_string().contains("do-not-persist"));
+        assert!(event.item_id.is_none());
+    }
+
+    #[test]
+    fn oversized_or_deep_known_projection_becomes_a_typed_failure() {
+        let mut event = ProjectedEvent {
+            event_type: "codex.item.completed".to_string(),
+            workspace_id: None,
+            thread_id: "thread-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            item_id: Some("item-1".to_string()),
+            payload: json!({
+                "schemaVersion": PROJECTION_VERSION,
+                "data": {"text": "x".repeat(MAX_PROJECTED_EVENT_STRING_CHARS + 1)}
+            }),
+            thread_metadata: None,
+            artifacts: Vec::new(),
+            inline_map: None,
+            resource_refs: Vec::new(),
+        };
+        enforce_projected_event_bounds(&mut event);
+        assert_eq!(event.event_type, "platform.projection.bounded");
+        assert_eq!(event.payload["data"]["code"], "payload_limit_exceeded");
+        assert!(event.item_id.is_none());
+
+        let mut nested = json!("leaf");
+        for _ in 0..=MAX_PROJECTED_EVENT_DEPTH {
+            nested = json!({"nested": nested});
+        }
+        assert!(!projected_event_is_bounded(&nested));
     }
 }

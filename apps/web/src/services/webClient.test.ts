@@ -920,7 +920,7 @@ describe("WebApp direct Server client", () => {
           id: "event-live",
           sequence: 1,
           run_id: run.id,
-          event_type: "codex.unknown",
+          event_type: "codex.thread.status.changed",
           projection_version: 1,
           thread_id: "thread-1",
           turn_id: "turn-1",
@@ -946,6 +946,7 @@ describe("WebApp direct Server client", () => {
     expect(events).toContainEqual({
       workspace_id: project.id,
       run_id: run.id,
+      sequence: 1,
       root_thread_id: "thread-1",
       message: {
         method: "thread/status/changed",
@@ -989,6 +990,7 @@ describe("WebApp direct Server client", () => {
     expect(events).toContainEqual({
       workspace_id: project.id,
       run_id: run.id,
+      sequence: 3,
       root_thread_id: "thread-1",
       message: {
         method: "platform/artifact/changed",
@@ -1076,6 +1078,7 @@ describe("WebApp direct Server client", () => {
     expect(events[0]).toEqual({
       workspace_id: project.id,
       run_id: run.id,
+      sequence: 1,
       root_thread_id: "thread-1",
       message: {
         method: "thread/started",
@@ -1177,7 +1180,7 @@ describe("WebApp direct Server client", () => {
       text: "Done.",
       phase: "final_answer",
     }, "agentMessage");
-    await vi.waitFor(() => expect(events).toHaveLength(7));
+    await vi.waitFor(() => expect(events).toHaveLength(5));
 
     expect(events.map((event) => event.message)).toEqual([
       {
@@ -1187,25 +1190,6 @@ describe("WebApp direct Server client", () => {
           turnId: "turn-1",
           sourceType: "thread/tokenUsage/updated",
           tokenUsage: { totalTokens: 42 },
-        },
-      },
-      {
-        method: "item/commandExecution/terminalInteraction",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          itemId: "command-1",
-          sourceType: "item/commandExecution/terminalInteraction",
-          stdin: "yes\n",
-        },
-      },
-      {
-        method: "item/reasoning/summaryPartAdded",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          itemId: "reasoning-1",
-          sourceType: "item/reasoning/summaryPartAdded",
         },
       },
       {
@@ -1305,7 +1289,7 @@ describe("WebApp direct Server client", () => {
           id: `event-live-${sequence}`,
           sequence,
           run_id: run.id,
-          event_type: "codex.unknown",
+          event_type: "codex.thread.status.changed",
           projection_version: 1,
           thread_id: "thread-1",
           turn_id: "turn-1",
@@ -1325,8 +1309,8 @@ describe("WebApp direct Server client", () => {
         && !url.searchParams.has("after_sequence");
     })).toBe(true));
     expect(methods).toEqual([]);
-    sendLive(3, "thread/settings/updated");
-    await vi.waitFor(() => expect(methods).toEqual(["thread/settings/updated"]));
+    sendLive(3, "thread/status/changed");
+    await vi.waitFor(() => expect(methods).toEqual(["thread/status/changed"]));
 
     socket?.onmessage?.({ data: JSON.stringify({ type: "resyncRequired", version: 1 }) });
     await vi.waitFor(() => expect(fetchMock.mock.calls.some((call) => {
@@ -1434,6 +1418,7 @@ describe("WebApp direct Server client", () => {
     expect(events[0]).toEqual({
       workspace_id: project.id,
       run_id: run.id,
+      sequence: 7,
       root_thread_id: "thread-1",
       message: {
         method: "item/commandExecution/requestApproval",

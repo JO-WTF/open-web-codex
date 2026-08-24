@@ -118,6 +118,143 @@ type LiveEnvelope =
   | { type: "resyncRequired"; version: number }
   | { type: "error"; version: number; code: string };
 
+type JsonRecord = Record<string, unknown>;
+
+const MAX_LIVE_EVENT_BYTES = 64 * 1024;
+const MAX_LIVE_EVENT_DEPTH = 12;
+const MAX_LIVE_EVENT_OBJECT_KEYS = 64;
+const MAX_LIVE_EVENT_ARRAY_ITEMS = 64;
+const MAX_LIVE_EVENT_STRING_CHARS = 12_000;
+
+function isRecord(value: unknown): value is JsonRecord {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function boundedText(value: unknown, maxLength: number): string | null {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= maxLength
+    && value.trim() === value
+    && !hasControlCharacter(value)
+    ? value
+    : null;
+}
+
+function hasAtMostCharacters(value: string, maxLength: number): boolean {
+  let count = 0;
+  for (const _ of value) {
+    count += 1;
+    if (count > maxLength) return false;
+  }
+  return true;
+}
+
+function addEstimatedJsonBytes(total: { value: number }, additional: number): boolean {
+  total.value = Math.min(Number.MAX_SAFE_INTEGER, total.value + additional);
+  return total.value <= MAX_LIVE_EVENT_BYTES;
+}
+
+function boundedLivePayload(value: unknown): value is JsonRecord {
+  if (!isRecord(value)) return false;
+  const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+  const estimatedBytes = { value: 0 };
+  while (pending.length > 0) {
+    const current = pending.pop() as { value: unknown; depth: number };
+    if (current.depth > MAX_LIVE_EVENT_DEPTH) return false;
+    if (typeof current.value === "string") {
+      if (!hasAtMostCharacters(current.value, MAX_LIVE_EVENT_STRING_CHARS)
+        || !addEstimatedJsonBytes(estimatedBytes, current.value.length * 6 + 2)) return false;
+      continue;
+    }
+    if (Array.isArray(current.value)) {
+      if (current.value.length > MAX_LIVE_EVENT_ARRAY_ITEMS
+        || !addEstimatedJsonBytes(estimatedBytes, 2)) return false;
+      for (const entry of current.value) pending.push({ value: entry, depth: current.depth + 1 });
+      continue;
+    }
+    if (isRecord(current.value)) {
+      const entries = Object.entries(current.value);
+      if (entries.length > MAX_LIVE_EVENT_OBJECT_KEYS
+        || entries.some(([key]) => !hasAtMostCharacters(key, 128))
+        || !addEstimatedJsonBytes(estimatedBytes, 2)) return false;
+      for (const [key] of entries) {
+        if (!addEstimatedJsonBytes(estimatedBytes, key.length * 6 + 3)) return false;
+      }
+      for (const [, entry] of entries) pending.push({ value: entry, depth: current.depth + 1 });
+      continue;
+    }
+    if (!addEstimatedJsonBytes(estimatedBytes, 64)) return false;
+  }
+  return true;
+}
+
+export function parseLiveRunEvent(value: unknown): RunEvent | null {
+  if (!isRecord(value)) return null;
+  const sequence = value.sequence;
+  if (typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence <= 0) return null;
+  const runId = boundedText(value.run_id, 128);
+  const eventType = boundedText(value.event_type, 128);
+  const projectionVersion = value.projection_version;
+  const id = boundedText(value.id, 128);
+  const createdAt = boundedText(value.created_at, 128);
+  const payload = value.payload;
+  if (!runId || !eventType || !id || !createdAt || !boundedLivePayload(payload)
+    || typeof projectionVersion !== "number"
+    || !Number.isSafeInteger(projectionVersion) || projectionVersion < 1 || projectionVersion > 32) {
+    return null;
+  }
+  const optionalIdentity = (entry: unknown): string | null => {
+    if (entry === null || entry === undefined) return null;
+    return boundedText(entry, 256);
+  };
+  const threadId = optionalIdentity(value.thread_id);
+  const turnId = optionalIdentity(value.turn_id);
+  const itemId = optionalIdentity(value.item_id);
+  if ((value.thread_id !== null && value.thread_id !== undefined && !threadId)
+    || (value.turn_id !== null && value.turn_id !== undefined && !turnId)
+    || (value.item_id !== null && value.item_id !== undefined && !itemId)) {
+    return null;
+  }
+  return {
+    id,
+    sequence,
+    run_id: runId,
+    event_type: eventType,
+    projection_version: projectionVersion,
+    thread_id: threadId,
+    turn_id: turnId,
+    item_id: itemId,
+    payload,
+    created_at: createdAt,
+  };
+}
+
+function parseLiveEnvelope(value: unknown): LiveEnvelope | null {
+  if (!isRecord(value) || !Number.isSafeInteger(value.version) || value.version !== 1) {
+    return null;
+  }
+  if (value.type === "ready" || value.type === "resyncRequired") {
+    return { type: value.type, version: value.version };
+  }
+  if (value.type === "error") {
+    const code = boundedText(value.code, 128);
+    return code ? { type: "error", version: value.version, code } : null;
+  }
+  if (value.type === "run.event") {
+    const event = parseLiveRunEvent(value.event);
+    return event ? { type: "run.event", version: value.version, event } : null;
+  }
+  return null;
+}
+
 function defaultBaseUrl() {
   return (import.meta.env.VITE_PLATFORM_API_URL ?? "").replace(/\/$/, "");
 }
@@ -1168,7 +1305,14 @@ export class PlatformClient {
         socket?.send(JSON.stringify({ type: "authenticate", token: this.token }));
       };
       socket.onmessage = (message) => {
-        const envelope = JSON.parse(String(message.data)) as LiveEnvelope;
+        let raw: unknown;
+        try {
+          raw = JSON.parse(String(message.data)) as unknown;
+        } catch {
+          return;
+        }
+        const envelope = parseLiveEnvelope(raw);
+        if (!envelope) return;
         if (envelope.type === "ready") {
           attempts = 0;
           onState("online");

@@ -2,11 +2,43 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   isPlatformRequestError,
+  parseLiveRunEvent,
   PlatformClient,
 } from "./client";
 
 describe("PlatformClient", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("fails closed when a live Run event lacks a bounded durable sequence", () => {
+    const base = {
+      id: "event-1",
+      run_id: "run-1",
+      event_type: "codex.turn.started",
+      projection_version: 1,
+      thread_id: "thread-1",
+      turn_id: "turn-1",
+      item_id: null,
+      payload: { data: {} },
+      created_at: "2026-08-24T00:00:00Z",
+    };
+    expect(parseLiveRunEvent({ ...base, sequence: 7 })?.sequence).toBe(7);
+    expect(parseLiveRunEvent(base)).toBeNull();
+    expect(parseLiveRunEvent({ ...base, sequence: 0 })).toBeNull();
+    expect(parseLiveRunEvent({ ...base, sequence: "7" })).toBeNull();
+    expect(parseLiveRunEvent({
+      ...base,
+      sequence: 8,
+      payload: { secret: "do-not-project", text: "x".repeat(12_001) },
+    })).toBeNull();
+    expect(parseLiveRunEvent({
+      ...base,
+      sequence: 9,
+      payload: { values: Array.from({ length: 65 }, () => "item") },
+    })).toBeNull();
+    let deep: unknown = "leaf";
+    for (let index = 0; index <= 12; index += 1) deep = { nested: deep };
+    expect(parseLiveRunEvent({ ...base, sequence: 10, payload: deep })).toBeNull();
+  });
 
   it("reads only bounded native inline visualization files", async () => {
     const threadId = "0198ff2f-82ee-7cc9-a3e6-2974debf8666";

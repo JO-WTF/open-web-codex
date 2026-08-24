@@ -343,11 +343,13 @@ Runtime 与共享 build store，`sync` 通过完整 `check` 后把冷重启交�
    PostgreSQL 生命周期门仍待执行。
    Codex 的 paginated history 仍遵循当前 upstream contract；本地不再保留 legacy response-tool/history
    materialization seam。
-3. `run_events` 的 sequence 和 run/thread/turn/item provenance 是合理的持久投影，但当前
-   `project_item` 会把未统一限长的 agent text、reasoning、command output、diff 与 Tool result
-   同时写入 PostgreSQL 和 WebSocket，且 unknown Runtime method 仍可能被 Browser JSON summary
-   放入对话；当前没有 event retention/prune owner。一次真实长 Run 观察到事件 delta 写放大，
-   pending approval replay 仍从 sequence 0 分页扫描；它们是性能 backlog，不是阶段一正常链门。
+3. `run_events.sequence` 是同一 Run 的唯一 durable browser event identity；live 与 replay 都传递
+   `{runId, sequence}`，Browser 只按该 identity 单调接收，不再按文本或时间窗猜重。超过 128KiB 的 raw
+   Runtime frame 在 JSON 解析前固定拒绝；其余 Runtime params 在投影前和 Browser parse 时均受 bytes、
+   深度、object/array、string 边界约束；越界只产生无 raw payload
+   的 typed bounded failure。未知 Runtime method 只留下 bounded audit marker，不进入对话 renderer。
+   当前仍没有 event retention/prune owner。一次真实长 Run 观察到事件 delta 写放大，pending approval
+   replay 仍从 sequence 0 分页扫描；它们是性能 backlog，不是阶段一正常链门。
 这些都是当前事实，不是应继续兼容的接口，也不是已经完成的阶段一正常链前置。后续按 owner
 处理 Browser legacy、Run lifecycle/lease、approval replay、event retention 和多用户隔离；
 不再把它们插回已经通过的仓网正常路径。

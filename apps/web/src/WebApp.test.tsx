@@ -19,6 +19,7 @@ import { PlatformRequestError } from "../browser/client";
 import type { AppServerEvent } from "./types";
 
 let appServerEventHandler: ((event: AppServerEvent) => void) | null = null;
+let nextMockRunEventSequence = 0;
 
 function strictProviderCatalog() {
   return {
@@ -125,6 +126,7 @@ describe("WebApp workspace-first messaging", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     appServerEventHandler = null;
+    nextMockRunEventSequence = 0;
     window.matchMedia = vi.fn().mockReturnValue({
       matches: false,
       addEventListener: vi.fn(),
@@ -140,7 +142,13 @@ describe("WebApp workspace-first messaging", () => {
       connected: true,
     }]);
     client.subscribeAppServerEvents.mockImplementation((handler: (event: AppServerEvent) => void) => {
-      appServerEventHandler = handler;
+      appServerEventHandler = (event) => {
+        handler({
+          ...event,
+          run_id: event.run_id ?? "run-1",
+          sequence: event.sequence ?? ++nextMockRunEventSequence,
+        });
+      };
       return () => undefined;
     });
     client.listThreads.mockResolvedValue({ data: [] });

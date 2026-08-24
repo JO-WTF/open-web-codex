@@ -218,6 +218,9 @@ function runtimeMessage(event: RunEvent): JsonRecord | null {
       params: { ...base, ...data },
     };
   }
+  if (event.event_type === "codex.error" && data.sourceType === "error") {
+    return { method: "error", params: { ...base, ...data } };
+  }
   if (event.event_type === "codex.item.started" || event.event_type === "codex.item.completed") {
     const item = rawItem(event);
     if (!item) return null;
@@ -227,9 +230,19 @@ function runtimeMessage(event: RunEvent): JsonRecord | null {
     };
   }
   if (event.event_type === "codex.item.delta") {
-    if (typeof data.sourceType !== "string") return null;
+    const sourceType = typeof data.sourceType === "string" ? data.sourceType : null;
+    if (!sourceType || ![
+      "item/agentMessage/delta",
+      "item/reasoning/summaryPartAdded",
+      "item/reasoning/summaryTextDelta",
+      "item/reasoning/textDelta",
+      "item/plan/delta",
+      "item/commandExecution/outputDelta",
+      "item/commandExecution/terminalInteraction",
+      "item/fileChange/outputDelta",
+    ].includes(sourceType)) return null;
     return {
-      method: data.sourceType,
+      method: sourceType,
       params: {
         ...base,
         itemId: event.item_id,
@@ -245,11 +258,15 @@ function runtimeMessage(event: RunEvent): JsonRecord | null {
     "codex.thread.started": "thread/started",
     "codex.thread.completed": "thread/completed",
     "codex.thread.failed": "thread/failed",
+    "codex.thread.status.changed": "thread/status/changed",
+    "codex.thread.archived": "thread/archived",
+    "codex.thread.unarchived": "thread/unarchived",
+    "codex.thread.name.updated": "thread/name/updated",
+    "codex.thread.token_usage.updated": "thread/tokenUsage/updated",
+    "codex.turn.plan.updated": "turn/plan/updated",
+    "codex.turn.diff.updated": "turn/diff/updated",
   }[event.event_type];
   if (lifecycleMethod) return { method: lifecycleMethod, params: { ...base, ...data } };
-  if (typeof data.sourceType === "string") {
-    return { method: data.sourceType, params: { ...base, ...data } };
-  }
   return null;
 }
 
@@ -922,15 +939,16 @@ export class CodexMonitorWebClient {
     };
     const deliver = async (event: RunEvent) => {
       if (!event.thread_id) return;
-      const message = runtimeMessage(event);
-      if (!message) return;
       const context = await this.findRunEventContext(event.run_id);
       const previous = this.taskEventSequences.get(context.taskId) ?? 0;
       if (event.sequence <= previous) return;
-      this.taskEventSequences.set(context.taskId, event.sequence);
+      this.taskEventSequences.set(context.taskId, Math.max(previous, event.sequence));
+      const message = runtimeMessage(event);
+      if (!message) return;
       onEvent({
         workspace_id: context.workspaceId,
-        run_id: context.runId,
+        run_id: event.run_id,
+        sequence: event.sequence,
         root_thread_id: context.rootThreadId,
         message,
       });
@@ -1018,7 +1036,8 @@ export class CodexMonitorWebClient {
           );
           onEvent({
             workspace_id: context.workspaceId,
-            run_id: context.runId,
+            run_id: event.run_id,
+            sequence: event.sequence,
             root_thread_id: context.rootThreadId,
             message,
           });
