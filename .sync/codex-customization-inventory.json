@@ -17,7 +17,7 @@
     "diverged": 0
   },
   "progress": {
-    "state": "runtime-validated-product-e2e-pending",
+    "state": "runtime-validated-product-e2e-complete",
     "classificationSource": "docs/custom-codex-patch-map.md",
     "classifiedRetainCore": [
       "provider-chat-wire-adapter",
@@ -39,18 +39,17 @@
       "That comparison snapshot has no upstream-only or diverged path; live upstream movement is reported by the status scripts."
     ],
     "validation": {
-      "status": "deterministic-complete-real-provider-pending",
+      "status": "deterministic-and-real-provider-complete",
       "completed": [
         "Focused tests passed for all seven retained seams, including Chat history ToolSearch reuse, Provider catalogs, Plugin policy, Role resume, and stdio MCP liveness.",
-        "Config schema, app-server JSON and TypeScript schema fixtures, precomputed exports, app-server smoke, and Web deterministic regression gates passed."
+        "Config schema, app-server JSON and TypeScript schema fixtures, precomputed exports, app-server smoke, and Web deterministic regression gates passed.",
+        "At 64b4461e4, one DeepSeek Flash Web Task completed baseline coverage, the Balikpapan follow-up, and minimum warehouse count with three Ready maps, stable Data and Network child Threads, ToolSearch counts 7/0/2, no terminal or provider-protocol failure, and four recovered typed Tool rejections."
       ],
-      "required": [
-        "DeepSeek Flash Web acceptance for baseline coverage, Balikpapan follow-up, and minimum warehouse count"
-      ]
+      "required": []
     },
     "validatedAgainstIntegratedUpstream": "76d98a771e6cd44a79a3ab895a9f7c49d27d6deb",
-    "validationWorktreeBaseCommit": "719c3fb3590018b337b02e2655bb67f2aca839ae",
-    "validationScope": "Runtime, app-server, generated contracts, Web deterministic tests, and package regressions are complete; real DeepSeek Flash Web acceptance remains pending.",
-    "nextAction": "Run the three required DeepSeek Flash Web turns in one canonical Thread and record results, durations, failures, Agent reuse, and map delivery."
+    "validationWorktreeBaseCommit": "64b4461e468d1885af73adbc8f9d39d1d19791c2",
+    "validationScope": "Runtime, app-server, generated contracts, Web deterministic tests, package regressions, and the specified three-turn DeepSeek Flash Web warehouse acceptance are complete for this frozen snapshot.",
+    "nextAction": "Repeat the same scoped validation after any later Runtime, Tool, Web behavior, or official upstream synchronization change; do not extrapolate this snapshot to other Providers or versions."
   }
 }

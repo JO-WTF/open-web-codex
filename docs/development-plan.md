@@ -5,10 +5,10 @@
 | 文档性质 | 当前与下一里程碑的执行计划 |
 | 更新日期 | 2026-08-24 |
 | 当前阶段 | 阶段三：回归 Codex Runtime owner 并清理并行实现 |
-| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统、Browser Workspace Preferences、独立 Terminal、本地 Usage、Fake 生产运行模式、Provider 定义/模型目录数据库镜像、Task/global model pair 和每 Turn pair override；C1 以 exact Workspace-bound Fake fixture 覆盖 terminal Thread follow-up，C2 已收敛 canonical history 与 client message identity，C3 已将 terminal Thread follow-up 收敛为带 direct source 的独立 Run attempt、仅 `turn/completed` 的 exact Turn terminal 与 Runtime event 等待，C4 已以 `(runId, sequence)` 收敛 durable event replay/live 去重并限制 Runtime event DTO；Codex 六个最小 seam 已代码收敛，disposable PostgreSQL 生命周期门仍待执行 |
+| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统、Browser Workspace Preferences、独立 Terminal、本地 Usage、Fake 生产运行模式、Provider 定义/模型目录数据库镜像、Task/global model pair 和每 Turn pair override；C1-C4 已把 follow-up Run、canonical history、exact terminal 与 durable event replay 收敛到现役 owner；Codex 已同步至 `76d98a771e6c`，七个 retained seam、disposable PostgreSQL 生命周期、deterministic 门和当前 HEAD 的三轮 DeepSeek Flash Web 验收均通过 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018/019/024/025 为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
-| 阶段三后续 | 执行六个 retained seam 的 focused/schema/app-server/product 验证；处理 Run/Thread 终态与 bounded event 投影 |
+| 阶段三后续 | 当前切片进入人工审核与合并收口；official upstream 后续推进时另开同步切片复验，不把新变更混入本次冻结基线 |
 
 本文记录阶段一已完成的正常业务主链、仍有效的边界和后续工作。用户心智统一为：
 
@@ -465,9 +465,10 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
    已完成 provided/haversine/navigation 路线、route/cost pair-level 复用、双覆盖口径以及 final
    地图卡片、map 文件与单份中文 Markdown 简报的最小交付合同；正文只显示关键结论和 durable Artifact 授权下载链接，不复制整份简报。Stage E non-active compatibility tail 已完成尾删，后续只维护
    Platform 业务状态。
-4. **D — 完整案例验收。** 已用 clean real Web 的 S1/S2/S3 验证 Indonesia 数据准备、完整规划、
+4. **D — 完整案例验收。** 历史 clean real Web 的 S1/S2/S3 已验证 Indonesia 数据准备、完整规划、
    同一 Network child 场景复用、地图卡片、唯一 Markdown Artifact 和一次 pending approval 刷新恢复；
-   案例顺序没有进入 Platform workflow。
+   现行 source-unit/Data v3、comparison map v3 与恢复语义另由 2026-08-24 当前 HEAD 三轮真实 Web 门
+   验证，案例顺序没有进入 Platform workflow。
 5. **E — 旧 caller 尾删。** 已原子删除 Network non-active compatibility tail 中的
    `CaseRepository`、`NetworkSnapshot`、`ArtifactRef`、旧 services/models/tests 与 Demo launcher
    surface，不保留兼容双路径；Data4 与 Network active `ResourceRef` surface 不回退为 aliases。
@@ -488,6 +489,14 @@ Provider 全量去重、首消息 compound selection 或完整 4B.3 Thread truth
 10.2GB 降到约 405MB；但 DeepSeek 的额外计划、搜索和参数纠正使模型轮次与墙钟时间没有下降。
 后续模型层加速必须用新的真实测量驱动，不能重新向 prompt 填回固定 Tool 顺序，也不能把内部计算
 加速误报为端到端加速。
+
+2026-08-24 当前 HEAD 的隔离 DB/Profile Web 复验在同一 Workspace、Task 和 Root Thread 中连续完成
+12h 基线、Balikpapan 变化和 90% 最少仓数三轮，Root Turn 分别为 132.533、212.594（含一次用户选择）
+和 139.146 秒，结果为需求量 81.5%、86.5% 和 90.0738%，三张地图 Ready。拓扑始终为
+Root/Data/Network，两个 child 跨 follow-up 复用；Tool Search 为 7/0/2，第二轮没有重复搜索。
+正式门没有 terminal、unknown Tool、Tool visibility、stream 或 Provider 协议失败；4 次 typed Tool
+拒绝在同一 child 内修正后完成。
+
 浏览器响应、日志、Workspace 与普通 Profile 文件均不得出现 Secret 明文；不写 `model_catalog_json`、
 不按模型名推断、不重试提示词、不回退 single-agent。后续真实空目录故障已用窄 follow-up 收口：Codex 只增加 exact
 Provider 的 fresh typed catalog，Platform 不切换 current Provider，只在非空成功后写回 Runtime 目标目录并在

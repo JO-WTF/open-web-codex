@@ -10,10 +10,11 @@ Runtime seam；生成 schema、TypeScript、锁文件、fixture 和 snapshot 都
   `76d98a771e6cd44a79a3ab895a9f7c49d27d6deb`
 - 比较对象：`HEAD:codex` 对 `codex-upstream/main`
 - 已分类差异：116 个 local-only（26 added、90 modified、0 missing），0 upstream-only、0 diverged
-- 状态：`runtime-validated-product-e2e-pending`
+- 状态：`runtime-validated-product-e2e-complete`
 
-这个状态只说明代码已经按下列 seam 收敛；它不宣称完整 Runtime、app-server、Web 或真实
-Provider E2E 已完成。实时计数以
+这个状态记录 `64b4461e4` 上七个 seam 的 focused Runtime/app-server/schema 门、确定性 Web 门和
+指定 DeepSeek Flash 仓网三轮产品验收均已完成；它不外推为任意 Provider、完整 hardening 或后来
+official upstream 变更也已经验证。实时计数以
 `scripts/codex-upstream-status.sh` 和 `scripts/codex-customization-status.sh` 为准，机器
 快照由 `.sync/codex-customization-inventory.json` 保存。
 
@@ -199,5 +200,5 @@ Protocol/config schema、TypeScript、generated proto、`Cargo.lock`、fixture �
 同步时先接受上游结构，再按表中顺序重新定位最小 owner；每个非生成差异只能归入一个 seam，或标为
 `upstreamed`、`move-out`、`drop`。如果上游已提供等价能力，删除本地实现而不是保留兼容分支。
 同步完成后更新 `.sync/codex-upstream.json`、本文件和 machine-readable inventory；库存状态必须
-准确区分 deterministic Runtime/app-server/schema 验证与尚未完成的真实 Provider 产品 E2E，不能把
-任一层的通过外推成另一层已经通过。
+准确记录 deterministic Runtime/app-server/schema 与特定真实 Provider 产品 E2E 的实际范围，不能把
+任一层或单一 Provider 的通过外推成另一层、任意 Provider 或后续版本已经通过。
