@@ -11,7 +11,10 @@ use open_web_codex_platform_contracts::{
     UpdateThreadModelSettingsRequest,
 };
 use open_web_codex_platform_store::AppState;
-use open_web_codex_run_orchestrator::{RecoverRunRequest, RunOrchestrator};
+use open_web_codex_run_orchestrator::{
+    ContinueThreadRunRequest, RecoverRunRequest, RunOrchestrator, RunRecord,
+    StartedThreadTurnRequest,
+};
 use serde::Deserialize;
 use sqlx::Row;
 use std::collections::HashSet;
@@ -378,7 +381,8 @@ pub async fn send_message(
 
     // Resolve the server-owned workspace; the browser never supplies a path.
     let active_run = sqlx::query(
-        "SELECT r.id, r.status, r.codex_thread_id, r.workspace_id, w.profile_id, w.root_path, \
+        "SELECT r.id, r.status, r.codex_thread_id, r.workspace_id, r.continued_from_run_id, \
+                w.profile_id, w.root_path, \
                 t.title, t.copilot_package_id \
          FROM runs r JOIN tasks t ON t.id = r.task_id \
            AND t.organization_id = r.organization_id \
@@ -393,7 +397,7 @@ pub async fn send_message(
          WHERE r.task_id = $1 AND r.organization_id = $2 \
            AND r.requested_by = $3 \
            AND r.codex_thread_id IS NOT NULL \
-           AND r.status IN ('running', 'recovery_pending', 'completed') \
+           AND r.status IN ('running', 'recovery_pending', 'completed', 'failed', 'cancelled') \
          ORDER BY CASE WHEN r.status IN ('running', 'recovery_pending') THEN 0 ELSE 1 END, \
                   r.created_at DESC LIMIT 1",
     )
@@ -446,6 +450,37 @@ pub async fn send_message(
             .await
             .map_err(super::runs::orchestrator_error)?;
     }
+    let active_status: String = active_run.get("status");
+    let followup_source_run_id: Option<Uuid> =
+        if matches!(active_status.as_str(), "completed" | "failed" | "cancelled") {
+            Some(active_run.get("id"))
+        } else {
+            active_run.get("continued_from_run_id")
+        };
+    let (run_id, is_followup) = if let Some(source_run_id) = followup_source_run_id {
+        let continued = orchestrator
+            .continue_thread_run(ContinueThreadRunRequest {
+                organization_id: auth.organization_id,
+                actor_id: auth.user_id,
+                task_id,
+                workspace_id,
+                source_run_id,
+                client_user_message_id: client_user_message_id.clone(),
+            })
+            .await
+            .map_err(super::runs::orchestrator_error)?;
+        if !continued.created {
+            return replay_followup_message(
+                continued.run,
+                continued.observed_turn_id,
+                &thread_id,
+                client_user_message_id,
+            );
+        }
+        (continued.run.id, true)
+    } else {
+        (active_run.get("id"), false)
+    };
     let message_text = selected_map_card_turn_text(
         &state,
         auth.organization_id,
@@ -466,7 +501,7 @@ pub async fn send_message(
     let suggested_thread_name =
         suggested_thread_name(active_run.get::<String, _>("title").as_str(), &req.text);
 
-    let result = adapter
+    let result = match adapter
         .send_user_message(
             &workspace,
             &thread_id,
@@ -482,20 +517,31 @@ pub async fn send_message(
             },
         )
         .await
-        .map_err(|error| {
+    {
+        Ok(result) => result,
+        Err(error) => {
+            if is_followup {
+                if let Err(mark_error) = orchestrator
+                    .fail_accepted_followup(auth.organization_id, run_id)
+                    .await
+                {
+                    tracing::warn!(%mark_error, %run_id, "follow-up turn start failure could not be recorded");
+                }
+            }
             tracing::warn!(
                 task_id = %task_id,
                 thread_id = %thread_id,
                 error = %error,
                 "Codex Runtime rejected turn start"
             );
-            (
+            return Err((
                 StatusCode::BAD_GATEWAY,
                 Json(PlatformError::internal(
                     "Codex Runtime failed to start the Turn",
                 )),
-            )
-        })?;
+            ));
+        }
+    };
 
     let turn_id = result
         .get("turnId")
@@ -510,29 +556,23 @@ pub async fn send_message(
             )
         })?
         .to_string();
-    if let Err(error) = sqlx::query(
-        "WITH updated_run AS (
-             UPDATE runs SET status = 'running', active_turn_id = $1,
-                             lease_owner = NULL, lease_token = NULL,
-                             lease_expires_at = NULL, updated_at = now()
-             WHERE id = $2 AND organization_id = $3
-               AND status IN ('running', 'completed')
-             RETURNING task_id
-         )
-         UPDATE tasks SET status = 'running', updated_at = now()
-         WHERE id IN (SELECT task_id FROM updated_run)
-           AND organization_id = $3
-           AND status NOT IN ('cancelled', 'archived', 'failed')",
-    )
-    .bind(&turn_id)
-    .bind(active_run.get::<Uuid, _>("id"))
-    .bind(auth.organization_id)
-    .execute(&state.db)
-    .await
-    {
-        tracing::warn!(%error, "active Turn delivery succeeded but projection update failed");
+    let started_turn = StartedThreadTurnRequest {
+        organization_id: auth.organization_id,
+        run_id,
+        thread_id: thread_id.clone(),
+        turn_id: turn_id.clone(),
+    };
+    if is_followup {
+        orchestrator
+            .start_accepted_followup_turn(started_turn)
+            .await
+            .map_err(super::runs::orchestrator_error)?;
+    } else {
+        orchestrator
+            .record_active_turn(started_turn)
+            .await
+            .map_err(super::runs::orchestrator_error)?;
     }
-
     let status = result
         .get("status")
         .and_then(|v| v.as_str())
@@ -566,6 +606,65 @@ pub async fn send_message(
         turn_id,
         client_user_message_id,
         thread_name,
+    }))
+}
+
+fn replay_followup_message(
+    run: RunRecord,
+    observed_turn_id: Option<String>,
+    expected_thread_id: &str,
+    client_user_message_id: String,
+) -> ApiResult<SendMessageResponse> {
+    if run.codex_thread_id.as_deref() != Some(expected_thread_id) {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(PlatformError::bad_request(
+                "follow-up Run is bound to another Thread",
+            )),
+        ));
+    }
+    let status = match run.status.as_str() {
+        "running" => "sent",
+        "completed" => "completed",
+        "provisioning" => {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(PlatformError::bad_request(
+                    "follow-up is accepted but its Runtime Turn is not observed yet",
+                )),
+            ));
+        }
+        "failed" if run.failure_code.as_deref() == Some("turn_start_failed") => {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                Json(PlatformError::internal(
+                    "Codex Runtime failed to start the prior follow-up Turn",
+                )),
+            ));
+        }
+        _ => {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(PlatformError::bad_request(
+                    "follow-up Run is no longer active",
+                )),
+            ));
+        }
+    };
+    let turn_id = observed_turn_id.ok_or_else(|| {
+        (
+            StatusCode::CONFLICT,
+            Json(PlatformError::bad_request(
+                "follow-up is accepted but its Runtime Turn is not observed yet",
+            )),
+        )
+    })?;
+    Ok(Json(SendMessageResponse {
+        status: status.to_string(),
+        thread_id: expected_thread_id.to_string(),
+        turn_id,
+        client_user_message_id,
+        thread_name: None,
     }))
 }
 

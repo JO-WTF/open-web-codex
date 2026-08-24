@@ -5,7 +5,7 @@
 | 文档性质 | 当前与下一里程碑的执行计划 |
 | 更新日期 | 2026-08-24 |
 | 当前阶段 | 阶段三：回归 Codex Runtime owner 并清理并行实现 |
-| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统、Browser Workspace Preferences、独立 Terminal、本地 Usage、Fake 生产运行模式、Provider 定义/模型目录数据库镜像、Task/global model pair 和每 Turn pair override；C1 以 exact Workspace-bound Fake fixture 覆盖 completed Thread follow-up，C2 已收敛 canonical history 与 client message identity；Codex 六个最小 seam 已代码收敛，验证矩阵待执行 |
+| 当前状态 | 阶段二开发者 SDK 验收完成；阶段三已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统、Browser Workspace Preferences、独立 Terminal、本地 Usage、Fake 生产运行模式、Provider 定义/模型目录数据库镜像、Task/global model pair 和每 Turn pair override；C1 以 exact Workspace-bound Fake fixture 覆盖 terminal Thread follow-up，C2 已收敛 canonical history 与 client message identity，C3 已将 terminal Thread follow-up 收敛为带 direct source 的独立 Run attempt、仅 `turn/completed` 的 exact Turn terminal 与 Runtime event 等待；Codex 六个最小 seam 已代码收敛，disposable PostgreSQL 生命周期门仍待执行 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018/019/024/025 为当前基线 |
 | 当前事实 | [Architecture](architecture.md) 与 [Capability Baseline](capability-baseline.md) |
 | 阶段三后续 | 执行六个 retained seam 的 focused/schema/app-server/product 验证；处理 Run/Thread 终态与 bounded event 投影 |

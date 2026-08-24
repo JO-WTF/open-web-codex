@@ -9,7 +9,9 @@ open-web-codex-git-runtime = { path = "../git-runtime" }
 
 async-trait.workspace = true
 chrono.workspace = true
+hex.workspace = true
 sqlx.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true

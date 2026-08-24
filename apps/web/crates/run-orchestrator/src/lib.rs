@@ -84,6 +84,38 @@ pub struct RecoverRunRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContinueThreadRunRequest {
+    pub organization_id: Uuid,
+    pub actor_id: Uuid,
+    pub task_id: Uuid,
+    pub workspace_id: Uuid,
+    pub source_run_id: Uuid,
+    pub client_user_message_id: String,
+}
+
+/// The durable result of accepting a user follow-up for a terminal Thread.
+///
+/// A repeated client message identity returns the same Run with
+/// `created = false`; callers must then replay its observed Turn rather than
+/// invoking the Runtime a second time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContinueThreadRunResult {
+    pub run: RunRecord,
+    pub created: bool,
+    /// The exact Runtime Turn already observed for an idempotent retry. It is
+    /// retained after terminal delivery so the retry never starts a new Turn.
+    pub observed_turn_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartedThreadTurnRequest {
+    pub organization_id: Uuid,
+    pub run_id: Uuid,
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateWorkspaceRequest {
     pub organization_id: Uuid,
     pub actor_id: Uuid,

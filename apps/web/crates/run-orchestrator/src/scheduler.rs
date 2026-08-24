@@ -1,13 +1,200 @@
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use sqlx::Row;
 use uuid::Uuid;
 
 use crate::{
-    chrono_ttl, validate_idempotency_key, CancelRunRequest, EnqueueRunRequest, RecoverRunRequest,
-    ReplayRunRequest, RunLease, RunOrchestrator, RunOrchestratorError, RunRecord,
+    chrono_ttl, validate_idempotency_key, CancelRunRequest, ContinueThreadRunRequest,
+    ContinueThreadRunResult, EnqueueRunRequest, RecoverRunRequest, ReplayRunRequest, RunLease,
+    RunOrchestrator, RunOrchestratorError, RunRecord, StartedThreadTurnRequest,
 };
 
 impl RunOrchestrator {
+    pub async fn continue_thread_run(
+        &self,
+        request: ContinueThreadRunRequest,
+    ) -> Result<ContinueThreadRunResult, RunOrchestratorError> {
+        let idempotency_key = followup_idempotency_key(&request.client_user_message_id);
+        validate_idempotency_key(&idempotency_key)?;
+        let mut transaction = self.db.begin().await?;
+        let source = sqlx::query(
+            "SELECT run.codex_thread_id, run.requested_profile_id, run.status, run.active_turn_id, \
+                    task.status AS task_status \
+             FROM runs run JOIN tasks task ON task.id = run.task_id \
+               AND task.organization_id = run.organization_id AND task.workspace_id = run.workspace_id \
+             WHERE run.id = $1 AND run.organization_id = $2 AND run.requested_by = $3 \
+               AND run.task_id = $4 AND run.workspace_id = $5 FOR UPDATE OF run, task",
+        )
+        .bind(request.source_run_id).bind(request.organization_id).bind(request.actor_id)
+        .bind(request.task_id).bind(request.workspace_id)
+        .fetch_optional(&mut *transaction).await?.ok_or(RunOrchestratorError::NotFound)?;
+        if !matches!(
+            source.get::<String, _>("status").as_str(),
+            "completed" | "failed" | "cancelled"
+        ) || source.get::<Option<String>, _>("active_turn_id").is_some()
+        {
+            return Err(RunOrchestratorError::Conflict(
+                "source Run is not a terminal Thread".to_string(),
+            ));
+        }
+        if source.get::<String, _>("task_status") == "archived" {
+            return Err(RunOrchestratorError::Conflict(
+                "archived Task cannot continue its Thread".to_string(),
+            ));
+        }
+        let thread_id: String = source
+            .get::<Option<String>, _>("codex_thread_id")
+            .filter(|value| !value.trim().is_empty() && value.len() <= 256)
+            .ok_or_else(|| {
+                RunOrchestratorError::Conflict("terminal Run has no Thread".to_string())
+            })?;
+        // Re-read after locking the source. Concurrent callers that began
+        // before the first insert could not see its idempotency row above.
+        if let Some(existing) = sqlx::query(
+            "SELECT id, task_id, status, failure_code, codex_thread_id, active_turn_id, workspace_id, attempt, created_at, updated_at, continued_from_run_id, last_turn_id \
+             FROM runs WHERE organization_id=$1 AND requested_by=$2 AND idempotency_key=$3",
+        )
+        .bind(request.organization_id)
+        .bind(request.actor_id)
+        .bind(&idempotency_key)
+        .fetch_optional(&mut *transaction)
+        .await?
+        {
+            if existing.get::<Uuid, _>("task_id") != request.task_id
+                || existing.get::<Uuid, _>("workspace_id") != request.workspace_id
+                || existing.get::<Option<String>, _>("codex_thread_id").as_deref()
+                    != Some(thread_id.as_str())
+                || existing.get::<Option<Uuid>, _>("continued_from_run_id")
+                    != Some(request.source_run_id)
+            {
+                return Err(RunOrchestratorError::Conflict(
+                    "idempotency key was already used for another follow-up".to_string(),
+                ));
+            }
+            transaction.commit().await?;
+            return Ok(ContinueThreadRunResult {
+                run: run_record(&existing),
+                created: false,
+                observed_turn_id: existing
+                    .get::<Option<String>, _>("active_turn_id")
+                    .or_else(|| existing.get("last_turn_id")),
+            });
+        }
+        let inserted = sqlx::query(
+            "INSERT INTO runs (organization_id, task_id, requested_by, requested_profile_id, workspace_id, idempotency_key, codex_thread_id, continued_from_run_id, status) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'provisioning') \
+             RETURNING id, task_id, status, failure_code, codex_thread_id, active_turn_id, workspace_id, attempt, created_at, updated_at",
+        ).bind(request.organization_id).bind(request.task_id).bind(request.actor_id)
+        .bind(source.get::<Uuid,_>("requested_profile_id")).bind(request.workspace_id)
+        .bind(&idempotency_key).bind(&thread_id).bind(request.source_run_id).fetch_one(&mut *transaction).await
+        .map_err(|error| if error.as_database_error().is_some_and(|database| database.is_unique_violation()) { RunOrchestratorError::Conflict("Task already has an active Run".to_string()) } else { error.into() })?;
+        sqlx::query(
+            "UPDATE tasks SET status = 'running', updated_at = now() \
+             WHERE id = $1 AND status <> 'archived'",
+        )
+        .bind(request.task_id)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(ContinueThreadRunResult {
+            run: run_record(&inserted),
+            created: true,
+            observed_turn_id: None,
+        })
+    }
+
+    /// Bind the Turn returned by the Runtime to an already accepted follow-up.
+    /// A delayed event for an older Turn cannot enter this provisional Run.
+    pub async fn start_accepted_followup_turn(
+        &self,
+        request: StartedThreadTurnRequest,
+    ) -> Result<RunRecord, RunOrchestratorError> {
+        validate_runtime_identity(&request.thread_id, "Thread")?;
+        validate_runtime_identity(&request.turn_id, "Turn")?;
+        self.start_turn(request, true).await
+    }
+
+    /// Record a Runtime Turn already accepted for an active Run. This is
+    /// idempotent only for the exact same Turn and never replaces another one.
+    pub async fn record_active_turn(
+        &self,
+        request: StartedThreadTurnRequest,
+    ) -> Result<RunRecord, RunOrchestratorError> {
+        validate_runtime_identity(&request.thread_id, "Thread")?;
+        validate_runtime_identity(&request.turn_id, "Turn")?;
+        self.start_turn(request, false).await
+    }
+
+    async fn start_turn(
+        &self,
+        request: StartedThreadTurnRequest,
+        accepted_followup: bool,
+    ) -> Result<RunRecord, RunOrchestratorError> {
+        let row = if accepted_followup {
+            sqlx::query(
+                "UPDATE runs SET status = 'running', active_turn_id = $1, last_turn_id = $1, lease_owner = NULL, \
+                                 lease_token = NULL, lease_expires_at = NULL, updated_at = now() \
+                 WHERE id = $2 AND organization_id = $3 AND codex_thread_id = $4 \
+                   AND continued_from_run_id IS NOT NULL \
+                   AND ((status = 'provisioning' \
+                         AND (active_turn_id IS NULL OR active_turn_id = $1)) \
+                     OR (status = 'running' AND active_turn_id = $1)) \
+                 RETURNING id, task_id, status, failure_code, codex_thread_id, active_turn_id, workspace_id, attempt, created_at, updated_at",
+            )
+            .bind(&request.turn_id)
+            .bind(request.run_id)
+            .bind(request.organization_id)
+            .bind(&request.thread_id)
+            .fetch_optional(&self.db)
+            .await?
+        } else {
+            sqlx::query(
+                "UPDATE runs SET active_turn_id = $1, last_turn_id = $1, updated_at = now() \
+                 WHERE id = $2 AND organization_id = $3 AND codex_thread_id = $4 \
+                   AND status = 'running' AND (active_turn_id IS NULL OR active_turn_id = $1) \
+                 RETURNING id, task_id, status, failure_code, codex_thread_id, active_turn_id, workspace_id, attempt, created_at, updated_at",
+            )
+            .bind(&request.turn_id)
+            .bind(request.run_id)
+            .bind(request.organization_id)
+            .bind(&request.thread_id)
+            .fetch_optional(&self.db)
+            .await?
+        };
+        let row = row.ok_or_else(|| {
+            RunOrchestratorError::Conflict(
+                "Run is not awaiting this exact Runtime Turn".to_string(),
+            )
+        })?;
+        Ok(run_record(&row))
+    }
+
+    pub async fn fail_accepted_followup(
+        &self,
+        organization_id: Uuid,
+        run_id: Uuid,
+    ) -> Result<(), RunOrchestratorError> {
+        let mut transaction = self.db.begin().await?;
+        sqlx::query(
+            "WITH failed_run AS ( \
+                 UPDATE runs SET status = 'failed', failure_code = 'turn_start_failed', \
+                                 lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, \
+                                 updated_at = now() \
+                  WHERE id = $1 AND organization_id = $2 AND status = 'provisioning' \
+                    AND active_turn_id IS NULL AND continued_from_run_id IS NOT NULL \
+                  RETURNING task_id \
+             ) \
+             UPDATE tasks SET status = 'pending', updated_at = now() \
+              WHERE id IN (SELECT task_id FROM failed_run) \
+                AND status NOT IN ('completed', 'cancelled', 'archived')",
+        )
+        .bind(run_id)
+        .bind(organization_id)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
     /// Mark Runtime work that was active before this process started as requiring
     /// explicit recovery. A restarted Profile Host cannot prove that an old
     /// in-memory Turn is still executing.
@@ -521,5 +708,50 @@ pub(crate) fn run_record(row: &sqlx::postgres::PgRow) -> RunRecord {
         attempt: row.get("attempt"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+    }
+}
+
+fn followup_idempotency_key(client_user_message_id: &str) -> String {
+    format!(
+        "followup:{}",
+        hex::encode(Sha256::digest(client_user_message_id.as_bytes()))
+    )
+}
+
+fn validate_runtime_identity(value: &str, label: &str) -> Result<(), RunOrchestratorError> {
+    if value.is_empty()
+        || value.trim() != value
+        || value.len() > 256
+        || value.chars().any(char::is_control)
+    {
+        return Err(RunOrchestratorError::Invalid(format!(
+            "{label} id is invalid"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{followup_idempotency_key, validate_runtime_identity};
+
+    #[test]
+    fn followup_idempotency_key_is_stable_and_safe_for_any_client_identity() {
+        let ascii = followup_idempotency_key("client-message-1");
+        let unicode = followup_idempotency_key("消息-1");
+        assert_eq!(ascii, followup_idempotency_key("client-message-1"));
+        assert_ne!(ascii, unicode);
+        assert_eq!(ascii.len(), "followup:".len() + 64);
+        assert!(ascii
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || ":".contains(character)));
+    }
+
+    #[test]
+    fn runtime_turn_identity_is_bounded_and_non_control() {
+        assert!(validate_runtime_identity("turn-1", "Turn").is_ok());
+        assert!(validate_runtime_identity("", "Turn").is_err());
+        assert!(validate_runtime_identity("turn\n", "Turn").is_err());
+        assert!(validate_runtime_identity(&"t".repeat(257), "Turn").is_err());
     }
 }

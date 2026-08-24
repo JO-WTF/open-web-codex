@@ -333,10 +333,16 @@ Runtime 与共享 build store，`sync` 通过完整 `check` 后把冷重启交�
 
 1. Profile Runtime 的 HOME 与 process cwd 已隔离，但 Server 仍可默认导入宿主认证；未来
    多用户身份隔离尚未成立。
-2. completed Thread 的 follow-up 仍会把已完成 Run 改回 `running`，而 archive、interrupt、
-   scheduler 与 event projection 也会竞争写入 Run/Task 状态；这是下一 Run lifecycle 原子，
-   不能借 Thread history projection 或 Browser optimistic 状态掩盖。Codex 的 paginated history
-   仍遵循当前 upstream contract；本地不再保留 legacy response-tool/history materialization seam。
+2. terminal Thread 的 follow-up 现在创建带 `continued_from_run_id` 的独立 Run attempt，原 Run
+   保持终态历史；在 Runtime response 或 official `turn/started` 绑定 exact Turn 前新 attempt 保持
+   `provisioning`，两者任一先到都原子进入 `running`；adapter 拒绝同步写为 `turn_start_failed`，已观察的
+   Turn identity 留在该 Run 供同一 client request 重放。只有带 exact
+   `(run, thread, turn)` 绑定的官方 `turn/completed` event 能终结该 Run；
+   interrupt 仅请求 Runtime、archive 只归档 Runtime Thread，均不抢写 Run/Task。Thread terminal 若不带
+   Turn identity，或带任何 Turn identity，均只结束可重建的 Agent projection。该切片的 disposable
+   PostgreSQL 生命周期门仍待执行。
+   Codex 的 paginated history 仍遵循当前 upstream contract；本地不再保留 legacy response-tool/history
+   materialization seam。
 3. `run_events` 的 sequence 和 run/thread/turn/item provenance 是合理的持久投影，但当前
    `project_item` 会把未统一限长的 agent text、reasoning、command output、diff 与 Tool result
    同时写入 PostgreSQL 和 WebSocket，且 unknown Runtime method 仍可能被 Browser JSON summary

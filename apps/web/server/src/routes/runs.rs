@@ -16,7 +16,7 @@ use open_web_codex_platform_contracts::{
 use open_web_codex_platform_store::AppState;
 use open_web_codex_run_orchestrator::{
     CancelRunRequest, EnqueueRunRequest, ReplayRunRequest, RunOrchestrator, RunOrchestratorError,
-    RunRecord,
+    RunRecord, StartedThreadTurnRequest,
 };
 use sqlx::Row;
 use uuid::Uuid;
@@ -162,17 +162,7 @@ pub async fn interrupt_run(
         .interrupt_turn(&context.workspace, &context.thread_id, &request.turn_id)
         .await
         .map_err(adapter_control_error)?;
-    sqlx::query(
-        "UPDATE runs SET active_turn_id = NULL, updated_at = now() \
-         WHERE id = $1 AND organization_id = $2 AND active_turn_id = $3",
-    )
-    .bind(id)
-    .bind(auth.organization_id)
-    .bind(&request.turn_id)
-    .execute(&state.db)
-    .await
-    .map_err(database_error)?;
-    Ok(Json(serde_json::json!({ "status": "interrupted" })))
+    Ok(Json(serde_json::json!({ "status": "interruptRequested" })))
 }
 
 /// Add a follow-up to the active Turn while enforcing the projected Turn id.
@@ -240,6 +230,7 @@ pub async fn start_review(
     auth: AuthenticatedUser,
     Path(id): Path<Uuid>,
     Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
+    Extension(orchestrator): Extension<Arc<RunOrchestrator>>,
     Json(request): Json<StartReviewRequest>,
 ) -> ApiResult<serde_json::Value> {
     if request
@@ -272,16 +263,15 @@ pub async fn start_review(
         .pointer("/turn/id")
         .and_then(serde_json::Value::as_str)
     {
-        sqlx::query(
-            "UPDATE runs SET active_turn_id = $1, updated_at = now() \
-             WHERE id = $2 AND organization_id = $3 AND status = 'running'",
-        )
-        .bind(turn_id)
-        .bind(id)
-        .bind(auth.organization_id)
-        .execute(&state.db)
-        .await
-        .map_err(database_error)?;
+        orchestrator
+            .record_active_turn(StartedThreadTurnRequest {
+                organization_id: auth.organization_id,
+                run_id: id,
+                thread_id: context.thread_id.clone(),
+                turn_id: turn_id.to_string(),
+            })
+            .await
+            .map_err(orchestrator_error)?;
     }
     Ok(Json(result))
 }

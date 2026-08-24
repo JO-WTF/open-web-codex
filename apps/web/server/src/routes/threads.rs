@@ -246,43 +246,11 @@ pub async fn archive(
     Extension(adapter): Extension<Arc<dyn CodexAdapter>>,
 ) -> ApiResult<serde_json::Value> {
     let context = authorized_thread(&state, &auth, run_id).await?;
-    let run_state = sqlx::query(
-        "SELECT status, active_turn_id FROM runs WHERE id = $1 AND organization_id = $2",
-    )
-    .bind(run_id)
-    .bind(auth.organization_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(database_error)?;
-    let recovery_without_active_turn = run_state.get::<String, _>("status") == "recovery_pending"
-        && run_state
-            .get::<Option<String>, _>("active_turn_id")
-            .is_none();
-    if !recovery_without_active_turn {
-        adapter
-            .archive_thread(&context.workspace, &context.thread_id)
-            .await
-            .map_err(runtime_error)?;
-    }
-    let mut transaction = state.db.begin().await.map_err(database_error)?;
-    sqlx::query("UPDATE tasks SET status = 'archived', updated_at = now() WHERE id = $1")
-        .bind(context.task_id)
-        .execute(&mut *transaction)
+    adapter
+        .archive_thread(&context.workspace, &context.thread_id)
         .await
-        .map_err(database_error)?;
-    // Archiving the Runtime Thread also ends any platform Run that is still
-    // schedulable. Otherwise the task disappears from the browser while its
-    // stale `running`/`recovery_pending` Run still blocks Workspace removal.
-    sqlx::query(
-        "UPDATE runs SET status = 'cancelled', active_turn_id = NULL, failure_code = NULL, \
-                         lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, \
-                         updated_at = now() \
-         WHERE id = $1 AND status IN ('pending', 'provisioning', 'running', 'cancelling', 'recovery_pending')",
-    )
-    .bind(run_id)
-    .execute(&mut *transaction)
-    .await
-    .map_err(database_error)?;
+        .map_err(runtime_error)?;
+    let mut transaction = state.db.begin().await.map_err(database_error)?;
     audit(
         &mut transaction,
         &auth,

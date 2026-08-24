@@ -14,7 +14,9 @@ use open_web_codex_git_runtime::{GitRuntime, GitRuntimeConfig};
 use open_web_codex_platform_contracts::{ApprovalDecision, DecideApprovalRequest};
 use open_web_codex_platform_store::AppState;
 use open_web_codex_provider_service::secured::InMemoryAuthorizedProviderService;
-use open_web_codex_run_orchestrator::RunOrchestrator;
+use open_web_codex_run_orchestrator::{
+    ContinueThreadRunRequest, RunOrchestrator, RunOrchestratorError, StartedThreadTurnRequest,
+};
 use open_web_codex_secret_store::{PostgresSecretStore, SecretCipher};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -171,7 +173,7 @@ async fn task_creation_binds_only_an_authorized_project_workspace() {
                 Arc::new(InMemoryAuthorizedProviderService::default()),
                 Arc::new(ApprovalService::new(pool.clone(), runtime_key)),
                 git.clone(),
-                orchestrator,
+                orchestrator.clone(),
                 Arc::new(PostgresSecretStore::new(
                     pool.clone(),
                     SecretCipher::generate("task-workspace-test-v1").expect("test Secret cipher"),
@@ -530,7 +532,7 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
                 Arc::new(InMemoryAuthorizedProviderService::default()),
                 approval_service.clone(),
                 git.clone(),
-                orchestrator,
+                orchestrator.clone(),
                 Arc::new(PostgresSecretStore::new(
                     pool.clone(),
                     SecretCipher::generate("security-test-v1").expect("test Secret cipher"),
@@ -770,18 +772,603 @@ async fn organization_and_profile_authorization_prevent_cross_tenant_access() {
         followup_response.1["thread_id"].as_str(),
         Some("completed-followup-thread")
     );
-    let reopened: (String, Option<String>, String) = sqlx::query_as(
+    let continued_runs = sqlx::query(
+        "SELECT id, status, active_turn_id, continued_from_run_id \
+         FROM runs WHERE task_id = $1 ORDER BY created_at, id",
+    )
+    .bind(completed_followup_task_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(continued_runs.len(), 2);
+    assert_eq!(
+        continued_runs[0].get::<Uuid, _>("id"),
+        completed_followup_run_id
+    );
+    assert_eq!(continued_runs[0].get::<String, _>("status"), "completed");
+    assert!(continued_runs[0]
+        .get::<Option<String>, _>("active_turn_id")
+        .is_none());
+    let continued_run_id: Uuid = continued_runs[1].get("id");
+    let continued_turn_id: String = continued_runs[1]
+        .get::<Option<String>, _>("active_turn_id")
+        .expect("accepted follow-up has its exact Runtime Turn");
+    assert_eq!(continued_runs[1].get::<String, _>("status"), "running");
+    assert_eq!(
+        continued_runs[1].get::<Option<Uuid>, _>("continued_from_run_id"),
+        Some(completed_followup_run_id)
+    );
+    assert_eq!(
+        followup_response.1["turn_id"].as_str(),
+        Some(continued_turn_id.as_str())
+    );
+    let continued_task_status: String =
+        sqlx::query_scalar("SELECT status FROM tasks WHERE id = $1")
+            .bind(completed_followup_task_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(continued_task_status, "running");
+
+    let replayed_followup = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!("/api/tasks/{completed_followup_task_id}/messages"),
+            &first_token,
+            json!({
+                "text": "continue after completion",
+                "clientUserMessageId": "completed-followup-client-message",
+                "images": []
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(replayed_followup.0, StatusCode::OK);
+    assert_eq!(
+        replayed_followup.1["turn_id"].as_str(),
+        Some(continued_turn_id.as_str())
+    );
+    let different_followup = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!("/api/tasks/{completed_followup_task_id}/messages"),
+            &first_token,
+            json!({
+                "text": "a separate concurrent follow-up",
+                "clientUserMessageId": "completed-followup-client-message-2",
+                "images": []
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(different_followup.0, StatusCode::CONFLICT);
+
+    let old_turn_terminal = serde_json::to_vec(&json!({
+        "method": "app-server-event",
+        "params": {
+            "workspace_id": workspace_id,
+            "message": {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "completed-followup-thread",
+                    "turnId": "old-completed-turn",
+                    "status": "completed"
+                }
+            }
+        }
+    }))
+    .unwrap();
+    crate::event_projection::persist_frame(&old_turn_terminal, &pool)
+        .await
+        .unwrap();
+    let old_thread_terminal = serde_json::to_vec(&json!({
+        "method": "app-server-event",
+        "params": {
+            "workspace_id": workspace_id,
+            "message": {
+                "method": "thread/completed",
+                "params": { "threadId": "completed-followup-thread" }
+            }
+        }
+    }))
+    .unwrap();
+    crate::event_projection::persist_frame(&old_thread_terminal, &pool)
+        .await
+        .unwrap();
+    let after_late_terminal: (String, Option<String>, String) = sqlx::query_as(
         "SELECT run.status, run.active_turn_id, task.status \
          FROM runs run JOIN tasks task ON task.id = run.task_id \
          WHERE run.id = $1",
     )
-    .bind(completed_followup_run_id)
+    .bind(continued_run_id)
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(reopened.0, "running");
-    assert!(reopened.1.is_some());
-    assert_eq!(reopened.2, "running");
+    assert_eq!(after_late_terminal.0, "running");
+    assert_eq!(
+        after_late_terminal.1.as_deref(),
+        Some(continued_turn_id.as_str())
+    );
+    assert_eq!(after_late_terminal.2, "running");
+
+    let interrupt_response = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!("/api/runs/{continued_run_id}/interrupt"),
+            &first_token,
+            json!({ "turnId": continued_turn_id }),
+        ),
+    )
+    .await;
+    assert_eq!(interrupt_response.0, StatusCode::OK);
+    assert_eq!(
+        interrupt_response.1["status"].as_str(),
+        Some("interruptRequested")
+    );
+    let after_interrupt_request: (String, Option<String>) =
+        sqlx::query_as("SELECT status, active_turn_id FROM runs WHERE id = $1")
+            .bind(continued_run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(after_interrupt_request.0, "running");
+    assert_eq!(
+        after_interrupt_request.1.as_deref(),
+        Some(continued_turn_id.as_str())
+    );
+
+    let actual_completed_terminal = serde_json::to_vec(&json!({
+        "method": "app-server-event",
+        "params": {
+            "workspace_id": workspace_id,
+            "message": {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "completed-followup-thread",
+                    "turnId": continued_turn_id,
+                    "status": "completed"
+                }
+            }
+        }
+    }))
+    .unwrap();
+    crate::event_projection::persist_frame(&actual_completed_terminal, &pool)
+        .await
+        .unwrap();
+    let completed_terminal: (String, Option<String>, String) = sqlx::query_as(
+        "SELECT run.status, run.active_turn_id, task.status \
+         FROM runs run JOIN tasks task ON task.id = run.task_id \
+         WHERE run.id = $1",
+    )
+    .bind(continued_run_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(completed_terminal.0, "completed");
+    assert!(completed_terminal.1.is_none());
+    assert_eq!(completed_terminal.2, "completed");
+    let archive_response = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!("/api/runs/{continued_run_id}/thread/archive"),
+            &first_token,
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(archive_response.0, StatusCode::OK);
+    let archived_event = serde_json::to_vec(&json!({
+        "method": "app-server-event",
+        "params": {
+            "workspace_id": workspace_id,
+            "message": {
+                "method": "thread/archived",
+                "params": { "threadId": "completed-followup-thread" }
+            }
+        }
+    }))
+    .unwrap();
+    crate::event_projection::persist_frame(&archived_event, &pool)
+        .await
+        .unwrap();
+    let after_archive: (String, String) = sqlx::query_as(
+        "SELECT run.status, task.status FROM runs run JOIN tasks task ON task.id = run.task_id \
+         WHERE run.id = $1",
+    )
+    .bind(continued_run_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        after_archive,
+        ("completed".to_string(), "completed".to_string())
+    );
+
+    let concurrent_task_id = Uuid::now_v7();
+    let concurrent_source_run_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO tasks (id, organization_id, project_id, workspace_id, created_by, title, status) \
+         VALUES ($1, $2, $3, $4, $5, 'Concurrent Followup Task', 'completed')",
+    )
+    .bind(concurrent_task_id)
+    .bind(first_organization_id)
+    .bind(Uuid::parse_str(&first_project_id).unwrap())
+    .bind(workspace_id)
+    .bind(first_user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runs \
+         (id, organization_id, task_id, requested_by, requested_profile_id, workspace_id, status, codex_thread_id, last_turn_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'completed', 'concurrent-followup-thread', 'old-source-turn')",
+    )
+    .bind(concurrent_source_run_id)
+    .bind(first_organization_id)
+    .bind(concurrent_task_id)
+    .bind(first_user_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let concurrent_request = ContinueThreadRunRequest {
+        organization_id: first_organization_id,
+        actor_id: first_user_id,
+        task_id: concurrent_task_id,
+        workspace_id,
+        source_run_id: concurrent_source_run_id,
+        client_user_message_id: "concurrent-followup-message".to_string(),
+    };
+    let (first_continue, second_continue) = tokio::join!(
+        orchestrator.continue_thread_run(concurrent_request.clone()),
+        orchestrator.continue_thread_run(concurrent_request),
+    );
+    let first_continue = first_continue.unwrap();
+    let second_continue = second_continue.unwrap();
+    assert_ne!(first_continue.created, second_continue.created);
+    assert_eq!(first_continue.run.id, second_continue.run.id);
+    let active_conflict = orchestrator
+        .continue_thread_run(ContinueThreadRunRequest {
+            organization_id: first_organization_id,
+            actor_id: first_user_id,
+            task_id: concurrent_task_id,
+            workspace_id,
+            source_run_id: concurrent_source_run_id,
+            client_user_message_id: "concurrent-followup-message-other".to_string(),
+        })
+        .await
+        .expect_err("an active follow-up blocks another new attempt");
+    assert!(matches!(active_conflict, RunOrchestratorError::Conflict(_)));
+    let concurrent_source_status: String =
+        sqlx::query_scalar("SELECT status FROM runs WHERE id = $1")
+            .bind(concurrent_source_run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(concurrent_source_status, "completed");
+    let concurrent_run_id = first_continue.run.id;
+    let late_old_turn_started = serde_json::to_vec(&json!({
+        "method": "app-server-event",
+        "params": {
+            "workspace_id": workspace_id,
+            "message": {
+                "method": "turn/started",
+                "params": {
+                    "threadId": "concurrent-followup-thread",
+                    "turnId": "old-source-turn"
+                }
+            }
+        }
+    }))
+    .unwrap();
+    crate::event_projection::persist_frame(&late_old_turn_started, &pool)
+        .await
+        .unwrap();
+    let after_late_turn_started: (String, Option<String>) =
+        sqlx::query_as("SELECT status, active_turn_id FROM runs WHERE id = $1")
+            .bind(concurrent_run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(after_late_turn_started.0, "provisioning");
+    assert!(after_late_turn_started.1.is_none());
+    let followup_turn_started = serde_json::to_vec(&json!({
+        "method": "app-server-event",
+        "params": {
+            "workspace_id": workspace_id,
+            "message": {
+                "method": "turn/started",
+                "params": {
+                    "threadId": "concurrent-followup-thread",
+                    "turnId": "followup-race-turn"
+                }
+            }
+        }
+    }))
+    .unwrap();
+    crate::event_projection::persist_frame(&followup_turn_started, &pool)
+        .await
+        .unwrap();
+    let event_first_turn: (String, Option<String>) =
+        sqlx::query_as("SELECT status, active_turn_id FROM runs WHERE id = $1")
+            .bind(concurrent_run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(event_first_turn.0, "running");
+    assert_eq!(event_first_turn.1.as_deref(), Some("followup-race-turn"));
+    orchestrator
+        .start_accepted_followup_turn(StartedThreadTurnRequest {
+            organization_id: first_organization_id,
+            run_id: concurrent_run_id,
+            thread_id: "concurrent-followup-thread".to_string(),
+            turn_id: "followup-race-turn".to_string(),
+        })
+        .await
+        .expect("owner accepts the same Turn after its event arrived first");
+    let after_response_owner: (String, Option<String>) =
+        sqlx::query_as("SELECT status, active_turn_id FROM runs WHERE id = $1")
+            .bind(concurrent_run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(after_response_owner.0, "running");
+    assert_eq!(
+        after_response_owner.1.as_deref(),
+        Some("followup-race-turn")
+    );
+    let thread_failed_terminal = serde_json::to_vec(&json!({
+        "method": "app-server-event",
+        "params": {
+            "workspace_id": workspace_id,
+            "message": {
+                "method": "thread/failed",
+                "params": {
+                    "threadId": "concurrent-followup-thread",
+                    "turnId": "followup-race-turn"
+                }
+            }
+        }
+    }))
+    .unwrap();
+    crate::event_projection::persist_frame(&thread_failed_terminal, &pool)
+        .await
+        .unwrap();
+    let thread_failed_status: (String, Option<String>) =
+        sqlx::query_as("SELECT status, active_turn_id FROM runs WHERE id = $1")
+            .bind(concurrent_run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(thread_failed_status.0, "running");
+    assert_eq!(
+        thread_failed_status.1.as_deref(),
+        Some("followup-race-turn")
+    );
+    let turn_failed_terminal = serde_json::to_vec(&json!({
+        "method": "app-server-event",
+        "params": {
+            "workspace_id": workspace_id,
+            "message": {
+                "method": "turn/completed",
+                "params": {
+                    "threadId": "concurrent-followup-thread",
+                    "turnId": "followup-race-turn",
+                    "status": "failed"
+                }
+            }
+        }
+    }))
+    .unwrap();
+    crate::event_projection::persist_frame(&turn_failed_terminal, &pool)
+        .await
+        .unwrap();
+    let turn_failed_status: (String, Option<String>) =
+        sqlx::query_as("SELECT status, active_turn_id FROM runs WHERE id = $1")
+            .bind(concurrent_run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(turn_failed_status.0, "failed");
+    assert!(turn_failed_status.1.is_none());
+    let failed_continuation = orchestrator
+        .continue_thread_run(ContinueThreadRunRequest {
+            organization_id: first_organization_id,
+            actor_id: first_user_id,
+            task_id: concurrent_task_id,
+            workspace_id,
+            source_run_id: concurrent_run_id,
+            client_user_message_id: "failed-terminal-followup-message".to_string(),
+        })
+        .await
+        .expect("a non-archived Task may continue its failed Run");
+    assert!(failed_continuation.created);
+    assert_eq!(
+        sqlx::query_scalar::<_, Option<Uuid>>(
+            "SELECT continued_from_run_id FROM runs WHERE id = $1",
+        )
+        .bind(failed_continuation.run.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        Some(concurrent_run_id)
+    );
+
+    let cancelled_task_id = Uuid::now_v7();
+    let cancelled_source_run_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO tasks (id, organization_id, project_id, workspace_id, created_by, title, status) \
+         VALUES ($1, $2, $3, $4, $5, 'Cancelled Followup Task', 'cancelled')",
+    )
+    .bind(cancelled_task_id)
+    .bind(first_organization_id)
+    .bind(Uuid::parse_str(&first_project_id).unwrap())
+    .bind(workspace_id)
+    .bind(first_user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runs \
+         (id, organization_id, task_id, requested_by, requested_profile_id, workspace_id, status, codex_thread_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'cancelled', 'cancelled-followup-thread')",
+    )
+    .bind(cancelled_source_run_id)
+    .bind(first_organization_id)
+    .bind(cancelled_task_id)
+    .bind(first_user_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let cancelled_continuation = orchestrator
+        .continue_thread_run(ContinueThreadRunRequest {
+            organization_id: first_organization_id,
+            actor_id: first_user_id,
+            task_id: cancelled_task_id,
+            workspace_id,
+            source_run_id: cancelled_source_run_id,
+            client_user_message_id: "cancelled-followup-message".to_string(),
+        })
+        .await
+        .expect("a non-archived Task may continue its cancelled Run");
+    assert!(cancelled_continuation.created);
+    let cancelled_task_status: String =
+        sqlx::query_scalar("SELECT status FROM tasks WHERE id = $1")
+            .bind(cancelled_task_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(cancelled_task_status, "running");
+
+    let archived_task_id = Uuid::now_v7();
+    let archived_source_run_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO tasks (id, organization_id, project_id, workspace_id, created_by, title, status) \
+         VALUES ($1, $2, $3, $4, $5, 'Archived Followup Task', 'archived')",
+    )
+    .bind(archived_task_id)
+    .bind(first_organization_id)
+    .bind(Uuid::parse_str(&first_project_id).unwrap())
+    .bind(workspace_id)
+    .bind(first_user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runs \
+         (id, organization_id, task_id, requested_by, requested_profile_id, workspace_id, status, codex_thread_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'failed', 'archived-followup-thread')",
+    )
+    .bind(archived_source_run_id)
+    .bind(first_organization_id)
+    .bind(archived_task_id)
+    .bind(first_user_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let archived_continuation = orchestrator
+        .continue_thread_run(ContinueThreadRunRequest {
+            organization_id: first_organization_id,
+            actor_id: first_user_id,
+            task_id: archived_task_id,
+            workspace_id,
+            source_run_id: archived_source_run_id,
+            client_user_message_id: "archived-followup-message".to_string(),
+        })
+        .await
+        .expect_err("an archived Task cannot create a provisioning follow-up");
+    assert!(matches!(
+        archived_continuation,
+        RunOrchestratorError::Conflict(_)
+    ));
+    let archived_run_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE task_id = $1")
+            .bind(archived_task_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(archived_run_count, 1);
+
+    let failed_start_task_id = Uuid::now_v7();
+    let failed_start_source_run_id = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO tasks (id, organization_id, project_id, workspace_id, created_by, title, status) \
+         VALUES ($1, $2, $3, $4, $5, 'Failed Followup Task', 'completed')",
+    )
+    .bind(failed_start_task_id)
+    .bind(first_organization_id)
+    .bind(Uuid::parse_str(&first_project_id).unwrap())
+    .bind(workspace_id)
+    .bind(first_user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runs \
+         (id, organization_id, task_id, requested_by, requested_profile_id, workspace_id, status, codex_thread_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'failed', 'missing-followup-thread')",
+    )
+    .bind(failed_start_source_run_id)
+    .bind(first_organization_id)
+    .bind(failed_start_task_id)
+    .bind(first_user_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let failed_start_response = call(
+        &app,
+        authenticated_json(
+            "POST",
+            &format!("/api/tasks/{failed_start_task_id}/messages"),
+            &first_token,
+            json!({
+                "text": "this exact Thread is unavailable",
+                "clientUserMessageId": "failed-followup-client-message",
+                "images": []
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(failed_start_response.0, StatusCode::BAD_GATEWAY);
+    let failed_start_runs = sqlx::query(
+        "SELECT status, failure_code, continued_from_run_id FROM runs \
+         WHERE task_id = $1 ORDER BY created_at, id",
+    )
+    .bind(failed_start_task_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(failed_start_runs.len(), 2);
+    assert_eq!(failed_start_runs[0].get::<String, _>("status"), "failed");
+    assert_eq!(failed_start_runs[1].get::<String, _>("status"), "failed");
+    assert_eq!(
+        failed_start_runs[1]
+            .get::<Option<String>, _>("failure_code")
+            .as_deref(),
+        Some("turn_start_failed")
+    );
+    assert_eq!(
+        failed_start_runs[1].get::<Option<Uuid>, _>("continued_from_run_id"),
+        Some(failed_start_source_run_id)
+    );
+    let failed_start_task_status: String =
+        sqlx::query_scalar("SELECT status FROM tasks WHERE id = $1")
+            .bind(failed_start_task_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(failed_start_task_status, "pending");
 
     sqlx::query(
         "INSERT INTO runs \

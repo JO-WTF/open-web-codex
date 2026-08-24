@@ -271,45 +271,19 @@ pub async fn persist_frame_with_deliveries(
         match event.event_type.as_str() {
             "codex.turn.started" => {
                 sqlx::query(
-                    "UPDATE runs SET active_turn_id = $1, updated_at = now() \
-                 WHERE id = $2 AND status = 'running'",
+                    "UPDATE runs SET status = CASE WHEN status = 'provisioning' THEN 'running' ELSE status END, \
+                                     active_turn_id = $1, last_turn_id = $1, updated_at = now() \
+                 WHERE id = $2 AND codex_thread_id = $3 \
+                   AND ((status = 'running' AND (active_turn_id IS NULL OR active_turn_id = $1)) \
+                     OR (status = 'provisioning' AND continued_from_run_id IS NOT NULL \
+                         AND (active_turn_id IS NULL OR active_turn_id = $1)))",
                 )
                 .bind(&event.turn_id)
                 .bind(run_id)
+                .bind(&event.thread_id)
                 .execute(&mut *transaction)
                 .await
                 .map_err(|error| format!("active Turn projection error: {error}"))?;
-            }
-            "codex.turn.completed" => {
-                sqlx::query(
-                    "UPDATE runs SET active_turn_id = NULL, updated_at = now() \
-                     WHERE id = $1 AND active_turn_id = $2",
-                )
-                .bind(run_id)
-                .bind(&event.turn_id)
-                .execute(&mut *transaction)
-                .await
-                .map_err(|error| format!("completed Turn projection error: {error}"))?;
-            }
-            "codex.thread.archived" => {
-                sqlx::query(
-                    "UPDATE tasks SET status = 'archived', updated_at = now() \
-                 WHERE id = (SELECT task_id FROM runs WHERE id = $1)",
-                )
-                .bind(run_id)
-                .execute(&mut *transaction)
-                .await
-                .map_err(|error| format!("archived Thread projection error: {error}"))?;
-            }
-            "codex.thread.unarchived" => {
-                sqlx::query(
-                    "UPDATE tasks SET status = 'pending', updated_at = now() \
-                 WHERE id = (SELECT task_id FROM runs WHERE id = $1) AND status = 'archived'",
-                )
-                .bind(run_id)
-                .execute(&mut *transaction)
-                .await
-                .map_err(|error| format!("unarchived Thread projection error: {error}"))?;
             }
             "codex.thread.name.updated" => {
                 if let Some(name) = event
@@ -334,12 +308,29 @@ pub async fn persist_frame_with_deliveries(
         }
     }
 
-    let terminal_status = match (is_root_thread, event.event_type.as_str()) {
-        (true, "codex.thread.completed") => Some("completed"),
-        (true, "codex.thread.failed") => Some("failed"),
+    // A Run may become terminal only from an official turn/completed event
+    // that carries the exact active Turn identity. Thread terminal events are
+    // limited to their rebuildable Agent projection and never infer a Run.
+    let terminal_outcome = match (
+        is_root_thread,
+        event.event_type.as_str(),
+        event.turn_id.as_deref(),
+    ) {
+        (true, "codex.turn.completed", Some(_)) => {
+            Some(projected_turn_terminal_outcome(&event.payload))
+        }
         _ => None,
     };
-    if let Some(status) = terminal_status {
+    if let Some(outcome) = terminal_outcome {
+        let status = match outcome {
+            ProjectedTurnTerminalOutcome::Completed => "completed",
+            ProjectedTurnTerminalOutcome::Cancelled | ProjectedTurnTerminalOutcome::Interrupted => {
+                "cancelled"
+            }
+            ProjectedTurnTerminalOutcome::Failed
+            | ProjectedTurnTerminalOutcome::Rejected
+            | ProjectedTurnTerminalOutcome::Timeout => "failed",
+        };
         let task_status = if status == "completed" {
             "completed"
         } else {
@@ -349,15 +340,17 @@ pub async fn persist_frame_with_deliveries(
             "WITH updated_run AS (
                 UPDATE runs SET status = $1, active_turn_id = NULL, lease_owner = NULL,
                                 lease_token = NULL, lease_expires_at = NULL, updated_at = now()
-                WHERE id = $2 AND status = 'running'
+                WHERE id = $2 AND codex_thread_id = $3 AND active_turn_id = $4 AND status = 'running'
                 RETURNING task_id
              )
-             UPDATE tasks SET status = $3, updated_at = now()
+             UPDATE tasks SET status = $5, updated_at = now()
              WHERE id IN (SELECT task_id FROM updated_run)
                AND status NOT IN ('completed', 'cancelled', 'archived')",
         )
         .bind(status)
         .bind(run_id)
+        .bind(&event.thread_id)
+        .bind(event.turn_id.as_deref())
         .bind(task_status)
         .execute(&mut *transaction)
         .await
@@ -791,8 +784,20 @@ async fn resolve_event_run_context(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     event: &ProjectedEvent,
 ) -> Result<Option<EventRunContext>, String> {
-    if let Some(context) =
-        lookup_known_thread_context(transaction, &event.thread_id, event.workspace_id).await?
+    let terminal_thread_without_turn = event.turn_id.is_none()
+        && matches!(
+            event.event_type.as_str(),
+            "codex.thread.completed" | "codex.thread.failed"
+        );
+    if let Some(context) = lookup_known_thread_context(
+        transaction,
+        &event.thread_id,
+        event.workspace_id,
+        event.turn_id.as_deref(),
+        terminal_thread_without_turn,
+        event.event_type == "codex.turn.started",
+    )
+    .await?
     {
         if event.thread_id == context.root_thread_id {
             ensure_root_agent_projection(transaction, &context).await?;
@@ -808,9 +813,15 @@ async fn resolve_event_run_context(
             let Some(parent_thread_id) = metadata.parent_thread_id.as_deref() else {
                 return Err("Runtime child identity omitted parent Thread".to_string());
             };
-            let Some(parent) =
-                lookup_known_thread_context(transaction, parent_thread_id, event.workspace_id)
-                    .await?
+            let Some(parent) = lookup_known_thread_context(
+                transaction,
+                parent_thread_id,
+                event.workspace_id,
+                None,
+                false,
+                false,
+            )
+            .await?
             else {
                 return Err("Runtime child parent Thread projection is unavailable".to_string());
             };
@@ -819,6 +830,19 @@ async fn resolve_event_run_context(
                 || parent.profile_id != context.profile_id
                 || parent.workspace_id != context.workspace_id
             {
+                if parent.task_id == context.task_id
+                    && parent.organization_id == context.organization_id
+                    && parent.profile_id == context.profile_id
+                    && parent.workspace_id == context.workspace_id
+                    && parent.root_thread_id == parent_thread_id
+                {
+                    // A later Run may deliberately continue the same root
+                    // Thread. A delayed child event belongs to its existing
+                    // projection until the Runtime supplies a new exact
+                    // binding; never move it into that later attempt by
+                    // guessing from a shared parent Thread id.
+                    return Ok(Some(context));
+                }
                 return Err(
                     "Runtime child parent Thread belongs to another Runtime tree".to_string(),
                 );
@@ -833,8 +857,15 @@ async fn resolve_event_run_context(
     let Some(parent_thread_id) = metadata.parent_thread_id.as_deref() else {
         return Ok(None);
     };
-    let Some(parent) =
-        lookup_known_thread_context(transaction, parent_thread_id, event.workspace_id).await?
+    let Some(parent) = lookup_known_thread_context(
+        transaction,
+        parent_thread_id,
+        event.workspace_id,
+        None,
+        false,
+        false,
+    )
+    .await?
     else {
         return Ok(None);
     };
@@ -940,7 +971,27 @@ async fn ensure_root_agent_projection(
     .await
     .map_err(|error| format!("root Thread projection error: {error}"))?;
     if row.is_none() {
-        return Err("root Thread is already associated with another Runtime tree".to_string());
+        let shared_by_prior_attempt: bool = sqlx::query_scalar(
+            "SELECT EXISTS ( \
+                 SELECT 1 FROM runtime_agent_projections projection \
+                 JOIN runs prior ON prior.id = projection.root_run_id \
+                   AND prior.organization_id = projection.organization_id \
+                 WHERE projection.profile_id = $1 AND projection.thread_id = $2 \
+                   AND projection.workspace_id = $3 AND projection.source_kind = 'root' \
+                   AND prior.task_id = $4 AND prior.organization_id = $5 \
+             )",
+        )
+        .bind(context.profile_id)
+        .bind(&context.root_thread_id)
+        .bind(context.workspace_id)
+        .bind(context.task_id)
+        .bind(context.organization_id)
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(|error| format!("shared root Thread projection lookup error: {error}"))?;
+        if !shared_by_prior_attempt {
+            return Err("root Thread is already associated with another Runtime tree".to_string());
+        }
     }
     Ok(())
 }
@@ -949,6 +1000,9 @@ async fn lookup_known_thread_context(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     thread_id: &str,
     workspace_id: Option<Uuid>,
+    turn_id: Option<&str>,
+    prefer_terminal_run: bool,
+    prefer_provisioning_followup: bool,
 ) -> Result<Option<EventRunContext>, String> {
     let root = sqlx::query(
         "SELECT run.id AS run_id, run.task_id, run.organization_id,
@@ -959,11 +1013,23 @@ async fn lookup_known_thread_context(
            AND run.requested_profile_id IS NOT NULL
            AND run.workspace_id IS NOT NULL
            AND ($2::uuid IS NULL OR run.workspace_id = $2)
-         ORDER BY run.created_at DESC
+         ORDER BY CASE
+             WHEN $3::text IS NOT NULL AND run.active_turn_id = $3 THEN 0
+             WHEN $3::text IS NOT NULL AND run.last_turn_id = $3 THEN 1
+             WHEN $5::boolean AND run.status = 'provisioning'
+                  AND run.continued_from_run_id IS NOT NULL
+                  AND run.active_turn_id IS NULL THEN 2
+             WHEN ($3::text IS NOT NULL OR $4::boolean)
+                  AND run.status IN ('completed', 'failed', 'cancelled') THEN 3
+             ELSE 4
+         END, run.created_at DESC
          LIMIT 1",
     )
     .bind(thread_id)
     .bind(workspace_id)
+    .bind(turn_id)
+    .bind(prefer_terminal_run)
+    .bind(prefer_provisioning_followup)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|error| format!("root Thread run lookup error: {error}"))?;
@@ -1069,6 +1135,12 @@ async fn update_runtime_agent_projection(
     .map_err(|error| format!("Runtime agent projection update error: {error}"))?
     .rows_affected();
     if updated == 0 {
+        if event.thread_id == context.root_thread_id {
+            // A completed root Thread can be continued by a later Run. The
+            // root identity projection remains attached to the first Run for
+            // historical tree ownership; Turn events below stay run-scoped.
+            return Ok(());
+        }
         let execution_exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (
                 SELECT 1 FROM runtime_agent_execution_projections execution
