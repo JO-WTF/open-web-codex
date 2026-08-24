@@ -46,7 +46,7 @@ Resolve by architectural layer:
 2. Reapply only the Patch Map seams in this order: Chat wire adapter;
    configured Provider capabilities; app-server Provider catalog API; Provider
    error redaction; Plugin MCP tool exposure; managed child Role projection and
-   resume; then their generated artifacts.
+   resume; stdio MCP liveness; then their generated artifacts.
 3. Do not preserve a custom workaround when upstream now provides the behavior.
 4. Keep protocol/schema generated files aligned with their Rust source.
 5. Avoid mixing product Web changes into an upstream runtime sync.
@@ -68,8 +68,14 @@ cd ../..
 ./scripts/test-codex.sh -p codex-app-server model_provider_models_list
 ./scripts/test-codex.sh -p codex-models-manager
 ./scripts/test-codex.sh -p codex-model-provider
+./scripts/test-codex.sh -p codex-model-provider-info
+./scripts/test-codex.sh -p codex-login default_client
+./scripts/test-codex.sh -p codex-config
 ./scripts/test-codex.sh -p codex-core-plugins
 ./scripts/test-codex.sh -p codex-core role
+./scripts/test-codex.sh -p codex-rmcp-client stdio_
+./scripts/test-codex.sh -p codex-app-server mcp_server_status_list_reports_disconnected_stdio_transport
+./scripts/test-codex.sh -p codex-app-server mcp_resource
 ./scripts/test-codex.sh -p codex-app-server-protocol schema_fixtures::
 cd apps/web
 npm run smoke:codex-app-server

@@ -3,21 +3,21 @@
   "purpose": "Tracks the committed Codex-tree comparison snapshot and convergence classification progress for codex/.",
   "comparison": {
     "upstreamRef": "codex-upstream/main",
-    "integratedUpstreamCommit": "2161ec272a7d6b775c9c721e6206f4fe63e383f2",
-    "upstreamCommit": "2161ec272a7d6b775c9c721e6206f4fe63e383f2",
+    "integratedUpstreamCommit": "76d98a771e6cd44a79a3ab895a9f7c49d27d6deb",
+    "upstreamCommit": "76d98a771e6cd44a79a3ab895a9f7c49d27d6deb",
     "comparisonLocalTree": "HEAD:codex",
     "comparisonSnapshotScope": "Post-sync retained-seam convergence snapshot; live counts remain owned by scripts/codex-customization-status.sh.",
-    "comparisonObservedAt": "2026-08-23T18:43:22Z",
-    "differenceCount": 110,
-    "addedLocally": 25,
-    "modified": 85,
+    "comparisonObservedAt": "2026-08-24T03:39:12Z",
+    "differenceCount": 116,
+    "addedLocally": 26,
+    "modified": 90,
     "missingLocally": 0,
     "upstreamOnly": 0,
-    "localOnly": 110,
+    "localOnly": 116,
     "diverged": 0
   },
   "progress": {
-    "state": "code-converged-validation-pending",
+    "state": "runtime-validated-product-e2e-pending",
     "classificationSource": "docs/custom-codex-patch-map.md",
     "classifiedRetainCore": [
       "provider-chat-wire-adapter",
@@ -25,29 +25,32 @@
       "provider-app-server-catalog-api",
       "provider-error-redaction",
       "plugin-mcp-tool-exposure",
-      "managed-child-role-projection-resume"
+      "managed-child-role-projection-resume",
+      "stdio-mcp-liveness"
     ],
     "classification": {
-      "classifiedLocalOnlyPaths": 110,
+      "classifiedLocalOnlyPaths": 116,
       "unclassifiedSourcePaths": 0,
       "upstreamOnlyPaths": 0,
       "divergedPaths": 0
     },
     "completed": [
-      "At the 2161ec272a7d comparison snapshot, all local-only differences are assigned to the six retained seams or their generated followers.",
+      "At the 76d98a771e6c comparison snapshot, all local-only differences are assigned to the seven retained seams or their generated followers.",
       "That comparison snapshot has no upstream-only or diverged path; live upstream movement is reported by the status scripts."
     ],
     "validation": {
-      "status": "pending",
+      "status": "deterministic-complete-real-provider-pending",
+      "completed": [
+        "Focused tests passed for all seven retained seams, including Chat history ToolSearch reuse, Provider catalogs, Plugin policy, Role resume, and stdio MCP liveness.",
+        "Config schema, app-server JSON and TypeScript schema fixtures, precomputed exports, app-server smoke, and Web deterministic regression gates passed."
+      ],
       "required": [
-        "Focused seam package tests and generated-contract drift gates",
-        "app-server initialize/thread-list smoke",
-        "Product and real Provider E2E gates required by the current delivery stage"
+        "DeepSeek Flash Web acceptance for baseline coverage, Balikpapan follow-up, and minimum warehouse count"
       ]
     },
-    "validatedAgainstIntegratedUpstream": "2161ec272a7d6b775c9c721e6206f4fe63e383f2",
-    "validationWorktreeBaseCommit": "bdec576911d28a7a515f8533bbe562356a0f9e35",
-    "validationScope": "Code convergence inventory only; it is not final Runtime, app-server, Web, or real Provider E2E evidence.",
-    "nextAction": "Run the retained-seam validation matrix, generated-contract drift gates, app-server smoke, and stage-required product E2E before changing the pending state."
+    "validatedAgainstIntegratedUpstream": "76d98a771e6cd44a79a3ab895a9f7c49d27d6deb",
+    "validationWorktreeBaseCommit": "719c3fb3590018b337b02e2655bb67f2aca839ae",
+    "validationScope": "Runtime, app-server, generated contracts, Web deterministic tests, and package regressions are complete; real DeepSeek Flash Web acceptance remains pending.",
+    "nextAction": "Run the three required DeepSeek Flash Web turns in one canonical Thread and record results, durations, failures, Agent reuse, and map delivery."
   }
 }

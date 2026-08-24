@@ -7,10 +7,10 @@ Runtime seam；生成 schema、TypeScript、锁文件、fixture 和 snapshot 都
 ## 当前快照
 
 - 记录的 comparison snapshot：integrated 与当时 official upstream 均为
-  `2161ec272a7d6b775c9c721e6206f4fe63e383f2`
+  `76d98a771e6cd44a79a3ab895a9f7c49d27d6deb`
 - 比较对象：`HEAD:codex` 对 `codex-upstream/main`
-- 已分类差异：110 个 local-only（25 added、85 modified、0 missing），0 upstream-only、0 diverged
-- 状态：`code-converged-validation-pending`
+- 已分类差异：116 个 local-only（26 added、90 modified、0 missing），0 upstream-only、0 diverged
+- 状态：`runtime-validated-product-e2e-pending`
 
 这个状态只说明代码已经按下列 seam 收敛；它不宣称完整 Runtime、app-server、Web 或真实
 Provider E2E 已完成。实时计数以
@@ -181,7 +181,7 @@ service 状态。executor-backed transport 不再另行终止同一 process，�
 drop 产生重复终态或悬挂的额外终止任务。app-server status 只读取这份 Runtime state，不 ping、重试、
 sleep 或建立 Platform cache。
 
-**为什么保留。** comparison snapshot 的 integrated `2161` 与当前 official `fb0781` 在这些
+**为什么保留。** comparison snapshot 的 integrated 与 official `76d98a771e6c` 在这些
 stdio liveness owner paths 没有等价改动；现有 rmcp service closed 信号可晚于 transport EOF，使
 `mcpServerStatus/list` 在自然退出后短暂地继续报告 Connected。
 
@@ -198,6 +198,6 @@ Protocol/config schema、TypeScript、generated proto、`Cargo.lock`、fixture �
 
 同步时先接受上游结构，再按表中顺序重新定位最小 owner；每个非生成差异只能归入一个 seam，或标为
 `upstreamed`、`move-out`、`drop`。如果上游已提供等价能力，删除本地实现而不是保留兼容分支。
-同步完成后更新 `.sync/codex-upstream.json`、本文件和 machine-readable inventory；在 focused
-Runtime/app-server、schema 与产品 E2E 门实际完成前，库存状态保持
-`code-converged-validation-pending`。
+同步完成后更新 `.sync/codex-upstream.json`、本文件和 machine-readable inventory；库存状态必须
+准确区分 deterministic Runtime/app-server/schema 验证与尚未完成的真实 Provider 产品 E2E，不能把
+任一层的通过外推成另一层已经通过。
