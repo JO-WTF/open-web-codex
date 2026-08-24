@@ -4,10 +4,13 @@ use crate::agent::role::apply_role_to_config;
 use crate::config::PermissionProfileSnapshot;
 use crate::context::ContextualUserFragment;
 use crate::context::CurrentTimeReminder;
+use crate::context::DeveloperInstructions;
 use crate::context::ManagedDeveloperInstructions;
 use crate::context::MultiAgentModeInstructions;
 use crate::context::MultiAgentRoleInstructions;
 use crate::session::multi_agents::resolve_usage_hints;
+use codex_context_fragments::set_annotated_content;
+use codex_context_fragments::to_annotated_content;
 use codex_extension_api::ExtensionDataInit;
 
 const AGENT_NAMES: &str = include_str!("../agent_names.txt");
@@ -91,15 +94,15 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
 }
 
 fn retain_forked_developer_message(item: &mut ResponseItem, usage_hint_texts: &[String]) -> bool {
-    let ResponseItem::Message { role, content, .. } = item else {
-        return true;
-    };
-    if role != "developer" {
+    if !matches!(item, ResponseItem::Message { role, .. } if role == "developer") {
         return true;
     }
 
+    let Some(mut content) = to_annotated_content(item) else {
+        return false;
+    };
     content.retain(|content_item| {
-        let ContentItem::InputText { text } = content_item else {
+        let ContentItem::InputText { text } = content_item.content() else {
             return true;
         };
 
@@ -110,7 +113,7 @@ fn retain_forked_developer_message(item: &mut ResponseItem, usage_hint_texts: &[
                 .iter()
                 .any(|usage_hint_text| usage_hint_text == text))
     });
-    !content.is_empty()
+    !content.is_empty() && set_annotated_content(item, content).is_some()
 }
 
 async fn load_agent_model_context(
@@ -741,11 +744,12 @@ impl AgentControl {
                 return false;
             }
 
-            if let ResponseItem::Message { role, content, .. } = response_item
-                && role == "developer"
-            {
+            if matches!(response_item, ResponseItem::Message { role, .. } if role == "developer") {
+                let Some(mut content) = to_annotated_content(response_item) else {
+                    return false;
+                };
                 content.retain_mut(|content_item| {
-                    let ContentItem::InputText { text } = content_item else {
+                    let ContentItem::InputText { text } = content_item.content_mut() else {
                         return true;
                     };
                     if ManagedDeveloperInstructions::matches_text(text) {
@@ -777,7 +781,8 @@ impl AgentControl {
                     *text = text.replace(parent_developer_instructions, replacement);
                     !text.is_empty()
                 });
-                return !content.is_empty();
+                return !content.is_empty()
+                    && set_annotated_content(response_item, content).is_some();
             }
 
             true
@@ -841,11 +846,10 @@ impl AgentControl {
                 .reference_context_item()
                 .await
                 .is_some()
-            && let Some(developer_message) =
-                crate::context_manager::updates::build_developer_update_item(vec![
-                    subagent_developer_instructions.clone(),
-                ])
         {
+            let developer_message = ContextualUserFragment::into(DeveloperInstructions::new(
+                subagent_developer_instructions,
+            ));
             forked_rollout_items.push(RolloutItem::ResponseItem(developer_message.into()));
         }
         if preserve_reference_context_item
