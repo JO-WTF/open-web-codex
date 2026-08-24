@@ -212,7 +212,7 @@ pub async fn list_turns(
         .map_err(runtime_error)?;
     let mut projected = Vec::with_capacity(turns.len());
     for turn in &turns {
-        projected.push(project_turn_with_refs(turn, &state, run_id).await?);
+        projected.push(project_turn_with_refs(turn, &state, run_id, &context.thread_id).await?);
     }
     Ok(Json(projected))
 }
@@ -234,7 +234,7 @@ pub async fn list_agent_turns(
         .map_err(runtime_error)?;
     let mut projected = Vec::with_capacity(turns.len());
     for turn in &turns {
-        projected.push(project_turn_with_refs(turn, &state, run_id).await?);
+        projected.push(project_turn_with_refs(turn, &state, run_id, &context.thread_id).await?);
     }
     Ok(Json(projected))
 }
@@ -371,23 +371,37 @@ async fn authorized_agent_thread(
     }
     let row = sqlx::query(
         "SELECT run.task_id, run.workspace_id, run.requested_by, task.copilot_package_id,
-                workspace.root_path, workspace.state, agent.thread_id
+                workspace.root_path, workspace.state, $3::text AS thread_id
          FROM runs run
          JOIN tasks task ON task.id = run.task_id
            AND task.organization_id = run.organization_id
            AND task.workspace_id = run.workspace_id
-         JOIN runtime_agent_projections agent
-           ON agent.root_run_id = run.id
-          AND agent.organization_id = run.organization_id
-          AND agent.thread_id = $3
-          AND agent.parent_thread_id IS NOT NULL
          JOIN workspaces workspace ON workspace.id = run.workspace_id
            AND workspace.organization_id = run.organization_id
          JOIN workspace_grants workspace_grant ON workspace_grant.workspace_id = workspace.id
            AND workspace_grant.organization_id = workspace.organization_id
            AND workspace_grant.user_id = run.requested_by
            AND workspace_grant.profile_id = workspace.profile_id
-         WHERE run.id = $1 AND run.organization_id = $2",
+         WHERE run.id = $1 AND run.organization_id = $2
+           AND (
+             EXISTS (
+               SELECT 1 FROM runtime_agent_projections agent
+               WHERE agent.root_run_id = run.id
+                 AND agent.organization_id = run.organization_id
+                 AND agent.profile_id = run.requested_profile_id
+                 AND agent.workspace_id = run.workspace_id
+                 AND agent.thread_id = $3
+                 AND agent.parent_thread_id IS NOT NULL
+             )
+             OR EXISTS (
+               SELECT 1 FROM runtime_agent_execution_projections execution
+               WHERE execution.root_run_id = run.id
+                 AND execution.organization_id = run.organization_id
+                 AND execution.profile_id = run.requested_profile_id
+                 AND execution.workspace_id = run.workspace_id
+                 AND execution.agent_thread_id = $3
+             )
+           )",
     )
     .bind(run_id)
     .bind(auth.organization_id)
@@ -434,7 +448,7 @@ async fn project_thread(
     if let Some(source_turns) = object.get("turns").and_then(serde_json::Value::as_array) {
         turns.reserve(source_turns.len());
         for turn in source_turns {
-            turns.push(project_turn_with_refs(turn, state, run_id).await?);
+            turns.push(project_turn_with_refs(turn, state, run_id, expected_id).await?);
         }
     }
     Ok(ThreadHistory {
@@ -547,6 +561,7 @@ async fn project_turn_with_refs(
     value: &serde_json::Value,
     state: &AppState,
     run_id: Uuid,
+    thread_id: &str,
 ) -> Result<ThreadHistoryTurn, ApiError> {
     let mut turn = project_turn(value)?;
     let item_ids = turn
@@ -575,7 +590,20 @@ async fn project_turn_with_refs(
         let Some(text) = item.get("text").and_then(Value::as_str) else {
             continue;
         };
-        let cards = crate::inline_map_cards::resolve(&state.db, run_id, text)
+        let Some(item_id) = item.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(producer_run_id) =
+            agent_message_producer_run(&state.db, run_id, thread_id, item_id)
+                .await
+                .map_err(database_error)?
+        else {
+            // A historic Runtime Message may only obtain a card from its own
+            // exact persisted producer Item. Never search a Task or Thread by
+            // card ref, title, text, or recency as a recovery fallback.
+            continue;
+        };
+        let cards = crate::inline_map_cards::resolve(&state.db, producer_run_id, text)
             .await
             .map_err(database_error)?;
         if !cards.is_empty() {
@@ -585,6 +613,45 @@ async fn project_turn_with_refs(
         }
     }
     Ok(turn)
+}
+
+/// Finds the one Run that persisted this exact canonical Agent Message. The
+/// current navigation Run authorizes the lookup, but a continued Root Thread
+/// may contain messages produced by an earlier Run attempt. Ambiguous or
+/// incomplete provenance fails closed rather than selecting a similarly named
+/// card from the Task.
+pub(crate) async fn agent_message_producer_run(
+    db: &sqlx::PgPool,
+    requested_run_id: Uuid,
+    thread_id: &str,
+    item_id: &str,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let rows = sqlx::query_scalar::<_, Uuid>(
+        "SELECT DISTINCT event.run_id
+         FROM run_events event
+         JOIN runs producer ON producer.id = event.run_id
+         JOIN runs requested ON requested.id = $1
+         WHERE event.item_id = $2 AND event.thread_id = $3
+           AND event.event_type = 'codex.item.completed'
+           AND event.payload->>'itemType' = 'agentMessage'
+           AND producer.organization_id = requested.organization_id
+           AND producer.task_id = requested.task_id
+           AND producer.requested_profile_id = requested.requested_profile_id
+           AND producer.workspace_id = requested.workspace_id
+           AND producer.codex_thread_id = requested.codex_thread_id
+         ORDER BY event.run_id
+         LIMIT 2",
+    )
+    .bind(requested_run_id)
+    .bind(item_id)
+    .bind(thread_id)
+    .fetch_all(db)
+    .await?;
+    match rows.as_slice() {
+        [] => Ok(None),
+        [run_id] => Ok(Some(*run_id)),
+        _ => Ok(None),
+    }
 }
 
 async fn persisted_artifacts_by_item(

@@ -28,6 +28,480 @@ use uuid::Uuid;
 use crate::ensure_transitional_profile_binding;
 use crate::routes::{self, RuntimeProfileBinding};
 
+fn runtime_frame(
+    workspace_id: Uuid,
+    method: &str,
+    thread_id: &str,
+    turn_id: Option<&str>,
+    item: Option<Value>,
+) -> Vec<u8> {
+    let mut params = json!({"threadId": thread_id});
+    if let Some(turn_id) = turn_id {
+        params["turnId"] = Value::String(turn_id.to_string());
+    }
+    if let Some(item) = item {
+        params["item"] = item;
+    }
+    serde_json::to_vec(&json!({
+        "method": "app-server-event",
+        "params": {
+            "workspace_id": workspace_id,
+            "message": {"method": method, "params": params}
+        }
+    }))
+    .expect("encode Runtime projection frame")
+}
+
+fn map_tool_item(item_id: &str, card_ref: &str) -> Value {
+    json!({
+        "id": item_id,
+        "type": "mcpToolCall",
+        "server": "map_utils",
+        "tool": "create_network_map_card",
+        "result": {"structuredContent": {
+            "type": "open-web-artifact",
+            "kind": "inline-visualization.v1",
+            "map_spec_ref": {
+                "type": "mcp_resource",
+                "server": "map_utils",
+                "uri": format!("maps-data://map-card-spec/{card_ref}"),
+                "resource_schema": "map_card_spec.v1"
+            },
+            "artifact": {
+                "ref": card_ref,
+                "renderer": {"kind": "map.v3", "payload": {
+                    "title": "Network map",
+                    "intent": "visualization",
+                    "status": "ready",
+                    "sources": {"network": {
+                        "type": "geojson",
+                        "data": {
+                            "type": "mcp_resource",
+                            "server": "supply_chain",
+                            "uri": "supply-chain://resources/distribution",
+                            "format": "geojson"
+                        }
+                    }},
+                    "layers": [{
+                        "id": "demand",
+                        "type": "circle",
+                        "source": "network",
+                        "paint": {"circle-color": "#2563eb"}
+                    }]
+                }}
+            },
+            "embed": {
+                "syntax": "codex-inline-vis.artifact.v1",
+                "code": format!("::codex-inline-vis{{artifact=\"{card_ref}\"}}")
+            }
+        }}
+    })
+}
+
+fn agent_message_item(item_id: &str, card_ref: &str) -> Value {
+    json!({
+        "id": item_id,
+        "type": "agentMessage",
+        "phase": "final_answer",
+        "text": format!("Map follows.\n::codex-inline-vis{{artifact=\"{card_ref}\"}}")
+    })
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL pointing at a disposable PostgreSQL database"]
+async fn continued_child_turns_keep_their_exact_run_and_history_map_producer() {
+    let database_url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&database_url)
+        .await
+        .expect("connect disposable PostgreSQL database");
+    open_web_codex_platform_store::migrate::run(&pool)
+        .await
+        .expect("migrate database");
+
+    let organization_id = Uuid::now_v7();
+    let user_id = Uuid::now_v7();
+    let profile_id = Uuid::now_v7();
+    let project_id = Uuid::now_v7();
+    let workspace_id = Uuid::now_v7();
+    let task_id = Uuid::now_v7();
+    let first_run_id = Uuid::now_v7();
+    let followup_run_id = Uuid::now_v7();
+    let root_thread_id = format!("root-{}", Uuid::now_v7());
+    let child_thread_id = format!("child-{}", Uuid::now_v7());
+    let unique = Uuid::now_v7();
+
+    sqlx::query(
+        "INSERT INTO users (id, name, email, username, password_hash) \
+         VALUES ($1, 'Projection test', $2, $3, 'hash')",
+    )
+    .bind(user_id)
+    .bind(format!("projection-{unique}@example.invalid"))
+    .bind(format!("projection_{}", unique.simple()))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO organizations (id, name, slug) VALUES ($1, 'Projection org', $2)")
+        .bind(organization_id)
+        .bind(format!("projection-{unique}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO memberships (organization_id, user_id, role) VALUES ($1, $2, 'owner')",
+    )
+    .bind(organization_id)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO profiles (id, organization_id, owner_user_id, runtime_key, name) \
+         VALUES ($1, $2, $3, $4, 'Projection profile')",
+    )
+    .bind(profile_id)
+    .bind(organization_id)
+    .bind(user_id)
+    .bind(format!("projection-{unique}"))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO projects (id, organization_id, created_by, name, git_url) \
+         VALUES ($1, $2, $3, 'Projection project', 'managed://projection')",
+    )
+    .bind(project_id)
+    .bind(organization_id)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO workspaces \
+         (id, organization_id, project_id, profile_id, created_by, root_path, state, source_ref, kind, name) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'ready', 'main', 'main', 'Projection workspace')",
+    )
+    .bind(workspace_id)
+    .bind(organization_id)
+    .bind(project_id)
+    .bind(profile_id)
+    .bind(user_id)
+    .bind(format!("/tmp/open-web-codex-projection-{unique}"))
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO tasks (id, organization_id, project_id, workspace_id, created_by, title, status) \
+         VALUES ($1, $2, $3, $4, $5, 'Projection task', 'running')",
+    )
+    .bind(task_id)
+    .bind(organization_id)
+    .bind(project_id)
+    .bind(workspace_id)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runs \
+         (id, organization_id, task_id, requested_by, requested_profile_id, workspace_id, \
+          status, codex_thread_id, last_turn_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'completed', $7, 'root-first-turn')",
+    )
+    .bind(first_run_id)
+    .bind(organization_id)
+    .bind(task_id)
+    .bind(user_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .bind(&root_thread_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runs \
+         (id, organization_id, task_id, requested_by, requested_profile_id, workspace_id, \
+          status, codex_thread_id, active_turn_id, last_turn_id, continued_from_run_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'running', $7, 'root-followup-turn', \
+                 'root-followup-turn', $8)",
+    )
+    .bind(followup_run_id)
+    .bind(organization_id)
+    .bind(task_id)
+    .bind(user_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .bind(&root_thread_id)
+    .bind(first_run_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runtime_agent_projections \
+         (organization_id, profile_id, workspace_id, root_run_id, thread_id, source_kind) \
+         VALUES ($1, $2, $3, $4, $5, 'root')",
+    )
+    .bind(organization_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .bind(first_run_id)
+    .bind(&root_thread_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runtime_agent_projections \
+         (organization_id, profile_id, workspace_id, root_run_id, thread_id, parent_thread_id, source_kind) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'thread_spawn')",
+    )
+    .bind(organization_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .bind(first_run_id)
+    .bind(&child_thread_id)
+    .bind(&root_thread_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO runtime_agent_execution_projections \
+         (organization_id, profile_id, workspace_id, root_run_id, agent_thread_id, turn_id, ordinal, \
+          status, current_behavior, first_observed_sequence, last_observed_sequence) \
+         VALUES ($1, $2, $3, $4, $5, 'child-first-turn', 1, 'completed', 'Completed', 1, 1)",
+    )
+    .bind(organization_id)
+    .bind(profile_id)
+    .bind(workspace_id)
+    .bind(first_run_id)
+    .bind(&child_thread_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    crate::event_projection::persist_frame(
+        &runtime_frame(
+            workspace_id,
+            "item/completed",
+            &child_thread_id,
+            Some("child-first-turn"),
+            Some(map_tool_item("child-map-first", "map-first")),
+        ),
+        &pool,
+    )
+    .await
+    .unwrap();
+    crate::event_projection::persist_frame(
+        &runtime_frame(
+            workspace_id,
+            "item/completed",
+            &root_thread_id,
+            Some("root-first-turn"),
+            Some(agent_message_item("root-message-first", "map-first")),
+        ),
+        &pool,
+    )
+    .await
+    .unwrap();
+
+    crate::event_projection::persist_frame(
+        &runtime_frame(
+            workspace_id,
+            "item/started",
+            &root_thread_id,
+            Some("root-followup-turn"),
+            Some(json!({
+                "id": "root-send-input",
+                "type": "collabAgentToolCall",
+                "tool": "sendInput",
+                "prompt": "Create the next exact map.",
+                "receiverThreadIds": [&child_thread_id]
+            })),
+        ),
+        &pool,
+    )
+    .await
+    .unwrap();
+    let pending: (Option<String>, String, Option<String>) = sqlx::query_as(
+        "SELECT turn_id, status, assignment_item_id \
+         FROM runtime_agent_execution_projections \
+         WHERE root_run_id = $1 AND agent_thread_id = $2",
+    )
+    .bind(followup_run_id)
+    .bind(&child_thread_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        pending,
+        (
+            None,
+            "pending".to_string(),
+            Some("root-send-input".to_string())
+        )
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT root_run_id FROM runtime_agent_projections \
+             WHERE profile_id = $1 AND thread_id = $2",
+        )
+        .bind(profile_id)
+        .bind(&child_thread_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        first_run_id,
+        "the stable child identity must stay on its first Run",
+    );
+
+    let followup_map_frame = runtime_frame(
+        workspace_id,
+        "item/completed",
+        &child_thread_id,
+        Some("child-followup-turn"),
+        Some(map_tool_item("child-map-followup", "map-followup")),
+    );
+    crate::event_projection::persist_frame(&followup_map_frame, &pool)
+        .await
+        .unwrap();
+    crate::event_projection::persist_frame(
+        &runtime_frame(
+            workspace_id,
+            "item/completed",
+            &child_thread_id,
+            Some("child-followup-turn"),
+            Some(map_tool_item("child-map-followup-2", "map-followup-2")),
+        ),
+        &pool,
+    )
+    .await
+    .unwrap();
+    let followup_execution: (String, String) = sqlx::query_as(
+        "SELECT turn_id, status FROM runtime_agent_execution_projections \
+         WHERE root_run_id = $1 AND agent_thread_id = $2 AND turn_id = 'child-followup-turn'",
+    )
+    .bind(followup_run_id)
+    .bind(&child_thread_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        followup_execution,
+        ("child-followup-turn".to_string(), "running".to_string())
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT run_id FROM inline_map_cards WHERE card_ref = 'map-followup'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        followup_run_id,
+    );
+
+    let root_followup = crate::event_projection::persist_frame(
+        &runtime_frame(
+            workspace_id,
+            "item/completed",
+            &root_thread_id,
+            Some("root-followup-turn"),
+            Some(agent_message_item("root-message-followup", "map-followup")),
+        ),
+        &pool,
+    )
+    .await
+    .unwrap()
+    .expect("follow-up root map marker projection");
+    let root_payload = String::from_utf8(root_followup.payload).unwrap();
+    assert!(root_payload.contains(&format!(
+        "/api/runs/{followup_run_id}/inline-maps/map-followup"
+    )));
+
+    crate::event_projection::persist_frame(
+        &runtime_frame(
+            workspace_id,
+            "item/completed",
+            &root_thread_id,
+            Some("root-followup-turn"),
+            Some(agent_message_item(
+                "root-message-followup-2",
+                "map-followup-2",
+            )),
+        ),
+        &pool,
+    )
+    .await
+    .unwrap();
+    crate::event_projection::persist_frame(&followup_map_frame, &pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM inline_map_cards WHERE run_id = $1 AND card_ref = 'map-followup'",
+        )
+        .bind(followup_run_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1,
+        "replayed map Tool completion must be idempotent",
+    );
+
+    crate::event_projection::persist_frame(
+        &runtime_frame(
+            workspace_id,
+            "turn/started",
+            &child_thread_id,
+            Some("child-first-turn"),
+            None,
+        ),
+        &pool,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, Uuid>(
+            "SELECT run_id FROM run_events \
+             WHERE thread_id = $1 AND turn_id = 'child-first-turn' \
+             ORDER BY sequence DESC LIMIT 1",
+        )
+        .bind(&child_thread_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        first_run_id,
+        "a late first-Run Turn must not contaminate the follow-up Run",
+    );
+
+    for (item_id, expected_run_id, card_ref) in [
+        ("root-message-first", first_run_id, "map-first"),
+        ("root-message-followup", followup_run_id, "map-followup"),
+        ("root-message-followup-2", followup_run_id, "map-followup-2"),
+    ] {
+        let producer_run_id = crate::routes::threads::agent_message_producer_run(
+            &pool,
+            followup_run_id,
+            &root_thread_id,
+            item_id,
+        )
+        .await
+        .unwrap()
+        .expect("exact Agent Message producer Run");
+        assert_eq!(producer_run_id, expected_run_id);
+        let cards = crate::inline_map_cards::resolve(
+            &pool,
+            producer_run_id,
+            &format!("::codex-inline-vis{{artifact=\"{card_ref}\"}}"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(cards.len(), 1);
+        assert!(cards[0]
+            .to_string()
+            .contains(&format!("/api/runs/{expected_run_id}/")));
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL pointing at a disposable PostgreSQL database"]
 async fn task_creation_binds_only_an_authorized_project_workspace() {

@@ -1013,9 +1013,9 @@ async fn resolve_event_run_context(
                 {
                     // A later Run may deliberately continue the same root
                     // Thread. A delayed child event belongs to its existing
-                    // projection until the Runtime supplies a new exact
-                    // binding; never move it into that later attempt by
-                    // guessing from a shared parent Thread id.
+                    // projection until its exact Turn is already bound to a
+                    // later execution. Never move it into that later attempt
+                    // from a shared parent Thread id alone.
                     return Ok(Some(context));
                 }
                 return Err(
@@ -1044,6 +1044,15 @@ async fn resolve_event_run_context(
     else {
         return Ok(None);
     };
+    if event.turn_id.is_some()
+        && is_followup_run(transaction, &parent).await?
+        && !has_pending_agent_execution(transaction, &parent, &event.thread_id).await?
+    {
+        // A child Turn that has no stable projection can only enter a later
+        // attempt through the exact pending execution created by the root
+        // collaboration item. Do not adopt it from parent metadata alone.
+        return Ok(None);
+    }
     upsert_child_runtime_agent_projection(transaction, &parent, event).await?;
     Ok(Some(parent))
 }
@@ -1117,6 +1126,12 @@ async fn upsert_child_runtime_agent_projection(
     .await
     .map_err(|error| format!("child Thread projection error: {error}"))?;
     if row.is_none() {
+        if has_agent_execution(transaction, parent, &event.thread_id).await? {
+            // A child identity is stable for the first Run that observed it.
+            // A continued Run records a distinct exact execution instead of
+            // migrating this Runtime identity to a newer Run.
+            return Ok(());
+        }
         return Err("child Thread is already associated with another Runtime tree".to_string());
     }
     Ok(())
@@ -1230,27 +1245,187 @@ async fn lookup_known_thread_context(
     .await
     .map_err(|error| format!("projected Thread run lookup error: {error}"))?;
     if let Some(projected) = projected {
-        return Ok(Some(event_run_context(&projected)));
+        let stable = event_run_context(&projected);
+        if let Some(turn_id) = turn_id {
+            if let Some(exact) =
+                exact_agent_execution_context(transaction, &stable, thread_id, turn_id).await?
+            {
+                return Ok(Some(exact));
+            }
+            if let Some(pending) =
+                pending_followup_agent_execution_context(transaction, &stable, thread_id).await?
+            {
+                return Ok(Some(pending));
+            }
+        }
+        return Ok(Some(stable));
     }
 
-    let execution = sqlx::query(
+    Ok(None)
+}
+
+/// Resolve a child event only from an exact persisted `(agent thread, turn)`
+/// execution inside the same Task/Profile/Workspace/root Thread scope. The
+/// stable Agent projection is deliberately not moved when a Thread is reused
+/// by a later Run.
+async fn exact_agent_execution_context(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    scope: &EventRunContext,
+    agent_thread_id: &str,
+    turn_id: &str,
+) -> Result<Option<EventRunContext>, String> {
+    let rows = sqlx::query(
         "SELECT execution.root_run_id AS run_id, run.task_id, execution.organization_id,
                 execution.profile_id, execution.workspace_id,
                 run.codex_thread_id AS root_thread_id
          FROM runtime_agent_execution_projections execution
          JOIN runs run ON run.id = execution.root_run_id
            AND run.organization_id = execution.organization_id
-         WHERE execution.agent_thread_id = $1
-           AND ($2::uuid IS NULL OR execution.workspace_id = $2)
+         WHERE execution.agent_thread_id = $1 AND execution.turn_id = $2
+           AND execution.organization_id = $3 AND execution.profile_id = $4
+           AND execution.workspace_id = $5 AND run.task_id = $6
+           AND run.requested_profile_id = $4 AND run.workspace_id = $5
+           AND run.codex_thread_id = $7
          ORDER BY execution.created_at DESC
-         LIMIT 1",
+         LIMIT 2",
     )
-    .bind(thread_id)
-    .bind(workspace_id)
+    .bind(agent_thread_id)
+    .bind(turn_id)
+    .bind(scope.organization_id)
+    .bind(scope.profile_id)
+    .bind(scope.workspace_id)
+    .bind(scope.task_id)
+    .bind(&scope.root_thread_id)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(|error| format!("exact agent execution run lookup error: {error}"))?;
+    match rows.as_slice() {
+        [] => Ok(None),
+        [row] => Ok(Some(event_run_context(row))),
+        _ => Err("exact Runtime Agent Turn belongs to multiple Run attempts".to_string()),
+    }
+}
+
+/// A reused child has no new Turn identity until its first event arrives. The
+/// only safe provisional binding is the exact `sendInput` root item that
+/// already named this child. Other historical or late Turns stay with their
+/// exact prior execution (or fail closed when no such execution exists).
+async fn pending_followup_agent_execution_context(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    scope: &EventRunContext,
+    agent_thread_id: &str,
+) -> Result<Option<EventRunContext>, String> {
+    let rows = sqlx::query(
+        "SELECT execution.root_run_id AS run_id, run.task_id, execution.organization_id,
+                execution.profile_id, execution.workspace_id,
+                run.codex_thread_id AS root_thread_id
+         FROM runtime_agent_execution_projections execution
+         JOIN runs run ON run.id = execution.root_run_id
+           AND run.organization_id = execution.organization_id
+         JOIN run_events assignment ON assignment.run_id = execution.root_run_id
+           AND assignment.sequence = execution.assignment_sequence
+           AND assignment.item_id = execution.assignment_item_id
+         WHERE execution.agent_thread_id = $1 AND execution.turn_id IS NULL
+           AND execution.status = 'pending'
+           AND execution.organization_id = $2 AND execution.profile_id = $3
+           AND execution.workspace_id = $4 AND run.task_id = $5
+           AND run.requested_profile_id = $3 AND run.workspace_id = $4
+           AND run.codex_thread_id = $6
+           AND run.continued_from_run_id IS NOT NULL
+           AND run.status IN ('provisioning', 'running')
+           AND assignment.event_type = 'codex.item.started'
+           AND assignment.payload->>'itemType' IN ('collabAgentToolCall', 'collabToolCall')
+           AND assignment.payload->'data'->>'tool' = 'sendInput'
+         ORDER BY execution.created_at DESC
+         LIMIT 2",
+    )
+    .bind(agent_thread_id)
+    .bind(scope.organization_id)
+    .bind(scope.profile_id)
+    .bind(scope.workspace_id)
+    .bind(scope.task_id)
+    .bind(&scope.root_thread_id)
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(|error| format!("pending follow-up Agent execution lookup error: {error}"))?;
+    match rows.as_slice() {
+        [] => Ok(None),
+        [row] => Ok(Some(event_run_context(row))),
+        _ => Err("multiple pending sendInput executions match one Agent Thread".to_string()),
+    }
+}
+
+async fn has_pending_agent_execution(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
+    agent_thread_id: &str,
+) -> Result<bool, String> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM runtime_agent_execution_projections execution
+            WHERE execution.root_run_id = $1
+              AND execution.organization_id = $2
+              AND execution.profile_id = $3
+              AND execution.workspace_id = $4
+              AND execution.agent_thread_id = $5
+              AND execution.turn_id IS NULL AND execution.status = 'pending'
+         )",
+    )
+    .bind(context.run_id)
+    .bind(context.organization_id)
+    .bind(context.profile_id)
+    .bind(context.workspace_id)
+    .bind(agent_thread_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|error| format!("pending Agent execution lookup error: {error}"))
+}
+
+async fn is_followup_run(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
+) -> Result<bool, String> {
+    sqlx::query_scalar(
+        "SELECT continued_from_run_id IS NOT NULL FROM runs
+         WHERE id = $1 AND organization_id = $2 AND task_id = $3
+           AND requested_profile_id = $4 AND workspace_id = $5
+           AND codex_thread_id = $6",
+    )
+    .bind(context.run_id)
+    .bind(context.organization_id)
+    .bind(context.task_id)
+    .bind(context.profile_id)
+    .bind(context.workspace_id)
+    .bind(&context.root_thread_id)
     .fetch_optional(&mut **transaction)
     .await
-    .map_err(|error| format!("projected agent execution run lookup error: {error}"))?;
-    Ok(execution.as_ref().map(event_run_context))
+    .map_err(|error| format!("follow-up Run lookup error: {error}"))?
+    .ok_or_else(|| "Run ownership changed during event delivery".to_string())
+}
+
+async fn has_agent_execution(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &EventRunContext,
+    agent_thread_id: &str,
+) -> Result<bool, String> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM runtime_agent_execution_projections execution
+            WHERE execution.root_run_id = $1
+              AND execution.organization_id = $2
+              AND execution.profile_id = $3
+              AND execution.workspace_id = $4
+              AND execution.agent_thread_id = $5
+         )",
+    )
+    .bind(context.run_id)
+    .bind(context.organization_id)
+    .bind(context.profile_id)
+    .bind(context.workspace_id)
+    .bind(agent_thread_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|error| format!("Agent execution lookup error: {error}"))
 }
 
 fn event_run_context(row: &sqlx::postgres::PgRow) -> EventRunContext {
@@ -1377,12 +1552,13 @@ async fn project_supervisor_assignment(
     sequence: i64,
     observed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), String> {
-    if event.event_type != "codex.item.completed"
-        || !matches!(
-            event.payload.get("itemType").and_then(Value::as_str),
-            Some("collabAgentToolCall" | "collabToolCall")
-        )
-    {
+    if !matches!(
+        event.event_type.as_str(),
+        "codex.item.started" | "codex.item.completed"
+    ) || !matches!(
+        event.payload.get("itemType").and_then(Value::as_str),
+        Some("collabAgentToolCall" | "collabToolCall")
+    ) {
         return Ok(());
     }
     let data = event.payload.get("data").unwrap_or(&Value::Null);
@@ -1394,13 +1570,19 @@ async fn project_supervisor_assignment(
     if !matches!(tool.as_str(), "spawnagent" | "sendinput") {
         return Ok(());
     }
-    let Some(task) = data
-        .get("prompt")
-        .and_then(Value::as_str)
-        .and_then(|value| bounded_runtime_text(value, 1_000))
+    let Some(assignment_item_id) = event
+        .item_id
+        .as_deref()
+        .filter(|value| !value.is_empty() && value.len() <= 256)
     else {
+        // A pending execution without the official root Item identity cannot
+        // later be matched idempotently, so it must not be invented.
         return Ok(());
     };
+    let task = data
+        .get("prompt")
+        .and_then(Value::as_str)
+        .and_then(|value| bounded_runtime_text(value, 1_000));
     let mut receivers = data
         .get("receiverThreadIds")
         .and_then(Value::as_array)
@@ -1418,7 +1600,8 @@ async fn project_supervisor_assignment(
         lock_agent_execution(transaction, context.run_id, &receiver).await?;
         let attached = sqlx::query_scalar::<_, Uuid>(
             "UPDATE runtime_agent_execution_projections
-             SET assignment_sequence = $1, assignment_item_id = $2, task = $3,
+             SET assignment_sequence = $1, assignment_item_id = $2,
+                 task = COALESCE($3, task),
                  first_observed_sequence = LEAST(first_observed_sequence, $1),
                  last_observed_sequence = GREATEST(last_observed_sequence, $1),
                  updated_at = now()
@@ -1433,14 +1616,14 @@ async fn project_supervisor_assignment(
              RETURNING id",
         )
         .bind(sequence)
-        .bind(&event.item_id)
+        .bind(assignment_item_id)
         .bind(&task)
         .bind(context.run_id)
         .bind(&receiver)
         .fetch_optional(&mut **transaction)
         .await
         .map_err(|error| format!("Agent task assignment attach error: {error}"))?;
-        if attached.is_some() || tool != "spawnagent" {
+        if attached.is_some() {
             continue;
         }
 
@@ -1457,7 +1640,12 @@ async fn project_supervisor_assignment(
              )
              ON CONFLICT (root_run_id, agent_thread_id, assignment_item_id)
              DO UPDATE SET
-                task = EXCLUDED.task,
+                task = COALESCE(EXCLUDED.task, runtime_agent_execution_projections.task),
+                display_title = CASE
+                    WHEN EXCLUDED.task IS NULL
+                        THEN runtime_agent_execution_projections.display_title
+                    ELSE EXCLUDED.display_title
+                END,
                 assignment_sequence = LEAST(
                     runtime_agent_execution_projections.assignment_sequence,
                     EXCLUDED.assignment_sequence
@@ -1479,9 +1667,9 @@ async fn project_supervisor_assignment(
         .bind(&receiver)
         .bind(ordinal)
         .bind(sequence)
-        .bind(&event.item_id)
+        .bind(assignment_item_id)
         .bind(&task)
-        .bind(build_execution_title(None, Some(&task)))
+        .bind(build_execution_title(None, task.as_deref()))
         .bind(observed_at)
         .execute(&mut **transaction)
         .await
@@ -1539,6 +1727,31 @@ async fn ensure_agent_execution(
     .map_err(|error| format!("Agent task Turn binding error: {error}"))?;
     if bound.is_some() {
         return Ok(());
+    }
+
+    let is_followup: bool = sqlx::query_scalar(
+        "SELECT continued_from_run_id IS NOT NULL FROM runs
+         WHERE id = $1 AND organization_id = $2 AND task_id = $3
+           AND requested_profile_id = $4 AND workspace_id = $5
+           AND codex_thread_id = $6",
+    )
+    .bind(context.run_id)
+    .bind(context.organization_id)
+    .bind(context.task_id)
+    .bind(context.profile_id)
+    .bind(context.workspace_id)
+    .bind(&context.root_thread_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|error| format!("Agent follow-up execution lookup error: {error}"))?
+    .ok_or_else(|| "Agent execution Run ownership changed during delivery".to_string())?;
+    if is_followup {
+        // A follow-up child Turn must have been reserved by the exact root
+        // collaboration Item before the child event arrived. Do not recreate
+        // a binding by inspecting historical assignments after the fact.
+        return Err(
+            "follow-up Agent Turn was not pre-bound by the root collaboration item".to_string(),
+        );
     }
 
     let last_consumed = sqlx::query_scalar::<_, Option<i64>>(

@@ -203,7 +203,11 @@ MCP Resource 的原始 server/URI、MIME、大小、缓存内容和 SHA-256 仍�
 
 解析规则：
 
-- 指令只能引用同一 Run、同一 Thread 中已完成的 Artifact；后续 Turn 可以复用；
+- live event 只能引用同一 Run、同一 Thread 中已完成的 Artifact；后续 Turn 可以复用；
+- canonical Thread 的历史恢复从 Agent Message 的 exact `item_id` 取得唯一的 persisted
+  producer Run，再在该 Run 中解析 Artifact。producer 必须同属当前授权的 Task、Profile、
+  Workspace 和 Root Thread；缺失或冲突 provenance 一律不可用。不得按 Task、`card_ref`、
+  文本、标题或时间搜索卡片；
 - 拒绝跨组织、跨 Run、跨 Thread、前向、自引用、重名和未完成 Artifact；
 - 浏览器只接收授权后的 Artifact ID 和安全 renderer DTO，不接收 MCP Resource URI、
   Profile 路径、Runtime request ID 或凭据；
@@ -212,6 +216,8 @@ MCP Resource 的原始 server/URI、MIME、大小、缓存内容和 SHA-256 仍�
 
 Thread 作用域的 `artifact.ref` 是 Assistant 可复制的展示句柄；GeoJSON 的规范数据身份仍是
 MCP server + Resource URI，不再创建第二套地图数据身份。
+历史 producer Run 只用于恢复该条既有 Message 的展示；它不把旧卡片提升为当前 Run 的输入，
+也不改变“基于此图修改”仍须由当前 Run 中用户明确选择的 exact card projection 授权。
 
 ## Assistant Message 编排
 
