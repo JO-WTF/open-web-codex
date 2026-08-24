@@ -112,6 +112,22 @@ function threadDisplayName(value: unknown): string {
   return !name || name === "New Agent" ? "Thread" : name;
 }
 
+function runIsActiveForNavigation(run: Run): boolean {
+  return Boolean(run.active_turn_id)
+    || ["pending", "provisioning", "running", "cancelling", "recovery_pending"].includes(run.status);
+}
+
+function compareThreadNavigationRuns(left: Run, right: Run): number {
+  const leftActive = runIsActiveForNavigation(left);
+  const rightActive = runIsActiveForNavigation(right);
+  if (leftActive !== rightActive) return leftActive ? -1 : 1;
+  if (left.updated_at !== right.updated_at) {
+    return left.updated_at > right.updated_at ? -1 : 1;
+  }
+  if (left.id === right.id) return 0;
+  return left.id > right.id ? -1 : 1;
+}
+
 function rawItem(event: RunEvent): JsonRecord | null {
   if (!event.item_id || !event.payload.itemType) return null;
   const data = isRecord(event.payload.data) ? event.payload.data : {};
@@ -360,19 +376,36 @@ export class CodexMonitorWebClient {
 
   private async indexWorkspaceThreads(workspace: Workspace) {
     const rows = await this.platform.listProjectThreadContexts(workspace.project_id);
-    return rows.flatMap(({ project, task, run }) => {
+    const candidates = rows.flatMap(({ project, task, run }) => {
       if (run.workspace_id !== workspace.id || !run.codex_thread_id || task.status === "archived") {
         return [];
       }
+      return [{ project, task, run, threadId: run.codex_thread_id }];
+    });
+    const selectedByThread = new Map<string, typeof candidates[number]>();
+    for (const candidate of candidates) {
+      const current = selectedByThread.get(candidate.threadId);
+      if (!current || compareThreadNavigationRuns(candidate.run, current.run) < 0) {
+        selectedByThread.set(candidate.threadId, candidate);
+      }
+    }
+
+    // A Run is an attempt; a canonical Codex Thread has one navigation entry.
+    // Refresh this Workspace atomically so a prior Run cannot remain cached
+    // after a continued Run becomes the selected attempt.
+    for (const [threadId, context] of this.threadContexts) {
+      if (context.workspaceId === workspace.id) this.threadContexts.delete(threadId);
+    }
+    return [...selectedByThread.values()].map(({ project, task, run, threadId }) => {
       const context = {
         workspaceId: workspace.id,
         projectId: workspace.project_id,
         taskId: task.id,
         runId: run.id,
-        rootThreadId: run.codex_thread_id,
+        rootThreadId: threadId,
       };
-      this.threadContexts.set(run.codex_thread_id, context);
-      return [{ project, task, run, threadId: run.codex_thread_id, context }];
+      this.threadContexts.set(threadId, context);
+      return { project, task, run, threadId, context };
     });
   }
 

@@ -177,6 +177,54 @@ describe("WebApp direct Server client", () => {
     });
   });
 
+  it("keeps one canonical Thread navigation entry and selects its active follow-up Run", async () => {
+    const firstRun = {
+      ...run,
+      status: "completed",
+      active_turn_id: null,
+      updated_at: "2026-07-22T00:00:01Z",
+    };
+    const followupRun = {
+      ...run,
+      id: "run-2",
+      status: "running",
+      active_turn_id: "followup-turn",
+      attempt: 2,
+      updated_at: "2026-07-22T00:00:02Z",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/workspaces") return json([workspace]);
+      if (url.pathname === `/api/workspaces/${workspace.id}`) return json(workspace);
+      if (url.pathname === `/api/projects/${project.id}/thread-contexts`) {
+        return json([
+          { project, task, run: firstRun },
+          { project, task, run: followupRun },
+        ]);
+      }
+      if (url.pathname === `/api/runs/${followupRun.id}/thread/turns`) return json([]);
+      throw new Error(`Unexpected Server request: ${url.pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new CodexMonitorWebClient({ baseUrl: "http://server.test" });
+
+    await expect(client.listThreads(workspace.id)).resolves.toEqual({
+      data: [expect.objectContaining({
+        id: "thread-1",
+        activeTurnId: "followup-turn",
+        updatedAt: followupRun.updated_at,
+      })],
+      nextCursor: null,
+    });
+    await expect(client.listThreadTurns(workspace.id, "thread-1")).resolves.toEqual([]);
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toContain(
+      `http://server.test/api/runs/${followupRun.id}/thread/turns`,
+    );
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContain(
+      `http://server.test/api/runs/${firstRun.id}/thread/turns`,
+    );
+  });
+
   it("keeps polling an accepted Run through a transient read failure without creating a second Task or Run", async () => {
     const baseFetch = resourceFetch();
     const pendingRun = {

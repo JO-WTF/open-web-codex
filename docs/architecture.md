@@ -204,6 +204,10 @@ gate 均证明删除后 Runtime child lifecycle、Artifact 和资源投影继续
 Browser 的当前 Workspace 与每个 Workspace 的 Root Thread 选择只作为 session-scoped
 presentation state 保存；reload 后必须先用授权 Workspace/Thread 列表校验，再通过既有
 `selectThread` 恢复 official history、Agent activity、overview 和 durable pending approval。
+导航按 canonical `codex_thread_id` 合并：一个 Thread 只显示一条记录，活动 Run 优先，随后才按
+更新时间和稳定 Run ID 选择其当前 presentation context。Run 是调度/审计 attempt，不是新的
+导航 Thread；因此 continued Run 不能在侧栏复制同一个 Root Thread，也不能让旧 Run 留在
+session cache 中作为该 Thread 的可选 context。
 2026-08-12 的真实 Web 门在 final report approval pending 时刷新，恢复了同一 Root Thread 和
 唯一可操作 approval，接受后原 Network child 继续完成唯一 Markdown Artifact。
 
@@ -280,6 +284,11 @@ GeoJSON ref 的紧凑 profile 还声明每个字段的观测值类型但不复�
 不匹配的 source expression，以及当前 renderer 未声明 image asset 的 `icon-image`，而非发布假 Ready 卡片。纯样式
 修订复用原 GeoJSON，新增覆盖线先由 Network 产生新的 GeoJSON 再创建 child spec。Platform 的
 `inline_map_cards` 只投影该 exact spec ref 和父卡片关系，浏览器不接收 GeoJSON 内容。
+live Agent Message 只以该 event 的当前 Run 解析 inline map；canonical Thread 的历史恢复则从
+该 Agent Message 的 exact `item_id` 在 `run_events` 找到同 Task/Profile/Workspace/root Thread
+范围内唯一的 producer Run，再以该 producer Run 解析 map。缺失或冲突 provenance 直接不展示，
+不按 Task、`card_ref`、文本或最新时间搜索。这个历史展示规则不扩大地图修订输入：用户选择的
+`map_card_ref` 仍只在当前发送 Run 的精确卡片投影内授权。
 
 ## 6. Profile 与认证的当前边界
 
