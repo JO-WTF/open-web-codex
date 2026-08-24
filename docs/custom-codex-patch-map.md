@@ -27,6 +27,7 @@ Provider E2E 已完成。实时计数以
 | `provider-error-redaction` | shared API bridge 与 Bedrock error mapper | Provider 401 的 secret/log 边界不能依赖上游错误文本。 | 4 |
 | `plugin-mcp-tool-exposure` | Plugin MCP config policy 与 loader | 已选 Plugin server 必须能声明 Runtime 原生的 Tool exposure omission。 | 5 |
 | `managed-child-role-projection-resume` | Role projection、cold resume、upstream V2 AgentControl attachment | package-owned child Role 的受信 MCP/Skill/指令投影在当前仓网 V1 cold resume 尚无上游等价。 | 6 |
+| `stdio-mcp-liveness` | `rmcp-client` stdio process/transport lifecycle | stdio MCP 自然退出必须以 Runtime-owned typed liveness 结束连接，不能让 app-server 状态投影继续显示 Connected。 | 7 |
 
 ### `provider-chat-wire-adapter`
 
@@ -167,6 +168,28 @@ Role 在当前 Runtime contract 下 resolve 为 V1；direct app-server V2 child 
 
 **退出条件。** 上游以同一 trust boundary cold-resume V1 child Role 的 package projection，并保留
 V2 native AgentControl 行为和 runtime setting snapshot。
+
+### `stdio-mcp-liveness`
+
+**Owner paths.** `codex-rs/rmcp-client/src/{stdio_server_launcher.rs,rmcp_client.rs,executor_process_transport.rs}`；回归只在
+`codex-rs/app-server/tests/suite/v2/mcp_server_status.rs` 与 `rmcp-client` 的 owner unit。
+
+**Typed contract.** `StdioServerProcessHandle` 的共享原子 closed state 是一个已启动 stdio
+server 的 Runtime-owned liveness 事实。stdio transport 返回 EOF 时、显式 `terminate` 时和最后一个
+handle drop 时都只会把该事实收敛为 closed；`RmcpClient::is_closed` 先消费同一状态，再消费 rmcp
+service 状态。executor-backed transport 不再另行终止同一 process，避免并发、主动终止、自然退出和
+drop 产生重复终态或悬挂的额外终止任务。app-server status 只读取这份 Runtime state，不 ping、重试、
+sleep 或建立 Platform cache。
+
+**为什么保留。** comparison snapshot 的 integrated `2161` 与当前 official `fb0781` 在这些
+stdio liveness owner paths 没有等价改动；现有 rmcp service closed 信号可晚于 transport EOF，使
+`mcpServerStatus/list` 在自然退出后短暂地继续报告 Connected。
+
+**验证门。** `./scripts/test-codex.sh -p codex-rmcp-client stdio_`；
+`./scripts/test-codex.sh -p codex-app-server mcp_server_status_list_reports_disconnected_stdio_transport`。
+
+**退出条件。** upstream 在 stdio process/transport lifecycle 提供等价的共享 closed state，并由
+`RmcpClient::is_closed` 消费且保证 executor termination 只有一个 owner 时，删除本地实现和本 seam。
 
 ## Followers、同步和分类规则
 

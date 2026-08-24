@@ -949,6 +949,14 @@ impl RmcpClient {
 
     /// Returns whether an initialized transport or its underlying service has stopped.
     pub async fn is_closed(&self) -> bool {
+        if self
+            .stdio_process
+            .as_ref()
+            .is_some_and(StdioServerProcessHandle::is_closed)
+        {
+            return true;
+        }
+
         let state = self.state.lock().await;
         match &*state {
             ClientState::Ready { service, .. } => {

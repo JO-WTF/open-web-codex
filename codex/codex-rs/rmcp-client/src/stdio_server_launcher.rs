@@ -133,10 +133,16 @@ impl Transport<RoleClient> for StdioServerTransport {
         // rmcp reads from the same transport shape for both placements. The
         // executor variant turns pushed process-output events back into the
         // line-delimited JSON stream expected by rmcp.
-        match &mut self.inner {
-            StdioServerTransportInner::LocalLegacy(transport) => transport.receive().boxed(),
-            StdioServerTransportInner::LocalModern(transport) => transport.receive().boxed(),
-            StdioServerTransportInner::Executor(transport) => transport.receive().boxed(),
+        async {
+            let message = match &mut self.inner {
+                StdioServerTransportInner::LocalLegacy(transport) => transport.receive().await,
+                StdioServerTransportInner::LocalModern(transport) => transport.receive().await,
+                StdioServerTransportInner::Executor(transport) => transport.receive().await,
+            };
+            if message.is_none() {
+                self.process.mark_closed();
+            }
+            message
         }
     }
 
@@ -244,6 +250,7 @@ pub(crate) struct StdioServerProcessHandle {
 struct StdioServerProcessHandleInner {
     program_name: String,
     kind: StdioServerProcessKind,
+    closed: AtomicBool,
     terminated: AtomicBool,
 }
 
@@ -457,6 +464,7 @@ impl StdioServerProcessHandle {
             inner: Arc::new(StdioServerProcessHandleInner {
                 program_name,
                 kind: StdioServerProcessKind::Local(terminator),
+                closed: AtomicBool::new(false),
                 terminated: AtomicBool::new(false),
             }),
         }
@@ -467,12 +475,22 @@ impl StdioServerProcessHandle {
             inner: Arc::new(StdioServerProcessHandleInner {
                 program_name,
                 kind: StdioServerProcessKind::Executor(process),
+                closed: AtomicBool::new(false),
                 terminated: AtomicBool::new(false),
             }),
         }
     }
 
+    pub(crate) fn is_closed(&self) -> bool {
+        self.inner.closed.load(Ordering::Acquire)
+    }
+
+    fn mark_closed(&self) {
+        self.inner.closed.store(true, Ordering::Release);
+    }
+
     pub(crate) async fn terminate(&self) -> io::Result<()> {
+        self.mark_closed();
         if self.inner.terminated.swap(true, Ordering::AcqRel) {
             return Ok(());
         }
@@ -496,6 +514,7 @@ impl StdioServerProcessHandle {
 
 impl Drop for StdioServerProcessHandleInner {
     fn drop(&mut self) {
+        self.closed.store(true, Ordering::Release);
         if self.terminated.swap(true, Ordering::AcqRel) {
             return;
         }
@@ -764,3 +783,7 @@ mod tests {
         assert!(!env.contains_key("UNREQUESTED_SECRET"));
     }
 }
+
+#[cfg(test)]
+#[path = "stdio_server_liveness_tests.rs"]
+mod liveness_tests;
