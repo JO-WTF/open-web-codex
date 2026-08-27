@@ -67,6 +67,9 @@ def test_execute_navigation_matrix_writes_typed_workspace_facts(tmp_path, monkey
     request_path.write_text(json.dumps(_request()), encoding="utf-8")
 
     class FakeClient:
+        async def get_route(self, *_args, **_kwargs):
+            raise AssertionError("multi-route origin group must use distance_matrix")
+
         async def distance_matrix(self, origins, destinations, *, mode):
             assert origins == [{"longitude": 106.8, "latitude": -6.2}]
             assert len(destinations) == 2
@@ -155,6 +158,81 @@ def test_navigation_rows_preserve_zero_duration_and_classify_missing_or_malforme
         mode="driving",
     )
     assert malformed.status == "error"
+
+
+def test_single_navigation_route_uses_route_provider_and_preserves_zero_values(
+    tmp_path, monkeypatch
+) -> None:
+    output_dir = tmp_path / "outputs/warehouse-network/requests"
+    output_dir.mkdir(parents=True)
+    request = _request()
+    request["routes"] = [request["routes"][0]]
+    request["estimated_billable_elements"] = 1
+    (output_dir / "single-route-request.json").write_text(json.dumps(request), encoding="utf-8")
+    calls: list[str] = []
+
+    class FakeClient:
+        async def get_route(self, origin, destination, *, mode):
+            calls.append("get_route")
+            assert origin == {"longitude": 106.8, "latitude": -6.2}
+            assert destination == {"longitude": 106.9, "latitude": -6.3}
+            assert mode == "driving"
+            return {
+                "provider": "mapbox",
+                "code": "Ok",
+                "route_count": 1,
+                "routes": [{"distance": 0, "duration": 0}],
+            }
+
+        async def distance_matrix(self, *_args, **_kwargs):
+            raise AssertionError("single-route origin group must not use distance_matrix")
+
+    async def fake_client(_ctx):
+        return FakeClient()
+
+    monkeypatch.setattr(server, "_client", fake_client)
+    result = asyncio.run(
+        server.execute_navigation_matrix(
+            "outputs/warehouse-network/requests/single-route-request.json",
+            "outputs/warehouse-network/requests/single-route-result.json",
+            _context(tmp_path),
+        )
+    )
+    payload = json.loads((output_dir / "single-route-result.json").read_text(encoding="utf-8"))
+    assert calls == ["get_route"]
+    assert result.ready_pair_count == 1
+    assert payload["rows"][0]["status"] == "ready"
+    assert payload["rows"][0]["distance_km"] == 0
+    assert payload["rows"][0]["duration_hours"] == 0
+
+
+def test_single_navigation_route_classifies_no_route_and_rejects_malformed_results() -> None:
+    route = server.NavigationRouteRequest.model_validate(_request()["routes"][0])
+
+    provider, no_route = server._single_navigation_entry(
+        {"provider": "mapbox", "code": "NoRoute", "route_count": 0, "routes": []}
+    )
+    no_route_row = server._matrix_row(route, no_route, provider=provider, mode="driving")
+    assert no_route_row.status == "unreachable"
+
+    google_provider, google_entry = server._single_navigation_entry(
+        {
+            "provider": "google",
+            "route_count": 1,
+            "routes": [{"distanceMeters": 0, "duration": "0s"}],
+        }
+    )
+    assert server._matrix_row(
+        route,
+        google_entry,
+        provider=google_provider,
+        mode="driving",
+    ).status == "ready"
+
+    with pytest.raises(RuntimeError, match="navigation_route_result_invalid"):
+        server._single_navigation_entry(
+            {"provider": "mapbox", "code": "Ok", "route_count": 1, "routes": []}
+        )
 
 
 def test_navigation_contract_round_trips_selected_warehouse_scope(tmp_path, monkeypatch) -> None:

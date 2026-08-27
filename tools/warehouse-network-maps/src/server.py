@@ -465,6 +465,40 @@ def _matrix_row(
     )
 
 
+def _single_navigation_entry(result: object) -> tuple[Provider, dict[str, object]]:
+    """Normalize one provider route to the existing navigation-matrix row shape."""
+    if not isinstance(result, dict):
+        raise RuntimeError("navigation_route_result_invalid")
+    provider = result.get("provider")
+    if provider not in {"google", "mapbox"}:
+        raise RuntimeError("navigation_provider_result_invalid")
+    route_count = result.get("route_count")
+    routes = result.get("routes")
+    if (
+        not isinstance(route_count, int)
+        or isinstance(route_count, bool)
+        or not isinstance(routes, list)
+        or route_count != len(routes)
+    ):
+        raise RuntimeError("navigation_route_result_invalid")
+    if route_count == 0:
+        return provider, {}
+    if route_count != 1 or not isinstance(routes[0], dict):
+        raise RuntimeError("navigation_route_result_invalid")
+    if provider == "mapbox" and result.get("code") != "Ok":
+        raise RuntimeError("navigation_route_result_invalid")
+    route = routes[0]
+    if provider == "google":
+        return provider, {
+            "distanceMeters": route.get("distanceMeters"),
+            "duration": route.get("duration"),
+        }
+    return provider, {
+        "distanceMeters": route.get("distance"),
+        "duration": route.get("duration"),
+    }
+
+
 def _resource_result(
     provider: object,
     summary: str,
@@ -1296,6 +1330,19 @@ async def execute_navigation_matrix(
 
     rows: list[NavigationRouteRow] = []
     for (longitude, latitude), routes in grouped.items():
+        if len(routes) == 1:
+            route = routes[0]
+            result = await client.get_route(
+                {"longitude": longitude, "latitude": latitude},
+                {
+                    "longitude": route.destination_longitude,
+                    "latitude": route.destination_latitude,
+                },
+                mode=mode,
+            )
+            provider, entry = _single_navigation_entry(result)
+            rows.append(_matrix_row(route, entry, provider=provider, mode=mode))
+            continue
         result = await client.distance_matrix(
             [{"longitude": longitude, "latitude": latitude}],
             [
