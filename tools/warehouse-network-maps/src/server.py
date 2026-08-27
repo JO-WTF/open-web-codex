@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import math
 import os
@@ -13,9 +14,11 @@ from uuid import uuid4
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
+from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, ResourceLink, TextContent, ToolAnnotations
 from open_web_codex_provider import (
     MAX_WORKSPACE_FILE_BYTES,
+    SANDBOX_STATE_META_CAPABILITY,
     GeoJsonResourceRef,
     ResourceRef,
     create_workspace_file,
@@ -132,6 +135,23 @@ class ExistingPlusCandidatesWarehouseScope(BaseModel):
         return sorted(values)
 
 
+class SelectedWarehousesScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["selected_warehouses"] = "selected_warehouses"
+    warehouse_ids: list[str] = Field(min_length=1, max_length=256)
+
+    @field_validator("warehouse_ids")
+    @classmethod
+    def normalize_warehouse_ids(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("warehouse_scope_selected_warehouse_id_invalid")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("warehouse_scope_selected_warehouse_ids_duplicate")
+        return sorted(normalized)
+
+
 class AllWarehousesScope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -139,7 +159,10 @@ class AllWarehousesScope(BaseModel):
 
 
 WarehouseScope = Annotated[
-    ExistingOnlyWarehouseScope | ExistingPlusCandidatesWarehouseScope | AllWarehousesScope,
+    ExistingOnlyWarehouseScope
+    | ExistingPlusCandidatesWarehouseScope
+    | SelectedWarehousesScope
+    | AllWarehousesScope,
     Field(discriminator="kind"),
 ]
 
@@ -158,6 +181,11 @@ class NavigationMatrixRequest(BaseModel):
     def validate_warehouse_ids(self):
         if self.warehouse_ids != sorted(set(self.warehouse_ids)):
             raise ValueError("warehouse_ids_not_canonical")
+        if (
+            self.warehouse_scope.kind == "selected_warehouses"
+            and self.warehouse_ids != self.warehouse_scope.warehouse_ids
+        ):
+            raise ValueError("warehouse_scope_selected_warehouse_ids_mismatch")
         keys = [(route.origin_id, route.destination_id, route.layer) for route in self.routes]
         if len(keys) != len(set(keys)):
             raise ValueError("navigation_route_duplicate_pair")
@@ -198,6 +226,11 @@ class NavigationMatrixResult(BaseModel):
     def validate_warehouse_ids(self):
         if self.warehouse_ids != sorted(set(self.warehouse_ids)):
             raise ValueError("warehouse_ids_not_canonical")
+        if (
+            self.warehouse_scope.kind == "selected_warehouses"
+            and self.warehouse_ids != self.warehouse_scope.warehouse_ids
+        ):
+            raise ValueError("warehouse_scope_selected_warehouse_ids_mismatch")
         keys = [(row.origin_id, row.destination_id, row.layer) for row in self.rows]
         if len(keys) != len(set(keys)):
             raise ValueError("navigation_route_duplicate_pair")
@@ -1360,7 +1393,18 @@ def main() -> None:
     _credential_store = WorkspaceCredentialStore(args.workspace_root)
     _resource_store = GeoJsonResourceStore(args.workspace_root)
     _map_card_spec_store = MapCardSpecStore(args.workspace_root)
-    mcp.run(transport=args.transport)
+    if args.transport == "stdio":
+        asyncio.run(run_stdio())
+    else:
+        mcp.run(transport=args.transport)
+
+
+async def run_stdio() -> None:
+    initialization_options = mcp._mcp_server.create_initialization_options(
+        experimental_capabilities={SANDBOX_STATE_META_CAPABILITY: {}},
+    )
+    async with stdio_server() as streams:
+        await mcp._mcp_server.run(streams[0], streams[1], initialization_options)
 
 
 if __name__ == "__main__":

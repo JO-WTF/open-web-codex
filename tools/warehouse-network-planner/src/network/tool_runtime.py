@@ -41,7 +41,6 @@ from supply_chain_planner.shared.resources import (
 
 McpResourceContractError = ProviderContractError
 
-SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
 RESOURCE_URI_PREFIX = "supply-chain://resources/"
 
 CONTENT_ADDRESSED_RESOURCE_TOOL = ToolAnnotations(

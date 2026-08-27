@@ -1725,6 +1725,21 @@ mod tests {
         assert!(instructions.contains("只有用户明确要求脚本核算时"));
         assert!(instructions.contains("同时保存可复用的 `.py` 脚本和 `.json` 结果"));
         assert!(instructions.contains("`create_network_map_card` 成功后立即回复并结束"));
+        assert_eq!(
+            role["plugins"]["map_utils"]["mcp_servers"]["map_utils"]["omit_tools_from"]
+                .as_array()
+                .expect("single-Agent deferred map-tool exposure")
+                .iter()
+                .filter_map(|item| item.as_str())
+                .collect::<Vec<_>>(),
+            vec!["direct"],
+        );
+        assert_eq!(
+            role["plugins"]["map_utils"]["mcp_servers"]["map_utils"]["tools"]
+                ["execute_navigation_matrix"]["approval_mode"]
+                .as_str(),
+            Some("prompt"),
+        );
         assert!(
             role["plugins"]["map_utils"]["mcp_servers"]["map_utils"]["tools"]
                 .get("publish_workspace_geojson")
@@ -1841,14 +1856,47 @@ mod tests {
     #[test]
     fn warehouse_data_skills_stop_and_ask_on_typed_missing_input() {
         assert!(DATA_SKILL.contains("只交接本次所选数据的真实缺口"));
-        assert!(SUPERVISOR_SKILL.contains("Data 或 Network 返回 `needs_input`"));
+        assert!(SUPERVISOR_SKILL.contains("当前用户意图尚未回答的真实业务歧义 `needs_input`"));
         assert!(SUPERVISOR_SKILL.contains("`request_user_input`"));
         assert!(SUPERVISOR_SKILL.contains("`id`、标题、问题和选项原样传给"));
-        assert!(SUPERVISOR_SKILL.contains("不得用普通文字假装已经询问"));
+        assert!(SUPERVISOR_SKILL.contains("不得用普通文字列选项"));
         assert!(SINGLE_AGENT_DATA_SKILL.contains("用一次输入卡片询问"));
         assert!(SINGLE_AGENT_ROOT_SKILL.contains("`request_user_input`"));
         assert!(SINGLE_AGENT_ROOT_SKILL.contains("`id`、标题、问题和选项原样传给"));
-        assert!(SINGLE_AGENT_ROOT_SKILL.contains("不得用普通文字假装已经询问"));
+        assert!(SINGLE_AGENT_ROOT_SKILL.contains("不得用普通文字列选项"));
+    }
+
+    #[test]
+    fn warehouse_navigation_skills_preserve_exact_scope_and_native_approval() {
+        for skill in [PLANNING_SKILL, SINGLE_AGENT_PLANNING_SKILL] {
+            assert!(skill.contains("用户已经明确要真实导航时"));
+            assert!(skill.contains("`warehouse_scope={\"kind\":\"selected_warehouses\""));
+            assert!(skill.contains("`create_navigation_matrix_request`"));
+            assert!(skill.contains("`execute_navigation_matrix`"));
+            assert!(skill.contains("`import_navigation_matrix`"));
+        }
+        for skill in [SUPERVISOR_SKILL, SINGLE_AGENT_ROOT_SKILL] {
+            assert!(skill.contains("原生 `request_user_input`"));
+            assert!(skill.contains("不得用普通文字列选项"));
+            assert!(skill.contains("用户已经明确真实导航时，不得再为路线方法请求输入卡片"));
+        }
+
+        let role = parse_role_template("network_agent", NETWORK_ROLE).expect("parse Network Role");
+        assert_eq!(
+            role["plugins"]["map_utils"]["mcp_servers"]["map_utils"]["omit_tools_from"]
+                .as_array()
+                .expect("Network deferred map-tool exposure")
+                .iter()
+                .filter_map(|item| item.as_str())
+                .collect::<Vec<_>>(),
+            vec!["direct"],
+        );
+        assert_eq!(
+            role["plugins"]["map_utils"]["mcp_servers"]["map_utils"]["tools"]
+                ["execute_navigation_matrix"]["approval_mode"]
+                .as_str(),
+            Some("prompt"),
+        );
     }
 
     #[test]
@@ -1901,7 +1949,7 @@ mod tests {
         for skill in [PLANNING_SKILL, SINGLE_AGENT_PLANNING_SKILL] {
             assert!(skill.contains("`route_method=\"provided\"`"));
             assert!(skill.contains("不得自行填写绕路系数、平均速度或导航费用"));
-            assert!(skill.contains("首次返回 `needs_input`"));
+            assert!(skill.contains("当前用户意图尚未回答的真实业务歧义"));
             assert!(skill.contains("不得重调同一工具"));
         }
         assert!(SINGLE_AGENT_PLANNING_SKILL.contains("`warehouse_quote_mean_calculation.v1`"));
@@ -2472,7 +2520,7 @@ runtime = "tools/maps/runtime.toml"
                 .as_str(),
             Some("approve")
         );
-        for tool in ["get_route", "distance_matrix", "execute_navigation_matrix"] {
+        for tool in ["get_route", "distance_matrix"] {
             assert!(
                 network["mcp_servers"]["map_utils"]["tools"]
                     .get(tool)
@@ -2480,6 +2528,13 @@ runtime = "tools/maps/runtime.toml"
                 "external Map Tool {tool} must inherit prompt",
             );
         }
+        assert_eq!(
+            network["mcp_servers"]["map_utils"]["tools"]["execute_navigation_matrix"]
+                ["approval_mode"]
+                .as_str(),
+            Some("prompt"),
+            "navigation execution must retain Runtime-native prompt approval",
+        );
         let network_developer_instructions = network["developer_instructions"]
             .as_str()
             .expect("network instructions");

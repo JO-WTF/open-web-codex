@@ -43,10 +43,12 @@ Data Tool 先以 `workspace_source_profile.v3` inline `source_profile`、exact s
 
 Data Tool 会把用户输入中完整的起点、终点、距离、时长与来源方法保存在
 `prepared_network_input.v2`；Network Tool 可以按分析范围把这些事实物化为
-`route_matrix.v3`。矩阵自身持有 discriminated `warehouse_scope`（existing_only、精确 candidate_ids 或 all_warehouses）与规范化 `warehouse_ids`，验证器按同一 scope 校验，不会因标准化资源
+`route_matrix.v3`。矩阵自身持有 discriminated `warehouse_scope`（existing_only、精确 candidate_ids、精确 warehouse_ids 的 selected_warehouses 或 all_warehouses）与规范化 `warehouse_ids`，验证器按同一 scope 校验，不会因标准化资源
 同时包含未参与本次分析的候选仓而要求 Data 重新发布资源；也无需让模型重读文件或重新估算。基线和比较结果同时返回按城市数量与按需求量
 加权的覆盖指标，并以 typed Resource 支持实际基线、优化基线或场景之间的比较；模型只负责解释，
 不自行汇总这些数值。
+
+真实导航先由 `create_navigation_matrix_request` 把一个 exact scope 物化为唯一的 Workspace request JSON；Maps 只执行该文件中的车道并把完整 `navigation_matrix_result.v2` JSON 写回 Workspace，随后 `import_navigation_matrix` 校验输入身份、scope、规范化 `warehouse_ids`、端点和导航 provenance 后发布 `route_matrix.v3`。`selected_warehouses` 从不隐式加入现有仓；若单独选择的 cross-dock 没有同时选择其上游中心，Planner 返回 `warehouse_upstream_center_missing`，不会扩大范围或改用估算路线。prior matrix 也只能在 input identity、method 和 exact scope/warehouse set 相同时复用。
 
 `plan_cost_matrix` 的 `cost_policy` 是当前唯一成本 fallback 选择：`kind=explicit` 接受显式分层数值规则；`kind=observed_quote_mean` 由 Planner 直接读取完整 prepared input，对当前所需层的全部标准化报价按 `price_per_vehicle / vehicle_capacity` 求算术均值，并把 `warehouse_quote_mean_calculation.v1` 的 prepared input identity、完整报价总数、分层报价数、币种、公式、均值和 Tool 版本作为 bounded provenance 返回并绑定到 `cost_matrix.v3`。用户明确要求脚本时，必须把同一 typed evidence 写入 calculations 目录并传 `quote_mean_evidence_relative_path`；Planner 会从完整输入重算并校验，脚本 JSON 不是第二份业务真相。该计算不读取 preview，也不把完整报价行送入模型上下文。
 
@@ -76,7 +78,7 @@ p-median、comparison 和卡片数据准备等无外部副作用的 Tool 配置�
 复用 `map_utils/create_map_card` 或 `revise_map_card`，当空间分布、覆盖关系、仓库变动或城市重分配有助于理解时可由
 Skill 自动使用，不创建 Workspace 文件。最终 map 文件与 Markdown report Tool 会以 create-new
 语义写 Workspace 文件，因此继续请求 official approval。地图导航和距离矩阵属于 `map_utils`
-的外部、可能计费操作，也不能由本包预批准。Tool annotations 描述 provider
+的外部、可能计费操作，也不能由本包预批准；`execute_navigation_matrix` 在两套 Network Role 中显式保持 `prompt`。Tool annotations 描述 provider
 事实，Role/Plugin policy 决定当前 Agent 的精确预批准面；两者都不改变全局 Runtime
 `approvalPolicy`。
 

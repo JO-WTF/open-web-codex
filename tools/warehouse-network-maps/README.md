@@ -19,6 +19,8 @@ A later configuration replaces the previous provider and key. Provider request
 limits are handled inside the server. Batch geocoding is capped at 500 inputs
 and distance matrices at 2,500 billable origin/destination elements per call.
 
+For stdio, the server advertises the SDK-owned `codex/sandbox-state-meta` experimental capability during `initialize`; Workspace writes only trust the matching Runtime-provided `sandboxCwd`. `execute_navigation_matrix` accepts the Planner's exact `navigation_matrix_request.v2` and writes the paired `navigation_matrix_result.v2` unchanged in scope: this includes `selected_warehouses` with its canonical selected ID set. Maps never adds an upstream center or otherwise expands the approved lane set.
+
 ## Credential configuration and local memory
 
 The Web platform stores one active provider/key pair as an encrypted global configuration. A later

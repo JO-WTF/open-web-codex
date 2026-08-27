@@ -13,6 +13,7 @@ from open_web_codex_provider.geojson import GeoJsonResourceRef, derive_geojson_p
 from open_web_codex_provider.runtime import McpResourceRuntime
 from open_web_codex_provider.store import ResourceStore, resource_ref, workspace_resource_root
 from open_web_codex_provider.workspace import (
+    SANDBOX_STATE_META_CAPABILITY,
     create_workspace_file,
     ensure_workspace_directory,
     trusted_workspace_root,
@@ -34,7 +35,7 @@ def _context(workspace: Path) -> SimpleNamespace:
         request_context=SimpleNamespace(
             meta=SimpleNamespace(
                 model_extra={
-                    "codex/sandbox-state-meta": {"sandboxCwd": workspace.as_uri()}
+                    SANDBOX_STATE_META_CAPABILITY: {"sandboxCwd": workspace.as_uri()}
                 }
             )
         )
@@ -55,6 +56,10 @@ def test_resource_ref_is_strict_and_bounded() -> None:
     }
     with pytest.raises(ValueError):
         ResourceRef.model_validate({**ref.model_dump(), "unexpected": True})
+
+
+def test_sandbox_state_meta_capability_has_one_public_sdk_owner() -> None:
+    assert SANDBOX_STATE_META_CAPABILITY == "codex/sandbox-state-meta"
 
 
 def test_geojson_resource_ref_carries_the_exact_schema_and_bounded_profile() -> None:

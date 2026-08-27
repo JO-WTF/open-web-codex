@@ -58,6 +58,13 @@ def resolve_warehouse_scope(
         selected = existing
     elif scope.kind == "all_warehouses":
         selected = set(warehouse_by_id)
+    elif scope.kind == "selected_warehouses":
+        selected = set(scope.warehouse_ids)
+        unknown = selected - set(warehouse_by_id)
+        if unknown:
+            raise ValueError(
+                "warehouse_scope_selected_warehouse_unknown:" + ",".join(sorted(unknown))
+            )
     else:
         candidates = set(scope.candidate_ids)
         unknown = candidates - set(warehouse_by_id)

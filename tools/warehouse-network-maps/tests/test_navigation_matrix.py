@@ -50,6 +50,15 @@ def _request() -> dict[str, object]:
     }
 
 
+def _selected_request() -> dict[str, object]:
+    request = _request()
+    request["warehouse_scope"] = {
+        "kind": "selected_warehouses",
+        "warehouse_ids": [" CENTER-1 "],
+    }
+    return request
+
+
 def test_execute_navigation_matrix_writes_typed_workspace_facts(tmp_path, monkeypatch) -> None:
     output_dir = tmp_path / "outputs/warehouse-network/requests"
     output_dir.mkdir(parents=True)
@@ -116,6 +125,59 @@ def test_navigation_contract_rejects_noncanonical_warehouse_ids() -> None:
         server.NavigationMatrixRequest.model_validate(
             {**_request(), "warehouse_ids": ["CENTER-1", "CENTER-1"]}
         )
+
+
+def test_navigation_contract_round_trips_selected_warehouse_scope(tmp_path, monkeypatch) -> None:
+    output_dir = tmp_path / "outputs/warehouse-network/requests"
+    output_dir.mkdir(parents=True)
+    request_path = output_dir / "selected-request.json"
+    result_path = output_dir / "selected-result.json"
+    request_path.write_text(json.dumps(_selected_request()), encoding="utf-8")
+
+    class FakeClient:
+        async def distance_matrix(self, _origins, destinations, *, mode):
+            assert mode == "driving"
+            return {
+                "provider": "mapbox",
+                "entries": [
+                    {
+                        "originIndex": 0,
+                        "destinationIndex": index,
+                        "distanceMeters": 1_000 + index,
+                        "durationSeconds": 300,
+                    }
+                    for index, _destination in enumerate(destinations)
+                ],
+            }
+
+    async def fake_client(_ctx):
+        return FakeClient()
+
+    monkeypatch.setattr(server, "_client", fake_client)
+    execution = asyncio.run(
+        server.execute_navigation_matrix(
+            "outputs/warehouse-network/requests/selected-request.json",
+            "outputs/warehouse-network/requests/selected-result.json",
+            _context(tmp_path),
+        )
+    )
+    assert execution.navigation_matrix_relative_path == (
+        "outputs/warehouse-network/requests/selected-result.json"
+    )
+    result = server.NavigationMatrixResult.model_validate(
+        json.loads(result_path.read_text(encoding="utf-8"))
+    )
+    assert result.warehouse_scope.model_dump() == {
+        "kind": "selected_warehouses",
+        "warehouse_ids": ["CENTER-1"],
+    }
+    assert result.warehouse_ids == ["CENTER-1"]
+    assert len(result.rows) == 2
+
+    mismatched = _selected_request()
+    mismatched["warehouse_ids"] = ["OTHER"]
+    with pytest.raises(ValueError, match="warehouse_scope_selected_warehouse_ids_mismatch"):
+        server.NavigationMatrixRequest.model_validate(mismatched)
 
 
 def test_publish_workspace_geojson_publishes_validated_polygon_boundaries(tmp_path) -> None:

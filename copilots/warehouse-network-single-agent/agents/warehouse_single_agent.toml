@@ -106,3 +106,6 @@ approval_mode = "approve"
 
 [plugins.map_utils.mcp_servers.map_utils.tools.revise_map_card]
 approval_mode = "approve"
+
+[plugins.map_utils.mcp_servers.map_utils.tools.execute_navigation_matrix]
+approval_mode = "prompt"

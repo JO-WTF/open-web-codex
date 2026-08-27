@@ -20,6 +20,7 @@ from mcp.types import (
 )
 from open_web_codex_provider import (
     MAX_WORKSPACE_FILE_BYTES,
+    SANDBOX_STATE_META_CAPABILITY,
     McpResourceRuntime,
     ProviderContractError,
 )
@@ -91,8 +92,6 @@ from supply_chain_planner.shared.workspace_outputs import (
     WorkspaceOutputKind,
     prepare_workspace_output_path,
 )
-
-SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
 
 READ_ONLY_LOCAL_TOOL = ToolAnnotations(
     readOnlyHint=True,

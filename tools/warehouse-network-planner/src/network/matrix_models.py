@@ -16,6 +16,13 @@ class MatrixModel(BaseModel):
         values = getattr(self, "warehouse_ids", None)
         if values is not None and (not values or values != sorted(set(values))):
             raise ValueError("warehouse_ids_not_canonical")
+        scope = getattr(self, "warehouse_scope", None)
+        if (
+            scope is not None
+            and scope.kind == "selected_warehouses"
+            and values != scope.warehouse_ids
+        ):
+            raise ValueError("warehouse_scope_selected_warehouse_ids_mismatch")
         return self
 
 
@@ -41,12 +48,32 @@ class ExistingPlusCandidatesWarehouseScope(MatrixModel):
         return sorted(set(values))
 
 
+class SelectedWarehousesScope(MatrixModel):
+    """An explicit warehouse set with no implicit existing-warehouse expansion."""
+
+    kind: Literal["selected_warehouses"] = "selected_warehouses"
+    warehouse_ids: list[str] = Field(min_length=1, max_length=256)
+
+    @field_validator("warehouse_ids")
+    @classmethod
+    def normalize_warehouse_ids(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("warehouse_scope_selected_warehouse_id_invalid")
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("warehouse_scope_selected_warehouse_ids_duplicate")
+        return sorted(normalized)
+
+
 class AllWarehousesScope(MatrixModel):
     kind: Literal["all_warehouses"] = "all_warehouses"
 
 
 WarehouseScope = Annotated[
-    ExistingOnlyWarehouseScope | ExistingPlusCandidatesWarehouseScope | AllWarehousesScope,
+    ExistingOnlyWarehouseScope
+    | ExistingPlusCandidatesWarehouseScope
+    | SelectedWarehousesScope
+    | AllWarehousesScope,
     Field(discriminator="kind"),
 ]
 

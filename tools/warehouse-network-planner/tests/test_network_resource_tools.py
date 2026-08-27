@@ -18,6 +18,7 @@ from supply_chain_planner.network.matrix_models import (
     NavigationMatrixResult,
     NavigationRouteMatrixStats,
     RouteMatrixRow,
+    SelectedWarehousesScope,
 )
 from supply_chain_planner.network.models import CurrentAssignmentRecord
 from supply_chain_planner.network.optimization_models import BaselineResult
@@ -387,9 +388,10 @@ def test_navigation_request_and_import_use_exact_workspace_contract(tmp_path, mo
     workspace, _store = _runtime(tmp_path, monkeypatch)
     ctx = _context(workspace)
     prepared_path = _write_prepared_input(workspace, "prepared.json")
+    scope = SelectedWarehousesScope(warehouse_ids=[" center-a "])
     request_result = route_tools.create_navigation_matrix_request(
         prepared_path,
-        ExistingOnlyWarehouseScope(),
+        scope,
         "outputs/warehouse-network/requests/navigation-request.json",
         ctx,
     )
@@ -397,13 +399,14 @@ def test_navigation_request_and_import_use_exact_workspace_contract(tmp_path, mo
         (workspace / request_result.navigation_request_relative_path).read_text()
     )
     assert request_payload["schema_version"] == "navigation_matrix_request.v2"
-    assert request_payload["warehouse_scope"] == {"kind": "existing_only"}
-    assert request_payload["warehouse_ids"] == sorted(
-        item["warehouse_id"] for item in json.loads((workspace / prepared_path).read_text())["warehouses"] if item["is_existing"]
-    )
+    assert request_payload["warehouse_scope"] == {
+        "kind": "selected_warehouses",
+        "warehouse_ids": ["center-a"],
+    }
+    assert request_payload["warehouse_ids"] == ["center-a"]
     result = NavigationMatrixResult(
         input_identity=request_result.input_identity,
-        warehouse_scope=ExistingOnlyWarehouseScope(),
+        warehouse_scope=scope,
         warehouse_ids=request_payload["warehouse_ids"],
         rows=[
             RouteMatrixRow(
@@ -437,6 +440,25 @@ def test_navigation_request_and_import_use_exact_workspace_contract(tmp_path, mo
     assert route_matrix.method == "navigation"
     assert route_matrix.input_identity == request_result.input_identity
 
+    all_reused = route_tools.create_navigation_matrix_request(
+        prepared_path,
+        scope,
+        "outputs/warehouse-network/requests/navigation-request-reused.json",
+        ctx,
+        prior_route_matrix_ref=route_ref,
+    )
+    assert all_reused.state == "ready"
+    assert all_reused.navigation_request_relative_path is None
+    assert all_reused.route_count == 0
+    with pytest.raises(ProviderContractError, match="navigation_route_matrix_scope_mismatch"):
+        route_tools.create_navigation_matrix_request(
+            prepared_path,
+            ExistingOnlyWarehouseScope(),
+            "outputs/warehouse-network/requests/navigation-request-wrong-scope.json",
+            ctx,
+            prior_route_matrix_ref=route_ref,
+        )
+
     partial_prior = route_matrix.model_copy(
         update={
             "rows": [
@@ -453,7 +475,7 @@ def test_navigation_request_and_import_use_exact_workspace_contract(tmp_path, mo
     )
     request_again = route_tools.create_navigation_matrix_request(
         prepared_path,
-        ExistingOnlyWarehouseScope(),
+        scope,
         "outputs/warehouse-network/requests/navigation-request-again.json",
         ctx,
         prior_route_matrix_ref=partial_prior_ref,
@@ -463,7 +485,7 @@ def test_navigation_request_and_import_use_exact_workspace_contract(tmp_path, mo
     )
     supplied_again = NavigationMatrixResult(
         input_identity=request_again.input_identity,
-        warehouse_scope=ExistingOnlyWarehouseScope(),
+        warehouse_scope=scope,
         warehouse_ids=request_again_payload["warehouse_ids"],
         rows=[
             RouteMatrixRow(

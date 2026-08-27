@@ -392,6 +392,8 @@ def import_navigation_matrix(
 def _scope_summary(scope: WarehouseScope, warehouse_count: int) -> str:
     if scope.kind == "existing_plus_candidates":
         return f"{scope.kind} ({len(scope.candidate_ids)} candidates, {warehouse_count} warehouses)"
+    if scope.kind == "selected_warehouses":
+        return f"{scope.kind} ({warehouse_count} exact warehouses)"
     return f"{scope.kind} ({warehouse_count} warehouses)"
 
 

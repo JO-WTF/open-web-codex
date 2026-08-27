@@ -13,7 +13,7 @@ from urllib.parse import unquote, urlparse
 
 from .errors import WorkspaceFileError
 
-SANDBOX_META = "codex/sandbox-state-meta"
+SANDBOX_STATE_META_CAPABILITY = "codex/sandbox-state-meta"
 MAX_WORKSPACE_FILE_BYTES = 32 * 1024 * 1024
 MAX_WORKSPACE_RELATIVE_PATH_CHARS = 1024
 
@@ -26,7 +26,7 @@ class CreatedWorkspaceFile:
 
 def trusted_workspace_root(meta: Any) -> Path:
     extra = getattr(meta, "model_extra", None)
-    state = extra.get(SANDBOX_META) if isinstance(extra, dict) else None
+    state = extra.get(SANDBOX_STATE_META_CAPABILITY) if isinstance(extra, dict) else None
     sandbox_cwd = state.get("sandboxCwd") if isinstance(state, dict) else None
     if not isinstance(sandbox_cwd, str):
         raise WorkspaceFileError("workspace_scope_unavailable")

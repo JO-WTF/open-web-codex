@@ -9,10 +9,10 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.stdio import stdio_server
+from open_web_codex_provider import SANDBOX_STATE_META_CAPABILITY
 
 from . import analysis_tools, cost_tools, delivery_tools, facility_tools, route_tools
 from .tool_runtime import (
-    SANDBOX_STATE_META_CAPABILITY,
     configure_runtime,
     register_resources,
 )

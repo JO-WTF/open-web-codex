@@ -12,6 +12,7 @@ from .runtime import McpResourceRuntime, bind_runtime
 from .store import PublishedResource, ResourceStore, resource_ref, workspace_resource_root
 from .workspace import (
     MAX_WORKSPACE_FILE_BYTES,
+    SANDBOX_STATE_META_CAPABILITY,
     CreatedWorkspaceFile,
     create_workspace_file,
     ensure_workspace_directory,
@@ -24,6 +25,7 @@ __all__ = [
     "GeoJsonProfile",
     "GeoJsonResourceRef",
     "MAX_WORKSPACE_FILE_BYTES",
+    "SANDBOX_STATE_META_CAPABILITY",
     "McpResourceRuntime",
     "ProviderContractError",
     "PublishedResource",
