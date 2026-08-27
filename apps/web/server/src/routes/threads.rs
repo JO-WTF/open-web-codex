@@ -36,7 +36,11 @@ pub async fn read(
 ) -> ApiResult<ThreadHistoryResponse> {
     let context = authorized_thread(&state, &auth, run_id).await?;
     let value = adapter
-        .read_thread(&context.workspace, &context.thread_id)
+        .read_thread(
+            &context.workspace,
+            context.copilot_package_id.as_deref(),
+            &context.thread_id,
+        )
         .await
         .map_err(runtime_error)?;
     let thread = value
@@ -207,7 +211,11 @@ pub async fn list_turns(
 ) -> ApiResult<Vec<ThreadHistoryTurn>> {
     let context = authorized_thread(&state, &auth, run_id).await?;
     let turns = adapter
-        .list_thread_turns(&context.workspace, &context.thread_id)
+        .list_thread_turns(
+            &context.workspace,
+            context.copilot_package_id.as_deref(),
+            &context.thread_id,
+        )
         .await
         .map_err(runtime_error)?;
     let mut projected = Vec::with_capacity(turns.len());
@@ -229,7 +237,11 @@ pub async fn list_agent_turns(
 ) -> ApiResult<Vec<ThreadHistoryTurn>> {
     let context = authorized_agent_thread(&state, &auth, run_id, agent_thread_id.as_str()).await?;
     let turns = adapter
-        .list_thread_turns(&context.workspace, &context.thread_id)
+        .list_thread_turns(
+            &context.workspace,
+            context.copilot_package_id.as_deref(),
+            &context.thread_id,
+        )
         .await
         .map_err(runtime_error)?;
     let mut projected = Vec::with_capacity(turns.len());

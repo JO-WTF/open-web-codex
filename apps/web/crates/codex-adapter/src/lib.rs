@@ -193,6 +193,7 @@ pub trait CodexAdapter: Send + Sync {
     async fn read_thread(
         &self,
         workspace: &AuthorizedWorkspace,
+        copilot_package_id: Option<&str>,
         thread_id: &str,
     ) -> Result<Value, AdapterError>;
 
@@ -218,6 +219,7 @@ pub trait CodexAdapter: Send + Sync {
     async fn list_thread_turns(
         &self,
         workspace: &AuthorizedWorkspace,
+        copilot_package_id: Option<&str>,
         thread_id: &str,
     ) -> Result<Vec<Value>, AdapterError>;
 

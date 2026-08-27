@@ -181,7 +181,7 @@ models = [{{ model_id = "mock-model", context_window = 25600 }}]
         24_320
     );
     let persisted_turns = adapter
-        .list_thread_turns(&workspace, &started.thread_id)
+        .list_thread_turns(&workspace, None, &started.thread_id)
         .await
         .expect("read paginated Thread history");
     assert_eq!(persisted_turns.len(), 1);

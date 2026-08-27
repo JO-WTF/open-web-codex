@@ -717,7 +717,14 @@ impl RealCodexAdapter {
                 "Thread id and message text or image input are required".to_string(),
             ));
         }
-        let (workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
+        let execution = self.root_execution(options.copilot_package_id.as_deref())?;
+        let (workspace_root, _runtime) = self
+            .ensure_thread_bound_with_execution(
+                workspace,
+                thread_id,
+                execution.map(|value| &value.config),
+            )
+            .await?;
 
         let mut input = Vec::new();
         if !text.trim().is_empty() {
@@ -740,7 +747,6 @@ impl RealCodexAdapter {
             .await
             .contains_key(thread_id);
         if !is_child_thread {
-            let execution = self.root_execution(options.copilot_package_id.as_deref())?;
             for skill in execution
                 .into_iter()
                 .flat_map(|execution| execution.skill_selections.iter())
@@ -914,9 +920,17 @@ impl CodexAdapter for RealCodexAdapter {
     async fn read_thread(
         &self,
         workspace: &AuthorizedWorkspace,
+        copilot_package_id: Option<&str>,
         thread_id: &str,
     ) -> Result<Value, AdapterError> {
-        let (_workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
+        let execution = self.root_execution(copilot_package_id)?;
+        let (_workspace_root, _runtime) = self
+            .ensure_thread_bound_with_execution(
+                workspace,
+                thread_id,
+                execution.map(|value| &value.config),
+            )
+            .await?;
         self.host
             .request(
                 "thread/read",
@@ -976,9 +990,17 @@ impl CodexAdapter for RealCodexAdapter {
     async fn list_thread_turns(
         &self,
         workspace: &AuthorizedWorkspace,
+        copilot_package_id: Option<&str>,
         thread_id: &str,
     ) -> Result<Vec<Value>, AdapterError> {
-        let (_workspace_root, _runtime) = self.ensure_thread_bound(workspace, thread_id).await?;
+        let execution = self.root_execution(copilot_package_id)?;
+        let (_workspace_root, _runtime) = self
+            .ensure_thread_bound_with_execution(
+                workspace,
+                thread_id,
+                execution.map(|value| &value.config),
+            )
+            .await?;
         if self
             .thread_history_modes
             .read()

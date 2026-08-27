@@ -246,6 +246,7 @@ impl CodexAdapter for FakeCodexAdapter {
     async fn read_thread(
         &self,
         workspace: &AuthorizedWorkspace,
+        _copilot_package_id: Option<&str>,
         thread_id: &str,
     ) -> Result<Value, AdapterError> {
         let state = self.state.lock().await;
@@ -310,21 +311,24 @@ impl CodexAdapter for FakeCodexAdapter {
     async fn list_thread_turns(
         &self,
         workspace: &AuthorizedWorkspace,
+        copilot_package_id: Option<&str>,
         thread_id: &str,
     ) -> Result<Vec<Value>, AdapterError> {
-        self.read_thread(workspace, thread_id).await?;
+        self.read_thread(workspace, copilot_package_id, thread_id)
+            .await?;
         Ok(Vec::new())
     }
 
     async fn read_mcp_resource(
         &self,
         workspace: &AuthorizedWorkspace,
-        _copilot_package_id: Option<&str>,
+        copilot_package_id: Option<&str>,
         thread_id: &str,
         server: &str,
         uri: &str,
     ) -> Result<Value, AdapterError> {
-        self.read_thread(workspace, thread_id).await?;
+        self.read_thread(workspace, copilot_package_id, thread_id)
+            .await?;
         if server.trim().is_empty() || uri.trim().is_empty() {
             return Err(AdapterError::Internal(
                 "MCP Resource server and URI are required".to_string(),
@@ -719,6 +723,19 @@ mod tests {
             .seed_completed_thread_for_test(&owner_workspace, "completed-thread")
             .await
             .expect("seed exact persisted Thread");
+        adapter
+            .read_thread(
+                &owner_workspace,
+                Some("warehouse-network-copilot"),
+                "completed-thread",
+            )
+            .await
+            .expect("selected package does not change fake Thread read semantics");
+        assert!(adapter
+            .list_thread_turns(&owner_workspace, None, "completed-thread")
+            .await
+            .expect("ordinary Thread list remains supported")
+            .is_empty());
         adapter
             .send_user_message(
                 &owner_workspace,
