@@ -2471,6 +2471,11 @@ fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
                 data.insert(key.to_string(), project_public_runtime_error(value));
             } else if matches!(key, "additionalDetails" | "additional_details") {
                 continue;
+            } else if method == "platform/approvalRequested" && key == "requestParams" {
+                data.insert(
+                    key.to_string(),
+                    project_platform_approval_request_params(value),
+                );
             } else if method == "turn/completed" && key == "turn" {
                 data.insert(key.to_string(), project_public_runtime_turn(value));
             } else {
@@ -2479,6 +2484,54 @@ fn project_event_data(method: &str, params: &Map<String, Value>) -> Value {
         }
     }
     Value::Object(data)
+}
+
+/// Approval request parameters are persisted and broadcast as a small Platform
+/// DTO. They are not a general Runtime payload: map credential classification
+/// is the sole non-identifier field required by the Browser approval card.
+fn project_platform_approval_request_params(value: &Value) -> Value {
+    let Some(source) = value.as_object() else {
+        return Value::Object(Map::new());
+    };
+    let mut projected = Map::new();
+    for key in ["threadId", "turnId", "itemId"] {
+        if let Some(value) = source
+            .get(key)
+            .and_then(Value::as_str)
+            .and_then(safe_approval_identifier)
+        {
+            projected.insert(key.to_string(), Value::String(value));
+        }
+    }
+    if let Some(mode) = source.get("mode").and_then(Value::as_str) {
+        if matches!(mode, "form" | "url") {
+            projected.insert("mode".to_string(), Value::String(mode.to_string()));
+        }
+    }
+    if source.get("credentialKind").and_then(Value::as_str) == Some("maps") {
+        projected.insert(
+            "credentialKind".to_string(),
+            Value::String("maps".to_string()),
+        );
+    }
+    Value::Object(projected)
+}
+
+fn safe_approval_identifier(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 256
+        || value.contains("://")
+        || value.starts_with('/')
+        || value.starts_with('\\')
+        || value.as_bytes().get(1) == Some(&b':')
+        || value.chars().any(char::is_control)
+        || value.split(['/', '\\']).any(|segment| segment == "..")
+        || is_sensitive_key(value)
+    {
+        return None;
+    }
+    Some(value.to_string())
 }
 
 fn project_public_runtime_turn(value: &Value) -> Value {
@@ -4640,6 +4693,60 @@ mod tests {
         assert_eq!(event.item_id.as_deref(), Some("item-1"));
         assert_eq!(event.payload["data"]["approvalId"], "018f-id");
         assert!(!event.payload.to_string().contains("requestId"));
+    }
+
+    #[test]
+    fn preserves_only_the_typed_maps_approval_request_params() {
+        let frame = br#"data: {"method":"app-server-event","params":{"message":{"method":"platform/approvalRequested","params":{"approvalId":"approval-1","threadId":"thread-1","turnId":"turn-1","itemId":"item-1","requestParams":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","mode":"url","credentialKind":"maps","serverName":"map_utils","url":"http://127.0.0.1:43123/one-time-token","message":"Configure Mapbox","credential":"credential-canary","api_key":"api-key-canary","path":"/private/server/path"}}}}}
+
+"#;
+        let event = project_frame(frame).unwrap().unwrap();
+
+        assert_eq!(
+            event.payload["data"]["requestParams"],
+            json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "item-1",
+                "mode": "url",
+                "credentialKind": "maps",
+            })
+        );
+        let encoded = event.payload.to_string();
+        for canary in [
+            "map_utils",
+            "one-time-token",
+            "Configure Mapbox",
+            "credential-canary",
+            "api-key-canary",
+            "/private/server/path",
+        ] {
+            assert!(!encoded.contains(canary));
+        }
+    }
+
+    #[test]
+    fn drops_malformed_approval_params_instead_of_projecting_sensitive_values() {
+        let frame = br#"data: {"method":"app-server-event","params":{"message":{"method":"platform/approvalRequested","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","requestParams":{"threadId":"/private/thread-secret","turnId":"turn-1","itemId":"item-1","mode":"browser","credentialKind":"maps-secret","secret":"secret-canary","password":"password-canary","serverName":"map_utils","url":"http://127.0.0.1:43123/one-time-token"}}}}}
+
+"#;
+        let event = project_frame(frame).unwrap().unwrap();
+
+        assert_eq!(
+            event.payload["data"]["requestParams"],
+            json!({"turnId": "turn-1", "itemId": "item-1"})
+        );
+        let encoded = event.payload.to_string();
+        for canary in [
+            "thread-secret",
+            "maps-secret",
+            "secret-canary",
+            "password-canary",
+            "map_utils",
+            "one-time-token",
+        ] {
+            assert!(!encoded.contains(canary));
+        }
     }
 
     #[test]
