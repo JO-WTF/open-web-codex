@@ -127,6 +127,36 @@ def test_navigation_contract_rejects_noncanonical_warehouse_ids() -> None:
         )
 
 
+def test_navigation_rows_preserve_zero_duration_and_classify_missing_or_malformed_values() -> None:
+    route = server.NavigationRouteRequest.model_validate(_request()["routes"][0])
+
+    zero = server._matrix_row(
+        route,
+        {"distanceMeters": 0, "durationSeconds": 0},
+        provider="mapbox",
+        mode="driving",
+    )
+    assert zero.status == "ready"
+    assert zero.distance_km == 0
+    assert zero.duration_hours == 0
+
+    unreachable = server._matrix_row(
+        route,
+        {"distanceMeters": None, "durationSeconds": None},
+        provider="mapbox",
+        mode="driving",
+    )
+    assert unreachable.status == "unreachable"
+
+    malformed = server._matrix_row(
+        route,
+        {"distanceMeters": "zero", "durationSeconds": "not-a-duration"},
+        provider="mapbox",
+        mode="driving",
+    )
+    assert malformed.status == "error"
+
+
 def test_navigation_contract_round_trips_selected_warehouse_scope(tmp_path, monkeypatch) -> None:
     output_dir = tmp_path / "outputs/warehouse-network/requests"
     output_dir.mkdir(parents=True)

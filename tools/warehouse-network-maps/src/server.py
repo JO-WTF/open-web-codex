@@ -424,7 +424,9 @@ def _matrix_row(
 ) -> NavigationRouteRow:
     item = entry if isinstance(entry, dict) else {}
     distance = item.get("distanceMeters")
-    duration = _duration_seconds(item.get("durationSeconds") or item.get("duration"))
+    duration_seconds = item.get("durationSeconds")
+    duration_value = item.get("duration") if duration_seconds is None else duration_seconds
+    duration = _duration_seconds(duration_value)
     valid_distance = (
         isinstance(distance, (int, float))
         and math.isfinite(float(distance))
