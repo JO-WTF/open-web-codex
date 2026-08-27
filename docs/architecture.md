@@ -3,8 +3,8 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前事实 |
-| 快照日期 | 2026-08-24 |
-| 代码快照 | Codex recorded integrated base 为 `2161ec272a7d`；六个最小 Runtime seam 已代码收敛，完整验证仍待执行 |
+| 快照日期 | 2026-08-27 |
+| 代码快照 | Codex recorded integrated base 为 `76d98a771e6c`；七个 retained Runtime seam 已完成确定性验证，当前仓网真实导航复验通过 |
 | 当前阶段边界 | [ADR-018](adr/018-built-in-network-copilot-runtime-closure.md)、[ADR-019](adr/019-task-selected-copilot-packages-and-shared-tools.md)、[ADR-024](adr/024-warehouse-copilot-contract-simplification.md)、[ADR-025](adr/025-source-unit-prepared-v2-reuse.md) 与 [开发计划](development-plan.md) |
 | 接受决策 | ADR-018；ADR-019 局部替代其单包/default 假设；ADR-024/025 约束当前仓网 Tool 合同 |
 
@@ -42,7 +42,7 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 | 通用 Copilot Resource/Workspace 基础合同 | Platform/Workspace authority 与 `packages/copilot-provider-sdk` 分工拥有 | Workspace 授权与 Artifact 物化属于 Platform/Runner；独立、领域无关的 provider SDK 提供 `ResourceRef` envelope、expected-schema 校验、canonical codec、payload bounds、typed errors、Workspace canonical/no-follow writer 与 provider load/publish primitives。Tool 用 `runtime.toml.platform_packages` 声明受 SDK registry 管理的平台包；generic provisioner 从已安装 SDK distribution 构建并注入 Tool 环境，不读取仓网路径或在 Runtime 启动时安装 |
 | Task、Run、Approval、Artifact、Audit | Platform | Task 固定一个显式选择的 `copilot_package_id`；Run、Thread 创建与后续 Turn 沿用该 ID，Task 不保存路径或运行配置。持久 Artifact 只接受 active package registries 合并后的 exact producer、固定 typed kind/schema/MIME/verifier 和 Workspace-relative descriptor，并按 producing Item provenance 物化；中间 Resource 永不注册 Artifact。两个仓网包声明相同地图/报告交付，meeting 包声明 Markdown 报告；Platform 不理解业务字段。producer-time verifier snapshot 随 Artifact 持久化，恢复和下载不依赖届时 active registry |
 | Codex Inline Visualization | Codex Runtime + Platform 授权快照投影 | Runtime 仍生成原生 `visualize`/`file` 引用和 Thread-scoped 文件；Platform 将执行器绝对路径投影为 basename，并且只在完成的 Agent Message 出现严格的 `workspace_file` 指令时，经权威 Run/Thread/Workspace 和 no-follow 文件读取，把受限 HTML 快照进该 Thread 的原生目录后改写为官方 `file` 引用。浏览器只允许当前授权 Profile/Thread 读取。Web 直接支持原生 HTML 与静态 PNG/JPEG/GIF/WebP；HTML 复用 Codex viewer assets 并运行在无 same-origin 权限的脚本沙箱/CSP 中，图片验证扩展名、大小与文件签名。SVG、Markdown 和任意 Artifact 脚本不进入该表面；额外 typed 卡片只来自 active Copilot 声明的固定 delivery kind，当前实例是仓网 `map.v3` |
-| 用户输入与审批 | Runtime 请求，Platform Approval 投影 | Root 官方输入路径已在真实 E2E 中通过；Platform 只对 exact pending request 回送 typed decision，旧 `/profile/approval-rules`、Browser command-prefix allowlist 和直接 Profile rule 写入已删除 |
+| 用户输入与审批 | Runtime 请求，Platform Approval 投影 | Root 官方输入路径已在真实 E2E 中通过；Platform 只对 exact pending request 回送 typed decision。MCP 表单审批只投影固定安全字段，凭据请求保留 typed `credentialKind`（如 `maps`）而不向 Browser 暴露 URL、server message 或 Secret；因此已加密保存的 Maps 凭据可按精确类型交付。旧 `/profile/approval-rules`、Browser command-prefix allowlist 和直接 Profile rule 写入已删除 |
 | Agent execution | Runtime 事件，Platform projection | 有等待、输入、完整终态和有界、裁剪后的 reasoning 文本投影；属于可重建视图，不暴露 encrypted reasoning |
 | Capability Draft/Release/Installation | 无当前生产 owner | Catalog/Studio/Python publish crate、route、DTO、client、UI 与无 owner 数据表均已删除，不参与启动或 readiness |
 | Work State 与 Platform coordination | 无当前 production owner | work-state-service、route、MCP、gate、schema 与第二控制面已由 Slice 4B.2-A 删除；不建设替代状态机 |
@@ -54,7 +54,10 @@ Runtime 事件转换成浏览器 DTO 和持久化投影。
 version 的 V1 表示）；首次 direct cold resume 只可通过 trusted SessionFlags 恢复该 stored
 ThreadSpawn Role 的 instructions、skills 与 MCP inventory，
 不能由 Browser、Profile、Workspace 或 caller 元数据扩大。V2 Role 恢复继续由 upstream
-AgentControl 处理。Platform 不复制 Resource 内容。
+AgentControl 处理。完整 Profile/app-server 重启后的第一次 Root/child history read、turn list 或
+send 会先从 Task 的持久 `copilot_package_id` 解析同一 trusted package execution config，再绑定
+Thread；Platform 不缓存 Role 或 MCP inventory，只保证 Runtime 在首次恢复时取得原有可信输入。
+Platform 不复制 Resource 内容。
 
 同一 Task、同一业务 Role 的 child 默认复用稳定 target。Root 对已关闭 child 先调用
 `resume_agent`，再以 `send_input.items` 重新传入当前 Runtime Catalog 中的精确任务 Skill
@@ -163,6 +166,12 @@ maps 状态根由 `tool_state_root` 绑定解析到当前 Profile 的 owned MCP 
 probe 的结果不作为新合同证据；通用 prepare、descriptor 消费与 real startup 只由当前工作树的
 SDK/Server/run-local gate 证明。
 
+`map_utils` 通过 provider SDK 声明 Runtime 的 sandbox-state metadata capability，Runtime 因而把
+当前授权 Workspace 的 `sandboxCwd` 注入 stdio server；Maps 不从进程 cwd 或请求文本猜 Workspace。
+导航 scope 可用 `selected_warehouses` 固定任意精确仓库 ID 集合。批量路线使用 provider matrix，
+单条路线使用同一 provider 的 route endpoint，避免 1×1 matrix 的供应商限制；合法的同起终点
+`0` 距离、`0` 时长按真实返回值保存为 `ready`，不再被缺失值判断丢弃。
+
 3B.2 的真实 Runtime gate 已使用当前 checkout 构建的 Codex、生产 Profile seed composition
 和本地 mock Responses provider 证明：clean Profile 的官方 `skills/list(forceReload=true)`
 精确发现三项仓网 Skill；Standard Root 不发现任何仓网 MCP；原生 Data/Network spawn 只看到
@@ -268,7 +277,8 @@ Server 在 Turn 前重验所有字段。
 
 用户输入中的完整路线距离、时长和来源方法由 Data Tool 保存在同一个
 `prepared_network_input.v2` Workspace 文件中；Network provider 按明确仓库范围将其物化为
-`route_matrix.v3`，矩阵与验证器共享其 discriminated `warehouse_scope` 与精确 `warehouse_ids`，并对该范围内缺失、重复和范围外
+`route_matrix.v3`，矩阵与验证器共享其 discriminated `warehouse_scope` 与精确 `warehouse_ids`；
+用户明确指定仓库时使用 `selected_warehouses`，不得隐式扩为全部候选。矩阵对该范围内缺失、重复和范围外
 pair 给出显式验证结果。覆盖口径及未覆盖城市由
 Network Tool 确定性计算，同时区分城市数量和需求量加权指标；这些领域事实不进入 Platform
 DTO、数据库工作流或 Skill 中的案例规则。

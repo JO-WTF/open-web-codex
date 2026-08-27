@@ -60,9 +60,11 @@ optimization 合并为一个 Network Planning 方法。Workspace 输出目录、
 warehouse changes；非法身份、缺失 assignment 或不一致计算在 schema/Tool 边界拒绝。
 
 `warehouse_scope` 是 discriminated union：`existing_only`、带精确 `candidate_ids` 的
-`existing_plus_candidates`、`all_warehouses`。路线、导航和成本矩阵都持久化规范化后的精确
-`warehouse_ids`。baseline 使用现有仓；单一设施变化使用现有仓加明确候选；只有全量选址使用全部仓。
-prior pair facts 只有在 prepared identity、方法、方法参数和精确 warehouse set 全部一致时才可复用。
+`existing_plus_candidates`、带精确 `warehouse_ids` 的 `selected_warehouses`、
+`all_warehouses`。路线、导航和成本矩阵都持久化规范化后的精确 `warehouse_ids`。baseline 使用
+现有仓；单一设施变化使用现有仓加明确候选；用户指定一个或多个仓时只使用该精确集合；只有全量
+选址使用全部仓。prior pair facts 只有在 prepared identity、方法、方法参数和精确 warehouse set
+全部一致时才可复用，任何 scope 都不得在 Tool 内隐式扩大。
 这条规则替代 ADR-023 中“输入身份不作为复用门”的旧决定；当前实现不保留双读或跨身份兼容。
 
 ### 6. 最小仓数最多使用两个 solver stage
@@ -105,7 +107,8 @@ Resource 身份错误、服务崩溃或已接受 Tool 后断流属于机制失�
 - SDK：共享 fingerprint、并发原子发布、失败保留、descriptor 引用保护和稳定缓存；
 - Platform：一次 Skill discovery、无历史 child MCP 探测、Task revision 准入；
 - Data：preview/total 区分、完整文件变化拒绝、preview 外候选仍进入准备输入；
-- Planner/Maps：comparison 全组合、精确 candidate scope、严格 pair reuse、导航 round-trip；
+- Planner/Maps：comparison 全组合、精确 candidate/selected warehouse scope、严格 pair reuse、Maps
+  sandbox metadata、单路线 provider route、零距离/零时长与批量导航 round-trip；
 - Solver：两阶段最优性、stage timeout、unavailable 与 exact policy；
 - Copilot：八个 Skill、单 Agent 无 child、多 Agent 只有 Root 直连 Data/Network child；
 - E2E：单 Agent 90% 需求加权覆盖和多 Agent Balikpapan 时效变化率各至少一次真实 DeepSeek 通过。

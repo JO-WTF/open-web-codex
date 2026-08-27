@@ -3,7 +3,7 @@
 | 字段 | 内容 |
 | --- | --- |
 | 文档性质 | 当前与下一里程碑的执行计划 |
-| 更新日期 | 2026-08-24 |
+| 更新日期 | 2026-08-27 |
 | 当前阶段 | 阶段三：回归 Codex Runtime owner 并清理并行实现 |
 | 当前状态 | 阶段二开发者 SDK 验收完成；阶段三已删除 hidden generation、永久 approval rule、generic RPC、Profile content/Agent/Prompt 二次系统、Browser Workspace Preferences、独立 Terminal、本地 Usage、Fake 生产运行模式、Provider 定义/模型目录数据库镜像、Task/global model pair 和每 Turn pair override；C1-C4 已把 follow-up Run、canonical history、exact terminal 与 durable event replay 收敛到现役 owner；Codex 已同步至 `76d98a771e6c`，七个 retained seam、disposable PostgreSQL 生命周期、deterministic 门和当前 HEAD 的三轮 DeepSeek Flash Web 验收均通过 |
 | 当前阶段裁决 | Codex 原生协作与 MCP Resource + Workspace 文件 + 最终 Artifact 混合边界；ADR-018/019/024/025 为当前基线 |
@@ -220,7 +220,7 @@ mailbox、Workflow DSL、Run Completion Controller、签名链或 exactly-once�
 | Skill、MCP、Role config 发现与刷新 | Codex Runtime；Profile Host 负责托管固定内置 Skill/Role 与 MCP activation | built-in 不使用 Plugin/selected roots；观察结果必须来自当前 Runtime |
 | 仓网 Tool 代码与只读 Mock 源 | 显式配置的共享应用资产 | 不复制到 Profile，不从 cwd、Workspace 或源码树扫描 |
 | Task 与唯一执行 Workspace | Platform | Task 创建后固定；Run、resume、fork 不得改选其他 Workspace |
-| Thread cwd 与 MCP sandbox metadata | Codex Runtime | Root/child 都继承授权 Workspace；仅 Patch Map 中 trusted Runtime-resolved V1（包括 upstream unset V1 representation）child Role cold-resume 投影是本地 seam，V2 保持 upstream AgentControl |
+| Thread cwd 与 MCP sandbox metadata | Codex Runtime | Root/child 都继承授权 Workspace；MCP server 必须声明 sandbox-state metadata capability 才能收到 Runtime 注入的 `sandboxCwd`。仅 Patch Map 中 trusted Runtime-resolved V1（包括 upstream unset V1 representation）child Role cold-resume 投影是本地 seam，V2 保持 upstream AgentControl；Platform 在完整重启后的首次 read/list/send 只负责把 Task 选定 package 的 trusted execution config 交给 Runtime，不缓存 Role/MCP |
 | 普通数据文件 | Workspace 文件系统 | 同 Workspace Task 天然可见；没有 Task→文件 binding 或数据生命周期 |
 | typed intermediate 内容与生命周期 | MCP provider | 通过官方 Resource URI/template/read 使用；Platform 不存内容或建通用 Broker |
 | Workspace authority | Platform/Runner | authenticated Workspace capability、canonical containment/no-follow、final file atomic create-new 与 Artifact 授权物化 |
@@ -497,6 +497,13 @@ Root/Data/Network，两个 child 跨 follow-up 复用；Tool Search 为 7/0/2，
 正式门没有 terminal、unknown Tool、Tool visibility、stream 或 Provider 协议失败；4 次 typed Tool
 拒绝在同一 child 内修正后完成。
 
+2026-08-27 又在同一隔离 Workspace/Task 通过真实 DeepSeek Flash 完成 Jakarta 中心仓到 50 个需求
+城市的真实驾车导航：精确 `selected_warehouses=[WH-CENTER-JAKARTA]` 只生成 50 对，最终 50/50
+`ready`，Mapbox 执行 56.805 秒、Root Run 约 89 秒。完整 Profile/app-server 重启后，历史读取和
+同一 Network child resume 仍恢复原 Role MCP；1×1 Jakarta 同城路线走 provider route endpoint，
+落盘为 0 公里、0 小时、`ready`。本次修复没有新增 Platform Tool cache、Role registry 或 Runtime
+改动。
+
 浏览器响应、日志、Workspace 与普通 Profile 文件均不得出现 Secret 明文；不写 `model_catalog_json`、
 不按模型名推断、不重试提示词、不回退 single-agent。后续真实空目录故障已用窄 follow-up 收口：Codex 只增加 exact
 Provider 的 fresh typed catalog，Platform 不切换 current Provider，只在非空成功后写回 Runtime 目标目录并在
@@ -634,7 +641,10 @@ producer-time verifier snapshot，恢复不依赖届时 active package registry�
    时询问；导航前展示路线数量、接口消耗和费用风险并取得许可。
    用户已经提供完整起终点距离、时长与来源方法时，由 Data Tool 写入准备输入，
    Network Tool 按当前分析范围直接物化并验证，不重复询问估算参数或让模型重读 raw 文件。导航则先
-   生成精确缺失 lane request，在费用确认后由地理 Tool 自动执行并导入验证结果。
+   生成精确缺失 lane request，在费用确认后由地理 Tool 自动执行并导入验证结果。用户指定一个或多个
+   仓时必须使用 `selected_warehouses` 的精确 ID 集合，不得扩为全部候选；批量路线使用 provider
+   matrix，单路线使用同一 provider 的 route endpoint。Maps 只接受 Runtime 注入的授权 Workspace，
+   审批投影按 typed `maps` 凭据类型交付已保存密文；合法的 0 距离、0 时长不得当作缺失。
 2. 优先使用用户路线报价；用户明确要求用现有报价均值外推时，由 Cost Tool 对 exact prepared input
    的完整报价按层计算 `mean(price_per_vehicle / vehicle_capacity)`，返回 `warehouse_quote_mean_calculation.v1`
    所需的 prepared identity、完整报价总数、分层报价数、币种、公式和均值 provenance，不让模型从 preview 推导。
